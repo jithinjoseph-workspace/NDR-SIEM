@@ -1,0 +1,22 @@
+# Rust
+rust/target/
+rust/ndr-engine/target/
+rust/ndr-engine/ndr.db
+rust/ndr-engine/ndr.db-shm
+rust/ndr-engine/ndr.db-wal
+rust/ndr.db-shm
+
+# Angular
+ndr-ui/node_modules/
+ndr-ui/.angular/
+
+# Swap files
+scripts/*.swp
+scripts/*.save
+*.swp
+
+# Zone identifiers (Windows)
+*:Zone.Identifier
+
+# Logs
+logs/
