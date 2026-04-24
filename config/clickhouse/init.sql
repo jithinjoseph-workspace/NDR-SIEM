@@ -1,0 +1,42 @@
+CREATE DATABASE IF NOT EXISTS ndr;
+
+CREATE TABLE IF NOT EXISTS ndr.ndr_events (
+    timestamp    DateTime,
+    source       String,
+    src_ip       String,
+    dst_ip       String,
+    src_port     UInt16,
+    dst_port     UInt16,
+    proto        String,
+    event_type   String,
+    community_id String,
+    raw          String
+) ENGINE = MergeTree()
+ORDER BY (timestamp, src_ip, dst_ip)
+TTL timestamp + INTERVAL 30 DAY;
+
+CREATE TABLE IF NOT EXISTS ndr.ndr_hits (
+    timestamp    DateTime,
+    community_id String,
+    src_ip       String,
+    dst_ip       String,
+    score        Float32,
+    severity     String,
+    tags         Array(String),
+    sigma_hits   Array(String),
+    threat_intel UInt8,
+    src_country  String,
+    dst_country  String
+) ENGINE = MergeTree()
+ORDER BY (timestamp, severity, score)
+TTL timestamp + INTERVAL 90 DAY;
+
+CREATE TABLE IF NOT EXISTS ndr.ndr_stats (
+    timestamp      DateTime,
+    events_per_min UInt32,
+    hits_per_min   UInt32,
+    top_src_ip     String,
+    top_dst_ip     String
+) ENGINE = MergeTree()
+ORDER BY timestamp
+TTL timestamp + INTERVAL 7 DAY;

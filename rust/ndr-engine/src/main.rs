@@ -18,7 +18,6 @@ use enrichment::{AsnLookup, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
-
 #[tokio::main]
 async fn main() {
     // ── Logging ───────────────────────────────────────────────────────────
@@ -66,6 +65,7 @@ async fn main() {
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
         detection:  Arc::new(detection::DetectionEngine::new("rules")),
+        ch_storage:  Arc::new(storage::ClickhouseStorage::new()),
         storage:    Arc::new(storage),
         tx:         tx.clone(),
     };
@@ -113,6 +113,8 @@ async fn main() {
         .route("/api/interface",   get(api::get_interface).post(api::set_interface))
         .route("/api/start",       post(api::start_services))
         .route("/api/stop",        post(api::stop_services))
+        .route("/api/agent-status",  get(api::get_agent_status))
+
         .with_state(state)
         .layer(cors);
 
@@ -136,6 +138,8 @@ async fn main() {
                             "type": "agent_status",
                             "zeek": data.get("zeek").and_then(|v| v.as_str()).unwrap_or("stopped"),
                             "suricata": data.get("suricata").and_then(|v| v.as_str()).unwrap_or("stopped"),
+                            "vector": data.get("vector").and_then(|v| v.as_str()).unwrap_or("stopped"),
+
                             "interface": data.get("interface").and_then(|v| v.as_str()).unwrap_or("eth0"),
                         });
                         let _ = tx.send(msg.to_string());

@@ -2,9 +2,13 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json, subprocess, os, re, time
 
-LOGDIR = "/home/jithin/logs"
+HOME_DIR = os.path.expanduser("~")
+LOGDIR = os.path.join(HOME_DIR, "logs")
 IFACE_FILE = "/tmp/ndr_interface"
 
+# Auto-create log directories on startup
+os.makedirs(f"{LOGDIR}/suricata", exist_ok=True)
+os.makedirs(f"{LOGDIR}/zeek", exist_ok=True)
 class AgentHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         print(f"[Agent] {args[0]} {args[1]}")
@@ -24,12 +28,20 @@ class AgentHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/agent/status":
             zeek = subprocess.run("sudo pgrep -x zeek", shell=True, capture_output=True).returncode == 0
-            suri = subprocess.run("ps aux | grep -v grep | grep -v ndr-agent | grep -c suricata", 
+            suri = subprocess.run("ps aux | grep -v grep | grep -v ndr-agent | grep -c suricata",
                 shell=True, capture_output=True, text=True).stdout.strip() != "0"
+            vector = subprocess.run(
+                "docker ps --filter name=vector --filter status=running --format '{{.Names}}'",
+                shell=True, capture_output=True, text=True
+    )
+            vector_running = "vector" in vector.stdout
             iface = open(IFACE_FILE).read().strip() if os.path.exists(IFACE_FILE) else "eth0"
-            self.send_json({"zeek": "running" if zeek else "stopped",
-                           "suricata": "running" if suri else "stopped",
-                           "interface": iface})
+            self.send_json({
+        "zeek": "running" if zeek else "stopped",
+        "suricata": "running" if suri else "stopped",
+        "vector": "running" if vector_running else "stopped",
+        "interface": iface })                   #help me arrange the code
+                           #
 
         elif self.path == "/agent/interfaces":
             out = subprocess.run(["ip", "-o", "link"], capture_output=True, text=True)
@@ -54,7 +66,9 @@ class AgentHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/agent/start":
             iface = open(IFACE_FILE).read().strip() if os.path.exists(IFACE_FILE) else "eth0"
-            
+            # Auto-create log directories
+            os.makedirs(f"{LOGDIR}/suricata", exist_ok=True)
+            os.makedirs(f"{LOGDIR}/zeek", exist_ok=True)
             # Kill existing processes
             subprocess.run(["sudo", "pkill", "-9", "-f", "suricata"], capture_output=True)
             subprocess.run(["sudo", "pkill", "-9", "-f", "zeek"], capture_output=True)
@@ -72,9 +86,15 @@ class AgentHandler(BaseHTTPRequestHandler):
                             stderr=subprocess.STDOUT)
     
             # Start Suricata
-            subprocess.Popen(["sudo", "suricata", "-c", "/etc/suricata/suricata.yaml",
-                            "-i", iface, "-l", f"{LOGDIR}/suricata", "-D",
-                            "--pidfile", "/tmp/suricata.pid"],  # use /tmp instead
+            subprocess.Popen(["sudo", "suricata",
+                 "-c", "/etc/suricata/suricata.yaml",
+                 "-i", iface,
+                 "-l", f"{LOGDIR}/suricata",
+                 "-D",
+                 "--pidfile", "/tmp/suricata.pid",
+                 "--set", "detect.profile=low",        # low profile for 1 CPU
+                 "--set", "max-pending-packets=128",   # reduce memory usage
+                 ],  # use /tmp instead
                             stdout=open("/tmp/suricata.log", "w"),
                             stderr=subprocess.STDOUT)
     

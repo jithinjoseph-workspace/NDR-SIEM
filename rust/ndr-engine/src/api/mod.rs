@@ -9,14 +9,12 @@ use crate::enrichment::EnrichmentPipeline;
 use crate::normalizer::NormalizedEvent;
 use crate::scoring::{conn_state_description, RiskScorer};
 use crate::storage::SqliteStorage;
-
+use crate::storage::ClickhouseStorage;
 use axum::{extract::State, Json, http::StatusCode};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
-use std::process::Command;
-use std::fs;
 use std::env;
 
 fn agent_url() -> String {
@@ -33,6 +31,7 @@ pub struct AppState {
     pub scorer:     Arc<RiskScorer>,
     pub detection:  Arc<DetectionEngine>,
     pub storage:    Arc<SqliteStorage>,
+    pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
 }
 
@@ -120,6 +119,30 @@ pub fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         warn!("Storage error: {}", e);
     }
 
+    // Persist to ClickHouse
+    let ch = state.ch_storage.clone();
+    let ch_hit = crate::storage::clickhouse::NdrHit {
+    timestamp:    chrono::Utc::now().timestamp() as u32,
+    community_id: hit.community_id.clone(),
+    src_ip:       src.to_string(),
+    dst_ip:       dst.to_string(),
+    score:        risk.score as f32,
+    severity:     risk.severity.as_str().to_string(),
+    tags:         risk.tags.clone(),
+    sigma_hits:   detections.iter().map(|d| d.title.clone()).collect(),
+    threat_intel: enrichment.is_malicious as u8,
+    src_country:  enrichment.src_geo.as_ref()
+                    .map(|g| g.country_code.clone())
+                    .unwrap_or_default(),
+    dst_country:  enrichment.dst_geo.as_ref()
+                    .map(|g| g.country_code.clone())
+                    .unwrap_or_default(),
+    };
+    tokio::spawn(async move {
+        if let Err(e) = ch.insert_hit(ch_hit).await {
+            tracing::warn!("ClickHouse hit insert error: {}", e);
+        }
+    });
     // Build WebSocket hit message
     let hit_msg = json!({
         "type":            "hit",
@@ -222,3 +245,23 @@ pub async fn stop_services() -> Json<Value> {
 
 
 
+pub async fn get_agent_status() -> Json<Value> {
+    let url = format!("{}/agent/status", agent_url());
+    match reqwest::get(&url).await {
+        Ok(resp) => {
+            let data: Value = resp.json().await.unwrap_or(json!({
+                "zeek": "stopped",
+                "suricata": "stopped",
+                "vector": "stopped",
+                "interface": "eth0"
+            }));
+            Json(data)
+        }
+        Err(_) => Json(json!({
+            "zeek": "stopped",
+            "suricata": "stopped",
+            "vector": "stopped",
+            "interface": "eth0"
+        }))
+    }
+}

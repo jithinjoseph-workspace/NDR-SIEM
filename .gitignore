@@ -20,3 +20,5 @@ scripts/*.save
 
 # Logs
 logs/
+.env
+*.env
