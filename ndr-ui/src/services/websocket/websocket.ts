@@ -1,0 +1,59 @@
+import { Injectable, NgZone } from '@angular/core';
+import { Subject, BehaviorSubject, filter } from 'rxjs';
+
+@Injectable({
+  providedIn: 'root'
+})
+export class Websocket {
+  private socket: WebSocket | null = null;
+  public messages$ = new Subject<any>();
+  public lastAgentStatus$ = new BehaviorSubject<any>(null);
+  public lastInterfaces$ = new BehaviorSubject<any>(null);
+
+  public agentStatus$ = this.messages$.pipe(filter(m => m.type === 'agent_status'));
+  public interfaces$ = this.messages$.pipe(filter(m => m.type === 'interfaces'));
+  public hits$ = this.messages$.pipe(filter(m => m.type === 'hit'));
+  public events$ = this.messages$.pipe(
+    filter(m => m.type === 'zeek' || m.type === 'suricata')
+  );
+
+  constructor(private zone: NgZone) { }
+
+  connect() {
+    console.log('Connecting to websocket...');
+    try {
+      this.socket = new WebSocket('ws://localhost:3000/ws');
+
+      this.socket.onmessage = (event) => {
+        // Run inside Angular zone so UI updates instantly
+        this.zone.run(() => {
+          try {
+            const data = JSON.parse(event.data);
+            this.messages$.next(data);
+            console.log(data);
+            if (data.type === 'agent_status') this.lastAgentStatus$.next(data);
+            if (data.type === 'interfaces') this.lastInterfaces$.next(data);
+          } catch (e) {
+            console.warn('Invalid WS message:', event.data);
+          }
+        });
+      };
+
+      this.socket.onopen = () => this.zone.run(() => console.log('WebSocket Connected'));
+      this.socket.onerror = (e) => console.error('WebSocket Error:', e);
+      this.socket.onclose = () => {
+        console.warn('WebSocket closed, reconnecting in 3s...');
+        setTimeout(() => this.connect(), 3000);
+      };
+    } catch (e) {
+      console.warn('WebSocket failed, retrying in 3s...');
+      setTimeout(() => this.connect(), 3000);
+    }
+  }
+
+  send(data: any) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(data));
+    }
+  }
+}

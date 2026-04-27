@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #070e1d;
+  --color-surface-container-low: #0b1323;
+  --color-surface-container-high: #161f33;
+  --color-surface-container-highest: #1b263b;
+  --color-primary: #69f6b8;
+  --color-secondary: #f8a010;
+  --color-tertiary: #ff716a;
+  --color-on-surface-variant: #a4abbf;
+  --color-outline: #6e7588;
+  --color-error: #ff716c;
+  --color-error-container: #9f0519;
+
+  --font-sans: 'Inter', sans-serif;
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* Global resets for the Tactical Observatory */
+body {
+  background-color: var(--color-surface);
+  color: #c9d1d9;
+  font-family: var(--font-sans);
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3, h4, .display-font {
+  font-family: var(--font-display);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-container-highest);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

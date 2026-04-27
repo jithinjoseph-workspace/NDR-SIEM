@@ -1,0 +1,128 @@
+<div class="p-8 space-y-8 animate-in fade-in duration-700">
+  <div class="flex items-center justify-between">
+    <div>
+      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">Operational Overview</h2>
+      <p class="text-on-surface-variant text-sm mt-1">Global infrastructure telemetry & real-time threat detection</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <button class="bg-surface-container-highest text-white text-xs font-semibold px-4 py-2 rounded-md hover:bg-surface-container-high transition-colors">Export Report</button>
+      <button class="bg-primary text-black text-xs font-bold px-4 py-2 rounded-md hover:bg-primary/90 transition-transform active:scale-95">Force Scan</button>
+    </div>
+  </div>
+
+  <!-- Stats Grid -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+    <!-- Total Events -->
+    <div class="bg-surface-container-highest p-5 rounded-lg border-l-2 border-primary group hover:bg-surface-container-high transition-all">
+      <div class="flex justify-between items-start">
+        <div class="p-2 rounded bg-primary/10 text-primary">
+          <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="text-[10px] text-primary bg-primary/10 px-2 py-0.5 rounded font-bold uppercase">
+          +{{ eventsLastHour }} /hr
+        </span>
+      </div>
+      <div class="mt-4">
+        <h3 class="text-on-surface-variant text-xs font-bold uppercase tracking-wider">Total Events</h3>
+        <p class="text-2xl font-display font-bold text-white mt-1">{{ totalEvents.toLocaleString() }}</p>
+        <p class="text-[10px] text-on-surface-variant mt-1">
+          Zeek: {{ zeekEvents }} | Suricata: {{ suricataEvents }}
+        </p>
+      </div>
+    </div>
+
+    <!-- Total Hits -->
+    <div class="bg-surface-container-highest p-5 rounded-lg border-l-2 border-secondary group">
+      <div class="flex justify-between items-start">
+        <div class="p-2 rounded bg-secondary/10 text-secondary">
+          <lucide-icon [name]="ShieldIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <lucide-icon [name]="ArrowIcon" class="w-4 h-4 text-secondary"></lucide-icon>
+      </div>
+      <div class="mt-4">
+        <h3 class="text-on-surface-variant text-xs font-bold uppercase tracking-wider">Correlation Hits</h3>
+        <p class="text-2xl font-display font-bold text-white mt-1">{{ totalHits }}</p>
+        <p class="text-[10px] text-on-surface-variant mt-1">{{ hitsLastHour }} in last hour</p>
+      </div>
+    </div>
+
+    <!-- Critical Alerts -->
+    <div class="bg-surface-container-highest p-5 rounded-lg border-l-2 border-tertiary group"
+         [class.animate-pulse]="critical > 0">
+      <div class="flex justify-between items-start">
+        <div class="p-2 rounded bg-tertiary/10 text-tertiary">
+          <lucide-icon [name]="AlertIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="text-[10px] text-tertiary bg-tertiary/20 px-2 py-0.5 rounded font-bold uppercase">
+          {{ critical > 0 ? 'Urgent' : 'Clear' }}
+        </span>
+      </div>
+      <div class="mt-4">
+        <h3 class="text-on-surface-variant text-xs font-bold uppercase tracking-wider">Critical Alerts</h3>
+        <p class="text-2xl font-display font-bold text-white mt-1">{{ critical }}</p>
+        <p class="text-[10px] text-on-surface-variant mt-1">High: {{ high }} | Medium: {{ medium }}</p>
+      </div>
+    </div>
+
+    <!-- Severity breakdown -->
+    <div class="bg-surface-container-highest p-5 rounded-lg border-l-2 border-primary/50 group">
+      <div class="flex justify-between items-start">
+        <div class="p-2 rounded bg-white/5 text-white">
+          <lucide-icon [name]="TrendingUpIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+      </div>
+      <div class="mt-4">
+        <h3 class="text-on-surface-variant text-xs font-bold uppercase tracking-wider">Severity Breakdown</h3>
+        <div class="flex gap-2 mt-2">
+          <span class="text-[10px] bg-red-500/20 text-red-400 px-2 py-0.5 rounded font-bold">C:{{ critical }}</span>
+          <span class="text-[10px] bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded font-bold">H:{{ high }}</span>
+          <span class="text-[10px] bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded font-bold">M:{{ medium }}</span>
+          <span class="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded font-bold">L:{{ low }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts & Details -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- Live chart -->
+    <div class="lg:col-span-2 bg-surface-container-highest rounded-lg p-6">
+      <div class="flex items-center justify-between mb-8">
+        <h4 class="text-sm font-bold text-white uppercase tracking-tight">Live Event Stream</h4>
+        <span class="text-[10px] text-on-surface-variant">Updates via WebSocket</span>
+      </div>
+      <div class="h-64">
+        <canvas baseChart
+                [data]="lineChartData"
+                [options]="lineChartOptions"
+                type="line">
+        </canvas>
+      </div>
+    </div>
+
+    <!-- Top source IPs -->
+    <div class="bg-surface-container-highest rounded-lg p-6 flex flex-col">
+      <h4 class="text-sm font-bold text-white uppercase tracking-tight mb-6">Top Source IPs</h4>
+      <div class="flex-1 space-y-4">
+        <div *ngFor="let ip of topSrcIps.slice(0, 5)" class="space-y-1.5">
+          <div class="flex justify-between text-[11px] font-mono">
+            <span class="text-white">{{ ip.ip }}</span>
+            <span class="text-on-surface-variant">{{ ip.count }} events</span>
+          </div>
+          <div class="h-1.5 w-full bg-surface-container-low rounded-full overflow-hidden">
+            <div [style.width.%]="(ip.count / (topSrcIps[0]?.count || 1)) * 100"
+                 class="h-full bg-primary"></div>
+          </div>
+        </div>
+        <div *ngIf="topSrcIps.length === 0" class="text-center text-on-surface-variant text-xs py-8">
+          No data yet — start monitoring to see top IPs
+        </div>
+      </div>
+      <button class="mt-8 w-full py-2 bg-surface-container-low text-xs font-bold text-on-surface-variant rounded hover:text-white hover:bg-surface-container-high transition-all">
+        View All IPs
+      </button>
+    </div>
+  </div>
+</div>

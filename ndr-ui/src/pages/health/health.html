@@ -1,0 +1,58 @@
+<div class="p-8 animate-in fade-in duration-500">
+  <div class="mb-8">
+    <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">System Health Monitor</h2>
+    <p class="text-on-surface-variant text-sm mt-1">Infrastructure vitals & service availability</p>
+  </div>
+
+  <!-- Stats Grid -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+    <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10 flex flex-col items-center">
+      <lucide-icon [name]="ActivityIcon" class="w-8 h-8 text-primary/40 mb-3"></lucide-icon>
+      <span class="text-[10px] text-on-surface-variant uppercase font-bold">Total Events</span>
+      <span class="text-2xl font-display font-bold text-white mt-1">{{ totalEvents.toLocaleString() }}</span>
+    </div>
+    <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10 flex flex-col items-center">
+      <lucide-icon [name]="CpuIcon" class="w-8 h-8 text-primary/40 mb-3"></lucide-icon>
+      <span class="text-[10px] text-on-surface-variant uppercase font-bold">Events / Hour</span>
+      <span class="text-2xl font-display font-bold text-white mt-1">{{ eventsPerHour }}</span>
+    </div>
+    <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10 flex flex-col items-center">
+      <lucide-icon [name]="ServerIcon" class="w-8 h-8 text-primary/40 mb-3"></lucide-icon>
+      <span class="text-[10px] text-on-surface-variant uppercase font-bold">Correlation Hits</span>
+      <span class="text-2xl font-display font-bold text-white mt-1">{{ totalHits }}</span>
+    </div>
+    <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10 flex flex-col items-center">
+      <lucide-icon [name]="CheckIcon" class="w-8 h-8 text-primary/40 mb-3"></lucide-icon>
+      <span class="text-[10px] text-on-surface-variant uppercase font-bold">Services</span>
+      <span class="text-2xl font-display font-bold text-white mt-1">
+        {{ runningCount }}/{{ services.length }}
+      </span>
+      <span class="text-[10px] text-on-surface-variant mt-1">
+        {{ sigmaRules }} SIGMA rules | {{ sessions }} sessions
+      </span>
+    </div>
+  </div>
+
+  <!-- Services List -->
+  <div class="grid grid-cols-1 gap-4">
+    <div *ngFor="let srv of services"
+         class="bg-surface-container-low p-5 rounded-lg border border-outline/5 flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <div class="w-2.5 h-2.5 rounded-full" [class]="getStatusDotClass(srv.status)"></div>
+        <div>
+          <h4 class="text-sm font-bold text-white">{{ srv.name }}</h4>
+          <span class="text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">
+            {{ srv.label }}
+          </span>
+        </div>
+      </div>
+      <span [class]="'text-[10px] font-bold border px-3 py-1 rounded uppercase ' + getStatusBadgeClass(srv.status)">
+        {{ getStatusLabel(srv.status) }}
+      </span>
+    </div>
+  </div>
+
+  <div class="mt-4 text-[11px] text-on-surface-variant text-right">
+    Auto-refreshes every 10 seconds · WebSocket connected
+  </div>
+</div>
