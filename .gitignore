@@ -17,6 +17,7 @@ scripts/*.save
 
 # Zone identifiers (Windows)
 *:Zone.Identifier
+*Zone.Identifier
 
 # Logs
 logs/
