@@ -78,6 +78,15 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
     let _ = state.tx.send(msg.to_string());
 }
 
+
+//network map
+pub async fn get_network_map(State(state): State<AppState>) -> Json<Value> {
+    match state.ch_storage.get_network_map().await {
+        Ok(data) => Json(data),
+        Err(_) => Json(json!({"nodes": [], "edges": []}))
+    }
+}
+
 pub fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let src = hit.suricata.source_ip.as_deref()
         .or(hit.zeek.source_ip.as_deref()).unwrap_or("-");
@@ -178,13 +187,39 @@ pub fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 // ── GET /health ───────────────────────────────────────────────────────────
 
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
+    let ch_stats = state.ch_storage.get_stats().await.unwrap_or(json!({}));
+
+    // Get all service status from agent
+    let agent_url = std::env::var("NDR_AGENT_URL")
+        .unwrap_or_else(|_| "http://localhost:3001".to_string());
+    
+    let services = match reqwest::get(
+        format!("{}/agent/status", agent_url)
+    ).await {
+        Ok(resp) => resp.json::<serde_json::Value>().await
+            .unwrap_or(json!({})),
+        Err(_) => json!({})
+    };
+
     Json(json!({
-        "status":        "ok",
-        "sessions":      state.correlator.session_count(),
-        "sigma_rules":   state.detection.rule_count(),
+        "status":          "ok",
+        "sessions":        state.correlator.session_count(),
+        "sigma_rules":     state.detection.rule_count(),
+        "events_total":    ch_stats.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
+        "hits_total":      ch_stats.get("hits_total").and_then(|v| v.as_u64()).unwrap_or(0),
+        "events_1h":       ch_stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
+        "zeek_events":     ch_stats.get("zeek_events").and_then(|v| v.as_u64()).unwrap_or(0),
+        "suricata_events": ch_stats.get("suricata_events").and_then(|v| v.as_u64()).unwrap_or(0),
+        "services": {
+            "zeek":       services.get("zeek").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "suricata":   services.get("suricata").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "vector":     services.get("vector").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "kafka":      services.get("kafka").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "clickhouse": services.get("clickhouse").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "engine":     "running",
+        }
     }))
 }
-
 // ── Interface Management ──────────────────────────────────────────────────
 
 pub async fn get_interfaces() -> Json<Value> {
@@ -243,7 +278,7 @@ pub async fn stop_services() -> Json<Value> {
     }
 }
 
-
+//agent status 
 
 pub async fn get_agent_status() -> Json<Value> {
     let url = format!("{}/agent/status", agent_url());
@@ -265,3 +300,93 @@ pub async fn get_agent_status() -> Json<Value> {
         }))
     }
 }
+
+// ── ClickHouse API endpoints ──────────────────────────────────────────────
+
+pub async fn get_stats(State(state): State<AppState>) -> Json<Value> {
+    match state.ch_storage.get_stats().await {
+        Ok(stats) => Json(stats),
+        Err(e) => {
+            tracing::warn!("Stats query error: {}", e);
+            Json(json!({
+                "events_total": 0,
+                "hits_total": 0,
+                "events_1h": 0,
+                "hits_1h": 0,
+                "zeek_events": 0,
+                "suricata_events": 0,
+            }))
+        }
+    }
+}
+
+pub async fn get_recent_events(State(state): State<AppState>) -> Json<Value> {
+    match state.ch_storage.get_recent_events(50).await {
+        Ok(events) => Json(json!(events)),
+        Err(e) => {
+            tracing::warn!("Recent events query error: {}", e);
+            Json(json!([]))
+        }
+    }
+}
+
+pub async fn get_top_ips(State(state): State<AppState>) -> Json<Value> {
+    let src = state.ch_storage.get_top_src_ips(10).await.unwrap_or_default();
+    let dst = state.ch_storage.get_top_dst_ips(10).await.unwrap_or_default();
+    Json(json!({
+        "top_src_ips": src,
+        "top_dst_ips": dst,
+    }))
+}
+
+
+pub async fn get_hits(State(state): State<AppState>) -> Json<Value> {
+    match state.ch_storage.get_recent_hits(50).await {
+        Ok(hits) => Json(json!(hits)),
+        Err(e) => {
+            tracing::warn!("Hits query error: {}", e);
+            Json(json!([]))
+        }
+    }
+}
+
+
+//scale status
+pub async fn get_scale_status(State(state): State<AppState>) -> Json<Value> {
+    let stats = state.ch_storage.get_stats().await.unwrap_or(json!({}));
+    let events_1h = stats.get("events_1h")
+        .and_then(|v| v.as_u64()).unwrap_or(0);
+    let events_per_sec = events_1h / 3600;
+
+    Json(json!({
+        "events_per_sec":   events_per_sec,
+        "events_1h":        events_1h,
+        "sessions":         state.correlator.session_count(),
+        "scale_recommendation": if events_per_sec > 10000 {
+            "scale_up"
+        } else if events_per_sec < 1000 {
+            "scale_down"
+        } else {
+            "optimal"
+        },
+        "current_engines": 1,
+        "max_engines":     5,
+    }))
+}
+
+//severity
+pub async fn get_severity(State(state): State<AppState>) -> Json<Value> {
+    match state.ch_storage.get_severity_breakdown().await {
+        Ok(data) => Json(data),
+        Err(e) => {
+            tracing::warn!("Severity query error: {}", e);
+            Json(json!({
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0
+            }))
+        }
+    }
+}
+

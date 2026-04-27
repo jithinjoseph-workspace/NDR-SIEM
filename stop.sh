@@ -25,7 +25,7 @@ pkill -f "npm start" 2>/dev/null || true
 # Stop Docker stack
 echo "  → Stopping Docker stack..."
 cd $INSTALL_DIR
-docker compose down
+sudo docker compose down
 
 # Stop ClickHouse
 echo "  → Stopping ClickHouse..."
@@ -38,7 +38,7 @@ sudo pkill -f zeek 2>/dev/null || true
 # Verify
 echo ""
 echo "📊 Verification:"
-echo "  Docker:    $(docker ps --format '{{.Names}}' | tr '\n' ' ' || echo 'none')"
+echo "  Docker:    $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ' || echo 'none')"
 echo "  Agent:     $(curl -s http://localhost:3001/agent/status 2>/dev/null || echo 'stopped')"
 echo "  Zeek/Suri: $(ps aux | grep -E 'zeek|suricata' | grep -v grep | wc -l) processes"
 

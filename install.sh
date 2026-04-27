@@ -106,6 +106,16 @@ else
     log "✅ ClickHouse already installed"
 fi
 
+# ── Configure ClickHouse network ──────────────
+log "Configuring ClickHouse network..."
+sudo mkdir -p /etc/clickhouse-server/config.d
+echo '<clickhouse><listen_host>0.0.0.0</listen_host></clickhouse>' | \
+    sudo tee /etc/clickhouse-server/config.d/network.xml > /dev/null
+
+sudo service clickhouse-server restart
+sleep 5
+log "✅ ClickHouse listening on all interfaces"
+
 # ── Configure ClickHouse ──────────────────────
 log "Configuring ClickHouse..."
 sudo service clickhouse-server start
@@ -118,12 +128,22 @@ CREATE USER IF NOT EXISTS ndr IDENTIFIED BY 'ndr123';
 GRANT ALL ON ndr.* TO ndr;
 CHSQL
 
-# Create tables
-clickhouse-client --user=ndr --password=ndr123 \
-    --multiquery \
-    < $INSTALL_DIR/config/clickhouse/init.sql \
+log "Creating ClickHouse tables from init.sql..."
+clickhouse-client --multiquery \
+    < "$INSTALL_DIR/config/clickhouse/init.sql" \
     && log "✅ ClickHouse tables created" \
     || warn "⚠️ ClickHouse table creation failed"
+
+# Verify tables exist
+TABLES=$(clickhouse-client --query "SHOW TABLES FROM ndr" 2>/dev/null)
+if echo "$TABLES" | grep -q "ndr_events"; then
+    log "✅ Tables verified: $TABLES"
+else
+    # Tables missing - try again with default user
+    warn "Tables not found, retrying..."
+    clickhouse-client --multiquery \
+        < "$INSTALL_DIR/config/clickhouse/init.sql" 2>&1
+fi
 
 # Enable ClickHouse on boot
 sudo systemctl enable clickhouse-server 2>/dev/null || true
@@ -155,7 +175,7 @@ sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
 # Protocol detection
 @load protocols/ssh/detect-bruteforcing
 @load protocols/ssl/validate-certs
-@load protocols/http/detect-sqli
+@load protocols/http/detect-sql-injection
 @load protocols/http/detect-webapps
 @load misc/detect-traceroute
 
@@ -266,7 +286,7 @@ After=network.target
 [Service]
 Type=simple
 User=$USERNAME
-ExecStartPre=/bin/rm -f /var/run/suricata.pid /run/suricata.pid /tmp/suricata.pid
+ExecStartPre=-/bin/rm -f /var/run/suricata.pid /run/suricata.pid /tmp/suricata.pid
 ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/ndr-agent.py
 Restart=always
 RestartSec=3
@@ -275,7 +295,6 @@ Environment=HOME=$HOME_DIR
 [Install]
 WantedBy=multi-user.target
 SERVICE
-
 sudo systemctl daemon-reload
 sudo systemctl enable ndr-agent
 sudo systemctl restart ndr-agent
@@ -323,65 +342,84 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plug
 
 log "✅ Docker + Compose installed"
 
-# ── Start Docker service ─────────────
+# ── Load required kernel modules ──────────────
+log "Loading kernel modules for Docker..."
+sudo modprobe overlay 2>/dev/null || true
+sudo modprobe br_netfilter 2>/dev/null || true
+
+# Persist modules on boot
+echo -e "overlay\nbr_netfilter" | \
+    sudo tee /etc/modules-load.d/docker.conf > /dev/null
+
+# ── Start Docker service ───────────────────────
 log "Starting Docker service..."
-sudo systemctl start docker
 sudo systemctl enable docker
+sudo systemctl start docker || true
 
-# Fix permissions
-sudo usermod -aG docker $USERNAME
-  log "Checking Docker..."
-
-for i in {1..10}; do
+# Wait longer for Docker to start
+log "Waiting for Docker to initialize..."
+for i in {1..20}; do
     if docker info >/dev/null 2>&1; then
+        log "✅ Docker is running"
         break
     fi
-    sleep 2
-done
-
-if ! docker info >/dev/null 2>&1; then
-    err "Docker failed to start!"
-fi
-# Verify Docker
-if ! docker info >/dev/null 2>&1; then
-    err "Docker is not running!"
-fi
-
-log "✅ Docker is running"
-
-# ── Build and start Docker stack ──────────────
-log "Building Docker stack (this takes a few minutes)..."
-cd $INSTALL_DIR
-docker compose down 2>/dev/null || true
-docker compose up -d --build
-log "✅ Docker stack started"
-
-# ── Initialize ClickHouse tables ──────────────
-log "Waiting for ClickHouse to be ready..."
-for i in {1..30}; do
-    if curl -s "http://ndr:ndr123@localhost:8123/ping" 2>/dev/null | grep -q "Ok"; then
-        log "✅ ClickHouse is ready"
-        break
+    if [ $i -eq 10 ]; then
+        # Try restarting once if still not up
+        warn "Docker slow to start, retrying..."
+        sudo systemctl restart docker || true
     fi
     echo -n "."
     sleep 3
 done
 echo ""
 
-log "Creating ClickHouse tables..."
-docker exec -i clickhouse clickhouse-client \
-    --user=default \
-    --multiquery \
-    < $INSTALL_DIR/config/clickhouse/init.sql \
-    && log "✅ ClickHouse tables created" \
-    || warn "⚠️  ClickHouse table creation failed"
+# Final check
+if ! docker info >/dev/null 2>&1; then
+    warn "Docker not responding — trying with sudo..."
+    if ! sudo docker info >/dev/null 2>&1; then
+        err "Docker failed to start! Run: sudo modprobe overlay && sudo systemctl start docker"
+    fi
+fi
+
+log "✅ Docker is running"
+
+# Fix permissions
+sudo usermod -aG docker $USERNAME
+  log "Checking Docker..."
+
+# Apply group without logouty
+newgrp docker << 'GROUPEOF'
+echo "Docker group applied"
+GROUPEOF
+
+# ── Build and start Docker stack ──────────────
+log "Building Docker stack (this takes a few minutes)..."
+cd $INSTALL_DIR
+sudo docker compose down 2>/dev/null || true
+sudo docker compose up -d --build
+log "✅ Docker stack started"
 
 # ── Start Angular UI ──────────────────────────
 log "Starting Angular UI..."
 cd $INSTALL_DIR/ndr-ui
+
+# Install dependencies if needed
+npm install --silent 2>/dev/null || true
+
 nohup npm start > /tmp/ndr-ui.log 2>&1 &
 echo $! > /tmp/ndr-ui.pid
-log "✅ Angular UI starting at http://localhost:4200"
+
+# Wait until Angular is actually ready
+log "Waiting for Angular UI to be ready..."
+for i in {1..60}; do
+    if curl -s http://localhost:4200 > /dev/null 2>&1; then
+        log "✅ Angular UI ready at http://localhost:4200"
+        break
+    fi
+    echo -n "."
+    sleep 3
+done
+echo ""
 
 # ── WSL2 port forwarding reminder ─────────────
 if grep -qi microsoft /proc/version 2>/dev/null; then

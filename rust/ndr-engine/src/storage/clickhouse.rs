@@ -1,5 +1,6 @@
 use clickhouse::Client;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
+use serde_json::json;
 
 #[derive(Debug, Serialize, clickhouse::Row)]
 pub struct NdrEvent {
@@ -30,6 +31,44 @@ pub struct NdrHit {
     pub dst_country:  String,
 }
 
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct TopIp {
+    pub ip:    String,
+    pub count: u64,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct NetworkPair {
+    pub src_ip:      String,
+    pub dst_ip:      String,
+    pub connections: u64,
+    pub protocols:   Vec<String>,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct RecentEvent {
+    pub timestamp:    u32,
+    pub source:       String,
+    pub src_ip:       String,
+    pub dst_ip:       String,
+    pub proto:        String,
+    pub event_type:   String,
+    pub community_id: String,
+}
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct RecentHit {
+    pub timestamp:    u32,
+    pub community_id: String,
+    pub src_ip:       String,
+    pub dst_ip:       String,
+    pub score:        f32,
+    pub severity:     String,
+    pub threat_intel: u8,
+    pub src_country:  String,
+    pub dst_country:  String,
+}
 pub struct ClickhouseStorage {
     client: Client,
 }
@@ -37,7 +76,7 @@ pub struct ClickhouseStorage {
 impl ClickhouseStorage {
     pub fn new() -> Self {
         let url = std::env::var("CLICKHOUSE_URL")
-            .unwrap_or_else(|_| "http://clickhouse:8123".to_string());
+            .unwrap_or_else(|_| "http://localhost:8123".to_string());
         let user = std::env::var("CLICKHOUSE_USER")
             .unwrap_or_else(|_| "ndr".to_string());
         let password = std::env::var("CLICKHOUSE_PASSWORD")
@@ -50,6 +89,8 @@ impl ClickhouseStorage {
                 .with_database("ndr"),
         }
     }
+
+    // ── Insert methods ────────────────────────────────────────────────────
 
     pub async fn insert_event(&self, event: NdrEvent) -> anyhow::Result<()> {
         let mut insert = self.client.insert("ndr_events")?;
@@ -65,22 +106,192 @@ impl ClickhouseStorage {
         Ok(())
     }
 
+    // ── Query methods ─────────────────────────────────────────────────────
+
     pub async fn get_stats(&self) -> anyhow::Result<serde_json::Value> {
-        let events_count: u64 = self.client
+        let events_total: u64 = self.client
+            .query("SELECT count() FROM ndr_events")
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0);
+
+        let hits_total: u64 = self.client
+            .query("SELECT count() FROM ndr_hits")
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0);
+
+        let events_1h: u64 = self.client
             .query("SELECT count() FROM ndr_events WHERE timestamp > now() - INTERVAL 1 HOUR")
             .fetch_one::<u64>()
             .await
             .unwrap_or(0);
 
-        let hits_count: u64 = self.client
+        let hits_1h: u64 = self.client
             .query("SELECT count() FROM ndr_hits WHERE timestamp > now() - INTERVAL 1 HOUR")
             .fetch_one::<u64>()
             .await
             .unwrap_or(0);
 
+        let zeek_count: u64 = self.client
+            .query("SELECT count() FROM ndr_events WHERE source = 'zeek'")
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0);
+
+        let suricata_count: u64 = self.client
+            .query("SELECT count() FROM ndr_events WHERE source = 'suricata'")
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0);
+
         Ok(serde_json::json!({
-            "events_last_hour": events_count,
-            "hits_last_hour":   hits_count,
+            "events_total":    events_total,
+            "hits_total":      hits_total,
+            "events_1h":       events_1h,
+            "hits_1h":         hits_1h,
+            "zeek_events":     zeek_count,
+            "suricata_events": suricata_count,
         }))
     }
+
+
+
+
+    //recent hits
+    pub async fn get_recent_hits(&self, limit: u64) -> anyhow::Result<Vec<RecentHit>> {
+    let hits = self.client
+        .query("SELECT timestamp, community_id, src_ip, dst_ip, score, severity, threat_intel, src_country, dst_country FROM ndr_hits ORDER BY timestamp DESC LIMIT ?")
+        .bind(limit)
+        .fetch_all::<RecentHit>()
+        .await
+        .unwrap_or_default();
+    Ok(hits)
+    }
+    
+    pub async fn get_recent_events(&self, limit: u64) -> anyhow::Result<Vec<RecentEvent>> {
+        let events = self.client
+            .query("SELECT timestamp, source, src_ip, dst_ip, proto, event_type, community_id FROM ndr_events ORDER BY timestamp DESC LIMIT ?")
+            .bind(limit)
+            .fetch_all::<RecentEvent>()
+            .await
+            .unwrap_or_default();
+        Ok(events)
+    }
+
+    //top src ips
+    pub async fn get_top_src_ips(&self, limit: u64) -> anyhow::Result<Vec<TopIp>> {
+        let ips = self.client
+            .query("SELECT src_ip as ip, count() as count FROM ndr_events WHERE src_ip != '' GROUP BY src_ip ORDER BY count DESC LIMIT ?")
+            .bind(limit)
+            .fetch_all::<TopIp>()
+            .await
+            .unwrap_or_default();
+        Ok(ips)
+    }
+
+    //top dst ips
+    pub async fn get_top_dst_ips(&self, limit: u64) -> anyhow::Result<Vec<TopIp>> {
+        let ips = self.client
+            .query("SELECT dst_ip as ip, count() as count FROM ndr_events WHERE dst_ip != '' GROUP BY dst_ip ORDER BY count DESC LIMIT ?")
+            .bind(limit)
+            .fetch_all::<TopIp>()
+            .await
+            .unwrap_or_default();
+        Ok(ips)
+    }
+
+//network map
+pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
+    // Get top communication pairs
+    let pairs = self.client
+        .query("
+            SELECT 
+                src_ip,
+                dst_ip,
+                count() as connections,
+                groupArray(DISTINCT proto) as protocols
+            FROM ndr_events 
+            WHERE src_ip != '' 
+              AND dst_ip != ''
+              AND timestamp > now() - INTERVAL 1 HOUR
+            GROUP BY src_ip, dst_ip
+            ORDER BY connections DESC
+            LIMIT 100
+        ")
+        .fetch_all::<NetworkPair>()
+        .await
+        .unwrap_or_default();
+
+    // Build nodes and edges for graph
+    let mut nodes: std::collections::HashMap<String, serde_json::Value> = 
+        std::collections::HashMap::new();
+    let mut edges: Vec<serde_json::Value> = Vec::new();
+
+    for pair in &pairs {
+        // Add source node
+        nodes.entry(pair.src_ip.clone()).or_insert(json!({
+            "id":    pair.src_ip,
+            "label": pair.src_ip,
+            "type":  if pair.src_ip.starts_with("10.") || 
+                        pair.src_ip.starts_with("192.168.") || 
+                        pair.src_ip.starts_with("172.") 
+                     { "internal" } else { "external" }
+        }));
+
+        // Add destination node
+        nodes.entry(pair.dst_ip.clone()).or_insert(json!({
+            "id":    pair.dst_ip,
+            "label": pair.dst_ip,
+            "type":  if pair.dst_ip.starts_with("10.") || 
+                        pair.dst_ip.starts_with("192.168.") || 
+                        pair.dst_ip.starts_with("172.") 
+                     { "internal" } else { "external" }
+        }));
+
+        // Add edge
+        edges.push(json!({
+            "source":      pair.src_ip,
+            "target":      pair.dst_ip,
+            "connections": pair.connections,
+            "protocols":   pair.protocols,
+            "weight":      pair.connections,
+        }));
+    }
+
+    Ok(json!({
+        "nodes": nodes.values().collect::<Vec<_>>(),
+        "edges": edges,
+        "total_nodes": nodes.len(),
+        "total_edges": edges.len(),
+    }))
+}
+
+
+    //severity breakdown
+    pub async fn get_severity_breakdown(&self) -> anyhow::Result<serde_json::Value> {
+        let critical: u64 = self.client
+            .query("SELECT count() FROM ndr_hits WHERE severity = 'critical'")
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let high: u64 = self.client
+            .query("SELECT count() FROM ndr_hits WHERE severity = 'high'")
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let medium: u64 = self.client
+            .query("SELECT count() FROM ndr_hits WHERE severity = 'medium'")
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let low: u64 = self.client
+            .query("SELECT count() FROM ndr_hits WHERE severity = 'low'")
+            .fetch_one::<u64>().await.unwrap_or(0);
+
+        Ok(serde_json::json!({
+            "critical": critical,
+            "high":     high,
+            "medium":   medium,
+            "low":      low,
+        }))
+    }
+
+
+
+    
 }

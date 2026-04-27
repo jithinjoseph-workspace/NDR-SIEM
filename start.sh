@@ -3,6 +3,21 @@ INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
 
 echo "🚀 Starting NDR Stack..."
 
+# ── Load kernel modules ───────────────────────
+echo "  → Loading kernel modules..."
+sudo modprobe overlay 2>/dev/null || true
+sudo modprobe br_netfilter 2>/dev/null || true
+
+# ── Set interface ─────────────────────────────
+if [ -f "$INSTALL_DIR/.env" ]; then
+    source "$INSTALL_DIR/.env"
+fi
+IFACE=${IFACE:-$(ip -o -4 addr show 2>/dev/null | \
+    grep -v "127.0.0.1\|docker\|br-\|veth" | \
+    awk '{print $2}' | head -1)}
+echo "$IFACE" > /tmp/ndr_interface
+echo "  → Interface: $IFACE"
+
 # Start ClickHouse
 echo "  → Starting ClickHouse..."
 sudo service clickhouse-server start 2>/dev/null || true
@@ -17,7 +32,7 @@ sleep 2
 # Start Docker stack
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
-docker compose up -d
+sudo docker compose up -d
 
 # Wait for Kafka to be healthy
 echo "  → Waiting for Kafka..."
@@ -28,6 +43,18 @@ echo "  → Starting Angular UI..."
 cd $INSTALL_DIR/ndr-ui
 nohup npm start > /tmp/ndr-ui.log 2>&1 &
 echo $! > /tmp/ndr-ui.pid
+
+# Verify UI started
+log "Waiting for Angular UI to be ready..."
+for i in {1..60}; do
+    if curl -s http://localhost:4200 > /dev/null 2>&1; then
+        log "✅ Angular UI ready at http://localhost:4200"
+        break
+    fi
+    echo -n "."
+    sleep 3
+done
+echo ""
 
 echo ""
 echo "📊 Status:"

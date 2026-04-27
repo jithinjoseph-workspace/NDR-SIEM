@@ -30,18 +30,34 @@ class AgentHandler(BaseHTTPRequestHandler):
             zeek = subprocess.run("sudo pgrep -x zeek", shell=True, capture_output=True).returncode == 0
             suri = subprocess.run("ps aux | grep -v grep | grep -v ndr-agent | grep -c suricata",
                 shell=True, capture_output=True, text=True).stdout.strip() != "0"
+            
+            # Check Docker containers
             vector = subprocess.run(
-                "docker ps --filter name=vector --filter status=running --format '{{.Names}}'",
+                "docker ps --filter name=vector --filter status=running --format '{{.Names}}' 2>/dev/null",
                 shell=True, capture_output=True, text=True
-    )
-            vector_running = "vector" in vector.stdout
+            ).stdout.strip() != ""
+    
+            kafka = subprocess.run(
+                "docker ps --filter name=kafka --filter status=running --format '{{.Names}}' 2>/dev/null",
+                shell=True, capture_output=True, text=True
+            ).stdout.strip() != ""
+
+            # Check ClickHouse
+            clickhouse = subprocess.run(
+                "curl -s http://localhost:8123/ping 2>/dev/null",
+                shell=True, capture_output=True, text=True
+            ).stdout.strip() == "Ok."
+
             iface = open(IFACE_FILE).read().strip() if os.path.exists(IFACE_FILE) else "eth0"
+
             self.send_json({
-        "zeek": "running" if zeek else "stopped",
-        "suricata": "running" if suri else "stopped",
-        "vector": "running" if vector_running else "stopped",
-        "interface": iface })                   #help me arrange the code
-                           #
+                "zeek":       "running" if zeek       else "stopped",
+                "suricata":   "running" if suri        else "stopped",
+                "vector":     "running" if vector      else "stopped",
+                "kafka":      "running" if kafka       else "stopped",
+                "clickhouse": "running" if clickhouse  else "stopped",
+                "interface":  iface
+            })                   
 
         elif self.path == "/agent/interfaces":
             out = subprocess.run(["ip", "-o", "link"], capture_output=True, text=True)

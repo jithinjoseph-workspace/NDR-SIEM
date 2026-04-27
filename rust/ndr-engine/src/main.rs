@@ -108,12 +108,19 @@ async fn main() {
 
     let app = Router::new()
         .route("/ws",              get(ws_handler))
-        .route("/health",          get(api::health))
+        .route("/api/health",          get(api::health))
         .route("/api/interfaces",  get(api::get_interfaces))
         .route("/api/interface",   get(api::get_interface).post(api::set_interface))
         .route("/api/start",       post(api::start_services))
         .route("/api/stop",        post(api::stop_services))
         .route("/api/agent-status",  get(api::get_agent_status))
+        .route("/api/stats",         get(api::get_stats))
+        .route("/api/events",        get(api::get_recent_events))
+        .route("/api/top-ips",       get(api::get_top_ips))
+        .route("/api/severity",      get(api::get_severity))
+        .route("/api/hits",          get(api::get_hits))
+        .route("/api/network-map", get(api::get_network_map))
+        .route("/api/scale-status", get(api::get_scale_status))
 
         .with_state(state)
         .layer(cors);
