@@ -41,6 +41,15 @@ echo "║  Zeek + Suricata + Kafka + Rust + UI     ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
+# ── Fix DNS and APT first ─────────────────────
+log "Fixing network and APT..."
+echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+sudo apt-get clean 2>/dev/null || true
+sudo apt-get update -qq 2>/dev/null || true
+log "✅ Network ready"
+
+
 # ── Deployment Mode Selection ─────────────────
 echo "Select deployment mode:"
 echo ""
@@ -96,9 +105,30 @@ sudo apt-get install -y -qq \
 # ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
     log "Installing Suricata..."
-    sudo add-apt-repository -y ppa:oisf/suricata-stable 2>/dev/null
+
+    # Fix GPG keys first
+    sudo apt-get install -y gnupg2 curl ca-certificates
+
+    # Import Suricata PPA keys
+    sudo apt-key adv --keyserver keyserver.ubuntu.com \
+        --recv-keys AC10378CF205C960 2>/dev/null || true
+    sudo apt-key adv --keyserver keyserver.ubuntu.com \
+        --recv-keys D7F87B2966EB736F 2>/dev/null || true
+
+    # Add PPA
+    sudo add-apt-repository -y ppa:oisf/suricata-stable 2>/dev/null || true
     sudo apt-get update -qq
-    sudo apt-get install -y suricata
+
+    # Try PPA install first
+    if sudo apt-get install -y suricata 2>/dev/null; then
+        log "✅ Suricata installed via PPA"
+    else
+        # Fallback to default apt
+        warn "PPA failed — trying default apt..."
+        sudo apt-get install -y suricata || \
+            err "Suricata installation failed!"
+    fi
+
     log "Updating Suricata rules..."
     sudo suricata-update 2>/dev/null || true
     sudo systemctl disable suricata 2>/dev/null || true

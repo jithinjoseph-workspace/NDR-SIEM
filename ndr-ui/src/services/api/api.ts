@@ -92,5 +92,15 @@ export class Api {
     return this.http.post(`${this.baseUrl}/rules/reload`, {});
   }
 
+getRuleById(id: string): Observable<any> {
+  return this.http.get(`${this.baseUrl}/rules/${id}`);
+}
+
+toggleRule(id: string, enabled: boolean): Observable<any> {
+  return this.http.post(
+    `${this.baseUrl}/rules/${id}/toggle`,
+    { enabled }
+  );
+}
 }
 

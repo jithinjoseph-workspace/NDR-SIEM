@@ -15,40 +15,56 @@ export class Rules implements OnInit {
   rules: any[] = [];
   loading: boolean = true;
   saving: boolean = false;
-  showAddForm: boolean = false;
+  showForm: boolean = false;
+  isEditing: boolean = false;
+  editingId: string = '';
   totalHits: number = 0;
   message: string = '';
   messageType: string = '';
+  showConnHelp: boolean = false;
+  showFieldInfo: boolean = false;
 
-  newRule = {
+  ruleForm = {
     title: '',
     severity: 'medium',
     description: '',
-    field: 'proto',
+    field: 'event_type',
     value: '',
     matcher: 'equals',
     tags: [] as string[]
   };
 
-  // Real NDR field definitions
+  // CORRECT field names matching normalizer get_field()
   fieldOptions = [
+    {
+      value: 'event_type',
+      label: 'Event Type',
+      description: 'Type of event from Suricata',
+      examples: ['alert', 'flow', 'dns', 'http', 'tls', 'quic']
+    },
     {
       value: 'proto',
       label: 'Protocol',
-      description: 'Network protocol',
-      examples: ['tcp', 'udp', 'icmp']
+      description: 'Network protocol (lowercase)',
+      examples: ['tcp', 'udp', 'icmp', 'ipv6-icmp']
     },
     {
-      value: 'src_ip',
+      value: 'source_ip',
       label: 'Source IP',
       description: 'IP address of the sender',
-      examples: ['192.168.1.1', '10.0.0.0/8']
+      examples: ['10.0.2.15', '192.168.1.1']
     },
     {
-      value: 'dst_ip',
+      value: 'dest_ip',
       label: 'Destination IP',
       description: 'IP address of the receiver',
-      examples: ['8.8.8.8', '1.1.1.1']
+      examples: ['93.184.216.34', '8.8.8.8']
+    },
+    {
+      value: 'conn_state',
+      label: 'Connection State',
+      description: 'Zeek connection state code',
+      examples: ['S0', 'REJ', 'SF', 'OTH', 'RSTO']
     },
     {
       value: 'network_protocol',
@@ -57,22 +73,10 @@ export class Rules implements OnInit {
       examples: ['dns', 'http', 'ssl', 'ssh', 'ftp', 'smtp']
     },
     {
-      value: 'event_type',
-      label: 'Event Type',
-      description: 'Type of event from Suricata',
-      examples: ['alert', 'flow', 'dns', 'http', 'tls']
-    },
-    {
-      value: 'conn_state',
-      label: 'Connection State',
-      description: 'Zeek connection state code',
-      examples: ['S0', 'REJ', 'SF', 'RSTO', 'RSTR']
-    },
-    {
-      value: 'alert.category',
-      label: 'Alert Category',
-      description: 'Suricata alert category',
-      examples: ['Malware', 'Exploit', 'Policy Violation']
+      value: 'alert.severity',
+      label: 'Alert Severity',
+      description: 'Suricata severity (1=high, 2=med, 3=low)',
+      examples: ['1', '2', '3']
     },
     {
       value: 'alert.signature',
@@ -81,21 +85,26 @@ export class Rules implements OnInit {
       examples: ['ET MALWARE', 'ET SCAN', 'ET POLICY']
     },
     {
-      value: 'source',
-      label: 'Data Source',
-      description: 'Which sensor generated the event',
-      examples: ['zeek', 'suricata']
+      value: 'alert.category',
+      label: 'Alert Category',
+      description: 'Suricata alert category',
+      examples: ['Malware', 'Exploit', 'Policy Violation']
+    },
+    {
+      value: 'log_source',
+      label: 'Log Source (Zeek)',
+      description: 'Zeek log type',
+      examples: ['conn', 'dns', 'http', 'ssl', 'ssh']
     },
   ];
 
-  // Connection state descriptions
   connStateHelp = [
-    { state: 'S0', meaning: 'No reply — possible scan/drop' },
-    { state: 'REJ', meaning: 'Connection rejected by target' },
-    { state: 'SF', meaning: 'Normal established connection' },
+    { state: 'S0', meaning: 'No reply — possible scan' },
+    { state: 'REJ', meaning: 'Connection rejected' },
+    { state: 'SF', meaning: 'Normal connection' },
+    { state: 'OTH', meaning: 'Mid-stream, no SYN' },
     { state: 'RSTO', meaning: 'Originator sent RST' },
     { state: 'RSTR', meaning: 'Responder sent RST' },
-    { state: 'OTH', meaning: 'No SYN seen, mid-connection' },
   ];
 
   matcherOptions = [
@@ -113,9 +122,6 @@ export class Rules implements OnInit {
     { value: 'low', label: 'Low', color: 'text-blue-400', description: 'Informational' },
   ];
 
-  showConnHelp: boolean = false;
-  showFieldInfo: boolean = false;
-
   GavelIcon = Gavel;
   PlusIcon = Plus;
   EditIcon = Edit;
@@ -127,17 +133,15 @@ export class Rules implements OnInit {
 
   constructor(private api: Api, private cdr: ChangeDetectorRef) { }
 
-  ngOnInit() {
-    this.loadRules();
-  }
-
   get selectedField() {
-    return this.fieldOptions.find(f => f.value === this.newRule.field);
+    return this.fieldOptions.find(f => f.value === this.ruleForm.field);
   }
 
   get selectedSeverity() {
-    return this.severityOptions.find(s => s.value === this.newRule.severity);
+    return this.severityOptions.find(s => s.value === this.ruleForm.severity);
   }
+
+  ngOnInit() { this.loadRules(); }
 
   loadRules() {
     this.loading = true;
@@ -171,32 +175,90 @@ export class Rules implements OnInit {
     });
   }
 
+  openAddForm() {
+    this.isEditing = false;
+    this.editingId = '';
+    this.resetForm();
+    this.showForm = true;
+  }
+
+  openEditForm(rule: any) {
+    this.isEditing = true;
+    this.editingId = rule.id;
+    this.showForm = true;
+
+    // Load full rule details from API
+    this.api.getRuleById(rule.id).subscribe({
+      next: (data: any) => {
+        this.ruleForm = {
+          title: data.title || rule.name,
+          severity: data.severity || 'medium',
+          description: data.description || '',
+          field: data.field || 'event_type',
+          value: data.value || '',
+          matcher: data.matcher || 'equals',
+          tags: data.tags || []
+        };
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        // Fallback to basic info
+        this.ruleForm = {
+          title: rule.name,
+          severity: rule.severity.toLowerCase(),
+          description: rule.description || '',
+          field: 'event_type',
+          value: '',
+          matcher: 'equals',
+          tags: rule.tags || []
+        };
+        this.cdr.detectChanges();
+      }
+    });
+  }
   saveRule() {
-    if (!this.newRule.title || !this.newRule.value) {
+    if (!this.ruleForm.title || !this.ruleForm.value) {
       this.showMessage('Title and Value are required', 'error');
       return;
     }
     this.saving = true;
 
-    this.api.createRule(this.newRule).subscribe({
+    if (this.isEditing) {
+      // Delete old rule first then create new
+      this.api.deleteRule(this.editingId).subscribe({
+        next: () => this.createNewRule(),
+        error: () => {
+          // Even if delete fails, try creating
+          this.createNewRule();
+        }
+      });
+    } else {
+      this.createNewRule();
+    }
+  }
+
+  createNewRule() {
+    this.api.createRule(this.ruleForm).subscribe({
       next: (data: any) => {
         this.saving = false;
         if (data.status === 'created') {
-          // Auto reload rules — no restart needed!
+          // Hot reload
           this.api.reloadRules().subscribe({
             next: (reload: any) => {
+              const action = this.isEditing ? 'updated' : 'created';
               this.showMessage(
-                `✅ Rule "${this.newRule.title}" saved and activated! ${reload.count} rules now active.`,
+                `✅ Rule "${this.ruleForm.title}" ${action}! ${reload.count} rules active.`,
                 'success'
               );
-              this.showAddForm = false;
+              this.showForm = false;
               this.resetForm();
-              setTimeout(() => this.loadRules(), 1000);
+              this.loadRules();
               this.cdr.detectChanges();
             }
           });
         } else {
           this.showMessage(data.message || 'Error', 'error');
+          this.saving = false;
         }
         this.cdr.detectChanges();
       },
@@ -209,20 +271,42 @@ export class Rules implements OnInit {
   }
 
   deleteRule(rule: any) {
+    console.log('Deleting rule id:', rule.id); // ← add this
     if (!confirm(`Delete rule "${rule.name}"?`)) return;
     this.api.deleteRule(rule.id).subscribe({
       next: () => {
+        this.api.reloadRules().subscribe();
         this.showMessage(`Rule "${rule.name}" deleted`, 'success');
-        this.loadRules();
+        this.api.reloadRules().subscribe({
+          next: () => {
+            // Remove from local array immediately — no need to fetch
+            this.rules = this.rules.filter(r => r.id !== rule.id);
+            this.showMessage(`Rule "${rule.name}" deleted`, 'success');
+            this.cdr.detectChanges();
+          }
+        });
       },
-      error: () => this.showMessage('Failed to delete rule', 'error')
+      error: (err) => {
+        console.log('Delete error:', err); // ← add this
+        this.showMessage('Failed to delete rule', 'error');
+      }
     });
   }
 
-  toggleRule(rule: any) {
-    rule.status = rule.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-    this.cdr.detectChanges();
-  }
+ toggleRule(rule: any) {
+  const newEnabled = rule.status !== 'ACTIVE';
+  this.api.toggleRule(rule.id, newEnabled).subscribe({
+    next: (data: any) => {
+      rule.status = newEnabled ? 'ACTIVE' : 'INACTIVE';
+      this.showMessage(
+        `Rule "${rule.name}" ${newEnabled ? 'enabled' : 'disabled'} — ${data.active_rules} rules active`,
+        'success'
+      );
+      this.cdr.detectChanges();
+    },
+    error: () => this.showMessage('Failed to toggle rule', 'error')
+  });
+}
 
   showMessage(msg: string, type: string) {
     this.message = msg;
@@ -234,11 +318,17 @@ export class Rules implements OnInit {
   }
 
   resetForm() {
-    this.newRule = {
+    this.ruleForm = {
       title: '', severity: 'medium', description: '',
-      field: 'proto', value: '', matcher: 'equals', tags: []
+      field: 'event_type', value: '', matcher: 'equals', tags: []
     };
     this.showConnHelp = false;
+    this.isEditing = false;
+    this.editingId = '';
+  }
+
+  getPlaceholder(): string {
+    return this.selectedField?.examples?.[0] || 'Enter value';
   }
 
   getSeverityClass(severity: string): string {

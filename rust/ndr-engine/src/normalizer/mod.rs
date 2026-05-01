@@ -105,21 +105,37 @@ impl NormalizedEvent {
     /// Return a field value as a String for SIGMA rule matching.
     /// Falls back to the raw JSON field if not in the canonical struct.
     pub fn get_field(&self, field: &str) -> Option<String> {
-        match field {
-            "source_ip"        => self.source_ip.clone(),
-            "dest_ip"          => self.dest_ip.clone(),
-            "source_port"      => self.source_port.map(|p| p.to_string()),
-            "dest_port"        => self.dest_port.map(|p| p.to_string()),
-            "proto"            => self.proto.clone(),
-            "network_protocol" => self.network_protocol.clone(),
-            "community_id"     => self.community_id.clone(),
-            "conn_state"       => self.conn_state.clone(),
-            "event_type"       => self.event_type.clone(),
-            "log_source"       => self.log_source.clone(),
-            "alert.signature"  => self.alert.as_ref().map(|a| a.signature.clone()),
-            "alert.category"   => self.alert.as_ref().map(|a| a.category.clone()),
-            "alert.severity"   => self.alert.as_ref().map(|a| a.severity.to_string()),
-            _ => self.raw.get(field).and_then(|v| v.as_str()).map(String::from),
-        }
+    match field {
+        // ── Canonical field names ─────────────────
+        "source_ip"        => self.source_ip.clone(),
+        "dest_ip"          => self.dest_ip.clone(),
+        "source_port"      => self.source_port.map(|p| p.to_string()),
+        "dest_port"        => self.dest_port.map(|p| p.to_string()),
+        "proto"            => self.proto.clone(),
+        "network_protocol" => self.network_protocol.clone(),
+        "community_id"     => self.community_id.clone(),
+        "conn_state"       => self.conn_state.clone(),
+        "event_type"       => self.event_type.clone(),
+        "log_source"       => self.log_source.clone(),
+        "alert.signature"  => self.alert.as_ref().map(|a| a.signature.clone()),
+        "alert.category"   => self.alert.as_ref().map(|a| a.category.clone()),
+        "alert.severity"   => self.alert.as_ref().map(|a| a.severity.to_string()),
+
+        // ── Aliases ───────────────────────────────
+        "src_ip"    => self.source_ip.clone(),
+        "dst_ip"    => self.dest_ip.clone(),
+        "src_port"  => self.source_port.map(|p| p.to_string()),
+        "dst_port"  => self.dest_port.map(|p| p.to_string()),
+        "source"    => Some(match self.event_source {
+                          EventSource::Zeek     => "zeek".to_string(),
+                          EventSource::Suricata => "suricata".to_string(),
+                          EventSource::Unknown  => "unknown".to_string(),
+                       }),
+
+        // ── Fallback to raw JSON ──────────────────
+        _ => self.raw.get(field)
+                .and_then(|v| v.as_str())
+                .map(String::from),
     }
+}
 }

@@ -22,7 +22,16 @@ fn agent_url() -> String {
         .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string())
 }
 
+#[derive(serde::Deserialize)]
+pub struct TogglePayload {
+    pub enabled: bool,
+}
+
+
 // ── Shared application state ──────────────────────────────────────────────
+
+
+
 
 #[derive(Clone)]
 pub struct AppState {
@@ -138,7 +147,7 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     score:        risk.score as f32,
     severity:     risk.severity.as_str().to_string(),
     tags:         risk.tags.clone(),
-    sigma_hits:   detections.iter().map(|d| d.title.clone()).collect(),
+    sigma_hits: {let mut seen = std::collections::HashSet::new();detections.iter().map(|d| d.title.clone()).filter(|t| seen.insert(t.clone())).collect()},  
     threat_intel: enrichment.is_malicious as u8,
     src_country:  enrichment.src_geo.as_ref()
                     .map(|g| g.country_code.clone())
@@ -153,6 +162,13 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
         }
     });
     // Build WebSocket hit message
+    let sigma_hits: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        detections.iter()
+            .map(|d| d.title.clone())
+            .filter(|t| seen.insert(t.clone()))
+            .collect()
+    };
     let hit_msg = json!({
         "type":            "hit",
         "cid":             hit.community_id,
@@ -168,7 +184,7 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
         "dst_country":     enrichment.dst_geo.as_ref().map(|g| &g.country_code),
         "src_asn":         enrichment.src_asn.as_ref().map(|a| &a.full),
         "dst_asn":         enrichment.dst_asn.as_ref().map(|a| &a.full),
-        "sigma_hits":      detections.iter().map(|d| &d.title).collect::<Vec<_>>(),
+        "sigma_hits":      sigma_hits,
         "suricata": {
             "src": hit.suricata.source_ip, "src_port": hit.suricata.source_port,
             "dst": hit.suricata.dest_ip,   "dst_port": hit.suricata.dest_port,
@@ -232,7 +248,11 @@ pub async fn get_interfaces() -> Json<Value> {
         Err(_) => Json(json!([])),
     }
 }
+ 
 
+
+
+//get interface
 pub async fn get_interface() -> Json<Value> {
     let url = format!("{}/agent/status", agent_url());
     match reqwest::get(&url).await {
@@ -350,6 +370,74 @@ pub async fn get_hits(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
+pub async fn get_rule_by_id(
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+    let file_path = format!("{}/{}.yml", rules_dir, rule_id);
+
+    match std::fs::read_to_string(&file_path) {
+        Ok(content) => {
+            // Parse YAML to extract fields
+            let doc: std::collections::HashMap<String, serde_yaml::Value> =
+                serde_yaml::from_str(&content).unwrap_or_default();
+
+            let get_str = |k: &str| -> String {
+                doc.get(k).and_then(|v| v.as_str())
+                    .unwrap_or("").to_string()
+            };
+
+            // Extract detection field/matcher/value
+            let mut field = String::new();
+            let mut matcher = String::new();
+            let mut value = String::new();
+
+            if let Some(detection) = doc.get("detection")
+                .and_then(|v| v.as_mapping()) {
+                for (k, v) in detection {
+                    let key = k.as_str().unwrap_or("");
+                    if key == "condition" { continue; }
+                    if let Some(field_map) = v.as_mapping() {
+                        for (fk, fv) in field_map {
+                            let fk_str = fk.as_str().unwrap_or("");
+                            let parts: Vec<&str> = fk_str.splitn(2, '|').collect();
+                            field   = parts[0].to_string();
+                            matcher = parts.get(1).unwrap_or(&"equals").to_string();
+                            value   = match fv {
+                                serde_yaml::Value::String(s) => s.clone(),
+                                serde_yaml::Value::Sequence(s) => s.first()
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("").to_string(),
+                                _ => String::new(),
+                            };
+                        }
+                    }
+                }
+            }
+
+            Json(json!({
+                "id":          get_str("id"),
+                "title":       get_str("title"),
+                "severity":    get_str("level"),
+                "description": get_str("description"),
+                "field":       field,
+                "matcher":     matcher,
+                "value":       value,
+                "tags":        doc.get("tags")
+                    .and_then(|v| v.as_sequence())
+                    .map(|s| s.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default(),
+            }))
+        }
+        Err(_) => Json(json!({
+            "error": "Rule not found"
+        }))
+    }
+}
+
 //rules endpoint
 pub async fn get_rules(State(state): State<AppState>) -> Json<Value> {
     Json(json!(state.detection.read().await.get_rules()))
@@ -384,23 +472,33 @@ pub async fn lookup_ioc(
 
 
 // auto reload rules 
-pub async fn reload_rules_api(State(state): State<AppState>) -> Json<Value> {
+pub async fn reload_rules_api(
+    State(state): State<AppState>
+) -> Json<Value> {
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
 
-    let new_rules = crate::detection::load_rules_from_dir(&rules_dir);
-    let count = new_rules.len();
+    // Get disabled rules from ClickHouse
+    let disabled = state.ch_storage
+        .get_disabled_rules().await
+        .unwrap_or_default();
 
-    // Write lock to update rules
-    let mut detection = state.detection.write().await;
-    detection.set_rules(new_rules);
+    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+    let total = all_rules.len();
+    let active = all_rules.into_iter()
+        .filter(|r| !disabled.contains(&r.id))
+        .collect::<Vec<_>>();
+    let count = active.len();
 
-    tracing::info!("🔄 Hot-reloaded {} SIGMA rules", count);
+    state.detection.write().await.set_rules(active);
+    tracing::info!("Hot-reloaded {} / {} SIGMA rules", count, total);
 
     Json(json!({
-        "status":  "reloaded",
-        "count":   count,
-        "message": "Rules reloaded successfully"
+        "status":        "reloaded",
+        "count":         count,
+        "total":         total,
+        "disabled":      disabled.len(),
+        "message":       "Rules reloaded successfully"
     }))
 }
 
@@ -482,7 +580,7 @@ detection:
 }
 
 pub async fn delete_rule(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     axum::extract::Path(rule_id): axum::extract::Path<String>,
 ) -> Json<Value> {
     let rules_dir = std::env::var("RULES_DIR")
@@ -491,11 +589,30 @@ pub async fn delete_rule(
 
     match std::fs::remove_file(&file_path) {
         Ok(_) => {
+            // Also remove state from ClickHouse
+            state.ch_storage
+                .delete_rule_state(&rule_id).await.ok();
+
+            // Reload rules
+            let disabled = state.ch_storage
+                .get_disabled_rules().await
+                .unwrap_or_default();
+            let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+            let active = all_rules.into_iter()
+                .filter(|r| !disabled.contains(&r.id))
+                .collect::<Vec<_>>();
+            let count = active.len();
+            state.detection.write().await.set_rules(active);
+
             tracing::info!("Rule deleted: {}", rule_id);
-            Json(json!({"status": "deleted", "id": rule_id}))
+            Json(json!({
+                "status": "deleted",
+                "id":     rule_id,
+                "active_rules": count
+            }))
         }
         Err(e) => Json(json!({
-            "status": "error",
+            "status":  "error",
             "message": e.to_string()
         }))
     }
@@ -523,6 +640,44 @@ pub async fn get_scale_status(State(state): State<AppState>) -> Json<Value> {
         },
         "current_engines": 1,
         "max_engines":     5,
+    }))
+}
+
+
+
+//rules enable disable
+pub async fn toggle_rule(
+    State(state): State<AppState>,
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+    Json(payload): Json<TogglePayload>,
+) -> Json<Value> {
+    // Save state to ClickHouse
+    if let Err(e) = state.ch_storage
+        .set_rule_enabled(&rule_id, payload.enabled).await {
+        return Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }));
+    }
+
+    // Reload rules respecting disabled state
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+    let disabled = state.ch_storage
+        .get_disabled_rules().await
+        .unwrap_or_default();
+    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+    let active = all_rules.into_iter()
+        .filter(|r| !disabled.contains(&r.id))
+        .collect::<Vec<_>>();
+    let count = active.len();
+    state.detection.write().await.set_rules(active);
+
+    Json(json!({
+        "status":       "ok",
+        "id":           rule_id,
+        "enabled":      payload.enabled,
+        "active_rules": count
     }))
 }
 
