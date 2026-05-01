@@ -69,6 +69,13 @@ pub struct RecentHit {
     pub src_country:  String,
     pub dst_country:  String,
 }
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct ThreatIntelHit {
+    pub src_ip:    String,
+    pub dst_ip:    String,
+    pub hits:      u64,
+    pub last_seen: u32,
+}
 pub struct ClickhouseStorage {
     client: Client,
 }
@@ -90,6 +97,33 @@ impl ClickhouseStorage {
         }
     }
 
+
+//threat intel hits
+    pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+    let hits = self.client
+        .query("
+            SELECT
+                src_ip,
+                dst_ip,
+                count() as hits,
+                max(timestamp) as last_seen
+            FROM ndr_hits
+            WHERE threat_intel = 1
+            GROUP BY src_ip, dst_ip
+            ORDER BY hits DESC
+            LIMIT 50
+        ")
+        .fetch_all::<ThreatIntelHit>()
+        .await
+        .unwrap_or_default();
+
+    Ok(hits.iter().map(|h| serde_json::json!({
+        "src_ip":    h.src_ip,
+        "dst_ip":    h.dst_ip,
+        "hits":      h.hits,
+        "last_seen": h.last_seen,
+    })).collect())
+}
     // ── Insert methods ────────────────────────────────────────────────────
 
     pub async fn insert_event(&self, event: NdrEvent) -> anyhow::Result<()> {

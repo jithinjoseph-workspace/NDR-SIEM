@@ -49,6 +49,8 @@ services:
       - ${INSTALL_DIR}/scripts:/scripts
       - ${HOME_DIR}/logs:/logs
       - ${HOME_DIR}/ndr-config:/config
+      - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
+
     depends_on:
       kafka:
         condition: service_healthy

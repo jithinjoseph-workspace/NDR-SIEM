@@ -1,49 +1,340 @@
 <div class="p-8 animate-in fade-in duration-500">
+
+  <!-- Header -->
   <div class="flex items-center justify-between mb-8">
     <div>
-      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">Rules Management</h2>
-      <p class="text-on-surface-variant text-sm mt-1">Detection logic, Sigma rules, and YARA signatures</p>
+      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">
+        Rules Management
+      </h2>
+      <p class="text-on-surface-variant text-sm mt-1">
+        SIGMA detection rules — applied to ALL events from Zeek + Suricata
+      </p>
     </div>
-    <button class="bg-primary text-black text-xs font-bold px-4 py-2 rounded-md flex items-center gap-2 hover:bg-primary/90 transition-transform active:scale-95">
-      <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
-      Create New Rule
-    </button>
+    <div class="flex gap-3">
+      <button (click)="loadRules()"
+        class="flex items-center gap-2 bg-surface-container-low text-on-surface-variant text-xs font-semibold px-4 py-2 rounded border border-outline/10 hover:text-white transition-all">
+        <lucide-icon [name]="RefreshIcon" class="w-3.5 h-3.5"></lucide-icon>
+        Refresh
+      </button>
+      <button (click)="showAddForm = !showAddForm"
+        class="bg-primary text-black text-xs font-bold px-4 py-2 rounded-md flex items-center gap-2 hover:bg-primary/90 transition-transform active:scale-95">
+        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+        New Rule
+      </button>
+    </div>
   </div>
 
-  <div class="grid grid-cols-1 gap-4">
-    <div *ngFor="let rule of rules" class="bg-surface-container-highest p-5 rounded-lg border border-outline/10 flex items-center justify-between group hover:border-primary/30 transition-all">
+  <!-- Message -->
+  <div *ngIf="message"
+       [class]="'mb-4 px-4 py-3 rounded text-xs font-bold ' +
+         (messageType === 'success' ?
+           'bg-primary/10 text-primary border border-primary/20' :
+           'bg-red-500/10 text-red-400 border border-red-500/20')">
+    {{ message }}
+  </div>
+
+  <!-- Stats -->
+  <div class="grid grid-cols-3 gap-4 mb-8">
+    <div class="bg-surface-container-highest p-4 rounded-lg border border-outline/10 text-center">
+      <div class="text-2xl font-bold text-white">{{ rules.length }}</div>
+      <div class="text-[10px] text-on-surface-variant uppercase mt-1">Total Rules</div>
+    </div>
+    <div class="bg-surface-container-highest p-4 rounded-lg border border-outline/10 text-center">
+      <div class="text-2xl font-bold text-primary">
+        {{ rules.filter(r => r.status === 'ACTIVE').length }}
+      </div>
+      <div class="text-[10px] text-on-surface-variant uppercase mt-1">Active</div>
+    </div>
+    <div class="bg-surface-container-highest p-4 rounded-lg border border-outline/10 text-center">
+      <div class="text-2xl font-bold text-orange-400">{{ totalHits }}</div>
+      <div class="text-[10px] text-on-surface-variant uppercase mt-1">Total Hits</div>
+    </div>
+  </div>
+
+  <!-- Add Rule Form -->
+  <div *ngIf="showAddForm"
+       class="mb-6 bg-surface-container-highest rounded-xl border border-primary/20 overflow-hidden animate-in slide-in-from-top-2">
+
+    <!-- Form Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10 bg-primary/5">
+      <div>
+        <h3 class="text-white font-bold uppercase text-sm">New SIGMA Detection Rule</h3>
+        <p class="text-[10px] text-on-surface-variant mt-0.5">
+          Rule applies to events from both Zeek and Suricata
+        </p>
+      </div>
+      <button (click)="showAddForm = false; resetForm()"
+              class="text-on-surface-variant hover:text-white">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+
+    <div class="p-6 space-y-6">
+
+      <!-- Title + Severity -->
+      <div class="grid grid-cols-3 gap-4">
+        <div class="col-span-2">
+          <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+            Rule Title *
+          </label>
+          <input [(ngModel)]="newRule.title"
+                 placeholder="e.g. SSH Brute Force Detection"
+                 class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs focus:outline-none focus:border-primary/50"/>
+        </div>
+        <div>
+          <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+            Severity Level
+          </label>
+          <select [(ngModel)]="newRule.severity"
+                  class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs">
+            <option *ngFor="let s of severityOptions" [value]="s.value">
+              {{ s.label }} — {{ s.description }}
+            </option>
+          </select>
+          <div *ngIf="selectedSeverity"
+               [class]="'text-[10px] mt-1 ' + selectedSeverity.color">
+            {{ selectedSeverity.description }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Detection Condition -->
+      <div>
+        <div class="flex items-center gap-2 mb-3">
+          <label class="text-[10px] text-on-surface-variant uppercase font-bold">
+            Detection Condition *
+          </label>
+          <button (click)="showFieldInfo = !showFieldInfo"
+                  class="text-on-surface-variant hover:text-primary">
+            <lucide-icon [name]="InfoIcon" class="w-3 h-3"></lucide-icon>
+          </button>
+        </div>
+
+        <!-- Field info popup -->
+        <div *ngIf="showFieldInfo"
+             class="mb-3 p-3 bg-surface-container-low rounded border border-outline/10 text-[10px] text-on-surface-variant">
+          <div class="font-bold text-white mb-2">Available Fields:</div>
+          <div class="grid grid-cols-2 gap-1">
+            <div *ngFor="let f of fieldOptions">
+              <span class="text-primary font-mono">{{ f.value }}</span>
+              — {{ f.description }}
+              <span class="text-on-surface-variant italic">
+                (e.g. {{ f.examples.join(', ') }})
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4">
+          <!-- Field -->
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+              Field
+            </label>
+            <select [(ngModel)]="newRule.field"
+                    class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs">
+              <option *ngFor="let f of fieldOptions" [value]="f.value">
+                {{ f.label }} ({{ f.value }})
+              </option>
+            </select>
+            <div *ngIf="selectedField"
+                 class="text-[10px] text-on-surface-variant mt-1 italic">
+              {{ selectedField.description }}
+            </div>
+          </div>
+
+          <!-- Matcher -->
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+              Match Type
+            </label>
+            <select [(ngModel)]="newRule.matcher"
+                    class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs">
+              <option *ngFor="let m of matcherOptions" [value]="m.value">
+                {{ m.label }} — {{ m.description }}
+              </option>
+            </select>
+          </div>
+
+          <!-- Value -->
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+              Value to Match *
+            </label>
+            <input [(ngModel)]="newRule.value"
+                   [placeholder]="selectedField?.examples?.[0] || 'Enter value'"
+                   class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs focus:outline-none focus:border-primary/50"/>
+            <!-- Examples -->
+            <div *ngIf="selectedField" class="flex gap-1 mt-1 flex-wrap">
+              <span class="text-[9px] text-on-surface-variant">Examples:</span>
+              <button *ngFor="let ex of selectedField.examples"
+                      (click)="newRule.value = ex"
+                      class="text-[9px] text-primary hover:underline font-mono">
+                {{ ex }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Conn state help -->
+        <div *ngIf="newRule.field === 'conn_state'" class="mt-3">
+          <button (click)="showConnHelp = !showConnHelp"
+                  class="text-[10px] text-primary hover:underline">
+            {{ showConnHelp ? 'Hide' : 'Show' }} connection state reference
+          </button>
+          <div *ngIf="showConnHelp"
+               class="mt-2 grid grid-cols-3 gap-2">
+            <div *ngFor="let cs of connStateHelp"
+                 (click)="newRule.value = cs.state"
+                 class="p-2 bg-surface-container-low rounded border border-outline/10 cursor-pointer hover:border-primary/30 transition-all">
+              <div class="text-primary font-mono font-bold text-xs">{{ cs.state }}</div>
+              <div class="text-[10px] text-on-surface-variant">{{ cs.meaning }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Description -->
+      <div>
+        <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+          Description (optional)
+        </label>
+        <input [(ngModel)]="newRule.description"
+               placeholder="What threat does this rule detect?"
+               class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs focus:outline-none focus:border-primary/50"/>
+      </div>
+
+      <!-- Preview -->
+      <div class="p-4 bg-black/30 rounded-lg border border-outline/10 font-mono text-[11px]">
+        <div class="text-primary font-bold mb-2">📋 Rule Preview (SIGMA YAML):</div>
+        <div class="text-on-surface-variant space-y-0.5">
+          <div>title: <span class="text-white">{{ newRule.title || '...' }}</span></div>
+          <div>level: <span [class]="getSeverityClass(newRule.severity)">{{ newRule.severity }}</span></div>
+          <div>detection:</div>
+          <div class="pl-4">keywords:</div>
+          <div class="pl-8">
+            <span class="text-yellow-400">{{ newRule.field }}|{{ newRule.matcher }}</span>:
+            <span class="text-green-400"> '{{ newRule.value || '...' }}'</span>
+          </div>
+          <div class="pl-4">condition: <span class="text-white">keywords</span></div>
+        </div>
+      </div>
+
+      <!-- Quick templates -->
+      <div>
+        <div class="text-[10px] text-on-surface-variant uppercase font-bold mb-2">
+          Quick Templates:
+        </div>
+        <div class="flex gap-2 flex-wrap">
+          <button (click)="newRule.field='conn_state'; newRule.value='S0'; newRule.matcher='equals'; newRule.title='Port Scan Detection'; newRule.severity='medium'; newRule.description='Detects port scanning via unanswered connections'"
+                  class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white transition-all">
+            🔍 Port Scan
+          </button>
+          <button (click)="newRule.field='network_protocol'; newRule.value='ssh'; newRule.matcher='equals'; newRule.title='SSH Connection Monitor'; newRule.severity='low'; newRule.description='Monitors SSH connections'"
+                  class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white transition-all">
+            🔑 SSH Monitor
+          </button>
+          <button (click)="newRule.field='network_protocol'; newRule.value='dns'; newRule.matcher='equals'; newRule.title='DNS Traffic Monitor'; newRule.severity='low'; newRule.description='Monitors all DNS traffic'"
+                  class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white transition-all">
+            📡 DNS Monitor
+          </button>
+          <button (click)="newRule.field='conn_state'; newRule.value='REJ'; newRule.matcher='equals'; newRule.title='Connection Rejected Alert'; newRule.severity='medium'; newRule.description='Detects rejected connections'"
+                  class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white transition-all">
+            🚫 Rejected Connections
+          </button>
+          <button (click)="newRule.field='alert.signature'; newRule.value='ET MALWARE'; newRule.matcher='contains'; newRule.title='Malware Signature Alert'; newRule.severity='critical'; newRule.description='Detects Suricata malware signatures'"
+                  class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white transition-all">
+            ☠️ Malware Alert
+          </button>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex gap-3 pt-2 border-t border-outline/10">
+        <button (click)="saveRule()" [disabled]="saving"
+          class="bg-primary text-black text-xs font-bold px-6 py-2 rounded hover:bg-primary/90 disabled:opacity-50 transition-all">
+          {{ saving ? 'Saving...' : '💾 Save Rule' }}
+        </button>
+        <button (click)="showAddForm = false; resetForm()"
+                class="bg-surface-container-low text-on-surface-variant text-xs font-bold px-4 py-2 rounded hover:text-white">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div *ngIf="loading" class="py-20 text-center text-on-surface-variant animate-pulse">
+    Loading rules...
+  </div>
+
+  <!-- Rules List -->
+  <div *ngIf="!loading" class="grid grid-cols-1 gap-4">
+    <div *ngFor="let rule of rules"
+         class="bg-surface-container-highest p-5 rounded-lg border border-outline/10 flex items-center justify-between group hover:border-primary/30 transition-all">
       <div class="flex items-center gap-5">
         <div class="p-3 rounded bg-surface-container-low text-on-surface-variant group-hover:text-primary transition-colors">
           <lucide-icon [name]="GavelIcon" class="w-6 h-6"></lucide-icon>
         </div>
         <div>
           <h3 class="text-white font-bold">{{ rule.name }}</h3>
-          <div class="flex items-center gap-3 mt-1">
-            <span class="text-[10px] text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded uppercase font-bold border border-outline/5">{{ rule.type }}</span>
-            <span [class]="'text-[10px] font-bold uppercase ' + (rule.severity === 'CRITICAL' ? 'text-tertiary' : rule.severity === 'HIGH' ? 'text-secondary' : 'text-primary')">
-              {{ rule.severity }} PRIORITY
+          <div class="flex items-center gap-3 mt-1 flex-wrap">
+            <span class="text-[10px] text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded uppercase font-bold border border-outline/5">
+              {{ rule.type }}
             </span>
+            <span [class]="'text-[10px] font-bold border px-2 py-0.5 rounded uppercase ' + getSeverityBadgeClass(rule.severity)">
+              {{ rule.severity }}
+            </span>
+            <span class="text-[10px] text-on-surface-variant">
+              {{ rule.conditions }} condition(s)
+            </span>
+            <span *ngFor="let tag of rule.tags?.slice(0,3)"
+                  class="text-[9px] text-on-surface-variant bg-surface-container-low px-1.5 py-0.5 rounded font-mono">
+              {{ tag }}
+            </span>
+          </div>
+          <div *ngIf="rule.description"
+               class="text-[10px] text-on-surface-variant mt-1 italic">
+            {{ rule.description }}
           </div>
         </div>
       </div>
 
-      <div class="flex items-center gap-8">
+      <div class="flex items-center gap-6">
         <div class="flex flex-col items-end">
-          <span class="text-[10px] text-on-surface-variant uppercase tracking-wider font-bold">Last Triggered</span>
-          <span class="text-xs text-white">{{ rule.lastTriggered }}</span>
+          <span class="text-[10px] text-on-surface-variant uppercase tracking-wider font-bold">
+            Status
+          </span>
+          <span [class]="rule.status === 'ACTIVE' ? 'text-primary text-xs font-bold' : 'text-on-surface-variant text-xs'">
+            {{ rule.status }}
+          </span>
         </div>
-        <div class="flex items-center gap-2">
-          <button [class]="'p-2 rounded hover:bg-surface-container-low transition-colors ' + (rule.status === 'ACTIVE' ? 'text-primary' : 'text-on-surface-variant')">
+        <div class="flex items-center gap-1">
+          <button (click)="toggleRule(rule)"
+                  [title]="rule.status === 'ACTIVE' ? 'Disable' : 'Enable'"
+                  [class]="'p-2 rounded hover:bg-surface-container-low transition-colors ' +
+                    (rule.status === 'ACTIVE' ? 'text-primary' : 'text-on-surface-variant')">
             <lucide-icon [name]="PowerIcon" class="w-4 h-4"></lucide-icon>
           </button>
-          <button class="p-2 rounded hover:bg-surface-container-low text-on-surface-variant hover:text-white transition-colors">
-            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
-          </button>
-          <button class="p-2 rounded hover:bg-surface-container-low text-on-surface-variant hover:text-tertiary transition-colors">
+          <button (click)="deleteRule(rule)"
+                  title="Delete rule"
+                  class="p-2 rounded hover:bg-surface-container-low text-on-surface-variant hover:text-red-400 transition-colors">
             <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
           </button>
         </div>
       </div>
     </div>
+
+    <!-- Empty -->
+    <div *ngIf="rules.length === 0"
+         class="py-20 flex flex-col items-center justify-center text-on-surface-variant">
+      <lucide-icon [name]="GavelIcon" class="w-12 h-12 mb-4 opacity-20"></lucide-icon>
+      <p class="text-sm">No SIGMA rules loaded</p>
+      <p class="text-xs mt-1">Click "New Rule" to create one</p>
+    </div>
+  </div>
+
+  <div class="mt-4 text-[11px] text-on-surface-variant">
+    ℹ️ Rules are saved to disk immediately. Restart NDR Engine to activate new rules.
   </div>
 </div>

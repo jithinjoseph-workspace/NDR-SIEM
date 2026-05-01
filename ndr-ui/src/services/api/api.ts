@@ -8,7 +8,7 @@ import { Observable, of } from 'rxjs';
 export class Api {
   private baseUrl = 'http://localhost:3000/api';
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient) { }
 
   getDashboardStats(): Observable<any> {
     return this.http.get(`${this.baseUrl}/health`);
@@ -41,7 +41,7 @@ export class Api {
   stopServices(): Observable<any> {
     return this.http.post(`${this.baseUrl}/stop`, {});
   }
-  
+
   getStats(): Observable<any> {
     return this.http.get(`${this.baseUrl}/stats`);
   }
@@ -63,7 +63,34 @@ export class Api {
   }
 
   getScaleStatus(): Observable<any> {
-  return this.http.get(`${this.baseUrl}/scale-status`);
-}
+    return this.http.get(`${this.baseUrl}/scale-status`);
+  }
+  getRules(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/rules`);
+  }
+
+
+
+  createRule(rule: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/rules`, rule);
+  }
+
+  deleteRule(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/rules/${id}`);
+  }
+
+
+
+  getThreatIntel(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat-intel`);
+  }
+
+  lookupIoc(ip: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat-intel/${ip}`);
+  }
+  reloadRules(): Observable<any> {
+    return this.http.post(`${this.baseUrl}/rules/reload`, {});
+  }
+
 }
 

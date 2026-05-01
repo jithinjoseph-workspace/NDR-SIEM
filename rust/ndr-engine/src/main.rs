@@ -12,7 +12,7 @@ mod scoring;
 mod storage;
 
 use api::{websocket::ws_handler, AppState};
-use axum::{routing::{get, post}, Router};
+use axum::{routing::{get, post, delete}, Router};
 use tower_http::cors::{Any, CorsLayer};
 use enrichment::{AsnLookup, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
@@ -64,7 +64,7 @@ async fn main() {
             threat_intel: ThreatIntel::new(), // separate instance for sync use
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
-        detection:  Arc::new(detection::DetectionEngine::new("rules")),
+        detection:  Arc::new(tokio::sync::RwLock::new(detection::DetectionEngine::new("rules"))),
         ch_storage:  Arc::new(storage::ClickhouseStorage::new()),
         storage:    Arc::new(storage),
         tx:         tx.clone(),
@@ -121,7 +121,12 @@ async fn main() {
         .route("/api/hits",          get(api::get_hits))
         .route("/api/network-map", get(api::get_network_map))
         .route("/api/scale-status", get(api::get_scale_status))
-
+        .route("/api/rules",           get(api::get_rules).post(api::create_rule))
+        .route("/api/rules/:id",       delete(api::delete_rule))
+        .route("/api/rules/reload",    post(api::reload_rules_api))
+        .route("/api/threat-intel",      get(api::get_threat_intel))
+        .route("/api/threat-intel/:ip",  get(api::lookup_ioc))
+       
         .with_state(state)
         .layer(cors);
 

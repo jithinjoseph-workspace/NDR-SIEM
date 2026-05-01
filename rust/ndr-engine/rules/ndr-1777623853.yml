@@ -1,0 +1,13 @@
+id: ndr-1777623853
+title: SSH Connection Monitor
+description: Monitors SSH connections
+level: low
+tags:
+  []
+logsource:
+  product: ndr
+detection:
+  keywords:
+    network_protocol|equals:
+      - 'ssh'
+  condition: keywords

@@ -29,7 +29,7 @@ pub struct AppState {
     pub correlator: Arc<CorrelationEngine>,
     pub enrichment: Arc<EnrichmentPipeline>,
     pub scorer:     Arc<RiskScorer>,
-    pub detection:  Arc<DetectionEngine>,
+    pub detection:  Arc<tokio::sync::RwLock<DetectionEngine>>,
     pub storage:    Arc<SqliteStorage>,
     pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
@@ -100,8 +100,8 @@ pub fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country);
 
     // SIGMA detection on both sides
-    let mut detections = state.detection.check(&hit.zeek);
-    detections.extend(state.detection.check(&hit.suricata));
+let mut detections = state.detection.blocking_read().check(&hit.zeek);
+detections.extend(state.detection.blocking_read().check(&hit.suricata));
 
     let cs      = hit.zeek.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);
@@ -204,7 +204,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "status":          "ok",
         "sessions":        state.correlator.session_count(),
-        "sigma_rules":     state.detection.rule_count(),
+        "sigma_rules":     state.detection.read().await.rule_count(),
         "events_total":    ch_stats.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
         "hits_total":      ch_stats.get("hits_total").and_then(|v| v.as_u64()).unwrap_or(0),
         "events_1h":       ch_stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -349,6 +349,158 @@ pub async fn get_hits(State(state): State<AppState>) -> Json<Value> {
         }
     }
 }
+
+//rules endpoint
+pub async fn get_rules(State(state): State<AppState>) -> Json<Value> {
+    Json(json!(state.detection.read().await.get_rules()))
+}
+
+pub async fn get_threat_intel(State(state): State<AppState>) -> Json<Value> {
+    // Get malicious IPs detected in our network from ClickHouse
+    let detected = state.ch_storage.get_threat_intel_hits().await
+        .unwrap_or_default();
+
+    Json(json!({
+        "total_malicious_ips": state.enrichment.threat_intel.count(),
+        "source": "abuse.ch Feodo Tracker",
+        "url": "https://feodotracker.abuse.ch",
+        "detected_in_network": detected,
+        "last_refresh": "Every 60 minutes",
+    }))
+}
+
+pub async fn lookup_ioc(
+    State(state): State<AppState>,
+    axum::extract::Path(ip): axum::extract::Path<String>,
+) -> Json<Value> {
+    let is_malicious = state.enrichment.threat_intel.is_malicious(&ip);
+    Json(json!({
+        "ip":           ip,
+        "is_malicious": is_malicious,
+        "source":       "abuse.ch Feodo Tracker",
+    }))
+}
+
+
+
+// auto reload rules 
+pub async fn reload_rules_api(State(state): State<AppState>) -> Json<Value> {
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+
+    let new_rules = crate::detection::load_rules_from_dir(&rules_dir);
+    let count = new_rules.len();
+
+    // Write lock to update rules
+    let mut detection = state.detection.write().await;
+    detection.set_rules(new_rules);
+
+    tracing::info!("🔄 Hot-reloaded {} SIGMA rules", count);
+
+    Json(json!({
+        "status":  "reloaded",
+        "count":   count,
+        "message": "Rules reloaded successfully"
+    }))
+}
+
+
+// ── SIGMA Rules CRUD ──────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct NewRule {
+    pub title:       String,
+    pub severity:    String,
+    pub description: Option<String>,
+    pub tags:        Option<Vec<String>>,
+    pub field:       String,
+    pub value:       String,
+    pub matcher:     Option<String>,
+}
+
+pub async fn create_rule(
+    State(_state): State<AppState>,
+    Json(payload): Json<NewRule>
+) -> Json<Value> {
+    let id = format!("ndr-{}", chrono::Utc::now().timestamp());
+    let tags = payload.tags.unwrap_or_default();
+    let matcher = payload.matcher.unwrap_or_else(|| "contains".to_string());
+    let description = payload.description.unwrap_or_default();
+
+    // Build SIGMA YAML
+    let yaml = format!(
+r#"id: {id}
+title: {title}
+description: {description}
+level: {severity}
+tags:{tags_str}
+logsource:
+  product: ndr
+detection:
+  keywords:
+    {field}|{matcher}:
+      - '{value}'
+  condition: keywords
+"#,
+        id = id,
+        title = payload.title,
+        description = description,
+        severity = payload.severity,
+        tags_str = if tags.is_empty() {
+            "\n  []".to_string()
+        } else {
+            tags.iter().map(|t| format!("\n  - {}", t)).collect::<String>()
+        },
+        field = payload.field,
+        matcher = matcher,
+        value = payload.value,
+    );
+
+    // Write to rules directory
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+    let file_path = format!("{}/{}.yml", rules_dir, id);
+
+    match std::fs::write(&file_path, &yaml) {
+        Ok(_) => {
+            tracing::info!("New SIGMA rule created: {}", id);
+            Json(json!({
+                "status": "created",
+                "id":     id,
+                "file":   file_path,
+                "rule":   yaml
+            }))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to write rule: {}", e);
+            Json(json!({
+                "status": "error",
+                "message": e.to_string()
+            }))
+        }
+    }
+}
+
+pub async fn delete_rule(
+    State(_state): State<AppState>,
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+    let file_path = format!("{}/{}.yml", rules_dir, rule_id);
+
+    match std::fs::remove_file(&file_path) {
+        Ok(_) => {
+            tracing::info!("Rule deleted: {}", rule_id);
+            Json(json!({"status": "deleted", "id": rule_id}))
+        }
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
 
 
 //scale status

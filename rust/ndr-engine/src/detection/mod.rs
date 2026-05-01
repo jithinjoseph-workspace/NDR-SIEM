@@ -39,4 +39,23 @@ impl DetectionEngine {
     }
 
     pub fn rule_count(&self) -> usize { self.rules.len() }
+   pub fn get_rules(&self) -> Vec<serde_json::Value> {
+    self.rules.iter().map(|r| serde_json::json!({
+        "id":       r.id,
+        "title":    r.title,
+        "severity": r.severity,
+        "tags":     r.tags,
+        "logsource": {
+            "product":  r.logsource.product,
+            "category": r.logsource.category,
+            "service":  r.logsource.service,
+        },
+        "conditions": r.conditions.len(),
+    })).collect()
+}
+
+pub fn set_rules(&mut self, rules: Vec<SigmaRule>) {
+    tracing::info!("Rules updated: {} loaded", rules.len());
+    self.rules = rules;
+}
 }
