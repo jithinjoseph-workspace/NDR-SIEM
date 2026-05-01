@@ -32,7 +32,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
         }
     };
 
-    info!("✅ Kafka client ready");
+    info!(" Kafka client ready");
 
     let partition_client = loop {
         match client
@@ -51,7 +51,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
         }
     };
 
-    info!("✅ Kafka consumer ready — topic: ndr-events");
+    info!(" Kafka consumer ready — topic: ndr-events");
 
     let mut offset = partition_client
         .get_offset(OffsetAt::Latest)
@@ -127,6 +127,6 @@ async fn process_event(raw: Value, state: &Arc<AppState>) {
     crate::api::broadcast_raw_event(state, &event);
 
     if let Some(hit) = state.correlator.process(event) {
-        crate::api::process_correlation_hit(state, hit);
+        crate::api::process_correlation_hit(state, hit).await;
     }
 }

@@ -87,7 +87,7 @@ pub async fn get_network_map(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
-pub fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
+pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let src = hit.suricata.source_ip.as_deref()
         .or(hit.zeek.source_ip.as_deref()).unwrap_or("-");
     let dst = hit.suricata.dest_ip.as_deref()
@@ -100,8 +100,8 @@ pub fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country);
 
     // SIGMA detection on both sides
-let mut detections = state.detection.blocking_read().check(&hit.zeek);
-detections.extend(state.detection.blocking_read().check(&hit.suricata));
+let mut detections = state.detection.read().await.check(&hit.zeek);
+detections.extend(state.detection.read().await.check(&hit.suricata));
 
     let cs      = hit.zeek.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);

@@ -1,0 +1,13 @@
+id: ndr-1777626812
+title: Example.com Traffic Detected
+description: Detects connections to example.com for testing
+level: medium
+tags:
+  []
+logsource:
+  product: ndr
+detection:
+  keywords:
+    dst_ip|equals:
+      - ' 172.66.147.243'
+  condition: keywords

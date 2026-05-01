@@ -1,5 +1,25 @@
 
 #!/bin/bash
+# Auto-fix line endings if running from Windows shared folder
+if file "$0" | grep -q CRLF; then
+    sed -i 's/\r//' "$0"
+    exec bash "$0" "$@"
+fi
+
+# Fix all scripts right now
+for f in /media/sf_ndr-stack/install.sh \
+          /media/sf_ndr-stack/start.sh \
+          /media/sf_ndr-stack/stop.sh \
+          /media/sf_ndr-stack/status.sh \
+          /media/sf_ndr-stack/scripts/*.sh \
+          /media/sf_ndr-stack/scripts/*.py; do
+    sed -i 's/\r//' "$f" 2>/dev/null || true
+done
+
+echo "✅ Fixed line endings"
+
+# Verify
+file /media/sf_ndr-stack/install.sh
 set -e
 
 RED='\033[0;31m'
