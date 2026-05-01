@@ -5,7 +5,6 @@ if file "$0" | grep -q CRLF; then
     sed -i 's/\r//' "$0"
     exec bash "$0" "$@"
 fi
-sed -i 's/\r//' install.sh && ./install.sh
 
 # Fix all scripts right now
 for f in /media/sf_ndr-stack/install.sh \
@@ -96,7 +95,22 @@ sudo apt-get install -y -qq \
 # ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
     log "Installing Suricata..."
-    sudo add-apt-repository -y ppa:oisf/suricata-stable 2>/dev/null
+    
+     # Fix: Import Suricata PPA GPG keys properly
+    sudo mkdir -p /etc/apt/keyrings
+    sudo gpg --no-default-keyring \
+        --keyring /etc/apt/keyrings/suricata.gpg \
+        --keyserver hkp://keyserver.ubuntu.com:80 \
+        --recv-keys AC10378CF205C960 D7F87B2966EB736F 2>/dev/null || \
+    sudo gpg --no-default-keyring \
+        --keyring /etc/apt/keyrings/suricata.gpg \
+        --keyserver hkp://keyserver.ubuntu.com \
+        --recv-keys AC10378CF205C960 D7F87B2966EB736F
+ 
+    echo "deb [signed-by=/etc/apt/keyrings/suricata.gpg] \
+https://ppa.launchpadcontent.net/oisf/suricata-stable/ubuntu $(lsb_release -cs) main" \
+        | sudo tee /etc/apt/sources.list.d/suricata.list > /dev/null
+        
     sudo apt-get update -qq
     sudo apt-get install -y suricata
     log "Updating Suricata rules..."
