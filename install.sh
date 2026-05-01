@@ -5,7 +5,7 @@ if file "$0" | grep -q CRLF; then
     sed -i 's/\r//' "$0"
     exec bash "$0" "$@"
 fi
-sed -i 's/\r//' install.sh && ./install.sh
+
 
 # Fix all scripts right now
 for f in /media/sf_ndr-stack/install.sh \
