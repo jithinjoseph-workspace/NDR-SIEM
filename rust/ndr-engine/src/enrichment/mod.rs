@@ -7,6 +7,8 @@
 pub mod geoip;
 pub mod asn;
 pub mod threat_intel;
+use std::sync::Arc;
+
 
 pub use geoip::{GeoIpLookup, GeoInfo};
 pub use asn::{AsnLookup, AsnInfo};
@@ -78,7 +80,7 @@ pub struct EnrichmentData {
 pub struct EnrichmentPipeline {
     pub geoip:        Option<GeoIpLookup>,
     pub asn:          Option<AsnLookup>,
-    pub threat_intel: ThreatIntel,
+    pub threat_intel: Arc<ThreatIntel>,
 }
 
 impl EnrichmentPipeline {

@@ -151,7 +151,7 @@ export class Rules implements OnInit {
           name: r.title || 'Unknown',
           type: 'SIGMA',
           severity: (r.severity || 'medium').toUpperCase(),
-          status: 'ACTIVE',
+          status: r.enabled ? 'ACTIVE' : 'INACTIVE',  // ← only this line changed
           id: r.id,
           description: r.description || '',
           tags: r.tags || [],
@@ -174,7 +174,6 @@ export class Rules implements OnInit {
       error: () => { }
     });
   }
-
   openAddForm() {
     this.isEditing = false;
     this.editingId = '';
@@ -293,20 +292,20 @@ export class Rules implements OnInit {
     });
   }
 
- toggleRule(rule: any) {
-  const newEnabled = rule.status !== 'ACTIVE';
-  this.api.toggleRule(rule.id, newEnabled).subscribe({
-    next: (data: any) => {
-      rule.status = newEnabled ? 'ACTIVE' : 'INACTIVE';
-      this.showMessage(
-        `Rule "${rule.name}" ${newEnabled ? 'enabled' : 'disabled'} — ${data.active_rules} rules active`,
-        'success'
-      );
-      this.cdr.detectChanges();
-    },
-    error: () => this.showMessage('Failed to toggle rule', 'error')
-  });
-}
+  toggleRule(rule: any) {
+    const newEnabled = rule.status !== 'ACTIVE';
+    this.api.toggleRule(rule.id, newEnabled).subscribe({
+      next: (data: any) => {
+        rule.status = newEnabled ? 'ACTIVE' : 'INACTIVE';
+        this.showMessage(
+          `Rule "${rule.name}" ${newEnabled ? 'enabled' : 'disabled'} — ${data.active_rules} rules active`,
+          'success'
+        );
+        this.cdr.detectChanges();
+      },
+      error: () => this.showMessage('Failed to toggle rule', 'error')
+    });
+  }
 
   showMessage(msg: string, type: string) {
     this.message = msg;

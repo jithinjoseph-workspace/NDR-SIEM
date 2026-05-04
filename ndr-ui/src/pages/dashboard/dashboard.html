@@ -5,8 +5,32 @@
       <p class="text-on-surface-variant text-sm mt-1">Global infrastructure telemetry & real-time threat detection</p>
     </div>
     <div class="flex items-center gap-3">
-      <button class="bg-surface-container-highest text-white text-xs font-semibold px-4 py-2 rounded-md hover:bg-surface-container-high transition-colors">Export Report</button>
-      <button class="bg-primary text-black text-xs font-bold px-4 py-2 rounded-md hover:bg-primary/90 transition-transform active:scale-95">Force Scan</button>
+      <div class="relative group">
+        <button class="flex items-center gap-2 bg-surface-container-low 
+    text-on-surface-variant text-xs font-semibold px-4 py-2 rounded 
+    border border-outline/10 hover:text-white transition-all">
+          Export Report ▾
+        </button>
+        <!-- Dropdown -->
+        <div class="absolute right-0 top-full mt-1 w-40 bg-surface-container-highest 
+    border border-outline/10 rounded-lg shadow-lg z-10 
+    hidden group-hover:block">
+          <button (click)="exportReport('pdf')" class="w-full text-left px-4 py-2 text-xs text-on-surface-variant 
+      hover:text-white hover:bg-surface-container-low transition-all">
+            📄 PDF Report
+          </button>
+          <button (click)="exportReport('csv')" class="w-full text-left px-4 py-2 text-xs text-on-surface-variant 
+      hover:text-white hover:bg-surface-container-low transition-all">
+            📊 CSV Export
+          </button>
+          <button (click)="exportReport('json')" class="w-full text-left px-4 py-2 text-xs text-on-surface-variant 
+      hover:text-white hover:bg-surface-container-low transition-all">
+            📋 JSON Export
+          </button>
+        </div>
+      </div> <button
+        class="bg-primary text-black text-xs font-bold px-4 py-2 rounded-md hover:bg-primary/90 transition-transform active:scale-95">Force
+        Scan</button>
     </div>
   </div>
 
@@ -14,7 +38,8 @@
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
     <!-- Total Events -->
-    <div class="bg-surface-container-highest p-5 rounded-lg border-l-2 border-primary group hover:bg-surface-container-high transition-all">
+    <div
+      class="bg-surface-container-highest p-5 rounded-lg border-l-2 border-primary group hover:bg-surface-container-high transition-all">
       <div class="flex justify-between items-start">
         <div class="p-2 rounded bg-primary/10 text-primary">
           <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
@@ -49,7 +74,7 @@
 
     <!-- Critical Alerts -->
     <div class="bg-surface-container-highest p-5 rounded-lg border-l-2 border-tertiary group"
-         [class.animate-pulse]="critical > 0">
+      [class.animate-pulse]="critical > 0">
       <div class="flex justify-between items-start">
         <div class="p-2 rounded bg-tertiary/10 text-tertiary">
           <lucide-icon [name]="AlertIcon" class="w-5 h-5"></lucide-icon>
@@ -94,10 +119,7 @@
         <span class="text-[10px] text-on-surface-variant">Updates via WebSocket</span>
       </div>
       <div class="h-64">
-        <canvas baseChart
-                [data]="lineChartData"
-                [options]="lineChartOptions"
-                type="line">
+        <canvas baseChart [data]="lineChartData" [options]="lineChartOptions" type="line">
         </canvas>
       </div>
     </div>
@@ -112,15 +134,15 @@
             <span class="text-on-surface-variant">{{ ip.count }} events</span>
           </div>
           <div class="h-1.5 w-full bg-surface-container-low rounded-full overflow-hidden">
-            <div [style.width.%]="(ip.count / (topSrcIps[0]?.count || 1)) * 100"
-                 class="h-full bg-primary"></div>
+            <div [style.width.%]="(ip.count / (topSrcIps[0]?.count || 1)) * 100" class="h-full bg-primary"></div>
           </div>
         </div>
         <div *ngIf="topSrcIps.length === 0" class="text-center text-on-surface-variant text-xs py-8">
           No data yet — start monitoring to see top IPs
         </div>
       </div>
-      <button class="mt-8 w-full py-2 bg-surface-container-low text-xs font-bold text-on-surface-variant rounded hover:text-white hover:bg-surface-container-high transition-all">
+      <button
+        class="mt-8 w-full py-2 bg-surface-container-low text-xs font-bold text-on-surface-variant rounded hover:text-white hover:bg-surface-container-high transition-all">
         View All IPs
       </button>
     </div>

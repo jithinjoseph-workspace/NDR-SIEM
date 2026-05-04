@@ -102,5 +102,11 @@ toggleRule(id: string, enabled: boolean): Observable<any> {
     { enabled }
   );
 }
+
+exportReport(format: string, hours: number = 24): void {
+  const url = `http://localhost:3000/api/export?format=${format}&hours=${hours}`;
+  window.open(url, '_blank');
+}
+
 }
 
