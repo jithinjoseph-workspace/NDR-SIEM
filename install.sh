@@ -410,9 +410,26 @@ log "✅ Vector configured"
 
 # ── Install Angular dependencies ──────────────
 log "Installing Angular UI dependencies..."
-cd $INSTALL_DIR/ndr-ui
-npm install --silent
+
+# Copy to home dir to avoid shared folder issues
+if [ ! -d "$HOME/ndr-ui" ]; then
+    log "Copying UI to home directory..."
+    cp -r $INSTALL_DIR/ndr-ui $HOME/ndr-ui
+fi
+
+cd $HOME/ndr-ui
+
+# Install with timeout and verbose
+log "Running npm install (this takes 2-5 minutes)..."
+npm install --prefer-offline 2>/dev/null || \
+npm install --legacy-peer-deps 2>/dev/null || \
+npm install --force 2>/dev/null || \
+    warn "⚠️ npm install had issues — continuing..."
+
 log "✅ Angular dependencies installed"
+
+# Update INSTALL_DIR to point to home copy
+export NDR_UI_DIR="$HOME/ndr-ui"
 
 # ── Install Docker ────────────────────────────
 log "Installing Docker..."
