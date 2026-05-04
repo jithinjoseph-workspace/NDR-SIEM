@@ -27,7 +27,7 @@
         </div>
         <div>
           <p class="text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">
-            Malicious IPs
+            Malicious IPs in Feed
           </p>
           <p class="text-xl font-display font-bold text-white">
             {{ totalMaliciousIps.toLocaleString() }}
@@ -56,15 +56,64 @@
 
     <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10">
       <div class="flex items-center gap-4">
-        <div class="p-3 bg-white/5 rounded-lg">
-          <lucide-icon [name]="ShieldCheckIcon" class="w-6 h-6 text-primary"></lucide-icon>
+        <div class="p-3 bg-white/5 rounded-lg relative">
+          <lucide-icon [name]="BellIcon" class="w-6 h-6 text-orange-400"></lucide-icon>
+          <span *ngIf="newAlertCount > 0" class="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white
+            text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
+            {{ newAlertCount > 9 ? '9+' : newAlertCount }}
+          </span>
         </div>
         <div>
           <p class="text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">
-            Feed Source
+            Live Threat Alerts
           </p>
-          <p class="text-sm font-bold text-white">abuse.ch</p>
-          <p class="text-[10px] text-on-surface-variant mt-1">Feodo Tracker</p>
+          <p class="text-xl font-display font-bold text-white">
+            {{ liveAlerts.length }}
+          </p>
+          <p class="text-[10px] text-on-surface-variant mt-1">this session</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Threat Alerts -->
+  <div *ngIf="liveAlerts.length > 0" class="mb-8 bg-red-500/5 rounded-xl border border-red-500/20 overflow-hidden">
+    <div class="px-6 py-4 border-b border-red-500/20 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
+        <span class="text-red-400 text-xs font-bold uppercase tracking-wider">
+          Live Threat Alerts — Real-time
+        </span>
+      </div>
+      <button (click)="clearAlerts()" class="text-[10px] text-on-surface-variant hover:text-white transition-colors">
+        Clear
+      </button>
+    </div>
+    <div class="divide-y divide-red-500/10 max-h-64 overflow-auto">
+      <div *ngFor="let alert of liveAlerts" class="px-6 py-3 flex items-center justify-between
+           animate-in slide-in-from-top-2 duration-300">
+        <div class="flex items-center gap-3">
+          <lucide-icon [name]="AlertIcon" class="w-4 h-4 text-red-400 shrink-0"></lucide-icon>
+          <div>
+            <div class="text-white text-xs font-mono font-bold">
+              {{ alert.src_ip }} → {{ alert.dst_ip }}
+            </div>
+            <div class="text-[10px] text-red-400 font-bold">
+              ⚠️ MALICIOUS IP DETECTED IN NETWORK TRAFFIC
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-4 text-right">
+          <div>
+            <div class="text-[10px] text-on-surface-variant">Score</div>
+            <div class="text-orange-400 font-mono font-bold text-xs">
+              {{ alert.score?.toFixed(0) }}
+            </div>
+          </div>
+          <div>
+            <div class="text-[10px] text-on-surface-variant">Time</div>
+            <div class="text-white font-mono text-[10px]">{{ alert.time }}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -78,11 +127,8 @@
         <lucide-icon [name]="SearchIcon"
           class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">
         </lucide-icon>
-        <input type="text"
-               [(ngModel)]="searchIp"
-               (keyup.enter)="lookupIoc()"
-               placeholder="Enter IP address to check..."
-               class="w-full bg-surface-container-low border border-outline/20 rounded-md py-2 pl-10 pr-4 text-xs text-white focus:outline-none focus:border-primary/50"/>
+        <input type="text" [(ngModel)]="searchIp" (keyup.enter)="lookupIoc()" placeholder="Enter IP address to check..."
+          class="w-full bg-surface-container-low border border-outline/20 rounded-md py-2 pl-10 pr-4 text-xs text-white focus:outline-none focus:border-primary/50" />
       </div>
       <button (click)="lookupIoc()" [disabled]="searching"
         class="bg-primary text-black text-xs font-bold px-6 py-2 rounded hover:bg-primary/90 disabled:opacity-50">
@@ -91,8 +137,7 @@
     </div>
 
     <!-- Lookup result -->
-    <div *ngIf="lookupResult" class="mt-4 p-4 rounded-lg border"
-         [class]="lookupResult.is_malicious ?
+    <div *ngIf="lookupResult" class="mt-4 p-4 rounded-lg border" [class]="lookupResult.is_malicious ?
            'bg-red-500/10 border-red-500/20' :
            'bg-primary/10 border-primary/20'">
       <div class="flex items-center gap-3">
@@ -101,9 +146,10 @@
         </lucide-icon>
         <div>
           <div class="text-white font-bold font-mono">{{ lookupResult.ip }}</div>
-          <div [class]="lookupResult.is_malicious ? 'text-red-400' : 'text-primary'"
-               class="text-xs font-bold">
-            {{ lookupResult.is_malicious ? '⚠️ MALICIOUS — Found in threat feed' : '✅ CLEAN — Not in threat feed' }}
+          <div [class]="lookupResult.is_malicious ? 'text-red-400' : 'text-primary'" class="text-xs font-bold">
+            {{ lookupResult.is_malicious ?
+            '⚠️ MALICIOUS — Found in threat feed' :
+            '✅ CLEAN — Not in threat feed' }}
           </div>
           <div class="text-[10px] text-on-surface-variant mt-1">
             Source: {{ lookupResult.source }}
@@ -117,31 +163,29 @@
   <div class="bg-surface-container-highest rounded-lg overflow-hidden border border-outline/5">
     <div class="px-6 py-4 border-b border-outline/10 flex items-center justify-between">
       <span class="text-xs font-bold text-white uppercase tracking-wider">
-        Malicious IPs Detected in Your Network
+        Malicious IPs Detected in Network
       </span>
       <span class="text-[10px] text-on-surface-variant">
-        From correlation hits
+        Real-time + historical
       </span>
     </div>
 
-    <!-- Loading -->
     <div *ngIf="loading" class="py-10 text-center text-on-surface-variant animate-pulse text-sm">
       Loading threat data...
     </div>
 
-    <!-- Empty -->
     <div *ngIf="!loading && detectedInNetwork.length === 0"
-         class="py-16 flex flex-col items-center text-on-surface-variant">
-      <lucide-icon [name]="ShieldCheckIcon" class="w-12 h-12 mb-4 text-primary opacity-40"></lucide-icon>
+      class="py-16 flex flex-col items-center text-on-surface-variant">
+      <lucide-icon [name]="ShieldCheckIcon" class="w-12 h-12 mb-4 text-primary opacity-40">
+      </lucide-icon>
       <p class="text-sm font-bold text-primary">No malicious IPs detected</p>
       <p class="text-xs mt-1">Your network looks clean!</p>
     </div>
 
-    <!-- Table -->
-    <table *ngIf="!loading && detectedInNetwork.length > 0"
-           class="w-full text-left border-collapse">
+    <table *ngIf="!loading && detectedInNetwork.length > 0" class="w-full text-left border-collapse">
       <thead>
-        <tr class="bg-surface-container-low/50 text-on-surface-variant text-[10px] uppercase tracking-widest">
+        <tr class="bg-surface-container-low/50 text-on-surface-variant
+          text-[10px] uppercase tracking-widest">
           <th class="px-6 py-3 font-bold">Source IP</th>
           <th class="px-6 py-3 font-bold">Destination IP</th>
           <th class="px-6 py-3 font-bold">Hits</th>
@@ -150,8 +194,7 @@
         </tr>
       </thead>
       <tbody class="divide-y divide-outline/5 font-mono text-[12px]">
-        <tr *ngFor="let ioc of detectedInNetwork"
-            class="hover:bg-surface-container-low/50 transition-colors">
+        <tr *ngFor="let ioc of detectedInNetwork" class="hover:bg-surface-container-low/50 transition-colors">
           <td class="px-6 py-4 text-red-400 font-bold">{{ ioc.src_ip }}</td>
           <td class="px-6 py-4 text-white">{{ ioc.dst_ip }}</td>
           <td class="px-6 py-4">
@@ -161,12 +204,17 @@
             {{ getTimestamp(ioc.last_seen) }}
           </td>
           <td class="px-6 py-4">
-            <span class="text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 px-2 py-0.5 rounded font-bold uppercase">
+            <span class="text-[10px] bg-red-500/10 text-red-400
+              border border-red-500/20 px-2 py-0.5 rounded font-bold uppercase">
               THREAT DETECTED
             </span>
           </td>
         </tr>
       </tbody>
     </table>
+  </div>
+
+  <div class="mt-4 text-[11px] text-on-surface-variant text-right">
+    Feed refreshes every 60 minutes · WebSocket connected for real-time alerts
   </div>
 </div>
