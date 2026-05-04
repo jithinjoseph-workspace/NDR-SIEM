@@ -1,26 +1,16 @@
-
 #!/bin/bash
-# Auto-fix line endings if running from Windows shared folder
-if file "$0" | grep -q CRLF; then
-    sed -i 's/\r//' "$0"
-    exec bash "$0" "$@"
+
+# ── Auto-fix Windows line endings ─────────────
+SELF=$(readlink -f "$0")
+if file "$SELF" | grep -q CRLF; then
+    echo "Fixing line endings..."
+    sed -i 's/\r//' "$SELF"
+    find "$(dirname "$SELF")" \
+        -name "*.sh" -o -name "*.py" | \
+        xargs sed -i 's/\r//' 2>/dev/null || true
+    exec bash "$SELF" "$@"
 fi
 
-
-# Fix all scripts right now
-for f in /media/sf_ndr-stack/install.sh \
-          /media/sf_ndr-stack/start.sh \
-          /media/sf_ndr-stack/stop.sh \
-          /media/sf_ndr-stack/status.sh \
-          /media/sf_ndr-stack/scripts/*.sh \
-          /media/sf_ndr-stack/scripts/*.py; do
-    sed -i 's/\r//' "$f" 2>/dev/null || true
-done
-
-echo "✅ Fixed line endings"
-
-# Verify
-file /media/sf_ndr-stack/install.sh
 set -e
 
 RED='\033[0;31m'
@@ -41,16 +31,21 @@ echo "║  Zeek + Suricata + Kafka + Rust + UI     ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
-# ── Fix DNS and APT first ─────────────────────
+# ── Fix network and APT ───────────────────────
 log "Fixing network and APT..."
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
+echo 'Acquire::ForceIPv4 "true";' | \
+    sudo tee /etc/apt/apt.conf.d/99force-ipv4 > /dev/null
 echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+sudo rm -f /etc/apt/sources.list.d/*suricata* 2>/dev/null || true
+sudo rm -f /etc/apt/sources.list.d/*oisf* 2>/dev/null || true
 sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 sudo apt-get clean 2>/dev/null || true
 sudo apt-get update -qq 2>/dev/null || true
 log "✅ Network ready"
 
-
-# ── Deployment Mode Selection ─────────────────
+# ── Deployment Mode ───────────────────────────
 echo "Select deployment mode:"
 echo ""
 echo "  1) Local  — everything on this machine (recommended for single site)"
@@ -94,7 +89,7 @@ log "Installing to: $INSTALL_DIR"
 log "Running as:    $USERNAME"
 log "Deploy mode:   $DEPLOY_MODE"
 
-# ── Install system dependencies ───────────────
+# ── System dependencies ───────────────────────
 log "Installing system dependencies..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
@@ -102,22 +97,47 @@ sudo apt-get install -y -qq \
     net-tools iproute2 \
     netcat-traditional 2>/dev/null || true
 
-# ── Install Suricata ──────────────────────────
+# ── Install Node.js 20 FIRST ─────────────────
+log "Installing Node.js 20..."
+sudo apt-get remove -y nodejs npm 2>/dev/null || true
+sudo rm -f /usr/bin/node /usr/bin/npm 2>/dev/null || true
+
+curl -fsSL https://deb.nodesource.com/setup_20.x \
+    | sudo -E bash - 2>/dev/null || true
+sudo apt-get install -y nodejs 2>/dev/null || true
+
+if ! command -v npm &>/dev/null; then
+    warn "npm not found — installing separately..."
+    sudo apt-get install -y npm 2>/dev/null || true
+    sudo npm install -g npm@latest 2>/dev/null || true
+fi
+
+NODE_VER=$(node --version 2>/dev/null || echo "missing")
+NPM_VER=$(npm --version 2>/dev/null || echo "missing")
+log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
+
+NODE_MAJOR=$(echo $NODE_VER | cut -d. -f1 | tr -d 'v')
+if [ "${NODE_MAJOR:-0}" -lt 18 ] 2>/dev/null; then
+    warn "Node.js too old ($NODE_VER) — trying NVM..."
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh \
+        | bash 2>/dev/null || true
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 20 2>/dev/null || true
+    nvm use 20 2>/dev/null || true
+    log "✅ Node.js via NVM: $(node --version)"
+fi
+
 # ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
     log "Installing Suricata..."
-
-    # Remove broken PPA if exists
-    sudo rm -f /etc/apt/sources.list.d/*suricata* 2>/dev/null || true
-    sudo rm -f /etc/apt/sources.list.d/*oisf* 2>/dev/null || true
     sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
     sudo apt-get update -qq 2>/dev/null || true
 
-    # Try default Ubuntu repo FIRST
     if sudo apt-get install -y suricata 2>/dev/null; then
         log "✅ Suricata installed from default repo"
     else
-        warn "Default repo failed — skipping Suricata"
+        warn "⚠️ Suricata install failed — skipping"
     fi
 
     sudo suricata-update 2>/dev/null || true
@@ -136,7 +156,8 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${OS_VERSION}/ /" \
         | sudo tee /etc/apt/sources.list.d/security:zeek.list
     curl -fsSL https://download.opensuse.org/repositories/security:zeek/xUbuntu_${OS_VERSION}/Release.key \
-        | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
+        | gpg --dearmor \
+        | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
     sudo apt-get update -qq
     sudo apt-get install -y zeek
     log "✅ Zeek installed"
@@ -148,9 +169,12 @@ fi
 if [ "$DEPLOY_MODE" = "local" ]; then
     log "Installing ClickHouse locally..."
     if ! command -v clickhouse-server &>/dev/null; then
-        sudo apt-get install -y apt-transport-https ca-certificates curl gnupg
-        curl -fsSL 'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' \
-            | sudo gpg --dearmor -o /usr/share/keyrings/clickhouse-keyring.gpg
+        sudo apt-get install -y \
+            apt-transport-https ca-certificates curl gnupg
+        curl -fsSL \
+            'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' \
+            | sudo gpg --dearmor \
+            -o /usr/share/keyrings/clickhouse-keyring.gpg
         echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg] \
             https://packages.clickhouse.com/deb stable main" \
             | sudo tee /etc/apt/sources.list.d/clickhouse.list
@@ -162,7 +186,6 @@ if [ "$DEPLOY_MODE" = "local" ]; then
         log "✅ ClickHouse already installed"
     fi
 
-    # Configure ClickHouse network
     log "Configuring ClickHouse network..."
     sudo mkdir -p /etc/clickhouse-server/config.d
     echo '<clickhouse><listen_host>0.0.0.0</listen_host></clickhouse>' | \
@@ -172,12 +195,10 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     sleep 5
     log "✅ ClickHouse listening on all interfaces"
 
-    # Configure ClickHouse
     log "Configuring ClickHouse..."
     sudo service clickhouse-server start 2>/dev/null || true
     sleep 5
 
-    # Wait until ready
     for i in {1..20}; do
         if clickhouse-client --query "SELECT 1" > /dev/null 2>&1; then
             log "✅ ClickHouse is ready"
@@ -188,39 +209,40 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     done
     echo ""
 
-    # Create NDR user and database
-    clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ndr" 2>/dev/null || true
-    clickhouse-client --query "CREATE USER IF NOT EXISTS ndr IDENTIFIED BY 'ndr123'" 2>/dev/null || true
-    clickhouse-client --query "GRANT ALL ON ndr.* TO ndr" 2>/dev/null || true
+    clickhouse-client --query \
+        "CREATE DATABASE IF NOT EXISTS ndr" 2>/dev/null || true
+    clickhouse-client --query \
+        "CREATE USER IF NOT EXISTS ndr IDENTIFIED BY 'ndr123'" \
+        2>/dev/null || true
+    clickhouse-client --query \
+        "GRANT ALL ON ndr.* TO ndr" 2>/dev/null || true
 
-    # Create tables
     log "Creating ClickHouse tables..."
     clickhouse-client --multiquery \
         < "$INSTALL_DIR/config/clickhouse/init.sql" \
         && log "✅ ClickHouse tables created" \
         || warn "⚠️ ClickHouse table creation failed"
 
-    # Verify
-    TABLES=$(clickhouse-client --query "SHOW TABLES FROM ndr" 2>/dev/null)
+    TABLES=$(clickhouse-client \
+        --query "SHOW TABLES FROM ndr" 2>/dev/null)
     if echo "$TABLES" | grep -q "ndr_events"; then
         log "✅ Tables verified: $TABLES"
     else
         warn "Tables not found, retrying..."
         clickhouse-client --multiquery \
-            < "$INSTALL_DIR/config/clickhouse/init.sql" 2>&1 || true
+            < "$INSTALL_DIR/config/clickhouse/init.sql" \
+            2>&1 || true
     fi
 
     sudo systemctl enable clickhouse-server 2>/dev/null || true
     log "✅ ClickHouse configured"
 
-    # Set local ClickHouse vars
     CLICKHOUSE_URL="http://localhost:8123"
     CLOUD_CH_USER="ndr"
     CLOUD_CH_PASS="ndr123"
     CLOUD_KAFKA="kafka:9092"
 
 else
-    # Hybrid mode — use cloud ClickHouse
     log "☁️  Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
     CLICKHOUSE_URL="$CLOUD_CLICKHOUSE"
     info "Skipping local ClickHouse installation"
@@ -241,32 +263,19 @@ echo "$IFACE" > /tmp/ndr_interface
 log "Configuring Zeek..."
 sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
 # NDR Stack - Zeek Configuration
-
-# JSON logging (required for Vector/Kafka pipeline)
 @load policy/tuning/json-logs.zeek
-
-# Community ID (required for Zeek-Suricata correlation)
 @load policy/protocols/conn/community-id-logging
-
-# Protocol detection
 @load protocols/ssh/detect-bruteforcing
 @load protocols/ssl/validate-certs
 @load protocols/http/detect-sql-injection
 @load protocols/http/detect-webapps
 @load misc/detect-traceroute
-
-# File analysis
 @load frameworks/files/hash-all-files
 @load frameworks/files/detect-MHR
-
-# Known hosts/services tracking
 @load policy/frameworks/software/vulnerable
 @load policy/frameworks/software/version-changes
 @load policy/protocols/conn/known-hosts
 @load policy/protocols/conn/known-services
-
-# Security
-redef digest_salt = "ndr-stack-$(hostname)-$(date +%s)";
 ZEEKCONF
 
 /opt/zeek/bin/zkg install zeek/corelight/zeek-community-id \
@@ -277,54 +286,19 @@ log "✅ Zeek configured"
 log "Configuring Suricata..."
 sudo cp /etc/suricata/suricata.yaml \
     /etc/suricata/suricata.yaml.bak 2>/dev/null || true
-sudo sed -i 's/community-id: false/community-id: true/g' \
-    /etc/suricata/suricata.yaml
+sudo sed -i \
+    's/community-id: false/community-id: true/g' \
+    /etc/suricata/suricata.yaml 2>/dev/null || true
 sudo sed -i \
     "s|default-log-dir: /var/log/suricata|default-log-dir: $HOME_DIR/logs/suricata|g" \
-    /etc/suricata/suricata.yaml
-sudo sed -i "s|interface: eth0|interface: $IFACE|g" \
-    /etc/suricata/suricata.yaml
+    /etc/suricata/suricata.yaml 2>/dev/null || true
+sudo sed -i \
+    "s|interface: eth0|interface: $IFACE|g" \
+    /etc/suricata/suricata.yaml 2>/dev/null || true
 log "Updating Suricata rules..."
 sudo suricata-update 2>/dev/null || true
 log "✅ Suricata configured on interface: $IFACE"
 
-# ── Install Node.js 20 ───────────────────────
-log "Installing Node.js 20..."
-
-# Remove old nodejs if installed
-sudo apt-get remove -y nodejs npm 2>/dev/null || true
-sudo rm -f /usr/bin/node /usr/bin/npm 2>/dev/null || true
-
-# Install Node.js 20 via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_20.x \
-    | sudo -E bash - 2>/dev/null || true
-sudo apt-get install -y nodejs
-
-# Verify npm exists
-if ! command -v npm &>/dev/null; then
-    warn "npm not found — installing separately..."
-    sudo apt-get install -y npm 2>/dev/null || true
-    # Force npm update
-    sudo npm install -g npm@latest 2>/dev/null || true
-fi
-
-# Verify versions
-NODE_VER=$(node --version 2>/dev/null || echo "missing")
-NPM_VER=$(npm --version 2>/dev/null || echo "missing")
-log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
-
-# Check version is 18+
-NODE_MAJOR=$(echo $NODE_VER | cut -d. -f1 | tr -d 'v')
-if [ "$NODE_MAJOR" -lt 18 ] 2>/dev/null; then
-    warn "Node.js version too old ($NODE_VER) — trying NVM..."
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh \
-        | bash 2>/dev/null || true
-    export NVM_DIR="$HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-    nvm install 20 2>/dev/null || true
-    nvm use 20 2>/dev/null || true
-    log "✅ Node.js via NVM: $(node --version)"
-fi
 # ── Create required directories ───────────────
 log "Creating directories..."
 mkdir -p $HOME_DIR/logs/suricata
@@ -333,7 +307,8 @@ mkdir -p $HOME_DIR/.vector/data
 mkdir -p $HOME_DIR/ndr-config
 
 # ── Detect host IP ────────────────────────────
-HOST_IP=$(ip -o -4 addr show $IFACE 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+HOST_IP=$(ip -o -4 addr show $IFACE 2>/dev/null | \
+    awk '{print $4}' | cut -d/ -f1)
 if [ -z "$HOST_IP" ]; then
     HOST_IP=$(hostname -I | awk '{print $1}')
 fi
@@ -369,7 +344,8 @@ log "✅ Sudo configured"
 
 # ── Set up scripts ────────────────────────────
 log "Setting up scripts..."
-chmod +x $INSTALL_DIR/scripts/*.py $INSTALL_DIR/scripts/*.sh 2>/dev/null || true
+chmod +x $INSTALL_DIR/scripts/*.py \
+    $INSTALL_DIR/scripts/*.sh 2>/dev/null || true
 
 # ── Install ndr-agent as systemd service ──────
 log "Installing NDR Agent as system service..."
@@ -398,12 +374,14 @@ log "✅ NDR Agent service started"
 
 # ── Configure Vector ──────────────────────────
 log "Configuring Vector..."
-cp $INSTALL_DIR/config/vector.toml $HOME_DIR/.vector/vector.toml
-sed -i "s|/home/[^/]*/logs|$HOME_DIR/logs|g" $HOME_DIR/.vector/vector.toml
+cp $INSTALL_DIR/config/vector.toml \
+    $HOME_DIR/.vector/vector.toml
+sed -i "s|/home/[^/]*/logs|$HOME_DIR/logs|g" \
+    $HOME_DIR/.vector/vector.toml
 
-# Update Vector Kafka broker for hybrid mode
 if [ "$DEPLOY_MODE" = "hybrid" ]; then
-    sed -i "s|bootstrap_servers = \"kafka:9092\"|bootstrap_servers = \"$CLOUD_KAFKA\"|g" \
+    sed -i \
+        "s|bootstrap_servers = \"kafka:9092\"|bootstrap_servers = \"$CLOUD_KAFKA\"|g" \
         $HOME_DIR/.vector/vector.toml
 fi
 log "✅ Vector configured"
@@ -411,44 +389,52 @@ log "✅ Vector configured"
 # ── Install Angular dependencies ──────────────
 log "Installing Angular UI dependencies..."
 
-# Copy to home dir to avoid shared folder issues
-if [ ! -d "$HOME/ndr-ui" ]; then
-    log "Copying UI to home directory..."
-    cp -r $INSTALL_DIR/ndr-ui $HOME/ndr-ui
-fi
+# Install deps in home dir (fast — avoids shared folder slowness)
+log "Setting up npm in home directory..."
+mkdir -p $HOME/ndr-ui-deps
 
-cd $HOME/ndr-ui
+# Copy package files to home
+cp $INSTALL_DIR/ndr-ui/package.json \
+    $HOME/ndr-ui-deps/ 2>/dev/null || true
+cp $INSTALL_DIR/ndr-ui/package-lock.json \
+    $HOME/ndr-ui-deps/ 2>/dev/null || true
 
-# Install with timeout and verbose
+cd $HOME/ndr-ui-deps
 log "Running npm install (this takes 2-5 minutes)..."
-npm install --prefer-offline 2>/dev/null || \
 npm install --legacy-peer-deps 2>/dev/null || \
 npm install --force 2>/dev/null || \
+npm install 2>/dev/null || \
     warn "⚠️ npm install had issues — continuing..."
 
+# Link node_modules to project for live reload
+rm -rf $INSTALL_DIR/ndr-ui/node_modules 2>/dev/null || true
+ln -sf $HOME/ndr-ui-deps/node_modules \
+    $INSTALL_DIR/ndr-ui/node_modules
 log "✅ Angular dependencies installed"
-
-# Update INSTALL_DIR to point to home copy
-export NDR_UI_DIR="$HOME/ndr-ui"
+cd $INSTALL_DIR
 
 # ── Install Docker ────────────────────────────
 log "Installing Docker..."
-sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+sudo apt-get remove -y docker docker-engine \
+    docker.io containerd runc 2>/dev/null || true
 sudo apt-get update -qq
-sudo apt-get install -y ca-certificates curl gnupg lsb-release
+sudo apt-get install -y \
+    ca-certificates curl gnupg lsb-release
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    | sudo gpg --dearmor \
+    -o /etc/apt/keyrings/docker.gpg
 echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-    https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+    "deb [arch=$(dpkg --print-architecture) \
+    signed-by=/etc/apt/keyrings/docker.gpg] \
+    https://download.docker.com/linux/ubuntu \
+    $(lsb_release -cs) stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 sudo apt-get update -qq
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
-    docker-buildx-plugin docker-compose-plugin
+sudo apt-get install -y docker-ce docker-ce-cli \
+    containerd.io docker-buildx-plugin docker-compose-plugin
 log "✅ Docker installed"
 
-# Fix Docker DNS
 sudo mkdir -p /etc/docker
 sudo tee /etc/docker/daemon.json > /dev/null << 'DOCKEREOF'
 {
@@ -456,19 +442,16 @@ sudo tee /etc/docker/daemon.json > /dev/null << 'DOCKEREOF'
 }
 DOCKEREOF
 
-# Load kernel modules
 sudo modprobe overlay 2>/dev/null || true
 sudo modprobe br_netfilter 2>/dev/null || true
 echo -e "overlay\nbr_netfilter" | \
     sudo tee /etc/modules-load.d/docker.conf > /dev/null
 
-# Start Docker
 log "Starting Docker service..."
 sudo systemctl enable docker
 sudo systemctl start docker || true
 sudo usermod -aG docker $USERNAME
 
-# Wait for Docker
 log "Waiting for Docker to initialize..."
 for i in {1..20}; do
     if sudo docker info >/dev/null 2>&1; then
@@ -495,11 +478,9 @@ cd $INSTALL_DIR
 sudo docker compose down 2>/dev/null || true
 
 if [ "$DEPLOY_MODE" = "hybrid" ]; then
-    # Hybrid — skip local Kafka, use cloud
-    log "Hybrid mode — skipping local Kafka, using cloud: $CLOUD_KAFKA"
+    log "Hybrid mode — using cloud: $CLOUD_KAFKA"
     sudo docker compose up -d --build vector ndr-engine-1 nginx
 else
-    # Local — start everything
     sudo docker compose up -d --build
 fi
 
@@ -507,6 +488,8 @@ log "✅ Docker stack started"
 
 # ── Start Angular UI ──────────────────────────
 log "Starting Angular UI..."
+
+# Run from shared folder for live reload!
 cd $INSTALL_DIR/ndr-ui
 nohup npm start > /tmp/ndr-ui.log 2>&1 &
 echo $! > /tmp/ndr-ui.pid
@@ -522,7 +505,7 @@ for i in {1..60}; do
 done
 echo ""
 
-# ── WSL2 port forwarding reminder ─────────────
+# ── WSL2 reminder ─────────────────────────────
 if grep -qi microsoft /proc/version 2>/dev/null; then
     warn "WSL2 detected — run in Windows PowerShell as Admin:"
     echo ""
@@ -541,13 +524,16 @@ log "  Zeek:       $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
 log "  Suricata:   $(suricata --version 2>&1 | head -1)"
 log "  Docker:     $(sudo docker --version)"
 log "  Node.js:    $(node --version)"
+log "  npm:        $(npm --version)"
 if [ "$DEPLOY_MODE" = "local" ]; then
-log "  ClickHouse: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
+    log "  ClickHouse: $(curl -s http://localhost:8123/ping \
+        2>/dev/null || echo 'starting...')"
 else
-log "  ClickHouse: $CLOUD_CLICKHOUSE (cloud)"
-log "  Kafka:      $CLOUD_KAFKA (cloud)"
+    log "  ClickHouse: $CLOUD_CLICKHOUSE (cloud)"
+    log "  Kafka:      $CLOUD_KAFKA (cloud)"
 fi
-log "  Agent:      $(curl -s http://localhost:3001/agent/status 2>/dev/null || echo 'starting...')"
+log "  Agent:      $(curl -s http://localhost:3001/agent/status \
+    2>/dev/null || echo 'starting...')"
 
 # ── Done ──────────────────────────────────────
 echo ""
@@ -564,3 +550,7 @@ echo "║  start:   ./start.sh                     ║"
 echo "║  stop:    ./stop.sh                      ║"
 echo "║  status:  ./status.sh                    ║"
 echo "╚══════════════════════════════════════════╝"
+echo ""
+echo "💡 Live reload: Edit Angular on Windows → auto-updates!"
+INSTALLEOF
+
