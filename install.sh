@@ -288,16 +288,43 @@ log "Updating Suricata rules..."
 sudo suricata-update 2>/dev/null || true
 log "✅ Suricata configured on interface: $IFACE"
 
-# ── Install Node.js ───────────────────────────
-if ! command -v node &>/dev/null; then
-    log "Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-    log "✅ Node.js installed: $(node --version)"
-else
-    log "✅ Node.js already installed: $(node --version)"
+# ── Install Node.js 20 ───────────────────────
+log "Installing Node.js 20..."
+
+# Remove old nodejs if installed
+sudo apt-get remove -y nodejs npm 2>/dev/null || true
+sudo rm -f /usr/bin/node /usr/bin/npm 2>/dev/null || true
+
+# Install Node.js 20 via NodeSource
+curl -fsSL https://deb.nodesource.com/setup_20.x \
+    | sudo -E bash - 2>/dev/null || true
+sudo apt-get install -y nodejs
+
+# Verify npm exists
+if ! command -v npm &>/dev/null; then
+    warn "npm not found — installing separately..."
+    sudo apt-get install -y npm 2>/dev/null || true
+    # Force npm update
+    sudo npm install -g npm@latest 2>/dev/null || true
 fi
 
+# Verify versions
+NODE_VER=$(node --version 2>/dev/null || echo "missing")
+NPM_VER=$(npm --version 2>/dev/null || echo "missing")
+log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
+
+# Check version is 18+
+NODE_MAJOR=$(echo $NODE_VER | cut -d. -f1 | tr -d 'v')
+if [ "$NODE_MAJOR" -lt 18 ] 2>/dev/null; then
+    warn "Node.js version too old ($NODE_VER) — trying NVM..."
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh \
+        | bash 2>/dev/null || true
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 20 2>/dev/null || true
+    nvm use 20 2>/dev/null || true
+    log "✅ Node.js via NVM: $(node --version)"
+fi
 # ── Create required directories ───────────────
 log "Creating directories..."
 mkdir -p $HOME_DIR/logs/suricata
