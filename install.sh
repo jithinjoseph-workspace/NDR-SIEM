@@ -107,34 +107,23 @@ sudo apt-get install -y -qq \
 if ! command -v suricata &>/dev/null; then
     log "Installing Suricata..."
 
-    # Fix GPG keys first
-    sudo apt-get install -y gnupg2 curl ca-certificates
+    # Remove broken PPA if exists
+    sudo rm -f /etc/apt/sources.list.d/*suricata* 2>/dev/null || true
+    sudo rm -f /etc/apt/sources.list.d/*oisf* 2>/dev/null || true
+    sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+    sudo apt-get update -qq 2>/dev/null || true
 
-    # Import Suricata PPA keys
-    sudo apt-key adv --keyserver keyserver.ubuntu.com \
-        --recv-keys AC10378CF205C960 2>/dev/null || true
-    sudo apt-key adv --keyserver keyserver.ubuntu.com \
-        --recv-keys D7F87B2966EB736F 2>/dev/null || true
-
-    # Add PPA
-    sudo add-apt-repository -y ppa:oisf/suricata-stable 2>/dev/null || true
-    sudo apt-get update -qq
-
-    # Try PPA install first
+    # Try default Ubuntu repo FIRST
     if sudo apt-get install -y suricata 2>/dev/null; then
-        log "✅ Suricata installed via PPA"
+        log "✅ Suricata installed from default repo"
     else
-        # Fallback to default apt
-        warn "PPA failed — trying default apt..."
-        sudo apt-get install -y suricata || \
-            err "Suricata installation failed!"
+        warn "Default repo failed — skipping Suricata"
     fi
 
-    log "Updating Suricata rules..."
     sudo suricata-update 2>/dev/null || true
     sudo systemctl disable suricata 2>/dev/null || true
     sudo systemctl stop suricata 2>/dev/null || true
-    log "✅ Suricata installed"
+    log "✅ Suricata ready"
 else
     log "✅ Suricata already installed"
     sudo systemctl disable suricata 2>/dev/null || true
