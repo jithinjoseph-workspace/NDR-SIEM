@@ -103,6 +103,7 @@ sudo apt-get install -y -qq \
     netcat-traditional 2>/dev/null || true
 
 # ── Install Suricata ──────────────────────────
+# ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
     log "Installing Suricata..."
 
