@@ -17,12 +17,22 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 use std::env;
 
+
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
         .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string())
 }
 
+#[derive(serde::Deserialize)]
+pub struct TogglePayload {
+    pub enabled: bool,
+}
+
+
 // ── Shared application state ──────────────────────────────────────────────
+
+
+
 
 #[derive(Clone)]
 pub struct AppState {
@@ -138,7 +148,7 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     score:        risk.score as f32,
     severity:     risk.severity.as_str().to_string(),
     tags:         risk.tags.clone(),
-    sigma_hits:   detections.iter().map(|d| d.title.clone()).collect(),
+    sigma_hits: {let mut seen = std::collections::HashSet::new();detections.iter().map(|d| d.title.clone()).filter(|t| seen.insert(t.clone())).collect()},  
     threat_intel: enrichment.is_malicious as u8,
     src_country:  enrichment.src_geo.as_ref()
                     .map(|g| g.country_code.clone())
@@ -153,6 +163,13 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
         }
     });
     // Build WebSocket hit message
+    let sigma_hits: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        detections.iter()
+            .map(|d| d.title.clone())
+            .filter(|t| seen.insert(t.clone()))
+            .collect()
+    };
     let hit_msg = json!({
         "type":            "hit",
         "cid":             hit.community_id,
@@ -168,7 +185,7 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
         "dst_country":     enrichment.dst_geo.as_ref().map(|g| &g.country_code),
         "src_asn":         enrichment.src_asn.as_ref().map(|a| &a.full),
         "dst_asn":         enrichment.dst_asn.as_ref().map(|a| &a.full),
-        "sigma_hits":      detections.iter().map(|d| &d.title).collect::<Vec<_>>(),
+        "sigma_hits":      sigma_hits,
         "suricata": {
             "src": hit.suricata.source_ip, "src_port": hit.suricata.source_port,
             "dst": hit.suricata.dest_ip,   "dst_port": hit.suricata.dest_port,
@@ -232,7 +249,11 @@ pub async fn get_interfaces() -> Json<Value> {
         Err(_) => Json(json!([])),
     }
 }
+ 
 
+
+
+//get interface
 pub async fn get_interface() -> Json<Value> {
     let url = format!("{}/agent/status", agent_url());
     match reqwest::get(&url).await {
@@ -350,9 +371,106 @@ pub async fn get_hits(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
+pub async fn get_rule_by_id(
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+    let file_path = format!("{}/{}.yml", rules_dir, rule_id);
+
+    match std::fs::read_to_string(&file_path) {
+        Ok(content) => {
+            // Parse YAML to extract fields
+            let doc: std::collections::HashMap<String, serde_yaml::Value> =
+                serde_yaml::from_str(&content).unwrap_or_default();
+
+            let get_str = |k: &str| -> String {
+                doc.get(k).and_then(|v| v.as_str())
+                    .unwrap_or("").to_string()
+            };
+
+            // Extract detection field/matcher/value
+            let mut field = String::new();
+            let mut matcher = String::new();
+            let mut value = String::new();
+
+            if let Some(detection) = doc.get("detection")
+                .and_then(|v| v.as_mapping()) {
+                for (k, v) in detection {
+                    let key = k.as_str().unwrap_or("");
+                    if key == "condition" { continue; }
+                    if let Some(field_map) = v.as_mapping() {
+                        for (fk, fv) in field_map {
+                            let fk_str = fk.as_str().unwrap_or("");
+                            let parts: Vec<&str> = fk_str.splitn(2, '|').collect();
+                            field   = parts[0].to_string();
+                            matcher = parts.get(1).unwrap_or(&"equals").to_string();
+                            value   = match fv {
+                                serde_yaml::Value::String(s) => s.clone(),
+                                serde_yaml::Value::Sequence(s) => s.first()
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("").to_string(),
+                                _ => String::new(),
+                            };
+                        }
+                    }
+                }
+            }
+
+            Json(json!({
+                "id":          get_str("id"),
+                "title":       get_str("title"),
+                "severity":    get_str("level"),
+                "description": get_str("description"),
+                "field":       field,
+                "matcher":     matcher,
+                "value":       value,
+                "tags":        doc.get("tags")
+                    .and_then(|v| v.as_sequence())
+                    .map(|s| s.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default(),
+            }))
+        }
+        Err(_) => Json(json!({
+            "error": "Rule not found"
+        }))
+    }
+}
+
 //rules endpoint
 pub async fn get_rules(State(state): State<AppState>) -> Json<Value> {
-    Json(json!(state.detection.read().await.get_rules()))
+    // Get all rules from disk
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+
+    // Get disabled rules from ClickHouse
+    let disabled = state.ch_storage
+        .get_disabled_rules().await
+        .unwrap_or_default();
+
+    // Return ALL rules with enabled/disabled state
+    let result: Vec<serde_json::Value> = all_rules.iter().map(|r| {
+        let is_enabled = !disabled.contains(&r.id);
+        json!({
+            "id":          r.id,
+            "title":       r.title,
+            "severity":    r.severity,
+            "tags":        r.tags,
+            "conditions":  r.conditions.len(),
+            "logsource": {
+                "product":  r.logsource.product,
+                "category": r.logsource.category,
+                "service":  r.logsource.service,
+            },
+            "enabled": is_enabled,
+            "status":  if is_enabled { "active" } else { "disabled" }
+        })
+    }).collect();
+
+    Json(json!(result))
 }
 
 pub async fn get_threat_intel(State(state): State<AppState>) -> Json<Value> {
@@ -384,23 +502,33 @@ pub async fn lookup_ioc(
 
 
 // auto reload rules 
-pub async fn reload_rules_api(State(state): State<AppState>) -> Json<Value> {
+pub async fn reload_rules_api(
+    State(state): State<AppState>
+) -> Json<Value> {
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
 
-    let new_rules = crate::detection::load_rules_from_dir(&rules_dir);
-    let count = new_rules.len();
+    // Get disabled rules from ClickHouse
+    let disabled = state.ch_storage
+        .get_disabled_rules().await
+        .unwrap_or_default();
 
-    // Write lock to update rules
-    let mut detection = state.detection.write().await;
-    detection.set_rules(new_rules);
+    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+    let total = all_rules.len();
+    let active = all_rules.into_iter()
+        .filter(|r| !disabled.contains(&r.id))
+        .collect::<Vec<_>>();
+    let count = active.len();
 
-    tracing::info!("🔄 Hot-reloaded {} SIGMA rules", count);
+    state.detection.write().await.set_rules(active);
+    tracing::info!("Hot-reloaded {} / {} SIGMA rules", count, total);
 
     Json(json!({
-        "status":  "reloaded",
-        "count":   count,
-        "message": "Rules reloaded successfully"
+        "status":        "reloaded",
+        "count":         count,
+        "total":         total,
+        "disabled":      disabled.len(),
+        "message":       "Rules reloaded successfully"
     }))
 }
 
@@ -482,7 +610,7 @@ detection:
 }
 
 pub async fn delete_rule(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     axum::extract::Path(rule_id): axum::extract::Path<String>,
 ) -> Json<Value> {
     let rules_dir = std::env::var("RULES_DIR")
@@ -491,11 +619,30 @@ pub async fn delete_rule(
 
     match std::fs::remove_file(&file_path) {
         Ok(_) => {
+            // Also remove state from ClickHouse
+            state.ch_storage
+                .delete_rule_state(&rule_id).await.ok();
+
+            // Reload rules
+            let disabled = state.ch_storage
+                .get_disabled_rules().await
+                .unwrap_or_default();
+            let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+            let active = all_rules.into_iter()
+                .filter(|r| !disabled.contains(&r.id))
+                .collect::<Vec<_>>();
+            let count = active.len();
+            state.detection.write().await.set_rules(active);
+
             tracing::info!("Rule deleted: {}", rule_id);
-            Json(json!({"status": "deleted", "id": rule_id}))
+            Json(json!({
+                "status": "deleted",
+                "id":     rule_id,
+                "active_rules": count
+            }))
         }
         Err(e) => Json(json!({
-            "status": "error",
+            "status":  "error",
             "message": e.to_string()
         }))
     }
@@ -525,6 +672,283 @@ pub async fn get_scale_status(State(state): State<AppState>) -> Json<Value> {
         "max_engines":     5,
     }))
 }
+
+
+
+//rules enable disable
+pub async fn toggle_rule(
+    State(state): State<AppState>,
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+    Json(payload): Json<TogglePayload>,
+) -> Json<Value> {
+    // Save state to ClickHouse
+    if let Err(e) = state.ch_storage
+        .set_rule_enabled(&rule_id, payload.enabled).await {
+        return Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }));
+    }
+
+
+
+
+
+    // Reload rules respecting disabled state
+    let rules_dir = std::env::var("RULES_DIR")
+        .unwrap_or_else(|_| "rules".to_string());
+    let disabled = state.ch_storage
+        .get_disabled_rules().await
+        .unwrap_or_default();
+    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+    let active = all_rules.into_iter()
+        .filter(|r| !disabled.contains(&r.id))
+        .collect::<Vec<_>>();
+    let count = active.len();
+    state.detection.write().await.set_rules(active);
+
+    Json(json!({
+        "status":       "ok",
+        "id":           rule_id,
+        "enabled":      payload.enabled,
+        "active_rules": count
+    }))
+}
+
+
+
+
+pub async fn export_report(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,) -> axum::response::Response {
+    let format = params.get("format").map(|s: &String| s.as_str()).unwrap_or("json");
+    let hours: u32 = params.get("hours").and_then(|h: &String| h.parse().ok()).unwrap_or(24);
+
+    let stats    = state.ch_storage.get_stats().await
+        .unwrap_or(json!({}));
+    let hits     = state.ch_storage.get_recent_hits(100).await
+        .unwrap_or_default();
+    let top_ips  = state.ch_storage.get_top_src_ips(10).await
+        .unwrap_or_default();
+    let severity = state.ch_storage.get_severity_breakdown().await
+        .unwrap_or(json!({}));
+    let threat   = state.ch_storage.get_threat_intel_hits().await
+        .unwrap_or_default();
+let rules = state.detection.read().await.get_rules();
+
+    let report = json!({
+        "generated_at":     chrono::Utc::now().to_rfc3339(),
+        "time_range_hours": hours,
+        "summary": {
+            "total_events":    stats.get("events_total")
+                .and_then(|v| v.as_u64()).unwrap_or(0),
+            "total_hits":      stats.get("hits_total")
+                .and_then(|v| v.as_u64()).unwrap_or(0),
+            "events_1h":       stats.get("events_1h")
+                .and_then(|v| v.as_u64()).unwrap_or(0),
+            "zeek_events":     stats.get("zeek_events")
+                .and_then(|v| v.as_u64()).unwrap_or(0),
+            "suricata_events": stats.get("suricata_events")
+                .and_then(|v| v.as_u64()).unwrap_or(0),
+            "active_rules":    rules.len(),
+        },
+        "severity_breakdown":  severity,
+        "top_source_ips":      top_ips,
+        "recent_hits":         hits,
+        "threat_intel_hits":   threat,
+        "active_rules":        rules,
+    });
+
+    match format {
+        "csv" => {
+            let mut csv = String::new();
+            csv.push_str("NDR Security Report\n");
+            csv.push_str(&format!("Generated,{}\n",
+                chrono::Utc::now().to_rfc3339()));
+            csv.push_str(&format!("Time Range,Last {} hours\n\n", hours));
+
+            csv.push_str("SUMMARY\n");
+            csv.push_str("Metric,Value\n");
+            csv.push_str(&format!("Total Events,{}\n",
+                report["summary"]["total_events"]));
+            csv.push_str(&format!("Total Hits,{}\n",
+                report["summary"]["total_hits"]));
+            csv.push_str(&format!("Events Last Hour,{}\n",
+                report["summary"]["events_1h"]));
+            csv.push_str(&format!("Zeek Events,{}\n",
+                report["summary"]["zeek_events"]));
+            csv.push_str(&format!("Suricata Events,{}\n",
+                report["summary"]["suricata_events"]));
+            csv.push_str(&format!("Active Rules,{}\n\n",
+                report["summary"]["active_rules"]));
+
+            csv.push_str("CORRELATION HITS\n");
+            csv.push_str("Timestamp,Source IP,Dest IP,Severity,Score,Sigma Hits\n");
+            if let Some(arr) = report["recent_hits"].as_array() {
+                for h in arr {
+                    csv.push_str(&format!("{},{},{},{},{:.0},{}\n",
+                        h["timestamp"].as_u64().unwrap_or(0),
+                        h["src_ip"].as_str().unwrap_or("-"),
+                        h["dst_ip"].as_str().unwrap_or("-"),
+                        h["severity"].as_str().unwrap_or("-"),
+                        h["score"].as_f64().unwrap_or(0.0),
+                        h["sigma_hits"].as_array()
+                            .map(|a| a.iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>().join(";"))
+                            .unwrap_or_default(),
+                    ));
+                }
+            }
+
+            csv.push_str("\nTOP SOURCE IPs\n");
+            csv.push_str("IP,Events\n");
+            if let Some(ips) = report["top_source_ips"].as_array() {
+                for ip in ips {
+                    csv.push_str(&format!("{},{}\n",
+                        ip["ip"].as_str().unwrap_or("-"),
+                        ip["count"].as_u64().unwrap_or(0),
+                    ));
+                }
+            }
+
+            axum::response::Response::builder()
+                .header("content-type", "text/csv")
+                .header("content-disposition",
+                    "attachment; filename=\"ndr-report.csv\"")
+                .body(axum::body::Body::from(csv))
+                .unwrap()
+        }
+
+        "pdf" => {
+            let hits_rows = report["recent_hits"].as_array()
+                .map(|hits| hits.iter().map(|h| format!(
+                    "<tr><td>{}</td><td>{}</td><td>{}</td>\
+                     <td>{}</td><td>{:.0}</td><td>{}</td></tr>",
+                    h["timestamp"].as_u64().unwrap_or(0),
+                    h["src_ip"].as_str().unwrap_or("-"),
+                    h["dst_ip"].as_str().unwrap_or("-"),
+                    h["severity"].as_str().unwrap_or("-"),
+                    h["score"].as_f64().unwrap_or(0.0),
+                    h["sigma_hits"].as_array()
+                        .map(|a| a.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default(),
+                )).collect::<Vec<_>>().join(""))
+                .unwrap_or_default();
+
+            let ip_rows = report["top_source_ips"].as_array()
+                .map(|ips| ips.iter().map(|ip| format!(
+                    "<tr><td>{}</td><td>{}</td></tr>",
+                    ip["ip"].as_str().unwrap_or("-"),
+                    ip["count"].as_u64().unwrap_or(0),
+                )).collect::<Vec<_>>().join(""))
+                .unwrap_or_default();
+
+            let threat_rows = report["threat_intel_hits"].as_array()
+                .map(|ti| ti.iter().map(|t| format!(
+                    "<tr><td style='color:red'>{}</td>\
+                     <td>{}</td><td>{}</td></tr>",
+                    t["src_ip"].as_str().unwrap_or("-"),
+                    t["dst_ip"].as_str().unwrap_or("-"),
+                    t["hits"].as_u64().unwrap_or(0),
+                )).collect::<Vec<_>>().join(""))
+                .unwrap_or_default();
+
+            let rules_rows = rules.iter().map(|r| format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                r["id"].as_str().unwrap_or("-"),
+                r["title"].as_str().unwrap_or("-"),
+                r["severity"].as_str().unwrap_or("-"),
+                r["conditions"].as_u64().unwrap_or(0),
+            )).collect::<Vec<_>>().join("");
+
+            let html = format!(r#"<!DOCTYPE html>
+<html>
+<head>
+<title>NDR Security Report</title>
+<style>
+body{{font-family:Arial,sans-serif;margin:40px;color:#333}}
+h1{{color:#1a1a2e;border-bottom:3px solid #69f6b8;padding-bottom:10px}}
+h2{{color:#16213e;margin-top:30px}}
+table{{width:100%;border-collapse:collapse;margin:15px 0}}
+th{{background:#1a1a2e;color:#69f6b8;padding:10px;text-align:left}}
+td{{padding:8px 10px;border-bottom:1px solid #ddd}}
+tr:nth-child(even){{background:#f9f9f9}}
+.grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin:20px 0}}
+.card{{background:#f0f0f0;padding:15px;border-radius:8px;text-align:center}}
+.val{{font-size:28px;font-weight:bold;color:#1a1a2e}}
+.lbl{{font-size:12px;color:#666;text-transform:uppercase}}
+@media print{{button{{display:none}}}}
+</style>
+</head>
+<body>
+<button onclick="window.print()"
+  style="background:#69f6b8;border:none;padding:10px 20px;
+  border-radius:5px;cursor:pointer;font-weight:bold;margin-bottom:20px">
+  Print / Save as PDF
+</button>
+<h1>NDR Security Report</h1>
+<p><strong>Generated:</strong> {}</p>
+<p><strong>Time Range:</strong> Last {} hours</p>
+<h2>Summary</h2>
+<div class="grid">
+  <div class="card"><div class="val">{}</div><div class="lbl">Total Events</div></div>
+  <div class="card"><div class="val">{}</div><div class="lbl">Hits</div></div>
+  <div class="card"><div class="val">{}</div><div class="lbl">Active Rules</div></div>
+  <div class="card"><div class="val">{}</div><div class="lbl">Zeek Events</div></div>
+  <div class="card"><div class="val">{}</div><div class="lbl">Suricata Events</div></div>
+  <div class="card"><div class="val">{}</div><div class="lbl">Events/Hour</div></div>
+</div>
+<h2>Recent Hits</h2>
+<table>
+  <tr><th>Timestamp</th><th>Src IP</th><th>Dst IP</th>
+      <th>Severity</th><th>Score</th><th>SIGMA</th></tr>
+  {}
+</table>
+<h2>Top Source IPs</h2>
+<table><tr><th>IP</th><th>Count</th></tr>{}</table>
+<h2>Threat Intel Hits</h2>
+<table><tr><th>Src IP</th><th>Dst IP</th><th>Hits</th></tr>{}</table>
+<h2>Active SIGMA Rules</h2>
+<table><tr><th>ID</th><th>Title</th><th>Severity</th><th>Conditions</th></tr>{}</table>
+</body></html>"#,
+                chrono::Utc::now().to_rfc3339(),
+                hours,
+                report["summary"]["total_events"],
+                report["summary"]["total_hits"],
+                report["summary"]["active_rules"],
+                report["summary"]["zeek_events"],
+                report["summary"]["suricata_events"],
+                report["summary"]["events_1h"],
+                hits_rows,
+                ip_rows,
+                threat_rows,
+                rules_rows,
+            );
+
+            axum::response::Response::builder()
+                .header("content-type", "text/html")
+                .header("content-disposition",
+                    "attachment; filename=\"ndr-report.html\"")
+                .body(axum::body::Body::from(html))
+                .unwrap()
+        }
+
+        _ => {
+            axum::response::Response::builder()
+                .header("content-type", "application/json")
+                .header("content-disposition",
+                    "attachment; filename=\"ndr-report.json\"")
+                .body(axum::body::Body::from(report.to_string()))
+                .unwrap()
+        }
+    }
+}
+
+
+
 
 //severity
 pub async fn get_severity(State(state): State<AppState>) -> Json<Value> {

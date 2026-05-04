@@ -104,6 +104,10 @@ export class Dashboard implements OnInit, OnDestroy {
     );
   }
 
+  exportReport(format: string) {
+    this.api.exportReport(format);
+  } 
+
   loadAllStats() {
     this.api.getStats().subscribe(data => {
       this.totalEvents = data.events_total || 0;

@@ -1,6 +1,6 @@
-id: ndr-1777609039
+id: ndr-1777691781
 title: Port Scan Detection
-description: Detects port scanning via unanswered connections
+description: Detects port scans via unanswered connections
 level: medium
 tags:
   []

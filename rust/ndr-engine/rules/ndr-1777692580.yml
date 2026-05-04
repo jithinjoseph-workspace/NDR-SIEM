@@ -1,5 +1,5 @@
-id: ndr-1777630208
-title: next
+id: ndr-1777692580
+title: Dns
 description: 
 level: medium
 tags:
@@ -8,6 +8,6 @@ logsource:
   product: ndr
 detection:
   keywords:
-    dst_ip|equals:
-      - '104.20.23.154'
+    network_protocol|equals:
+      - 'dns'
   condition: keywords

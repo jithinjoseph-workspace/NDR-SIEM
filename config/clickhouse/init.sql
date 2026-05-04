@@ -40,3 +40,11 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_stats (
 ) ENGINE = MergeTree()
 ORDER BY timestamp
 TTL timestamp + INTERVAL 7 DAY;
+
+
+CREATE TABLE IF NOT EXISTS ndr.rules_state (
+    id      String,
+    enabled UInt8    DEFAULT 1,
+    updated DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated)
+ORDER BY id;

@@ -188,6 +188,36 @@ impl ClickhouseStorage {
             "suricata_events": suricata_count,
         }))
     }
+    
+    pub async fn set_rule_enabled(&self,id: &str,enabled: bool) -> anyhow::Result<()> {
+    self.client.query("INSERT INTO ndr.rules_state (id, enabled, updated) VALUES (?, ?, now())").bind(id).bind(enabled as u8).execute().await?;
+    Ok(())
+}
+
+pub async fn get_disabled_rules(&self) -> anyhow::Result<Vec<String>> {
+    let ids = self.client
+        .query(
+            "SELECT id FROM ndr.rules_state
+             FINAL
+             WHERE enabled = 0"
+        )
+        .fetch_all::<String>()
+        .await
+        .unwrap_or_default();
+    Ok(ids)
+}
+
+pub async fn delete_rule_state(&self, id: &str) -> anyhow::Result<()> {
+    self.client
+        .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ?")
+        .bind(id)
+        .execute()
+        .await?;
+    Ok(())
+}
+
+
+
 
 
 
