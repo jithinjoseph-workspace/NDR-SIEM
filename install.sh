@@ -31,18 +31,37 @@ echo "║  Zeek + Suricata + Kafka + Rust + UI     ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
+# Add at top of install.sh after functions
+TOTAL_STEPS=10
+CURRENT_STEP=0
+
+step() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}  Step $CURRENT_STEP/$TOTAL_STEPS: $1${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
 # ── Fix network and APT ───────────────────────
 log "Fixing network and APT..."
 sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
 sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
+log "  → IPv6 disabled"
+
 echo 'Acquire::ForceIPv4 "true";' | \
     sudo tee /etc/apt/apt.conf.d/99force-ipv4 > /dev/null
-echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
-sudo rm -f /etc/apt/sources.list.d/*suricata* 2>/dev/null || true
-sudo rm -f /etc/apt/sources.list.d/*oisf* 2>/dev/null || true
+log "  → IPv4 forced"
+
+echo "nameserver 8.8.8.8" | \
+    sudo tee /etc/resolv.conf > /dev/null
+log "  → DNS set to 8.8.8.8"
+
 sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-sudo apt-get clean 2>/dev/null || true
-sudo apt-get update -qq 2>/dev/null || true
+log "  → APT cache cleared"
+
+sudo apt-get update 2>&1 | \
+    grep -E "^Get|^Hit|^Err|^W:" || true
 log "✅ Network ready"
 
 # ── Deployment Mode ───────────────────────────
@@ -110,15 +129,20 @@ progress() {
     spinner $! "$msg"
 }
 
+step "Installing system dependencies"
+
 # ── System dependencies ───────────────────────
 log "Installing system dependencies..."
-(sudo apt-get update -qq && \
- sudo apt-get install -y -qq \
+log "  → Updating package lists..."
+sudo apt-get update 2>&1 | grep -E "^Get|^Hit|^Err|^W:" || true
+log "  → Installing packages..."
+sudo apt-get install -y \
     curl wget git jq python3 \
     net-tools iproute2 \
-    netcat-traditional 2>/dev/null || true) &
-spinner $! "Installing system packages"
+    netcat-traditional
+log "✅ System dependencies installed"
 
+step "Installing Node.js 20"
 
 # ── Install Node.js 20 ────────────────────────
 log "Installing Node.js 20..."
@@ -147,6 +171,7 @@ NODE_VER=$(node --version 2>/dev/null || echo "missing")
 NPM_VER=$(npm --version 2>/dev/null || echo "missing")
 log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
 
+step "Installing Suricata"
 
 # ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
@@ -170,6 +195,8 @@ else
     sudo systemctl stop suricata 2>/dev/null || true
 fi
 
+step "Installing Zeek"
+
 # ── Install Zeek ──────────────────────────────
 if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     log "Installing Zeek..."
@@ -184,6 +211,8 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
 else
     log "✅ Zeek already installed"
 fi
+
+step "Installing ClickHouse"
 
 # ── Install ClickHouse (LOCAL MODE ONLY) ──────
 if [ "$DEPLOY_MODE" = "local" ]; then
@@ -267,6 +296,9 @@ else
     CLICKHOUSE_URL="$CLOUD_CLICKHOUSE"
     info "Skipping local ClickHouse installation"
 fi
+
+step "Configuring network and services"
+
 
 # ── Detect network interface ──────────────────
 log "Detecting network interface..."
@@ -406,6 +438,9 @@ if [ "$DEPLOY_MODE" = "hybrid" ]; then
 fi
 log "✅ Vector configured"
 
+
+step "Installing Angular dependencies"
+
 # ── Install Angular dependencies ──────────────
 log "Installing Angular UI dependencies..."
 
@@ -432,6 +467,9 @@ ln -sf $HOME/ndr-ui-deps/node_modules \
     $INSTALL_DIR/ndr-ui/node_modules
 log "✅ Angular dependencies installed"
 cd $INSTALL_DIR
+
+
+step "Installing Docker"
 
 # ── Install Docker ────────────────────────────
 log "Installing Docker..."
@@ -491,6 +529,9 @@ if ! sudo docker info >/dev/null 2>&1; then
     err "Docker failed to start!"
 fi
 
+step "Building Docker stack"
+
+
 # ── Build and start Docker stack ──────────────
 log "Building Docker stack (this takes a few minutes)..."
 cd $INSTALL_DIR
@@ -525,6 +566,7 @@ for i in {1..60}; do
 done
 echo ""
 
+
 # ── WSL2 reminder ─────────────────────────────
 if grep -qi microsoft /proc/version 2>/dev/null; then
     warn "WSL2 detected — run in Windows PowerShell as Admin:"
@@ -534,6 +576,8 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
     echo "  netsh interface portproxy add v4tov4 listenport=9092 listenaddress=0.0.0.0 connectport=9092 connectaddress=$HOST_IP"
     echo ""
 fi
+
+step "Starting all services"
 
 # ── Verify installation ───────────────────────
 echo ""
