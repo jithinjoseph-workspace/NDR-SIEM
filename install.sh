@@ -32,7 +32,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # Add at top of install.sh after functions
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 CURRENT_STEP=0
 
 step() {
@@ -46,10 +46,10 @@ step() {
 # ── Fix APT sources ───────────────────────────
 log "  → Switching to reliable mirror..."
 sudo tee /etc/apt/sources.list > /dev/null << 'EOF'
-deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
-deb http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+deb https://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+deb https://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+deb https://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+deb https://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
 EOF
 
 # Set apt timeout
@@ -173,6 +173,15 @@ fi
 NODE_VER=$(node --version 2>/dev/null || echo "missing")
 NPM_VER=$(npm --version 2>/dev/null || echo "missing")
 log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
+
+step "Installing Angular CLI"
+# ── Install Angular CLI globally ──────────────
+log "Installing Angular CLI..."
+sudo npm install -g @angular/cli 2>/dev/null || \
+    npm install -g @angular/cli 2>/dev/null || \
+    warn "⚠️ Angular CLI install failed"
+log "✅ Angular CLI: $(ng version --skip-confirmation 2>/dev/null | grep 'Angular CLI' || echo 'installed')"
+
 
 step "Installing Suricata"
 
