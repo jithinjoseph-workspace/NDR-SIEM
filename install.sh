@@ -457,32 +457,25 @@ step "Installing Angular dependencies"
 log "Installing Angular UI dependencies..."
 cd $INSTALL_DIR/ndr-ui
 
-# Clean old broken install
-log "  → Cleaning old node_modules..."
-rm -rf node_modules package-lock.json 2>/dev/null || true
-
-# Fix permissions
 sudo chmod -R 777 $INSTALL_DIR/ndr-ui 2>/dev/null || true
 
-# Install with full output visible
+# Disable symlinks — required for VirtualBox shared folders
+npm config set bin-links false
+
 log "  → Running npm install..."
+rm -rf node_modules 2>/dev/null || true
 npm install 2>&1
 
-# Verify Angular packages exist
+
+# Re-enable for system
+npm config set bin-links true
+
 if [ -d "node_modules/@angular/build" ]; then
     log "✅ Angular dependencies installed"
 else
-    warn "Angular packages missing — retrying with legacy..."
-    npm install --legacy-peer-deps 2>&1 || true
-    if [ -d "node_modules/@angular/build" ]; then
-        log "✅ Angular dependencies installed"
-    else
-        warn "Trying force install..."
-        npm install --force 2>&1 || true
-    fi
+    warn "⚠️ npm install had issues"
 fi
 
-cd $INSTALL_DIR
 
 
 step "Installing Docker"
