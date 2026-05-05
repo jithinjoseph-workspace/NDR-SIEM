@@ -89,13 +89,36 @@ log "Installing to: $INSTALL_DIR"
 log "Running as:    $USERNAME"
 log "Deploy mode:   $DEPLOY_MODE"
 
+# ── Spinner function ──────────────────────────
+spinner() {
+    local pid=$1
+    local msg=$2
+    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local i=0
+    while kill -0 $pid 2>/dev/null; do
+        printf "\r${GREEN}[NDR]${NC} ${frames[$i]} %s..." "$msg"
+        i=$(( (i+1) % 10 ))
+        sleep 0.1
+    done
+    printf "\r${GREEN}[NDR]${NC} ✅ %s done!        \n" "$msg"
+}
+
+progress() {
+    local msg=$1
+    shift
+    "$@" &>/dev/null &
+    spinner $! "$msg"
+}
+
 # ── System dependencies ───────────────────────
 log "Installing system dependencies..."
-sudo apt-get update -qq
-sudo apt-get install -y -qq \
+(sudo apt-get update -qq && \
+ sudo apt-get install -y -qq \
     curl wget git jq python3 \
     net-tools iproute2 \
-    netcat-traditional 2>/dev/null || true
+    netcat-traditional 2>/dev/null || true) &
+spinner $! "Installing system packages"
+
 
 # ── Install Node.js 20 ────────────────────────
 log "Installing Node.js 20..."
