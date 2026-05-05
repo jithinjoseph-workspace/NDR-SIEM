@@ -20,6 +20,6 @@ scripts/*.save
 *Zone.Identifier
 
 # Logs
-logs/
+
 .env
 *.env
