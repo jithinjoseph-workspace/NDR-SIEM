@@ -43,25 +43,28 @@ step() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
-# ── Fix network and APT ───────────────────────
-log "Fixing network and APT..."
-sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
-sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
-log "  → IPv6 disabled"
+# ── Fix APT sources ───────────────────────────
+log "  → Switching to reliable mirror..."
+sudo tee /etc/apt/sources.list > /dev/null << 'EOF'
+deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+deb http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+EOF
 
-echo 'Acquire::ForceIPv4 "true";' | \
-    sudo tee /etc/apt/apt.conf.d/99force-ipv4 > /dev/null
-log "  → IPv4 forced"
-
-echo "nameserver 8.8.8.8" | \
-    sudo tee /etc/resolv.conf > /dev/null
-log "  → DNS set to 8.8.8.8"
+# Set apt timeout
+sudo tee /etc/apt/apt.conf.d/99timeout > /dev/null << 'EOF'
+Acquire::http::Timeout "15";
+Acquire::https::Timeout "15";
+Acquire::Retries "2";
+EOF
 
 sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 log "  → APT cache cleared"
 
+log "  → Updating package lists..."
 sudo apt-get update 2>&1 | \
-    grep -E "^Get|^Hit|^Err|^W:" || true
+    grep -E "^Get|^Hit|^Err" | head -15 || true
 log "✅ Network ready"
 
 # ── Deployment Mode ───────────────────────────
@@ -444,27 +447,20 @@ step "Installing Angular dependencies"
 # ── Install Angular dependencies ──────────────
 log "Installing Angular UI dependencies..."
 
-# Install deps in home dir (fast — avoids shared folder slowness)
-log "Setting up npm in home directory..."
-mkdir -p $HOME/ndr-ui-deps
+# ── Install Angular dependencies ──────────────
+log "Installing Angular UI dependencies..."
+cd $INSTALL_DIR/ndr-ui
 
-# Copy package files to home
-cp $INSTALL_DIR/ndr-ui/package.json \
-    $HOME/ndr-ui-deps/ 2>/dev/null || true
-cp $INSTALL_DIR/ndr-ui/package-lock.json \
-    $HOME/ndr-ui-deps/ 2>/dev/null || true
+# Fix permissions on shared folder
+sudo chmod -R 777 $INSTALL_DIR/ndr-ui 2>/dev/null || true
 
-cd $HOME/ndr-ui-deps
-log "Running npm install (this takes 2-5 minutes)..."
+# Install directly in project folder
+log "  → Running npm install..."
 npm install --legacy-peer-deps 2>/dev/null || \
 npm install --force 2>/dev/null || \
 npm install 2>/dev/null || \
     warn "⚠️ npm install had issues — continuing..."
 
-# Link node_modules to project for live reload
-rm -rf $INSTALL_DIR/ndr-ui/node_modules 2>/dev/null || true
-ln -sf $HOME/ndr-ui-deps/node_modules \
-    $INSTALL_DIR/ndr-ui/node_modules
 log "✅ Angular dependencies installed"
 cd $INSTALL_DIR
 
