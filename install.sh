@@ -47,14 +47,21 @@ step() {
 log "Fixing network and APT..."
 sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
 sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
+log "  → IPv6 disabled"
+
 echo 'Acquire::ForceIPv4 "true";' | \
     sudo tee /etc/apt/apt.conf.d/99force-ipv4 > /dev/null
-echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
-sudo rm -f /etc/apt/sources.list.d/*suricata* 2>/dev/null || true
-sudo rm -f /etc/apt/sources.list.d/*oisf* 2>/dev/null || true
+log "  → IPv4 forced"
+
+echo "nameserver 8.8.8.8" | \
+    sudo tee /etc/resolv.conf > /dev/null
+log "  → DNS set to 8.8.8.8"
+
 sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-sudo apt-get clean 2>/dev/null || true
-sudo apt-get update -qq 2>/dev/null || true
+log "  → APT cache cleared"
+
+sudo apt-get update 2>&1 | \
+    grep -E "^Get|^Hit|^Err|^W:" || true
 log "✅ Network ready"
 
 # ── Deployment Mode ───────────────────────────
