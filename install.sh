@@ -97,36 +97,33 @@ sudo apt-get install -y -qq \
     net-tools iproute2 \
     netcat-traditional 2>/dev/null || true
 
-# ── Install Node.js 20 FIRST ─────────────────
+# ── Install Node.js 20 ────────────────────────
 log "Installing Node.js 20..."
-sudo apt-get remove -y nodejs npm 2>/dev/null || true
-sudo rm -f /usr/bin/node /usr/bin/npm 2>/dev/null || true
 
-curl -fsSL https://deb.nodesource.com/setup_20.x \
-    | sudo -E bash - 2>/dev/null || true
-sudo apt-get install -y nodejs 2>/dev/null || true
+# Check if Node.js 20 already installed
+NODE_VER=$(node --version 2>/dev/null || echo "none")
+NODE_MAJOR=$(echo $NODE_VER | cut -d. -f1 | tr -d 'v')
 
-if ! command -v npm &>/dev/null; then
-    warn "npm not found — installing separately..."
-    sudo apt-get install -y npm 2>/dev/null || true
-    sudo npm install -g npm@latest 2>/dev/null || true
+if [ "${NODE_MAJOR:-0}" -ge 18 ] 2>/dev/null; then
+    log "✅ Node.js already OK: $NODE_VER"
+else
+    # Only remove if old version
+    if [ "${NODE_MAJOR:-0}" -lt 18 ] && [ "$NODE_VER" != "none" ]; then
+        log "Removing old Node.js $NODE_VER..."
+        sudo apt-get remove -y nodejs npm 2>/dev/null || true
+        sudo apt-get autoremove -y 2>/dev/null || true
+    fi
+
+    # Add NodeSource repo and install
+    curl -fsSL https://deb.nodesource.com/setup_20.x \
+        | sudo -E bash - 2>/dev/null || true
+    sudo apt-get install -y nodejs 2>/dev/null || true
 fi
 
 NODE_VER=$(node --version 2>/dev/null || echo "missing")
 NPM_VER=$(npm --version 2>/dev/null || echo "missing")
 log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
 
-NODE_MAJOR=$(echo $NODE_VER | cut -d. -f1 | tr -d 'v')
-if [ "${NODE_MAJOR:-0}" -lt 18 ] 2>/dev/null; then
-    warn "Node.js too old ($NODE_VER) — trying NVM..."
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh \
-        | bash 2>/dev/null || true
-    export NVM_DIR="$HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-    nvm install 20 2>/dev/null || true
-    nvm use 20 2>/dev/null || true
-    log "✅ Node.js via NVM: $(node --version)"
-fi
 
 # ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
