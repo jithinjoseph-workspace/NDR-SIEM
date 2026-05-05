@@ -455,22 +455,33 @@ step "Installing Angular dependencies"
 
 # ── Install Angular dependencies ──────────────
 log "Installing Angular UI dependencies..."
-
-# ── Install Angular dependencies ──────────────
-log "Installing Angular UI dependencies..."
 cd $INSTALL_DIR/ndr-ui
 
-# Fix permissions on shared folder
+# Clean old broken install
+log "  → Cleaning old node_modules..."
+rm -rf node_modules package-lock.json 2>/dev/null || true
+
+# Fix permissions
 sudo chmod -R 777 $INSTALL_DIR/ndr-ui 2>/dev/null || true
 
-# Install directly in project folder
+# Install with full output visible
 log "  → Running npm install..."
-npm install --legacy-peer-deps 2>/dev/null || \
-npm install --force 2>/dev/null || \
-npm install 2>/dev/null || \
-    warn "⚠️ npm install had issues — continuing..."
+npm install 2>&1
 
-log "✅ Angular dependencies installed"
+# Verify Angular packages exist
+if [ -d "node_modules/@angular/build" ]; then
+    log "✅ Angular dependencies installed"
+else
+    warn "Angular packages missing — retrying with legacy..."
+    npm install --legacy-peer-deps 2>&1 || true
+    if [ -d "node_modules/@angular/build" ]; then
+        log "✅ Angular dependencies installed"
+    else
+        warn "Trying force install..."
+        npm install --force 2>&1 || true
+    fi
+fi
+
 cd $INSTALL_DIR
 
 
