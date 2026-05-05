@@ -473,33 +473,95 @@ pub async fn get_rules(State(state): State<AppState>) -> Json<Value> {
     Json(json!(result))
 }
 
+//threat intelegence endpoint
 pub async fn get_threat_intel(State(state): State<AppState>) -> Json<Value> {
-    // Get malicious IPs detected in our network from ClickHouse
+    let ti = &state.enrichment.threat_intel;
     let detected = state.ch_storage.get_threat_intel_hits().await
         .unwrap_or_default();
 
     Json(json!({
-        "total_malicious_ips": state.enrichment.threat_intel.count(),
-        "source": "abuse.ch Feodo Tracker",
-        "url": "https://feodotracker.abuse.ch",
-        "detected_in_network": detected,
+        "total_malicious_ips":     ti.ip_count(),
+        "total_malicious_hashes":  ti.hash_count(),
+        "total_malicious_domains": ti.domain_count(),
+        "detected_in_network":     detected,
         "last_refresh": "Every 60 minutes",
+        "sources": [
+            {
+                "name": "Feodo Tracker",
+                "type": "IP",
+                "url":  "https://feodotracker.abuse.ch"
+            },
+            {
+                "name": "MalwareBazaar",
+                "type": "File Hash",
+                "url":  "https://bazaar.abuse.ch"
+            },
+            {
+                "name": "URLhaus",
+                "type": "Domain/URL",
+                "url":  "https://urlhaus.abuse.ch"
+            }
+        ]
     }))
 }
 
+//lookup ioc
 pub async fn lookup_ioc(
     State(state): State<AppState>,
-    axum::extract::Path(ip): axum::extract::Path<String>,
+    axum::extract::Path(ioc): axum::extract::Path<String>,
 ) -> Json<Value> {
-    let is_malicious = state.enrichment.threat_intel.is_malicious(&ip);
+    let ti = &state.enrichment.threat_intel;
+    let ioc_lower = ioc.to_lowercase();
+
+    // Detect IOC type
+    let (ioc_type, is_malicious) = if ioc.contains('.') &&
+        ioc.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        // IP address
+        ("ip", ti.is_malicious_ip(&ioc))
+    } else if ioc.len() == 32 || ioc.len() == 40 || ioc.len() == 64 {
+        // Hash (MD5=32, SHA1=40, SHA256=64)
+        ("hash", ti.is_malicious_hash(&ioc))
+    } else if ioc.contains('.') {
+        // Domain/hostname
+        ("domain", ti.is_malicious_domain(&ioc))
+    } else {
+        ("unknown", false)
+    };
+
     Json(json!({
-        "ip":           ip,
+        "ioc":          ioc,
+        "type":         ioc_type,
         "is_malicious": is_malicious,
-        "source":       "abuse.ch Feodo Tracker",
+        "source":       "abuse.ch (Feodo + MalwareBazaar + URLhaus)"
     }))
 }
 
+//add manaual ioc
+pub async fn add_manual_ioc(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<Value> {
+    let ioc_type = payload["type"].as_str()
+        .unwrap_or("ip");
+    let value = payload["value"].as_str()
+        .unwrap_or("");
 
+    if value.is_empty() {
+        return Json(json!({
+            "status":  "error",
+            "message": "value is required"
+        }));
+    }
+
+    state.enrichment.threat_intel.add_ioc(ioc_type, value);
+
+    Json(json!({
+        "status":  "added",
+        "type":    ioc_type,
+        "value":   value,
+        "message": format!("IOC {} added successfully", ioc_type)
+    }))
+}
 
 // auto reload rules 
 pub async fn reload_rules_api(

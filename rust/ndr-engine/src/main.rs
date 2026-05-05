@@ -131,7 +131,7 @@ async fn main() {
        .route("/api/threat-intel/:ip", get(api::lookup_ioc))
        .route("/api/rules/:id/toggle", post(api::toggle_rule))
         .route("/api/export", get(api::export_report))
-
+        .route("/api/threat-intel/add", post(api::add_manual_ioc))
         .with_state(state)
         .layer(cors);
 
