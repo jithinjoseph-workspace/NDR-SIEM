@@ -1,87 +1,58 @@
-<header class="h-16 bg-surface border-b border-outline/5 flex items-center justify-between px-8">
-  <div class="flex items-center gap-4 flex-1">
-    <div class="relative w-full max-w-md group">
-      <lucide-icon [name]="SearchIcon"
-        class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">
-      </lucide-icon>
-      <input type="text"
-             [(ngModel)]="searchText"
-             (input)="onSearchInput()"
-             (keydown)="onSearch($event)"
-             (blur)="closeSearch()"
-             placeholder="Search IP, rules, alerts, logs..."
-             class="w-full bg-surface-container-low border-none rounded-full py-2 pl-10 pr-4 text-sm text-white placeholder:text-on-surface-variant focus:ring-1 focus:ring-primary/30 outline-none transition-all"/>
+<header class="topbar">
+  <div class="search-wrap">
+    <lucide-icon [name]="SearchIcon" class="search-icon w-4 h-4"></lucide-icon>
+    <input
+      type="text"
+      [(ngModel)]="searchText"
+      (input)="onSearchInput()"
+      (keydown)="onSearch($event)"
+      (blur)="closeSearch()"
+      placeholder="Search IPs, alerts, rules, and logs"
+    />
 
-      <!-- Search suggestions dropdown -->
-      <div *ngIf="showSuggestions"
-           class="absolute top-full left-0 right-0 mt-2 bg-surface-container-highest border border-outline/10 rounded-xl shadow-lg z-50 overflow-hidden">
-        <div *ngFor="let s of filteredSuggestions"
-             (mousedown)="selectSuggestion(s)"
-             class="flex items-center gap-3 px-4 py-3 hover:bg-surface-container-low cursor-pointer transition-colors">
-          <span class="text-base">{{ s.icon }}</span>
-          <div>
-            <div class="text-white text-xs font-bold">{{ s.label }}</div>
-            <div class="text-on-surface-variant text-[10px]">{{ s.hint }}</div>
-          </div>
-        </div>
+    <div *ngIf="showSuggestions" class="suggestions-panel">
+      <button *ngFor="let s of filteredSuggestions" (mousedown)="selectSuggestion(s)" class="suggestion-row">
+        <span class="suggestion-icon">{{ s.label.charAt(0) }}</span>
+        <span>
+          <strong>{{ s.label }}</strong>
+          <small>{{ s.hint }}</small>
+        </span>
+      </button>
 
-        <!-- Quick links when no search term -->
-        <div class="border-t border-outline/10 px-4 py-2">
-          <div class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">
-            Quick Navigate
-          </div>
-          <div class="flex gap-2 flex-wrap">
-            <button *ngFor="let s of suggestions.slice(0,4)"
-                    (mousedown)="selectSuggestion(s)"
-                    class="text-[10px] px-2 py-1 bg-surface-container-low rounded text-on-surface-variant hover:text-white transition-colors">
-              {{ s.icon }} {{ s.label }}
-            </button>
-          </div>
+      <div class="quick-links">
+        <span>Quick Navigate</span>
+        <div>
+          <button *ngFor="let s of suggestions.slice(0, 4)" (mousedown)="selectSuggestion(s)">
+            {{ s.label }}
+          </button>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="flex items-center gap-6">
-    <div class="flex flex-col items-end">
-      <span class="text-[10px] text-on-surface-variant uppercase tracking-wider">
-        System Status
-      </span>
-      <div class="flex items-center gap-1.5">
-        <div [class]="'w-1.5 h-1.5 rounded-full animate-pulse ' +
-          (systemStatus === 'OPERATIONAL' ?
-            'bg-primary shadow-[0_0_8px_rgba(105,246,184,0.5)]' :
-            'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.5)]')">
-        </div>
-        <span [class]="'text-[11px] font-bold ' +
-          (systemStatus === 'OPERATIONAL' ? 'text-primary' : 'text-yellow-400')">
-          {{ systemStatus }}
-        </span>
-      </div>
+  <div class="topbar-actions">
+    <div class="system-card">
+      <span>System Status</span>
+      <strong [class.degraded]="systemStatus !== 'OPERATIONAL'">
+        <i></i>
+        {{ systemStatus }}
+      </strong>
     </div>
 
-    <div class="h-8 w-px bg-outline/10"></div>
-
-    <button class="relative text-on-surface-variant hover:text-white transition-colors">
+    <button class="icon-button" aria-label="Notifications">
       <lucide-icon [name]="BellIcon" class="w-5 h-5"></lucide-icon>
-      <span class="absolute -top-1 -right-1 w-4 h-4 bg-tertiary text-[10px] font-bold
-        text-white flex items-center justify-center rounded-full">
-        4
-      </span>
+      <span>{{ alertCount }}</span>
     </button>
 
-    <button class="flex items-center gap-3 pl-4 border-l border-outline/10 group">
-      <div class="w-8 h-8 rounded-full bg-surface-container-highest border border-outline/20
-        flex items-center justify-center text-primary overflow-hidden">
+    <button class="profile-button">
+      <span class="avatar">
         <lucide-icon [name]="UserIcon" class="w-5 h-5"></lucide-icon>
-      </div>
-      <div class="flex flex-col items-start leading-none">
-        <span class="text-xs font-semibold text-white">Analyst 01</span>
-        <span class="text-[10px] text-on-surface-variant">Admin Level</span>
-      </div>
-      <lucide-icon [name]="ChevronDownIcon"
-        class="w-3 h-3 text-on-surface-variant group-hover:text-white transition-colors">
-      </lucide-icon>
+      </span>
+      <span class="profile-copy">
+        <strong>Analyst 01</strong>
+        <small>Admin Level</small>
+      </span>
+      <lucide-icon [name]="ChevronDownIcon" class="w-3 h-3 chevron-icon"></lucide-icon>
     </button>
   </div>
 </header>
