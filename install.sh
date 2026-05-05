@@ -32,7 +32,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # Add at top of install.sh after functions
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 CURRENT_STEP=0
 
 step() {
@@ -173,6 +173,15 @@ fi
 NODE_VER=$(node --version 2>/dev/null || echo "missing")
 NPM_VER=$(npm --version 2>/dev/null || echo "missing")
 log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
+
+step "Installing Angular CLI"
+# ── Install Angular CLI globally ──────────────
+log "Installing Angular CLI..."
+sudo npm install -g @angular/cli 2>/dev/null || \
+    npm install -g @angular/cli 2>/dev/null || \
+    warn "⚠️ Angular CLI install failed"
+log "✅ Angular CLI: $(ng version --skip-confirmation 2>/dev/null | grep 'Angular CLI' || echo 'installed')"
+
 
 step "Installing Suricata"
 
