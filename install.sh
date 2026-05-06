@@ -174,14 +174,21 @@ NODE_VER=$(node --version 2>/dev/null || echo "missing")
 NPM_VER=$(npm --version 2>/dev/null || echo "missing")
 log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
 
+
 step "Installing Angular CLI"
 # ── Install Angular CLI globally ──────────────
-log "Installing Angular CLI..."
-sudo npm install -g @angular/cli 2>/dev/null || \
-    npm install -g @angular/cli 2>/dev/null || \
-    warn "⚠️ Angular CLI install failed"
-log "✅ Angular CLI: $(ng version --skip-confirmation 2>/dev/null | grep 'Angular CLI' || echo 'installed')"
-
+if ! command -v ng &>/dev/null; then
+    log "Installing Angular CLI..."
+    sudo npm install -g @angular/cli 2>/dev/null || \
+        npm install -g @angular/cli 2>/dev/null || \
+        warn "⚠️ Angular CLI install failed"
+    log "✅ Angular CLI: $(ng version --skip-confirmation \
+        2>/dev/null | grep 'Angular CLI' | head -1)"
+else
+    log "✅ Angular CLI already installed: $(ng version \
+        --skip-confirmation 2>/dev/null | \
+        grep 'Angular CLI' | head -1)"
+fi
 
 step "Installing Suricata"
 
@@ -453,28 +460,37 @@ log "✅ Vector configured"
 
 step "Installing Angular dependencies"
 
+
+
 # ── Install Angular dependencies ──────────────
 log "Installing Angular UI dependencies..."
 cd $INSTALL_DIR/ndr-ui
 
-sudo chmod -R 777 $INSTALL_DIR/ndr-ui 2>/dev/null || true
-
-# Disable symlinks — required for VirtualBox shared folders
-npm config set bin-links false
-
-log "  → Running npm install..."
-rm -rf node_modules 2>/dev/null || true
-npm install 2>&1
-
-
-# Re-enable for system
-npm config set bin-links true
-
+# Skip if already installed
 if [ -d "node_modules/@angular/build" ]; then
-    log "✅ Angular dependencies installed"
+    log "✅ Angular dependencies already installed — skipping"
 else
-    warn "⚠️ npm install had issues"
+    log "  → First time install..."
+    sudo chmod -R 777 $INSTALL_DIR/ndr-ui 2>/dev/null || true
+
+    # Disable symlinks for VirtualBox shared folders
+    npm config set bin-links false
+
+    log "  → Running npm install..."
+    rm -rf node_modules 2>/dev/null || true
+    npm install 2>&1
+
+    # Re-enable
+    npm config set bin-links true
+
+    if [ -d "node_modules/@angular/build" ]; then
+        log "✅ Angular dependencies installed"
+    else
+        warn "⚠️ npm install had issues"
+    fi
 fi
+
+cd $INSTALL_DIR
 
 
 

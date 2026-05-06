@@ -69,12 +69,16 @@ impl ThreatIntel {
                 self.malicious_domains.insert(value.to_lowercase());
             }
             "url" => {
-                self.malicious_urls.insert(value.to_lowercase());
-                // Also extract domain from URL
-                if let Some(domain) = extract_domain(value) {
-                    self.malicious_domains.insert(domain);
-                }
-            }
+    self.malicious_urls.insert(value.to_lowercase());
+    // Also extract host from URL
+    if let Some(host) = extract_host(value) {
+        if let Ok(ip) = IpAddr::from_str(&host) {
+            self.malicious_ips.insert(ip);
+        } else {
+            self.malicious_domains.insert(host);
+        }
+    }
+}
             _ => {}
         }
     }
@@ -159,43 +163,56 @@ impl ThreatIntel {
     }
 
     // ── URLhaus — Domains/URLs ─────────────────
-    async fn refresh_urlhaus(&self) {
-        let url = "https://urlhaus.abuse.ch/downloads/text_online/";
-        let text = match reqwest::get(url).await {
-            Ok(r) => match r.text().await {
-                Ok(t) => t,
-                Err(e) => { warn!("URLhaus body: {}", e); return; }
-            },
-            Err(e) => { warn!("URLhaus fetch: {}", e); return; }
-        };
+async fn refresh_urlhaus(&self) {
+    let url = "https://urlhaus.abuse.ch/downloads/text_online/";
+    let text = match reqwest::get(url).await {
+        Ok(r) => match r.text().await {
+            Ok(t) => t,
+            Err(e) => { warn!("URLhaus body: {}", e); return; }
+        },
+        Err(e) => { warn!("URLhaus fetch: {}", e); return; }
+    };
 
-        self.malicious_domains.clear();
-        self.malicious_urls.clear();
-        let mut loaded = 0usize;
+    self.malicious_domains.clear();
+    self.malicious_urls.clear();
+    let mut loaded_domains = 0usize;
+    let mut loaded_ips = 0usize;
 
-        for line in text.lines() {
-            let line = line.trim();
-            if line.starts_with('#') || line.is_empty() { continue; }
-            // Store full URL
-            self.malicious_urls.insert(line.to_lowercase());
-            // Extract and store domain
-            if let Some(domain) = extract_domain(line) {
-                self.malicious_domains.insert(domain);
-                loaded += 1;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.is_empty() { continue; }
+
+        // Store full URL
+        self.malicious_urls.insert(line.to_lowercase());
+
+        // Extract host (could be IP or domain)
+        if let Some(host) = extract_host(line) {
+            // Check if host is an IP address
+            if let Ok(ip) = IpAddr::from_str(&host) {
+                self.malicious_ips.insert(ip);
+                loaded_ips += 1;
+            } else {
+                // It's a domain
+                self.malicious_domains.insert(host);
+                loaded_domains += 1;
             }
         }
-        info!("URLhaus: {} malicious domains loaded", loaded);
     }
+    info!("URLhaus: {} malicious domains + {} IPs loaded",
+        loaded_domains, loaded_ips);
+}
 }
 
-fn extract_domain(url: &str) -> Option<String> {
+fn extract_host(url: &str) -> Option<String> {
     let url = url.trim_start_matches("http://")
         .trim_start_matches("https://");
-    let domain = url.split('/').next()?
-        .split(':').next()?
-        .to_lowercase();
-    if domain.contains('.') && !domain.is_empty() {
-        Some(domain)
+    let host = url.split('/').next()?
+        .split(':').next()?  // remove port
+        .to_lowercase()
+        .trim()
+        .to_string();
+    if !host.is_empty() {
+        Some(host)
     } else {
         None
     }

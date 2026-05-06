@@ -511,8 +511,6 @@ pub async fn lookup_ioc(
     axum::extract::Path(ioc): axum::extract::Path<String>,
 ) -> Json<Value> {
     let ti = &state.enrichment.threat_intel;
-    let ioc_lower = ioc.to_lowercase();
-
     // Detect IOC type
     let (ioc_type, is_malicious) = if ioc.contains('.') &&
         ioc.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
