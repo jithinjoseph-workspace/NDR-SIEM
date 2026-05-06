@@ -92,21 +92,30 @@ export class Api {
     return this.http.post(`${this.baseUrl}/rules/reload`, {});
   }
 
-getRuleById(id: string): Observable<any> {
-  return this.http.get(`${this.baseUrl}/rules/${id}`);
-}
+  getRuleById(id: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/rules/${id}`);
+  }
 
-toggleRule(id: string, enabled: boolean): Observable<any> {
-  return this.http.post(
-    `${this.baseUrl}/rules/${id}/toggle`,
-    { enabled }
-  );
-}
+  toggleRule(id: string, enabled: boolean): Observable<any> {
+    return this.http.post(
+      `${this.baseUrl}/rules/${id}/toggle`,
+      { enabled }
+    );
+  }
 
-exportReport(format: string, hours: number = 24): void {
-  const url = `http://localhost:3000/api/export?format=${format}&hours=${hours}`;
-  window.open(url, '_blank');
-}
+  exportReport(format: string, hours: number = 24): void {
+    const url = `http://localhost:3000/api/export?format=${format}&hours=${hours}`;
+    window.open(url, '_blank');
+  }
+
+
+  getSoarStatus(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/soar/status`);
+  }
+
+  testSoarWebhook(): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/test`, {});
+  }
 
 }
 

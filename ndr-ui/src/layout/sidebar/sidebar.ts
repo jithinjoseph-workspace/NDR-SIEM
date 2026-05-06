@@ -12,6 +12,7 @@ import {
   Settings,
   HelpCircle,
   Network,
+  Zap,
   LucideAngularModule
 } from 'lucide-angular';
 
@@ -33,6 +34,7 @@ export class Sidebar {
     { label: 'Threat Intel', route: '/intel', icon: Search },
     { label: 'System Health', route: '/health', icon: Database },
     { label: 'Sensor Setup', route: '/setup', icon: Settings },
+    { label: 'SOAR',    route: '/soar',    icon: Zap }
   ];
 
   bottomItems = [

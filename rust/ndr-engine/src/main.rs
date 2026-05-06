@@ -132,6 +132,8 @@ async fn main() {
        .route("/api/rules/:id/toggle", post(api::toggle_rule))
         .route("/api/export", get(api::export_report))
         .route("/api/threat-intel/add", post(api::add_manual_ioc))
+        .route("/api/soar/status",  get(api::get_soar_status))
+        .route("/api/soar/test",    post(api::test_soar_webhook))
         .with_state(state)
         .layer(cors);
 

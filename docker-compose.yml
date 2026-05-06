@@ -16,7 +16,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
-      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      test: [ "CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092" ]
       interval: 10s
       timeout: 10s
       retries: 10
@@ -54,7 +54,8 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    # Nginx Load Balancer — single entry point on port 3000
+
+  # Nginx Load Balancer — single entry point on port 3000
   nginx:
     image: nginx:alpine
     container_name: ndr-nginx
@@ -66,3 +67,50 @@ services:
       - ndr-engine-1
     restart: unless-stopped
 
+  # shuffle setting for soar-integration
+
+  shuffle-backend:
+    image: ghcr.io/shuffle/shuffle-backend:latest
+    container_name: shuffle-backend
+    hostname: shuffle-backend
+    ports:
+      - "5001:5001"
+    environment:
+      - SHUFFLE_APP_HOTLOAD_FOLDER=/shuffle-apps
+      - SHUFFLE_FILE_LOCATION=/shuffle-files
+      - SHUFFLE_OPENSEARCH_URL=http://shuffle-opensearch:9200
+      - SHUFFLE_DEFAULT_USERNAME=admin
+      - SHUFFLE_DEFAULT_PASSWORD=shufflepassword
+      - SHUFFLE_DEFAULT_APIKEY=shuffleapikey123
+      - DATASTORE_EMULATOR_HOST=shuffle-database:8000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - shuffle-apps:/shuffle-apps
+      - shuffle-files:/shuffle-files
+    depends_on:
+      - shuffle-opensearch
+
+  shuffle-frontend:
+    image: ghcr.io/shuffle/shuffle-frontend:latest
+    container_name: shuffle-frontend
+    ports:
+      - "3002:80"
+    environment:
+      - BACKEND_HOSTNAME=shuffle-backend
+    depends_on:
+      - shuffle-backend
+
+  shuffle-opensearch:
+    image: opensearchproject/opensearch:2.5.0
+    container_name: shuffle-opensearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - shuffle-opensearch:/usr/share/opensearch/data
+
+volumes:
+  shuffle-apps:
+  shuffle-files:
+  shuffle-opensearch:

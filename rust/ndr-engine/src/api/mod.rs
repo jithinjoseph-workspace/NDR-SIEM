@@ -184,6 +184,43 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
             .filter(|t| seen.insert(t.clone()))
             .collect()
     };
+
+// ── Send webhook to Shuffle SOAR ──────────────
+// ── Send to Shuffle SOAR ──────────────────────
+if risk.score >= 75.0 {
+    let shuffle_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    if !shuffle_url.is_empty() {
+        let payload = json!({
+            "alert_type":   "ndr_threat_detected",
+            "src_ip":       src,
+            "dst_ip":       dst,
+            "score":        risk.score,
+            "severity":     risk.severity.as_str(),
+            "threat_intel": enrichment.is_malicious,
+            "sigma_hits":   sigma_hits,
+            "timestamp":    chrono::Utc::now().to_rfc3339(),
+            "tags":         risk.tags,
+            "community_id": hit.community_id,
+        });
+
+        let url = shuffle_url.clone();
+        tokio::spawn(async move {
+            match reqwest::Client::new()
+                .post(&url)
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(_)  => info!("✅ Alert sent to Shuffle SOAR"),
+                Err(e) => warn!("Shuffle webhook failed: {}", e),
+            }
+        });
+    }
+}
+
     let hit_msg = json!({
         "type":            "hit",
         "cid":             hit.community_id,
@@ -607,6 +644,67 @@ pub async fn reload_rules_api(
     }))
 }
 
+//soar status
+pub async fn get_soar_status(
+    State(_state): State<AppState>) -> Json<Value> {
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+    let shuffle_url = std::env::var("SHUFFLE_URL")
+        .unwrap_or_else(|_| "http://localhost:5001".to_string());
+
+    // Check if Shuffle is reachable
+    let connected = reqwest::Client::new()
+        .get(&format!("{}/api/v1/health", shuffle_url))
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+
+    Json(json!({
+        "connected":      connected,
+        "webhook_url":    webhook_url,
+        "shuffle_url":    shuffle_url,
+        "recent_actions": []
+    }))
+}
+
+pub async fn test_soar_webhook(
+    State(_state): State<AppState>
+) -> Json<Value> {
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    if webhook_url.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Webhook URL not configured"
+        }));
+    }
+
+    match reqwest::Client::new()
+        .post(&webhook_url)
+        .json(&json!({
+            "alert_type": "test",
+            "message":    "NDR test alert",
+            "score":      85,
+            "severity":   "HIGH",
+            "timestamp":  chrono::Utc::now().to_rfc3339()
+        }))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Test alert sent!"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
 
 // ── SIGMA Rules CRUD ──────────────────────────────────────────────────────
 
