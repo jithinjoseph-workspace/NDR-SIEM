@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { LucideAngularModule, Search, Bell, User, ChevronDown } from 'lucide-angular';
 import { Websocket } from '../../services/websocket/websocket';
+import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 
 @Component({
   selector: 'app-navbar',
@@ -21,7 +22,9 @@ export class Navbar implements OnInit {
   systemStatus = 'OPERATIONAL';
   searchText   = '';
   showSuggestions = false;
+  showNotifications = false;
   alertCount   = 0;
+  recentAlerts: ThreatNotification[] = [];
 
   // Search suggestions
   suggestions = [
@@ -39,6 +42,7 @@ export class Navbar implements OnInit {
   constructor(
     private router: Router,
     private ws: Websocket,
+    private notifications: Notifications,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -49,6 +53,16 @@ export class Navbar implements OnInit {
       const allRunning = data.zeek === 'running' &&
                          data.suricata === 'running';
       this.systemStatus = allRunning ? 'OPERATIONAL' : 'DEGRADED';
+      this.cdr.detectChanges();
+    });
+
+    this.notifications.unreadCount$.subscribe(count => {
+      this.alertCount = count;
+      this.cdr.detectChanges();
+    });
+
+    this.notifications.alerts$.subscribe(alerts => {
+      this.recentAlerts = alerts.slice(0, 5);
       this.cdr.detectChanges();
     });
   }
@@ -139,10 +153,31 @@ export class Navbar implements OnInit {
     this.searchText = '';
   }
 
+  openNotifications() {
+    this.showNotifications = !this.showNotifications;
+    if (this.showNotifications) {
+      this.notifications.markAllRead();
+    }
+    this.showSuggestions = false;
+    this.cdr.detectChanges();
+  }
+
+  viewThreatIntel() {
+    this.showNotifications = false;
+    this.router.navigate(['/intel']);
+  }
+
   closeSearch() {
     setTimeout(() => {
       this.showSuggestions = false;
       this.cdr.detectChanges();
     }, 200);
+  }
+
+  closeNotifications() {
+    setTimeout(() => {
+      this.showNotifications = false;
+      this.cdr.detectChanges();
+    }, 160);
   }
 }

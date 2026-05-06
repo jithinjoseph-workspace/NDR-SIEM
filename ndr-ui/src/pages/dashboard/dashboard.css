@@ -374,7 +374,9 @@
 
 .ip-panel {
   display: flex;
+  min-width: 0;
   min-height: 430px;
+  overflow: hidden;
   flex-direction: column;
 }
 
@@ -383,22 +385,34 @@
   gap: 17px;
 }
 
+.ip-row {
+  min-width: 0;
+}
+
 .ip-row-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
   margin-bottom: 8px;
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
 .ip-row-header span {
+  min-width: 0;
+  overflow: hidden;
   color: #f7f9ff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ip-row-header strong {
+  max-width: 82px;
   color: #98a3b8;
   font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .ip-meter i {

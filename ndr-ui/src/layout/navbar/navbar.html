@@ -39,10 +39,41 @@
       </strong>
     </div>
 
-    <button class="icon-button" aria-label="Notifications">
-      <lucide-icon [name]="BellIcon" class="w-5 h-5"></lucide-icon>
-      <span>{{ alertCount }}</span>
-    </button>
+    <div class="notification-wrap" (focusout)="closeNotifications()">
+      <button class="icon-button" aria-label="Notifications" (click)="openNotifications()">
+        <lucide-icon [name]="BellIcon" class="w-5 h-5"></lucide-icon>
+        <span *ngIf="alertCount > 0">{{ alertCount > 9 ? '9+' : alertCount }}</span>
+      </button>
+
+      <div *ngIf="showNotifications" class="notification-panel">
+        <div class="notification-head">
+          <strong>Threat Alerts</strong>
+          <small>{{ recentAlerts.length }} recent</small>
+        </div>
+
+        <div *ngIf="recentAlerts.length === 0" class="notification-empty">
+          No threat alerts yet
+        </div>
+
+        <div *ngIf="recentAlerts.length > 0" class="notification-list">
+          <div *ngFor="let alert of recentAlerts" class="notification-row">
+            <div>
+              <strong>{{ alert.message }}</strong>
+              <span>{{ alert.src_ip }} -> {{ alert.dst_ip }}</span>
+              <em>{{ alert.hits }} {{ alert.hits === 1 ? 'hit' : 'hits' }} · Latest {{ alert.time }}</em>
+            </div>
+            <small>
+              <span>Score</span>
+              <b>{{ alert.score?.toFixed(0) }}</b>
+            </small>
+          </div>
+        </div>
+
+        <button class="notification-link" (mousedown)="viewThreatIntel()">
+          View Threat Intel
+        </button>
+      </div>
+    </div>
 
     <button class="profile-button">
       <span class="avatar">
