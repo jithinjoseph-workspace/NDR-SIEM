@@ -57,4 +57,6 @@ pub struct CorrelationHit {
     pub zeek:         NormalizedEvent,
     pub suricata:     NormalizedEvent,
     pub hit_time:     u64,
+    pub source:       String,  // ← NEW
+
 }

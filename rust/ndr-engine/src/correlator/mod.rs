@@ -1,6 +1,6 @@
 // NDR Engine — Real-time Correlation Engine
-// Uses community_id as the join key — same approach as Malcolm and Security Onion.
-// DashMap gives lock-free concurrent access without a global Mutex.
+// Fires immediately from Zeek OR Suricata — no waiting
+// Upgrades to full correlation if both arrive
 // License: Apache-2.0
 
 mod session;
@@ -15,9 +15,6 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
-/// In-memory correlation engine backed by a DashMap keyed on community_id.
-/// Both Zeek and Suricata events for the same flow share one Session entry.
-/// When both sides are present → emit a CorrelationHit.
 pub struct CorrelationEngine {
     sessions: Arc<DashMap<String, Session>>,
 }
@@ -29,8 +26,6 @@ impl CorrelationEngine {
         }
     }
 
-    /// Feed a normalised event into the engine.
-    /// Returns Some(CorrelationHit) the moment both Zeek and Suricata are seen.
     pub fn process(&self, event: NormalizedEvent) -> Option<CorrelationHit> {
         let cid = event.community_id.clone()?;
         let now = now_secs();
@@ -43,19 +38,33 @@ impl CorrelationEngine {
 
         match event.event_source {
             EventSource::Zeek => {
-                // Track proto for TTL decision
                 if let Some(p) = &event.proto {
                     session.proto = Some(p.clone());
                 }
                 session.zeek = Some(event);
 
-                // Check if Suricata side already arrived
-                if let (Some(z), Some(s)) = (&session.zeek, &session.suricata) {
+                // Best — both sources present
+                if let (Some(z), Some(s)) = (
+                    &session.zeek,
+                    &session.suricata
+                ) {
                     return Some(CorrelationHit {
                         community_id: cid,
                         zeek:         z.clone(),
                         suricata:     s.clone(),
                         hit_time:     now,
+                        source:       "zeek+suricata".to_string(),
+                    });
+                }
+
+                // Fire from Zeek alone immediately
+                if let Some(z) = &session.zeek {
+                    return Some(CorrelationHit {
+                        community_id: cid,
+                        zeek:         z.clone(),
+                        suricata:     z.clone(),
+                        hit_time:     now,
+                        source:       "zeek".to_string(),
                     });
                 }
             }
@@ -63,13 +72,28 @@ impl CorrelationEngine {
             EventSource::Suricata => {
                 session.suricata = Some(event);
 
-                // Check if Zeek side already arrived
-                if let (Some(z), Some(s)) = (&session.zeek, &session.suricata) {
+                // Best — both sources present
+                if let (Some(z), Some(s)) = (
+                    &session.zeek,
+                    &session.suricata
+                ) {
                     return Some(CorrelationHit {
                         community_id: cid,
                         zeek:         z.clone(),
                         suricata:     s.clone(),
                         hit_time:     now,
+                        source:       "zeek+suricata".to_string(),
+                    });
+                }
+
+                // Fire from Suricata alone immediately
+                if let Some(s) = &session.suricata {
+                    return Some(CorrelationHit {
+                        community_id: cid,
+                        zeek:         s.clone(),
+                        suricata:     s.clone(),
+                        hit_time:     now,
+                        source:       "suricata".to_string(),
                     });
                 }
             }
@@ -80,7 +104,6 @@ impl CorrelationEngine {
         None
     }
 
-    /// Drop expired sessions. Call from a background task every 30s.
     pub fn sweep_expired(&self) {
         let now = now_secs();
         self.sessions.retain(|_, s| !s.is_expired(now));

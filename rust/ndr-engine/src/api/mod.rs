@@ -98,11 +98,25 @@ pub async fn get_network_map(State(state): State<AppState>) -> Json<Value> {
 }
 
 pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
-    let src = hit.suricata.source_ip.as_deref()
-        .or(hit.zeek.source_ip.as_deref()).unwrap_or("-");
-    let dst = hit.suricata.dest_ip.as_deref()
-        .or(hit.zeek.dest_ip.as_deref()).unwrap_or("-");
-
+ let (src, dst) = match hit.source.as_str() {
+        "zeek" => (
+            hit.zeek.source_ip.as_deref().unwrap_or("-"),
+            hit.zeek.dest_ip.as_deref().unwrap_or("-"),
+        ),
+        "suricata" => (
+            hit.suricata.source_ip.as_deref().unwrap_or("-"),
+            hit.suricata.dest_ip.as_deref().unwrap_or("-"),
+        ),
+        _ => (
+            // zeek+suricata — prefer Zeek for flow data
+            hit.zeek.source_ip.as_deref()
+                .or(hit.suricata.source_ip.as_deref())
+                .unwrap_or("-"),
+            hit.zeek.dest_ip.as_deref()
+                .or(hit.suricata.dest_ip.as_deref())
+                .unwrap_or("-"),
+        ),
+    };
     // Enrich
     let enrichment = state.enrichment.enrich(src, dst);
 
@@ -504,6 +518,7 @@ pub async fn get_threat_intel(State(state): State<AppState>) -> Json<Value> {
         ]
     }))
 }
+
 
 //lookup ioc
 pub async fn lookup_ioc(
