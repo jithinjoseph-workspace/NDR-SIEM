@@ -84,12 +84,10 @@ impl ThreatIntel {
     }
 
     pub async fn refresh(&self) {
-        tokio::join!(
-            self.refresh_feodo(),
-            self.refresh_malware_bazaar(),
-            self.refresh_urlhaus(),
-        );
-    }
+        self.refresh_feodo().await;
+        self.refresh_urlhaus().await;
+        self.refresh_malware_bazaar().await;
+        }
 
     // ── Feodo Tracker — IPs ───────────────────
     async fn refresh_feodo(&self) {
@@ -173,6 +171,7 @@ async fn refresh_urlhaus(&self) {
         Err(e) => { warn!("URLhaus fetch: {}", e); return; }
     };
 
+    // Only clear domains and urls — NOT ips (Feodo already loaded them)
     self.malicious_domains.clear();
     self.malicious_urls.clear();
     let mut loaded_domains = 0usize;
@@ -182,17 +181,14 @@ async fn refresh_urlhaus(&self) {
         let line = line.trim();
         if line.starts_with('#') || line.is_empty() { continue; }
 
-        // Store full URL
         self.malicious_urls.insert(line.to_lowercase());
 
-        // Extract host (could be IP or domain)
         if let Some(host) = extract_host(line) {
-            // Check if host is an IP address
             if let Ok(ip) = IpAddr::from_str(&host) {
+                // ADD to existing IPs — don't clear!
                 self.malicious_ips.insert(ip);
                 loaded_ips += 1;
             } else {
-                // It's a domain
                 self.malicious_domains.insert(host);
                 loaded_domains += 1;
             }
