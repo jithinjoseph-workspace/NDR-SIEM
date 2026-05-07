@@ -1,111 +1,121 @@
-<div class="p-8 space-y-8 animate-in fade-in duration-700">
-  <div class="flex items-center justify-between">
+<section class="setup-shell">
+  <div class="setup-header">
     <div>
-      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">Sensor Configuration</h2>
-      <p class="text-on-surface-variant text-sm mt-1">Select capture interface and manage detection engines</p>
+      <div class="eyebrow">Sensor Control</div>
+      <h2>Sensor Configuration</h2>
+      <p>Capture interface selection and detection engine operations.</p>
     </div>
-    <div class="p-3 bg-primary/10 rounded-full border border-primary/20 relative">
-      <lucide-icon [name]="SettingsIcon" class="w-6 h-6 text-primary"></lucide-icon>
+
+    <div class="status-summary" [class.active]="status === 'Running'">
+      <span></span>
+      <div>
+        <strong>{{ status }}</strong>
+        <small>{{ selectedInterface || 'No interface selected' }}</small>
+      </div>
     </div>
   </div>
 
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-    <!-- Interface Selection Card -->
-    <div class="bg-surface-container-highest p-8 rounded-xl border border-outline/10 space-y-6">
-      <div class="flex items-center gap-3">
-        <lucide-icon [name]="ActivityIcon" class="w-5 h-5 text-secondary"></lucide-icon>
-        <h3 class="text-white font-bold uppercase tracking-wider text-sm">Network Interface</h3>
-      </div>
-
-      <div class="space-y-4">
-        <div>
-          <label class="block text-[10px] text-on-surface-variant uppercase font-bold mb-2">Select Capture NIC</label>
-          <select [(ngModel)]="selectedInterface"
-            class="w-full bg-surface-container-low border border-outline/20 text-white rounded-md py-3 px-4 font-mono text-sm focus:outline-none focus:border-primary/50 transition-all cursor-pointer">
-            <option *ngFor="let iface of interfaces" [value]="iface">{{ iface }}</option>
-          </select>
-        </div>
-
-        <button (click)="applyInterface()"
-          class="w-full bg-surface-container-low hover:bg-surface-container-high text-primary border border-primary/20 hover:border-primary/50 py-3 rounded-md font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2">
-          <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
-          Apply Interface
-        </button>
-      </div>
-
-      <div class="p-4 bg-primary/5 border border-primary/10 rounded-lg">
-        <div class="flex items-center gap-2 text-[11px] text-on-surface-variant italic">
-          <lucide-icon [name]="ShieldIcon" class="w-3.5 h-3.5 text-primary"></lucide-icon>
-          Selected: <span class="text-white font-mono not-italic ml-1">{{ selectedInterface || 'None' }}</span>
-        </div>
-      </div>
+  <div class="sensor-strip">
+    <div>
+      <span>Capture Interface</span>
+      <strong>{{ selectedInterface || 'None' }}</strong>
     </div>
+    <div>
+      <span>Engines Running</span>
+      <strong>
+        {{ (zeekStatus === 'running' ? 1 : 0) + (suricataStatus === 'running' ? 1 : 0) + (vectorStatus === 'running' ? 1 : 0) }}/3
+      </strong>
+    </div>
+    <div>
+      <span>Pipeline</span>
+      <strong [class.degraded]="status !== 'Running'">{{ status === 'Running' ? 'Monitoring Active' : 'Monitoring Idle' }}</strong>
+    </div>
+  </div>
 
-    <!-- Engine Control Card -->
-    <div class="bg-surface-container-highest p-8 rounded-xl border border-outline/10 space-y-6">
-      <div class="flex items-center gap-3">
-        <lucide-icon [name]="PlayIcon" class="w-5 h-5 text-primary"></lucide-icon>
-        <h3 class="text-white font-bold uppercase tracking-wider text-sm">Engine Management</h3>
+  <div class="setup-grid">
+    <section class="panel interface-panel">
+      <div class="panel-heading">
+        <div class="panel-icon secondary">
+          <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <div>
+          <h3>Network Interface</h3>
+          <p>Interface used by Zeek and Suricata for packet capture.</p>
+        </div>
       </div>
 
-      <div class="grid grid-cols-1 gap-4">
-        <div class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg border border-outline/10">
-          <div>
-            <p class="text-xs font-bold text-white uppercase">Zeek IDS</p>
-            <p class="text-[10px] text-on-surface-variant italic">Traffic Analysis Engine</p>
+      <div class="field-group">
+        <label for="capture-interface">Capture NIC</label>
+        <select id="capture-interface" [(ngModel)]="selectedInterface">
+          <option value="" disabled>Select an interface</option>
+          <option *ngFor="let iface of interfaces" [value]="iface">{{ iface }}</option>
+        </select>
+      </div>
+
+      <div class="selected-chip">
+        <span>Selected</span>
+        <strong>{{ selectedInterface || 'None' }}</strong>
+      </div>
+
+      <button class="secondary-action" (click)="applyInterface()" [disabled]="!selectedInterface">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Apply Interface
+      </button>
+    </section>
+
+    <section class="panel engine-panel">
+      <div class="panel-heading">
+        <div class="panel-icon">
+          <lucide-icon [name]="SettingsIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <div>
+          <h3>Engine Management</h3>
+          <p>Runtime control for the local monitoring pipeline.</p>
+        </div>
+      </div>
+
+      <div class="engine-list">
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>Zeek IDS</strong>
+            <span>Traffic analysis engine</span>
           </div>
-          <span [ngClass]="zeekStatus === 'running' ? 
-  'bg-primary/10 text-primary border-primary/20' : 
-  'bg-surface-container text-on-surface-variant border-outline/20'"
-            class="text-[10px] px-2 py-0.5 rounded font-bold uppercase border transition-all">
+          <span class="engine-badge" [class.running]="zeekStatus === 'running'">
             {{ zeekStatus === 'running' ? 'Running' : 'Stopped' }}
           </span>
-        </div>
+        </article>
 
-        <div class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg border border-outline/10">
-          <div>
-            <p class="text-xs font-bold text-white uppercase">Suricata EVE</p>
-            <p class="text-[10px] text-on-surface-variant italic">Intrusion Detection System</p>
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>Suricata EVE</strong>
+            <span>Intrusion detection system</span>
           </div>
-          <span [ngClass]="suricataStatus === 'running' ? 
-  'bg-primary/10 text-primary border-primary/20' : 
-  'bg-surface-container text-on-surface-variant border-outline/20'"
-            class="text-[10px] px-2 py-0.5 rounded font-bold uppercase border transition-all">
+          <span class="engine-badge" [class.running]="suricataStatus === 'running'">
             {{ suricataStatus === 'running' ? 'Running' : 'Stopped' }}
           </span>
-        </div>
-      </div>
-      <div class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg border border-outline/10">
-        <div>
-          <p class="text-xs font-bold text-white uppercase">Vector</p>
-          <p class="text-[10px] text-on-surface-variant italic">Log Shipping Pipeline</p>
-        </div>
-        <span [ngClass]="vectorStatus === 'running' ? 
-    'bg-primary/10 text-primary border-primary/20' : 
-    'bg-surface-container text-on-surface-variant border-outline/20'"
-          class="text-[10px] px-2 py-0.5 rounded font-bold uppercase border transition-all">
-          {{ vectorStatus === 'running' ? 'Running' : 'Stopped' }}
-        </span>
+        </article>
+
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>Vector</strong>
+            <span>Log shipping pipeline</span>
+          </div>
+          <span class="engine-badge" [class.running]="vectorStatus === 'running'">
+            {{ vectorStatus === 'running' ? 'Running' : 'Stopped' }}
+          </span>
+        </article>
       </div>
 
-      <div class="grid grid-cols-2 gap-4">
-        <button (click)="startMonitoring()"
-          class="bg-primary hover:bg-primary/90 text-black py-4 rounded-md font-bold text-xs uppercase tracking-widest transition-transform active:scale-95 flex items-center justify-center gap-2">
+      <div class="engine-actions">
+        <button class="primary-action" (click)="startMonitoring()" [disabled]="status === 'Starting...'">
           <lucide-icon [name]="PlayIcon" class="w-4 h-4"></lucide-icon>
-          Start All
+          {{ status === 'Starting...' ? 'Starting...' : 'Start Monitoring' }}
         </button>
-        <button (click)="stopMonitoring()"
-          class="bg-surface-container-low hover:bg-tertiary/10 text-on-surface-variant hover:text-tertiary border border-outline/20 hover:border-tertiary/20 py-4 rounded-md font-bold text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2">
+        <button class="stop-action" (click)="stopMonitoring()" [disabled]="status === 'Stopped' || status === 'Stopping...' || status === 'Ready'">
           <lucide-icon [name]="StopIcon" class="w-4 h-4"></lucide-icon>
-          Stop All
+          {{ status === 'Stopping...' ? 'Stopping...' : 'Stop Monitoring' }}
         </button>
       </div>
-
-      <div class="flex items-center justify-center gap-2 text-[10px] uppercase font-bold tracking-widest"
-        [ngClass]="{'text-primary': status === 'Running', 'text-on-surface-variant': status !== 'Running'}">
-        <span class="w-2 h-2 rounded-full bg-current" [class.animate-pulse]="status === 'Running'"></span>
-        Status: {{ status }}
-      </div>
-    </div>
+    </section>
   </div>
-</div>
+</section>
