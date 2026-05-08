@@ -7,7 +7,8 @@ use crate::correlator::{CorrelationEngine, CorrelationHit};
 use crate::detection::DetectionEngine;
 use crate::enrichment::EnrichmentPipeline;
 use crate::normalizer::NormalizedEvent;
-use crate::scoring::{conn_state_description, RiskScorer};
+use crate::scoring::{conn_state_description, RiskScorer, Severity};
+use crate::settings::NdrSettings;
 use crate::storage::SqliteStorage;
 use crate::storage::ClickhouseStorage;
 use axum::{extract::State, Json, http::StatusCode};
@@ -43,6 +44,7 @@ pub struct AppState {
     pub storage:    Arc<SqliteStorage>,
     pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
+    pub settings:   Arc<tokio::sync::RwLock<NdrSettings>>,
 }
 
 
@@ -120,8 +122,17 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     // Enrich
     let enrichment = state.enrichment.enrich(src, dst);
 
-    // Score
-    let risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country);
+    // Score with dynamic severity thresholds from settings
+    let settings = state.settings.read().await;
+    let mut risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country);
+    risk.severity = Severity::from_score_with_thresholds(
+        risk.score,
+        settings.severity_critical,
+        settings.severity_high,
+        settings.severity_medium,
+        settings.severity_low,
+    );
+    drop(settings);
 
     // SIGMA detection on both sides
 let mut detections = state.detection.read().await.check(&hit.zeek);
@@ -1041,3 +1052,142 @@ pub async fn get_severity(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
+// ── Settings API ──────────────────────────────────────────────────────────
+
+/// GET /api/settings — returns all current settings
+pub async fn get_settings(State(state): State<AppState>) -> Json<Value> {
+    let settings = state.settings.read().await;
+    Json(serde_json::to_value(&*settings).unwrap_or(json!({})))
+}
+
+/// POST /api/settings — merge-update settings, persist to SQLite
+pub async fn update_settings(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    // 1. Merge with current settings
+    let mut settings = state.settings.write().await;
+    settings.merge_from_json(&payload);
+
+    // 2. Persist to SQLite
+    let kv = settings.to_kv();
+    if let Err(e) = state.storage.set_settings_bulk(&kv) {
+        warn!("Failed to persist settings: {}", e);
+        return Json(json!({
+            "status": "error",
+            "message": format!("Failed to save settings: {}", e)
+        }));
+    }
+
+    info!("Settings updated and persisted ({} keys)", kv.len());
+
+    // 3. If rules dir changed, trigger immediate reload
+    if payload.get("sigma_rules_dir").is_some() {
+        let rules_dir = settings.sigma_rules_dir.clone();
+        drop(settings); // release write lock before acquiring read
+
+        let disabled = state.ch_storage.get_disabled_rules().await.unwrap_or_default();
+        let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+        let active: Vec<_> = all_rules.into_iter()
+            .filter(|r| !disabled.contains(&r.id))
+            .collect();
+        let count = active.len();
+        state.detection.write().await.set_rules(active);
+        info!("Rules reloaded from new dir '{}': {} active", rules_dir, count);
+    } else {
+        drop(settings);
+    }
+
+    // 4. Return updated settings
+    let updated = state.settings.read().await;
+    Json(json!({
+        "status": "ok",
+        "message": "Settings saved successfully",
+        "settings": serde_json::to_value(&*updated).unwrap_or(json!({}))
+    }))
+}
+
+/// POST /api/settings/upload-iocs — bulk IOC upload from CSV/TXT
+pub async fn upload_iocs(
+    State(state): State<AppState>,
+    body: String,
+) -> Json<Value> {
+    let ti = &state.enrichment.threat_intel;
+    let mut added_ips = 0u32;
+    let mut added_hashes = 0u32;
+    let mut added_domains = 0u32;
+    let mut skipped = 0u32;
+    let mut batch = Vec::new();
+
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("type") { continue; }
+
+        // Handle CSV format: type,value or just plain value per line
+        let (ioc_type, value) = if line.contains(',') {
+            let parts: Vec<&str> = line.splitn(2, ',').collect();
+            (parts[0].trim().to_lowercase(), parts[1].trim().to_string())
+        } else {
+            // Auto-detect type
+            let v = line.to_string();
+            let t = if v.parse::<std::net::IpAddr>().is_ok() {
+                "ip".to_string()
+            } else if (v.len() == 32 || v.len() == 40 || v.len() == 64)
+                && v.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                "hash".to_string()
+            } else if v.contains('.') {
+                "domain".to_string()
+            } else {
+                "unknown".to_string()
+            };
+            (t, v)
+        };
+
+        if value.is_empty() { skipped += 1; continue; }
+
+        match ioc_type.as_str() {
+            "ip" | "ipv4" | "ipv6" => {
+                ti.add_ioc("ip", &value);
+                batch.push(("ip".to_string(), value));
+                added_ips += 1;
+            }
+            "hash" | "md5" | "sha1" | "sha256" => {
+                ti.add_ioc("hash", &value);
+                batch.push(("hash".to_string(), value));
+                added_hashes += 1;
+            }
+            "domain" | "hostname" | "fqdn" => {
+                ti.add_ioc("domain", &value);
+                batch.push(("domain".to_string(), value));
+                added_domains += 1;
+            }
+            "url" => {
+                ti.add_ioc("url", &value);
+                batch.push(("url".to_string(), value));
+                added_domains += 1; // URLs count as domains here for the summary
+            }
+            _ => { skipped += 1; }
+        }
+    }
+
+    if !batch.is_empty() {
+        if let Err(e) = state.storage.add_custom_iocs(&batch, "manual") {
+            warn!("Failed to persist manual IOC upload: {}", e);
+        }
+    }
+
+    let total = added_ips + added_hashes + added_domains;
+    info!("Bulk IOC upload: {} IPs, {} hashes, {} domains ({} skipped), persisted to SQLite",
+        added_ips, added_hashes, added_domains, skipped);
+
+    Json(json!({
+        "status":         "ok",
+        "total_added":    total,
+        "added_ips":      added_ips,
+        "added_hashes":   added_hashes,
+        "added_domains":  added_domains,
+        "skipped":        skipped,
+        "message":        format!("{} IOCs imported successfully", total)
+    }))
+}

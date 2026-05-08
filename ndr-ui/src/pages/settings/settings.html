@@ -1,0 +1,380 @@
+<div class="p-8 animate-in slide-in-from-bottom-4 duration-500">
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-8">
+    <div>
+      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">Settings</h2>
+      <p class="text-on-surface-variant text-sm mt-1">Configure system, detection engine &amp; threat intelligence</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <!-- Save status -->
+      <div *ngIf="saveSuccess" class="flex items-center gap-2 text-primary text-xs font-bold animate-in fade-in duration-300">
+        <lucide-icon [name]="CheckIcon" class="w-4 h-4"></lucide-icon>
+        Settings saved
+      </div>
+      <div *ngIf="saveError" class="flex items-center gap-2 text-red-400 text-xs font-bold animate-in fade-in duration-300">
+        <lucide-icon [name]="AlertIcon" class="w-4 h-4"></lucide-icon>
+        {{ saveError }}
+      </div>
+      <button (click)="saveSettings()" [disabled]="saving"
+        class="flex items-center gap-2 bg-primary text-black text-xs font-bold px-5 py-2.5 rounded shadow-[0_0_15px_rgba(105,246,184,0.2)] hover:shadow-[0_0_25px_rgba(105,246,184,0.35)] transition-all disabled:opacity-50">
+        <lucide-icon [name]="SaveIcon" class="w-4 h-4"></lucide-icon>
+        {{ saving ? 'Saving...' : 'Save Settings' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Loading state -->
+  <div *ngIf="loading" class="py-20 flex flex-col items-center justify-center text-on-surface-variant">
+    <p class="text-sm font-medium animate-pulse">Loading settings...</p>
+  </div>
+
+  <div *ngIf="!loading" class="flex gap-6">
+    <!-- Left Tab Navigation -->
+    <div class="w-56 flex-shrink-0">
+      <div class="settings-tabs space-y-1.5">
+        <button (click)="activeSection = 'general'"
+          [class.active]="activeSection === 'general'"
+          class="tab-btn">
+          <lucide-icon [name]="GlobeIcon" class="w-4.5 h-4.5"></lucide-icon>
+          <div class="text-left">
+            <p class="font-bold text-xs">General</p>
+            <p class="text-[10px] opacity-60">Organization &amp; appearance</p>
+          </div>
+          <lucide-icon [name]="ChevronIcon" class="w-3.5 h-3.5 ml-auto opacity-40"></lucide-icon>
+        </button>
+
+        <button (click)="activeSection = 'detection'"
+          [class.active]="activeSection === 'detection'"
+          class="tab-btn">
+          <lucide-icon [name]="SearchIcon" class="w-4.5 h-4.5"></lucide-icon>
+          <div class="text-left">
+            <p class="font-bold text-xs">Detection</p>
+            <p class="text-[10px] opacity-60">Thresholds &amp; rules</p>
+          </div>
+          <lucide-icon [name]="ChevronIcon" class="w-3.5 h-3.5 ml-auto opacity-40"></lucide-icon>
+        </button>
+
+        <button (click)="activeSection = 'threat'"
+          [class.active]="activeSection === 'threat'"
+          class="tab-btn">
+          <lucide-icon [name]="ShieldIcon" class="w-4.5 h-4.5"></lucide-icon>
+          <div class="text-left">
+            <p class="font-bold text-xs">Threat Intel</p>
+            <p class="text-[10px] opacity-60">Feeds &amp; IOCs</p>
+          </div>
+          <lucide-icon [name]="ChevronIcon" class="w-3.5 h-3.5 ml-auto opacity-40"></lucide-icon>
+        </button>
+      </div>
+    </div>
+
+    <!-- Right Content Panel -->
+    <div class="flex-1 min-w-0">
+
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <!-- SECTION 1: GENERAL                                            -->
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <div *ngIf="activeSection === 'general'" class="space-y-6 animate-in fade-in duration-300">
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="GlobeIcon" class="w-4 h-4 text-primary"></lucide-icon>
+            Organization
+          </h3>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div class="field-group">
+              <label class="field-label" for="org-name">Organization Name</label>
+              <input type="text" id="org-name" [(ngModel)]="settings.org_name"
+                class="field-input" placeholder="Your organization name">
+            </div>
+            <div class="field-group">
+              <label class="field-label" for="sys-name">System Name</label>
+              <input type="text" id="sys-name" [(ngModel)]="settings.system_name"
+                class="field-input" placeholder="System identifier">
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Theme Toggle -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="settings.theme === 'dark' ? MoonIcon : SunIcon" class="w-4 h-4 text-primary"></lucide-icon>
+            Appearance
+          </h3>
+          <div class="flex items-center gap-6">
+            <div class="flex items-center gap-4 p-4 bg-surface-container-low rounded-lg border border-outline/10 flex-1">
+              <div>
+                <p class="text-sm font-bold text-white">Theme</p>
+                <p class="text-[10px] text-on-surface-variant mt-0.5">Switch between dark and light mode</p>
+              </div>
+              <div class="ml-auto flex items-center gap-3">
+                <span class="text-[10px] uppercase font-bold tracking-widest"
+                  [class.text-primary]="settings.theme === 'dark'"
+                  [class.text-on-surface-variant]="settings.theme !== 'dark'">Dark</span>
+                <button (click)="toggleTheme()" class="toggle-switch" [class.active]="settings.theme === 'light'">
+                  <span class="toggle-knob"></span>
+                </button>
+                <span class="text-[10px] uppercase font-bold tracking-widest"
+                  [class.text-secondary]="settings.theme === 'light'"
+                  [class.text-on-surface-variant]="settings.theme !== 'light'">Light</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <!-- SECTION 2: DETECTION                                          -->
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <div *ngIf="activeSection === 'detection'" class="space-y-6 animate-in fade-in duration-300">
+        <!-- Auto-Block Threshold -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="SearchIcon" class="w-4 h-4 text-primary"></lucide-icon>
+            Auto-Block Threshold
+          </h3>
+          <div class="p-4 bg-surface-container-low rounded-lg border border-outline/10">
+            <div class="flex items-center justify-between mb-3">
+              <p class="text-xs text-on-surface-variant">Events with a score above this threshold will be auto-blocked</p>
+              <span class="font-mono text-lg font-bold"
+                [class.text-red-400]="settings.auto_block_threshold >= 90"
+                [class.text-orange-400]="settings.auto_block_threshold >= 70 && settings.auto_block_threshold < 90"
+                [class.text-yellow-400]="settings.auto_block_threshold >= 50 && settings.auto_block_threshold < 70"
+                [class.text-primary]="settings.auto_block_threshold < 50">
+                {{ settings.auto_block_threshold }}
+              </span>
+            </div>
+            <input type="range" min="0" max="100" step="1"
+              [(ngModel)]="settings.auto_block_threshold"
+              class="range-slider w-full">
+            <div class="flex justify-between text-[9px] text-on-surface-variant mt-1 font-mono">
+              <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Severity Levels -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="AlertIcon" class="w-4 h-4 text-secondary"></lucide-icon>
+            Alert Severity Levels
+          </h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="severity-card" style="--sev-color: #ff4444">
+              <div class="sev-dot" style="background: #ff4444"></div>
+              <div>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-red-400 mb-1">Critical</p>
+                <p class="text-[9px] text-on-surface-variant">Score ≥</p>
+              </div>
+              <input type="number" min="0" max="100" [(ngModel)]="settings.severity_critical"
+                class="sev-input" style="border-color: rgba(255,68,68,0.3)">
+            </div>
+            <div class="severity-card" style="--sev-color: #ff8800">
+              <div class="sev-dot" style="background: #ff8800"></div>
+              <div>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-orange-400 mb-1">High</p>
+                <p class="text-[9px] text-on-surface-variant">Score ≥</p>
+              </div>
+              <input type="number" min="0" max="100" [(ngModel)]="settings.severity_high"
+                class="sev-input" style="border-color: rgba(255,136,0,0.3)">
+            </div>
+            <div class="severity-card" style="--sev-color: #ffcc00">
+              <div class="sev-dot" style="background: #ffcc00"></div>
+              <div>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-yellow-400 mb-1">Medium</p>
+                <p class="text-[9px] text-on-surface-variant">Score ≥</p>
+              </div>
+              <input type="number" min="0" max="100" [(ngModel)]="settings.severity_medium"
+                class="sev-input" style="border-color: rgba(255,204,0,0.3)">
+            </div>
+            <div class="severity-card" style="--sev-color: #69f6b8">
+              <div class="sev-dot" style="background: #69f6b8"></div>
+              <div>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-primary mb-1">Low</p>
+                <p class="text-[9px] text-on-surface-variant">Score ≥</p>
+              </div>
+              <input type="number" min="0" max="100" [(ngModel)]="settings.severity_low"
+                class="sev-input" style="border-color: rgba(105,246,184,0.3)">
+            </div>
+          </div>
+        </div>
+
+        <!-- SIGMA Rules -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="SearchIcon" class="w-4 h-4 text-tertiary"></lucide-icon>
+            SIGMA Rules Engine
+          </h3>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div class="field-group">
+              <label class="field-label" for="rules-dir">Rules Directory Path</label>
+              <input type="text" id="rules-dir" [(ngModel)]="settings.sigma_rules_dir"
+                class="field-input font-mono" placeholder="/path/to/rules">
+            </div>
+            <div class="field-group">
+              <label class="field-label" for="hot-reload">Hot-Reload Interval (minutes)</label>
+              <input type="number" id="hot-reload" min="1" max="1440"
+                [(ngModel)]="settings.hot_reload_interval_min"
+                class="field-input font-mono">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <!-- SECTION 3: THREAT INTELLIGENCE                                -->
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <div *ngIf="activeSection === 'threat'" class="space-y-6 animate-in fade-in duration-300">
+        <!-- Feed Refresh -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="RefreshIcon" class="w-4 h-4 text-primary"></lucide-icon>
+            Feed Refresh
+          </h3>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div class="field-group">
+              <label class="field-label" for="ti-refresh">Feed Refresh Interval (minutes)</label>
+              <input type="number" id="ti-refresh" min="1" max="1440"
+                [(ngModel)]="settings.ti_refresh_interval_min"
+                class="field-input font-mono">
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Feed Toggles -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="ShieldIcon" class="w-4 h-4 text-secondary"></lucide-icon>
+            Intelligence Feeds
+          </h3>
+          <div class="space-y-3">
+            <!-- Feodo Tracker -->
+            <div class="feed-row">
+              <div class="flex items-center gap-3">
+                <span class="feed-icon">🔴</span>
+                <div>
+                  <p class="text-sm font-bold text-white">Feodo Tracker</p>
+                  <p class="text-[10px] text-on-surface-variant">Botnet C2 IP addresses — abuse.ch</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-[9px] uppercase font-bold tracking-widest px-2 py-0.5 rounded"
+                  [class]="settings.feed_feodo_enabled ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-surface-container text-on-surface-variant border border-outline/20'">
+                  {{ settings.feed_feodo_enabled ? 'Active' : 'Disabled' }}
+                </span>
+                <button (click)="settings.feed_feodo_enabled = !settings.feed_feodo_enabled"
+                  class="toggle-switch" [class.active]="settings.feed_feodo_enabled">
+                  <span class="toggle-knob"></span>
+                </button>
+              </div>
+            </div>
+            <!-- MalwareBazaar -->
+            <div class="feed-row">
+              <div class="flex items-center gap-3">
+                <span class="feed-icon">🟣</span>
+                <div>
+                  <p class="text-sm font-bold text-white">MalwareBazaar</p>
+                  <p class="text-[10px] text-on-surface-variant">Malware file hashes (SHA256) — abuse.ch</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-[9px] uppercase font-bold tracking-widest px-2 py-0.5 rounded"
+                  [class]="settings.feed_malwarebazaar_enabled ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-surface-container text-on-surface-variant border border-outline/20'">
+                  {{ settings.feed_malwarebazaar_enabled ? 'Active' : 'Disabled' }}
+                </span>
+                <button (click)="settings.feed_malwarebazaar_enabled = !settings.feed_malwarebazaar_enabled"
+                  class="toggle-switch" [class.active]="settings.feed_malwarebazaar_enabled">
+                  <span class="toggle-knob"></span>
+                </button>
+              </div>
+            </div>
+            <!-- URLhaus -->
+            <div class="feed-row">
+              <div class="flex items-center gap-3">
+                <span class="feed-icon">🟡</span>
+                <div>
+                  <p class="text-sm font-bold text-white">URLhaus</p>
+                  <p class="text-[10px] text-on-surface-variant">Malicious URLs &amp; domains — abuse.ch</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-[9px] uppercase font-bold tracking-widest px-2 py-0.5 rounded"
+                  [class]="settings.feed_urlhaus_enabled ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-surface-container text-on-surface-variant border border-outline/20'">
+                  {{ settings.feed_urlhaus_enabled ? 'Active' : 'Disabled' }}
+                </span>
+                <button (click)="settings.feed_urlhaus_enabled = !settings.feed_urlhaus_enabled"
+                  class="toggle-switch" [class.active]="settings.feed_urlhaus_enabled">
+                  <span class="toggle-knob"></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Custom Feed URL -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="GlobeIcon" class="w-4 h-4 text-tertiary"></lucide-icon>
+            Custom IOC Feed
+          </h3>
+          <div class="field-group">
+            <label class="field-label" for="custom-feed">Custom IOC Feed URL (plain text, one IOC per line)</label>
+            <input type="url" id="custom-feed" [(ngModel)]="settings.custom_ioc_feed_url"
+              class="field-input font-mono" placeholder="https://example.com/iocs.txt">
+          </div>
+        </div>
+
+        <!-- Manual IOC Upload -->
+        <div class="section-card">
+          <h3 class="section-title">
+            <lucide-icon [name]="UploadIcon" class="w-4 h-4 text-primary"></lucide-icon>
+            Manual IOC Upload
+          </h3>
+          <div class="upload-zone"
+            [class.drag-over]="dragOver"
+            (dragover)="onDragOver($event)"
+            (dragleave)="onDragLeave()"
+            (drop)="onDrop($event)">
+            <div *ngIf="!uploading && !uploadResult" class="text-center">
+              <lucide-icon [name]="UploadIcon" class="w-8 h-8 text-on-surface-variant/40 mx-auto mb-3"></lucide-icon>
+              <p class="text-sm text-on-surface-variant mb-1">Drop a CSV or TXT file here</p>
+              <p class="text-[10px] text-on-surface-variant/60 mb-4">Format: one IOC per line, or CSV with type,value columns</p>
+              <label class="inline-flex items-center gap-2 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant hover:text-white text-xs font-bold px-4 py-2.5 rounded border border-outline/20 hover:border-primary/30 transition-all cursor-pointer">
+                <lucide-icon [name]="UploadIcon" class="w-3.5 h-3.5"></lucide-icon>
+                Browse Files
+                <input type="file" accept=".csv,.txt" (change)="onFileSelect($event)" class="hidden">
+              </label>
+            </div>
+            <div *ngIf="uploading" class="text-center py-4">
+              <p class="text-sm text-on-surface-variant animate-pulse">Uploading IOCs...</p>
+            </div>
+            <div *ngIf="uploadResult && !uploading" class="text-center py-2">
+              <div *ngIf="uploadResult.status === 'ok'" class="space-y-2">
+                <lucide-icon [name]="CheckIcon" class="w-8 h-8 text-primary mx-auto"></lucide-icon>
+                <p class="text-sm font-bold text-primary">{{ uploadResult.total_added }} IOCs imported</p>
+                <div class="flex justify-center gap-4 text-[10px] text-on-surface-variant">
+                  <span>{{ uploadResult.added_ips }} IPs</span>
+                  <span>{{ uploadResult.added_hashes }} Hashes</span>
+                  <span>{{ uploadResult.added_domains }} Domains</span>
+                  <span *ngIf="uploadResult.skipped > 0" class="text-yellow-400">{{ uploadResult.skipped }} skipped</span>
+                </div>
+                <button (click)="uploadResult = null" class="text-[10px] text-on-surface-variant hover:text-white mt-2 underline">
+                  Upload another file
+                </button>
+              </div>
+              <div *ngIf="uploadResult.status === 'error'" class="space-y-2">
+                <lucide-icon [name]="AlertIcon" class="w-8 h-8 text-red-400 mx-auto"></lucide-icon>
+                <p class="text-sm font-bold text-red-400">{{ uploadResult.message }}</p>
+                <button (click)="uploadResult = null" class="text-[10px] text-on-surface-variant hover:text-white mt-2 underline">
+                  Try again
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>

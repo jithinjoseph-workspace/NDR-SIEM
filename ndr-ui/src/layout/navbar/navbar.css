@@ -5,8 +5,9 @@
   justify-content: space-between;
   gap: 24px;
   border-bottom: 1px solid rgba(110, 117, 136, 0.14);
-  background: rgba(8, 16, 31, 0.96);
+  background: var(--color-surface-container-low, rgba(8, 16, 31, 0.96));
   padding: 0 28px;
+  transition: background 300ms ease;
 }
 
 .search-wrap {
@@ -27,12 +28,12 @@
   height: 40px;
   border: 1px solid rgba(110, 117, 136, 0.18);
   border-radius: 8px;
-  background: rgba(16, 25, 43, 0.86);
-  color: #f7f9ff;
+  background: var(--color-surface, rgba(16, 25, 43, 0.86));
+  color: var(--color-on-surface-variant, #f7f9ff);
   font-size: 13px;
   outline: none;
   padding: 0 14px 0 42px;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 300ms ease;
 }
 
 .search-wrap input::placeholder {
@@ -53,7 +54,7 @@
   overflow: hidden;
   border: 1px solid rgba(110, 117, 136, 0.18);
   border-radius: 8px;
-  background: #10192b;
+  background: var(--color-surface-container-highest, #10192b);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
 }
 

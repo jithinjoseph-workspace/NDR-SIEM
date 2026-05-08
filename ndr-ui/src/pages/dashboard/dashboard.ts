@@ -2,6 +2,7 @@ import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
+import { ChartDataService } from '../../services/chart-data/chart-data';
 import { Subscription } from 'rxjs';
 import { LucideAngularModule, TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight } from 'lucide-angular';
 import { BaseChartDirective } from 'ng2-charts';
@@ -27,8 +28,6 @@ export class Dashboard implements OnInit, OnDestroy {
   low: number = 0;
   topSrcIps: any[] = [];
   topDstIps: any[] = [];
-  chartLabels: string[] = [];
-  chartData: number[] = [];
 
   private subs: Subscription[] = [];
   private refreshInterval: any;
@@ -68,22 +67,24 @@ export class Dashboard implements OnInit, OnDestroy {
   constructor(
     private api: Api,
     private ws: Websocket,
+    private chartService: ChartDataService,
     private cdr: ChangeDetectorRef
   ) { }
 
   ngOnInit() {
-    // Initialize chart with empty data first
-    this.chartLabels = ['', '', '', '', '', ''];
-    this.chartData = [0, 0, 0, 0, 0, 0];
-    this.updateChartData();
+    // Ensure the chart data service is running (idempotent)
+    this.chartService.start();
 
+    // Immediately load the persisted chart data (survives tab switches)
+    this.syncChartFromService();
+
+    // Load dashboard stats
     this.loadAllStats();
 
-    // Refresh every 30 seconds
+    // Refresh stats & re-sync chart every 30 seconds
     this.refreshInterval = setInterval(() => {
       this.loadAllStats();
-      this.addChartPoint();  // add point every 30s
-
+      this.syncChartFromService();
     }, 30000);
 
     // WebSocket real-time updates
@@ -106,7 +107,7 @@ export class Dashboard implements OnInit, OnDestroy {
 
   exportReport(format: string) {
     this.api.exportReport(format);
-  } 
+  }
 
   loadAllStats() {
     this.api.getStats().subscribe(data => {
@@ -134,24 +135,13 @@ export class Dashboard implements OnInit, OnDestroy {
     });
   }
 
-  addChartPoint() {
-    const now = new Date().toLocaleTimeString('en-US', {
-      hour: '2-digit', minute: '2-digit'
-    });
-    if (this.chartLabels.length >= 10) {
-      this.chartLabels.shift();
-      this.chartData.shift();
-    }
-    this.chartLabels.push(now);
-    this.chartData.push(this.eventsLastHour);
-    this.updateChartData();
-  }
-
-  updateChartData() {
+  /** Pull the latest chart snapshot from the persistent service */
+  private syncChartFromService() {
+    const snapshot = this.chartService.getSnapshot();
     this.lineChartData = {
-      labels: [...this.chartLabels],
+      labels: snapshot.labels,
       datasets: [{
-        data: [...this.chartData],
+        data: snapshot.data,
         label: 'Events',
         fill: true,
         tension: 0.4,
@@ -162,6 +152,7 @@ export class Dashboard implements OnInit, OnDestroy {
     };
     this.cdr.detectChanges();
   }
+
   ngOnDestroy() {
     this.subs.forEach(s => s.unsubscribe());
     if (this.refreshInterval) clearInterval(this.refreshInterval);

@@ -38,6 +38,10 @@ export const routes: Routes = [
     path: 'network-map', 
     loadComponent: () => import('../pages/network-map/network-map').then(m => m.NetworkMap) 
   },
+  { 
+    path: 'settings', 
+    loadComponent: () => import('../pages/settings/settings').then(m => m.Settings) 
+  },
 
   { path: '**', redirectTo: 'dashboard' }
 ];

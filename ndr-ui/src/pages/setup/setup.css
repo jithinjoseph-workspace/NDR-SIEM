@@ -31,3 +31,64 @@ button {
 .bg-primary\/10 {
     background-color: rgba(105, 246, 184, 0.1);
 }
+
+/* ── Light Theme — Sensor Setup ────────────────────────────────────────── */
+
+:host-context(html[data-theme="light"]) .bg-surface-container-highest {
+    background: #ffffff !important;
+    backdrop-filter: none;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
+}
+
+:host-context(html[data-theme="light"]) .bg-surface-container-low {
+    background-color: #f0f2f7 !important;
+}
+
+:host-context(html[data-theme="light"]) .text-white {
+    color: #0f172a !important;
+}
+
+:host-context(html[data-theme="light"]) .text-on-surface-variant {
+    color: #4a5568 !important;
+}
+
+:host-context(html[data-theme="light"]) .text-primary {
+    color: #0b8a58 !important;
+}
+
+:host-context(html[data-theme="light"]) select {
+    background-color: #f0f2f7 !important;
+    border-color: rgba(148, 163, 184, 0.25) !important;
+    color: #0f172a !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%234a5568'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E") !important;
+}
+
+:host-context(html[data-theme="light"]) select option {
+    background-color: #ffffff;
+    color: #0f172a;
+}
+
+:host-context(html[data-theme="light"]) .border-outline\/10,
+:host-context(html[data-theme="light"]) .border-outline\/20 {
+    border-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+:host-context(html[data-theme="light"]) .border-primary\/20 {
+    border-color: rgba(11, 138, 88, 0.2) !important;
+}
+
+:host-context(html[data-theme="light"]) .bg-primary\/10 {
+    background-color: rgba(11, 138, 88, 0.08) !important;
+}
+
+:host-context(html[data-theme="light"]) .bg-primary\/5 {
+    background-color: rgba(11, 138, 88, 0.04) !important;
+}
+
+:host-context(html[data-theme="light"]) .bg-primary {
+    background-color: #0b8a58 !important;
+}
+
+:host-context(html[data-theme="light"]) .bg-primary.text-black {
+    color: #ffffff !important;
+}

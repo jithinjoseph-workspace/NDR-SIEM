@@ -8,6 +8,7 @@ use crate::enrichment::EnrichmentData;
 use crate::scoring::RiskResult;
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::warn;
 
@@ -48,9 +49,112 @@ impl SqliteStorage {
             CREATE INDEX IF NOT EXISTS idx_ts        ON ndr_hits(timestamp);
             CREATE INDEX IF NOT EXISTS idx_score     ON ndr_hits(score);
             CREATE INDEX IF NOT EXISTS idx_severity  ON ndr_hits(severity);
+
+            CREATE TABLE IF NOT EXISTS ndr_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ndr_custom_iocs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ioc_type TEXT NOT NULL,
+                ioc_value TEXT NOT NULL UNIQUE,
+                source TEXT DEFAULT 'manual',
+                active BOOLEAN DEFAULT 1,
+                added_at INTEGER NOT NULL
+            );
         ")?;
         Ok(Self { conn: Mutex::new(conn) })
     }
+
+    // ── Settings CRUD ─────────────────────────────────────────────────────
+
+    /// Read all settings as a key-value map.
+    pub fn get_settings(&self) -> HashMap<String, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key, value FROM ndr_settings")
+            .unwrap();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }).unwrap();
+
+        let mut map = HashMap::new();
+        for row in rows {
+            if let Ok((k, v)) = row {
+                map.insert(k, v);
+            }
+        }
+        map
+    }
+
+    /// Upsert a single setting.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ndr_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Bulk upsert settings from a key-value map (single transaction).
+    pub fn set_settings_bulk(&self, settings: &HashMap<String, String>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO ndr_settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            )?;
+            for (k, v) in settings {
+                stmt.execute(params![k, v])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    // ── Custom IOCs ───────────────────────────────────────────────────────
+
+    /// Bulk insert custom IOCs, ignoring duplicates.
+    pub fn add_custom_iocs(&self, iocs: &[(String, String)], source: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let now = chrono::Utc::now().timestamp() as i64;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO ndr_custom_iocs (ioc_type, ioc_value, source, active, added_at)
+                 VALUES (?1, ?2, ?3, 1, ?4)
+                 ON CONFLICT(ioc_value) DO NOTHING"
+            )?;
+            for (ioc_type, value) in iocs {
+                stmt.execute(params![ioc_type, value, source, now])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Retrieve all active custom IOCs. Returns a vector of (ioc_type, ioc_value).
+    pub fn get_active_custom_iocs(&self) -> Vec<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        let mut map = Vec::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT ioc_type, ioc_value FROM ndr_custom_iocs WHERE active = 1") {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                for row in rows {
+                    if let Ok(r) = row {
+                        map.push(r);
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    // ── Hit Storage ───────────────────────────────────────────────────────
 
     pub fn store_hit(
         &self,

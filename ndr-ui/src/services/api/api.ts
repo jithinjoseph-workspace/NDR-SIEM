@@ -108,5 +108,20 @@ exportReport(format: string, hours: number = 24): void {
   window.open(url, '_blank');
 }
 
+// ── Settings API ─────────────────────────────────────────────────────
+
+getSettings(): Observable<any> {
+  return this.http.get(`${this.baseUrl}/settings`);
 }
 
+updateSettings(settings: any): Observable<any> {
+  return this.http.post(`${this.baseUrl}/settings`, settings);
+}
+
+uploadIocs(content: string): Observable<any> {
+  return this.http.post(`${this.baseUrl}/settings/upload-iocs`, content, {
+    headers: { 'Content-Type': 'text/plain' }
+  });
+}
+
+}

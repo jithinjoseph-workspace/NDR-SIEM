@@ -17,14 +17,21 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// Score using default thresholds (backward compatible).
     pub fn from_score(score: f32) -> Self {
-        match score as u32 {
-            80..=100 => Severity::Critical,
-            60..=79  => Severity::High,
-            40..=59  => Severity::Medium,
-            20..=39  => Severity::Low,
-            _        => Severity::Info,
-        }
+        Self::from_score_with_thresholds(score, 90, 75, 50, 25)
+    }
+
+    /// Score using configurable thresholds from settings.
+    pub fn from_score_with_thresholds(
+        score: f32, critical: u32, high: u32, medium: u32, low: u32
+    ) -> Self {
+        let s = score as u32;
+        if s >= critical { Severity::Critical }
+        else if s >= high { Severity::High }
+        else if s >= medium { Severity::Medium }
+        else if s >= low { Severity::Low }
+        else { Severity::Info }
     }
 
     pub fn as_str(&self) -> &'static str {

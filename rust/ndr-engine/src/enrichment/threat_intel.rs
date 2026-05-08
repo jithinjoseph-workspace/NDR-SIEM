@@ -87,7 +87,71 @@ impl ThreatIntel {
         self.refresh_feodo().await;
         self.refresh_urlhaus().await;
         self.refresh_malware_bazaar().await;
+    }
+
+    /// Refresh with per-feed toggle support from settings.
+    pub async fn refresh_with_settings(
+        &self,
+        feodo_enabled: bool,
+        malwarebazaar_enabled: bool,
+        urlhaus_enabled: bool,
+        custom_feed_url: &str,
+    ) {
+        if feodo_enabled {
+            self.refresh_feodo().await;
+        } else {
+            info!("Feodo Tracker feed disabled — skipping");
         }
+        if urlhaus_enabled {
+            self.refresh_urlhaus().await;
+        } else {
+            info!("URLhaus feed disabled — skipping");
+        }
+        if malwarebazaar_enabled {
+            self.refresh_malware_bazaar().await;
+        } else {
+            info!("MalwareBazaar feed disabled — skipping");
+        }
+        if !custom_feed_url.is_empty() {
+            self.refresh_custom_feed(custom_feed_url).await;
+        }
+    }
+
+    /// Refresh from a custom IOC feed (plain text, one IOC per line).
+    /// Auto-detects IOC type: IP, hash (SHA256/MD5/SHA1), or domain.
+    async fn refresh_custom_feed(&self, url: &str) {
+        let text = match reqwest::get(url).await {
+            Ok(r) => match r.text().await {
+                Ok(t) => t,
+                Err(e) => { warn!("Custom feed body error: {}", e); return; }
+            },
+            Err(e) => { warn!("Custom feed fetch error: {}", e); return; }
+        };
+
+        let mut ips = 0usize;
+        let mut hashes = 0usize;
+        let mut domains = 0usize;
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('#') || line.is_empty() { continue; }
+
+            // Detect IOC type by format
+            if let Ok(addr) = std::net::IpAddr::from_str(line) {
+                self.malicious_ips.insert(addr);
+                ips += 1;
+            } else if (line.len() == 32 || line.len() == 40 || line.len() == 64)
+                && line.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                self.malicious_hashes.insert(line.to_lowercase());
+                hashes += 1;
+            } else if line.contains('.') && !line.contains('/') {
+                self.malicious_domains.insert(line.to_lowercase());
+                domains += 1;
+            }
+        }
+        info!("Custom feed: {} IPs, {} hashes, {} domains loaded from {}", ips, hashes, domains, url);
+    }
 
     // ── Feodo Tracker — IPs ───────────────────
     async fn refresh_feodo(&self) {

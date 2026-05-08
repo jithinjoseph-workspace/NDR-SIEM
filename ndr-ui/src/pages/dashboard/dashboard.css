@@ -97,11 +97,20 @@
   z-index: 20;
   display: none;
   width: 168px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(110, 117, 136, 0.2);
   border-radius: 8px;
   background: #10192b;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+.export-dropdown::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: 0;
+  right: 0;
+  height: 8px;
 }
 
 .export-menu:hover .export-dropdown {
