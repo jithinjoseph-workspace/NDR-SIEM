@@ -108,9 +108,16 @@ export class Api {
     window.open(url, '_blank');
   }
 
-
   getSoarStatus(): Observable<any> {
     return this.http.get(`${this.baseUrl}/soar/status`);
+  }
+
+  setupSoar(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/setup`, data);
+  }
+
+  updateSoarConfig(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/config`, data);
   }
 
   testSoarWebhook(): Observable<any> {

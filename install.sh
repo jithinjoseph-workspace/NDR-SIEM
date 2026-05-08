@@ -385,7 +385,8 @@ if [ -z "$HOST_IP" ]; then
 fi
 log "Host IP detected: $HOST_IP"
 
-# ── Generate .env file ────────────────────────
+SHUFFLE_KEY=$(cat /proc/sys/kernel/random/uuid)
+
 cat > $INSTALL_DIR/.env << ENVEOF
 HOST_IP=$HOST_IP
 HOME_DIR=$HOME_DIR
@@ -396,11 +397,24 @@ CLICKHOUSE_URL=$CLICKHOUSE_URL
 CLICKHOUSE_USER=$CLOUD_CH_USER
 CLICKHOUSE_PASSWORD=$CLOUD_CH_PASS
 KAFKA_BROKERS=$CLOUD_KAFKA
-SHUFFLE_URL=http://localhost:5001
-SHUFFLE_API_KEY=shuffleapikey123
+SHUFFLE_URL=http://${HOST_IP}:3002
+SHUFFLE_API_URL=http://${HOST_IP}:5001
 SHUFFLE_WEBHOOK_URL=
+SHUFFLE_API_KEY=$SHUFFLE_KEY
 ENVEOF
 log "✅ .env generated"
+
+# ── Fix Shuffle API key in docker-compose ─────
+log "Configuring Shuffle API key..."
+python3 -c "
+content = open('$INSTALL_DIR/docker-compose.yml').read()
+content = content.replace(
+    'SHUFFLE_DEFAULT_APIKEY=shuffleapikey123',
+    'SHUFFLE_DEFAULT_APIKEY=$SHUFFLE_KEY'
+)
+open('$INSTALL_DIR/docker-compose.yml', 'w').write(content)
+"
+log "✅ Shuffle API key: $SHUFFLE_KEY"
 
 # ── Set up sudoers ────────────────────────────
 log "Configuring sudo permissions..."

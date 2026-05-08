@@ -1,11 +1,11 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { HttpClient } from '@angular/common/http';
 import { Api } from '../../services/api/api';
 import { LucideAngularModule,
     Zap, Play, Pause, Settings,
-    CheckCircle, XCircle, Bell } from 'lucide-angular';
+    CheckCircle, XCircle, Link,
+    RefreshCw, ExternalLink } from 'lucide-angular';
 
 @Component({
     selector: 'app-soar',
@@ -15,21 +15,39 @@ import { LucideAngularModule,
     styleUrl: './soar.css'
 })
 export class Soar implements OnInit {
-    ZapIcon          = Zap;
-    PlayIcon         = Play;
-    PauseIcon        = Pause;
-    SettingsIcon     = Settings;
-    CheckCircleIcon  = CheckCircle;
-    XCircleIcon      = XCircle;
-    BellIcon         = Bell;
+    ZapIcon         = Zap;
+    PlayIcon        = Play;
+    PauseIcon       = Pause;
+    SettingsIcon    = Settings;
+    CheckIcon       = CheckCircle;
+    XIcon           = XCircle;
+    LinkIcon        = Link;
+    RefreshIcon     = RefreshCw;
+    ExternalIcon    = ExternalLink;
 
-    shuffleUrl    = '';
-    webhookUrl    = '';
+    // Setup wizard steps
+    // 'check' | 'setup' | 'connected' | 'settings'
+    view = 'check';
+
+    // Setup form
+    shuffleUrl = 'http://localhost:5001';
+    username   = 'admin';
+    password   = '';
+    setting    = false;
+    setupError = '';
+    setupMsg   = '';
+
+    // Connected state
     soarConnected = false;
+    webhookUrl    = '';
+    shuffleUiUrl  = '';
     loading       = true;
-    recentActions: any[] = [];
 
-    // Default playbooks shown in NDR UI
+    // Manual config
+    manualWebhook  = '';
+    manualShuffleUrl = '';
+    showSettings   = false;
+
     playbooks = [
         {
             id: 1,
@@ -65,31 +83,103 @@ export class Soar implements OnInit {
         },
     ];
 
+    recentActions: any[] = [];
+
     constructor(
         private api: Api,
-        private http: HttpClient,
         private cdr: ChangeDetectorRef
     ) {}
 
     ngOnInit() {
-        this.loadSoarStatus();
+        this.checkStatus();
     }
 
-    loadSoarStatus() {
+    checkStatus() {
         this.loading = true;
         this.api.getSoarStatus().subscribe({
             next: (data: any) => {
-                this.shuffleUrl    = data.shuffle_url || '';
-                this.webhookUrl    = data.webhook_url || '';
                 this.soarConnected = data.connected || false;
+                this.webhookUrl    = data.webhook_url || '';
+                this.shuffleUiUrl  = data.shuffle_url || '';
                 this.recentActions = data.recent_actions || [];
                 this.loading = false;
+
+                // Decide which view to show
+                if (this.webhookUrl) {
+                    this.view = 'connected';
+                } else {
+                    this.view = 'setup';
+                }
                 this.cdr.detectChanges();
             },
             error: () => {
                 this.loading = false;
+                this.view = 'setup';
                 this.cdr.detectChanges();
             }
+        });
+    }
+
+    setupSoar() {
+        if (!this.shuffleUrl || !this.username || !this.password) {
+            this.setupError = 'Please fill all fields!';
+            return;
+        }
+
+        this.setting   = true;
+        this.setupError = '';
+        this.setupMsg  = 'Connecting to Shuffle...';
+        this.cdr.detectChanges();
+
+        this.api.setupSoar({
+            shuffle_url: this.shuffleUrl,
+            username:    this.username,
+            password:    this.password,
+        }).subscribe({
+            next: (data: any) => {
+                this.setting = false;
+                if (data.status === 'ok') {
+                    this.webhookUrl   = data.webhook_url;
+                    this.shuffleUiUrl = this.shuffleUrl
+                        .replace(':5001', ':3002');
+                    this.view = 'connected';
+                    this.setupMsg = '✅ ' + data.message;
+                } else {
+                    this.setupError = data.message;
+                }
+                this.cdr.detectChanges();
+            },
+            error: (err: any) => {
+                this.setting = false;
+                this.setupError = 'Connection failed — check URL and credentials';
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    saveManualConfig() {
+        this.api.updateSoarConfig({
+            webhook_url: this.manualWebhook,
+            shuffle_url: this.manualShuffleUrl,
+        }).subscribe({
+            next: () => {
+                this.webhookUrl   = this.manualWebhook;
+                this.shuffleUiUrl = this.manualShuffleUrl;
+                this.showSettings = false;
+                this.view = 'connected';
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    testWebhook() {
+        this.api.testSoarWebhook().subscribe({
+            next: (data: any) => {
+                alert(data.status === 'ok'
+                    ? '✅ Test alert sent to Shuffle!'
+                    : '❌ ' + data.message);
+            },
+            error: () => alert('❌ Webhook test failed')
         });
     }
 
@@ -99,13 +189,15 @@ export class Soar implements OnInit {
     }
 
     openShuffle() {
-        window.open(this.shuffleUrl || 'http://localhost:3002', '_blank');
+        const url = this.shuffleUiUrl ||
+            this.shuffleUrl.replace(':5001', ':3002');
+        window.open(url, '_blank');
     }
 
-    testWebhook() {
-        this.api.testSoarWebhook().subscribe({
-            next: () => alert('✅ Test alert sent to Shuffle!'),
-            error: () => alert('❌ Webhook not configured')
-        });
+    reconfigure() {
+        this.showSettings = true;
+        this.manualWebhook    = this.webhookUrl;
+        this.manualShuffleUrl = this.shuffleUiUrl;
+        this.cdr.detectChanges();
     }
 }

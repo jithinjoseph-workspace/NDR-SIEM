@@ -4,6 +4,11 @@ HOST_IP=$(ip -o -4 addr show 2>/dev/null | \
     grep -v "127.0.0.1\|docker\|br-\|veth" | \
     awk '{print $4}' | cut -d/ -f1 | head -1)
 SHUFFLE_URL="http://${HOST_IP}:5001"
+# Load API key from .env
+SHUFFLE_API_KEY=$(grep "SHUFFLE_API_KEY" \
+    $INSTALL_DIR/.env 2>/dev/null | \
+    cut -d= -f2 | tr -d '[:space:]')
+log "Using API key: ${SHUFFLE_API_KEY:0:8}..."
 
 log()  { echo -e "\033[0;32m[NDR]\033[0m $1"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
@@ -49,6 +54,16 @@ except: pass
 fi
 
 log "Session: ${SESSION:0:20}..."
+ # If no session — try API key directly
+if [ -z "$SESSION" ] && [ -n "$SHUFFLE_API_KEY" ]; then
+    log "Using API key auth..."
+    SESSION=$SHUFFLE_API_KEY
+fi
+
+if [ -z "$SESSION" ]; then
+    warn "No auth available — cannot create webhook"
+    exit 1
+fi
 
 # Create workflow using session cookie
 log "Creating NDR workflow..."
@@ -97,7 +112,7 @@ except: pass
         HOOK_ID="webhook_$WORKFLOW_ID"
     fi
 
-    WEBHOOK_URL="$SHUFFLE_URL/api/v1/hooks/$HOOK_ID"
+WEBHOOK_URL="$SHUFFLE_URL/api/v1/workflows/$WORKFLOW_ID/run"
     log "✅ Webhook URL: $WEBHOOK_URL"
 
     # Save to .env

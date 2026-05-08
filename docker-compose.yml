@@ -30,8 +30,8 @@ services:
       - ${HOME_DIR}/.vector/data:/etc/vector/data
       - ${HOME_DIR}/logs:/logs
     depends_on:
-      kafka:
-        condition: service_healthy
+      - kafka
+      
 
   ndr-engine-1:
     build: ./rust
@@ -45,6 +45,10 @@ services:
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=1
+      - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
+      - INSTALL_DIR=${INSTALL_DIR}
+      - RULES_DIR=/app/ndr-engine/rules
+
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
       - ${HOME_DIR}/logs:/logs
@@ -52,8 +56,7 @@ services:
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
 
     depends_on:
-      kafka:
-        condition: service_healthy
+      - kafka
 
   # Nginx Load Balancer — single entry point on port 3000
   nginx:
@@ -81,8 +84,14 @@ services:
       - SHUFFLE_OPENSEARCH_URL=http://shuffle-opensearch:9200
       - SHUFFLE_DEFAULT_USERNAME=admin
       - SHUFFLE_DEFAULT_PASSWORD=shufflepassword
-      - SHUFFLE_DEFAULT_APIKEY=shuffleapikey123
-      - DATASTORE_EMULATOR_HOST=shuffle-database:8000
+      - SHUFFLE_DEFAULT_APIKEY=${SHUFFLE_API_KEY}
+      - ORG_ID=default
+      - SHUFFLE_BASE_URL=http://shuffle-backend:5001
+      - SHUFFLE_CLOUD_SYNC=false
+      - SHUFFLE_PASS_WORKER_PROXY=false
+      - ENVIRONMENT_NAME=default
+      - SHUFFLE_WORKER_VERSION=latest
+      - SHUFFLE_SKIPSSL_VERIFY=true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - shuffle-apps:/shuffle-apps
@@ -109,8 +118,28 @@ services:
       - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
     volumes:
       - shuffle-opensearch:/usr/share/opensearch/data
+  
+
+  shuffle-orborus:
+    image: ghcr.io/shuffle/shuffle-orborus:latest
+    container_name: shuffle-orborus
+    hostname: shuffle-orborus
+    environment:
+      - ENVIRONMENT_NAME=Shuffle
+      - BASE_URL=http://shuffle-backend:5001
+      - DOCKER_API_VERSION=1.40
+      - SHUFFLE_BASE_URL=http://shuffle-backend:5001
+      - SHUFFLE_PASS_WORKER_PROXY=false
+      - CLEANUP=false
+      - ORG_ID=default
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - shuffle-backend
 
 volumes:
   shuffle-apps:
   shuffle-files:
   shuffle-opensearch:
+
+
