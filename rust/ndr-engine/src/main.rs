@@ -181,16 +181,20 @@ async fn main() {
         .route("/api/hits",          get(api::get_hits))
         .route("/api/network-map", get(api::get_network_map))
         .route("/api/scale-status", get(api::get_scale_status))
-       .route("/api/rules",          get(api::get_rules).post(api::create_rule))
-       .route("/api/rules/reload",   post(api::reload_rules_api))     // ← MUST be before /:id
-       .route("/api/rules/:id",      get(api::get_rule_by_id).delete(api::delete_rule))
-       .route("/api/threat-intel",     get(api::get_threat_intel))
-       .route("/api/threat-intel/:ip", get(api::lookup_ioc))
-       .route("/api/rules/:id/toggle", post(api::toggle_rule))
+        .route("/api/rules",          get(api::get_rules).post(api::create_rule))
+        .route("/api/rules/reload",   post(api::reload_rules_api))     // ← MUST be before /:id
+        .route("/api/rules/:id",      get(api::get_rule_by_id).delete(api::delete_rule))
+        .route("/api/threat-intel",     get(api::get_threat_intel))
+        .route("/api/threat-intel/:ip", get(api::lookup_ioc))
+        .route("/api/rules/:id/toggle", post(api::toggle_rule))
         .route("/api/export", get(api::export_report))
         .route("/api/threat-intel/add", post(api::add_manual_ioc))
         .route("/api/settings",           get(api::get_settings).post(api::update_settings))
         .route("/api/settings/upload-iocs", post(api::upload_iocs))
+        .route("/api/soar/status",  get(api::get_soar_status))
+        .route("/api/soar/setup",   post(api::setup_soar))
+        .route("/api/soar/config",  post(api::update_soar_config))
+        .route("/api/soar/test",    post(api::test_soar_webhook))
         .with_state(state)
         .layer(cors);
 

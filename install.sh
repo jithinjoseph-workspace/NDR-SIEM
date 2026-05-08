@@ -32,7 +32,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # Add at top of install.sh after functions
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 CURRENT_STEP=0
 
 step() {
@@ -385,7 +385,8 @@ if [ -z "$HOST_IP" ]; then
 fi
 log "Host IP detected: $HOST_IP"
 
-# ── Generate .env file ────────────────────────
+SHUFFLE_KEY=$(cat /proc/sys/kernel/random/uuid)
+
 cat > $INSTALL_DIR/.env << ENVEOF
 HOST_IP=$HOST_IP
 HOME_DIR=$HOME_DIR
@@ -396,8 +397,24 @@ CLICKHOUSE_URL=$CLICKHOUSE_URL
 CLICKHOUSE_USER=$CLOUD_CH_USER
 CLICKHOUSE_PASSWORD=$CLOUD_CH_PASS
 KAFKA_BROKERS=$CLOUD_KAFKA
+SHUFFLE_URL=http://${HOST_IP}:3002
+SHUFFLE_API_URL=http://${HOST_IP}:5001
+SHUFFLE_WEBHOOK_URL=
+SHUFFLE_API_KEY=$SHUFFLE_KEY
 ENVEOF
 log "✅ .env generated"
+
+# ── Fix Shuffle API key in docker-compose ─────
+log "Configuring Shuffle API key..."
+python3 -c "
+content = open('$INSTALL_DIR/docker-compose.yml').read()
+content = content.replace(
+    'SHUFFLE_DEFAULT_APIKEY=shuffleapikey123',
+    'SHUFFLE_DEFAULT_APIKEY=$SHUFFLE_KEY'
+)
+open('$INSTALL_DIR/docker-compose.yml', 'w').write(content)
+"
+log "✅ Shuffle API key: $SHUFFLE_KEY"
 
 # ── Set up sudoers ────────────────────────────
 log "Configuring sudo permissions..."
@@ -456,6 +473,7 @@ if [ "$DEPLOY_MODE" = "hybrid" ]; then
         $HOME_DIR/.vector/vector.toml
 fi
 log "✅ Vector configured"
+
 
 
 step "Installing Angular dependencies"
@@ -571,6 +589,48 @@ else
 fi
 
 log "✅ Docker stack started"
+
+# ── Setup Shuffle SOAR ────────────────────────
+step "Setting up Shuffle SOAR"
+log "Starting Shuffle SOAR services..."
+cd $INSTALL_DIR
+
+# Start opensearch first (needs most time)
+sudo docker compose up -d shuffle-opensearch
+log "  → Waiting for OpenSearch..."
+sleep 30
+
+# Start backend and frontend
+sudo docker compose up -d \
+    shuffle-backend \
+    shuffle-frontend
+log "  → Waiting for Shuffle backend..."
+
+# Wait properly for Shuffle
+SHUFFLE_READY=false
+for i in {1..40}; do
+    if curl -s http://localhost:5001/api/v1/health \
+        > /dev/null 2>&1; then
+        SHUFFLE_READY=true
+        log "✅ Shuffle backend ready"
+        break
+    fi
+    echo -n "."
+    sleep 5
+done
+echo ""
+
+if [ "$SHUFFLE_READY" = true ]; then
+    # Auto-configure webhook
+    bash $INSTALL_DIR/scripts/setup-shuffle.sh
+    log "✅ Shuffle SOAR ready!"
+    log "  UI:   http://localhost:3002"
+    log "  User: admin"
+    log "  Pass: shufflepassword"
+else
+    warn "⚠️ Shuffle not ready — configure manually later"
+    warn "  Run: bash $INSTALL_DIR/scripts/setup-shuffle.sh"
+fi
 
 # ── Start Angular UI ──────────────────────────
 log "Starting Angular UI..."

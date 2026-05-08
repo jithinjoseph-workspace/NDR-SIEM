@@ -1,6 +1,9 @@
 #!/bin/bash
 INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
 
+log()  { echo -e "\033[0;32m[NDR]\033[0m $1"; }
+warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+
 echo "🚀 Starting NDR Stack..."
 
 # ── Load kernel modules ───────────────────────
@@ -34,6 +37,25 @@ echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
 sudo docker compose up -d
 
+# ── Check Shuffle SOAR ────────────────────────
+echo "  → Checking Shuffle SOAR..."
+sleep 5
+if curl -s http://localhost:5001/api/v1/health \
+    > /dev/null 2>&1; then
+    echo "  ✅ Shuffle SOAR running"
+
+    # Check webhook configured
+    source $INSTALL_DIR/.env 2>/dev/null || true
+    if [ -z "$SHUFFLE_WEBHOOK_URL" ]; then
+        echo "  ⚠️  Shuffle webhook not configured"
+        echo "      Open UI → SOAR page to configure"
+    else
+        echo "  ✅ Shuffle webhook configured"
+    fi
+else
+    echo "  ⚠️  Shuffle not running"
+fi
+
 # Wait for Kafka to be healthy
 echo "  → Waiting for Kafka..."
 sleep 10
@@ -63,6 +85,7 @@ echo "  Docker: $(docker ps --format '{{.Names}}' | tr '\n' ' ')"
 echo "  Agent:  $(curl -s http://localhost:3001/agent/status 2>/dev/null)"
 echo ""
 echo "✅ NDR Stack started"
-echo "   UI:    http://localhost:4200"
-echo "   API:   http://localhost:3000"
-echo "   Agent: http://localhost:3001"
+echo "   UI:     http://localhost:4200"
+echo "   API:    http://localhost:3000"
+echo "   Agent:  http://localhost:3001"
+echo "   SOAR:   http://localhost:3002"

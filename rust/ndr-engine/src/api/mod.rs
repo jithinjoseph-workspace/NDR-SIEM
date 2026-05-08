@@ -30,6 +30,14 @@ pub struct TogglePayload {
 }
 
 
+
+#[derive(serde::Deserialize)]
+pub struct SoarSetupPayload {
+    pub shuffle_url: String,
+    pub username:    String,
+    pub password:    String,
+}
+
 // ── Shared application state ──────────────────────────────────────────────
 
 
@@ -195,6 +203,43 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
             .filter(|t| seen.insert(t.clone()))
             .collect()
     };
+
+// ── Send webhook to Shuffle SOAR ──────────────
+// ── Send to Shuffle SOAR ──────────────────────
+if risk.score >= 75.0 {
+    let shuffle_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    if !shuffle_url.is_empty() {
+        let payload = json!({
+            "alert_type":   "ndr_threat_detected",
+            "src_ip":       src,
+            "dst_ip":       dst,
+            "score":        risk.score,
+            "severity":     risk.severity.as_str(),
+            "threat_intel": enrichment.is_malicious,
+            "sigma_hits":   sigma_hits,
+            "timestamp":    chrono::Utc::now().to_rfc3339(),
+            "tags":         risk.tags,
+            "community_id": hit.community_id,
+        });
+
+        let url = shuffle_url.clone();
+        tokio::spawn(async move {
+            match reqwest::Client::new()
+                .post(&url)
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(_)  => info!("✅ Alert sent to Shuffle SOAR"),
+                Err(e) => warn!("Shuffle webhook failed: {}", e),
+            }
+        });
+    }
+}
+
     let hit_msg = json!({
         "type":            "hit",
         "cid":             hit.community_id,
@@ -532,21 +577,30 @@ pub async fn get_threat_intel(State(state): State<AppState>) -> Json<Value> {
 
 
 //lookup ioc
+//lookup ioc
 pub async fn lookup_ioc(
     State(state): State<AppState>,
     axum::extract::Path(ioc): axum::extract::Path<String>,
 ) -> Json<Value> {
     let ti = &state.enrichment.threat_intel;
-    // Detect IOC type
-    let (ioc_type, is_malicious) = if ioc.contains('.') &&
-        ioc.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-        // IP address
+
+    // Check if real IP — ALL 4 parts must be valid numbers 0-255
+    let is_real_ip = ioc.split('.').count() == 4 &&
+        ioc.split('.').all(|p| p.parse::<u8>().is_ok());
+
+    // Check if hash — hex string of specific length
+    let is_hash = (ioc.len() == 32 || ioc.len() == 40 || ioc.len() == 64) &&
+        ioc.chars().all(|c| c.is_ascii_hexdigit());
+
+    // Detect IOC type correctly
+    let (ioc_type, is_malicious) = if is_real_ip {
+        // Real IP address like 10.0.2.15
         ("ip", ti.is_malicious_ip(&ioc))
-    } else if ioc.len() == 32 || ioc.len() == 40 || ioc.len() == 64 {
+    } else if is_hash {
         // Hash (MD5=32, SHA1=40, SHA256=64)
         ("hash", ti.is_malicious_hash(&ioc))
     } else if ioc.contains('.') {
-        // Domain/hostname
+        // Domain/hostname — includes 1navorex.lat etc
         ("domain", ti.is_malicious_domain(&ioc))
     } else {
         ("unknown", false)
@@ -559,7 +613,6 @@ pub async fn lookup_ioc(
         "source":       "abuse.ch (Feodo + MalwareBazaar + URLhaus)"
     }))
 }
-
 //add manaual ioc
 pub async fn add_manual_ioc(
     State(state): State<AppState>,
@@ -615,6 +668,298 @@ pub async fn reload_rules_api(
         "total":         total,
         "disabled":      disabled.len(),
         "message":       "Rules reloaded successfully"
+    }))
+}
+
+//soar status
+pub async fn get_soar_status(
+    State(_state): State<AppState>) -> Json<Value> {
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
+    .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
+
+    let shuffle_url = std::env::var("SHUFFLE_URL")
+    .unwrap_or_else(|_| "http://localhost:5001".to_string());
+    // Check if Shuffle is reachable
+    let connected = reqwest::Client::new()
+    .get(&format!("{}/api/v1/health", internal_url))
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+
+    Json(json!({
+        "connected":      connected,
+        "webhook_url":    webhook_url,
+        "shuffle_url":    shuffle_url,
+        "recent_actions": []
+    }))
+}
+
+pub async fn test_soar_webhook(
+    State(_state): State<AppState>
+) -> Json<Value> {
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    if webhook_url.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Webhook URL not configured"
+        }));
+    }
+
+    match reqwest::Client::new()
+        .post(&webhook_url)
+        .json(&json!({
+            "alert_type": "test",
+            "message":    "NDR test alert",
+            "score":      85,
+            "severity":   "HIGH",
+            "timestamp":  chrono::Utc::now().to_rfc3339()
+        }))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Test alert sent!"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+
+pub async fn setup_soar(
+    State(_state): State<AppState>,
+    Json(payload): Json<SoarSetupPayload>,
+) -> Json<Value> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+
+    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
+        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
+
+    tracing::info!("Connecting to Shuffle at: {}", internal_url);
+
+    // Step 1: Login to get session
+    let login_resp = match client
+        .post(&format!("{}/api/v1/login", internal_url))
+        .json(&serde_json::json!({
+            "username": payload.username,
+            "password": payload.password
+        }))
+        .send()
+        .await {
+            Ok(r) => r,
+            Err(e) => return Json(json!({
+                "status": "error",
+                "message": format!("Cannot connect to Shuffle: {}", e)
+            }))
+        };
+
+    // Get session from header
+    let session_header = login_resp.headers()
+        .get_all("set-cookie")
+        .iter()
+        .find_map(|v| {
+            let s = v.to_str().ok()?;
+            let part = s.split(';').next()?;
+            let mut kv = part.splitn(2, '=');
+            let key = kv.next()?.trim();
+            let val = kv.next()?.trim();
+            if key == "session_token" {
+                Some(val.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    // Get session from body
+    let login_body: Value = login_resp.json().await
+        .unwrap_or(json!({}));
+
+    let session = if !session_header.is_empty() {
+        session_header
+    } else {
+        login_body["cookies"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|c| {
+                c["key"].as_str() == Some("session_token")
+            }))
+            .and_then(|c| c["value"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
+    tracing::info!("Session: {}...", &session[..8.min(session.len())]);
+
+    if session.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Login failed — check username and password"
+        }));
+    }
+
+    // Step 2: Generate new API key using session
+    let apikey_resp = client
+        .get(&format!("{}/api/v1/users/generateapikey", internal_url))
+        .header("Cookie", format!("session_token={}", session))
+        .send()
+        .await;
+
+    let api_key = match apikey_resp {
+        Ok(r) => {
+            let body: Value = r.json().await.unwrap_or(json!({}));
+            body["apikey"].as_str().unwrap_or("").to_string()
+        }
+        Err(_) => session.clone()
+    };
+
+    tracing::info!("API key: {}...", &api_key[..8.min(api_key.len())]);
+
+    // Step 3: Create workflow using API key
+    let workflow_resp = client
+        .post(&format!("{}/api/v1/workflows", internal_url))
+        .header("Cookie", format!("session_token={}", session))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&serde_json::json!({
+            "name": "NDR Alert Response",
+            "description": "Auto-created by NDR Stack"
+        }))
+        .send()
+        .await;
+
+    let workflow_data: Value = match workflow_resp {
+        Ok(r) => {
+            let text = r.text().await.unwrap_or_default();
+            tracing::info!("Workflow response: {}", &text[..200.min(text.len())]);
+            serde_json::from_str(&text).unwrap_or(json!({}))
+        }
+        Err(e) => return Json(json!({
+            "status": "error",
+            "message": format!("Workflow creation failed: {}", e)
+        }))
+    };
+
+    let workflow_id = workflow_data["id"]
+        .as_str().unwrap_or("").to_string();
+
+    if workflow_id.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": format!(
+                "Could not create workflow: {}",
+                workflow_data
+            )
+        }));
+    }
+
+    tracing::info!("Workflow created: {}", workflow_id);
+
+    // Step 4: Build webhook URL using external IP
+    let webhook_url = format!(
+        "{}/api/v1/workflows/{}/run",
+        payload.shuffle_url,
+        workflow_id
+    );
+
+    // Step 5: Save to .env file
+    let install_dir = std::env::var("INSTALL_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    let env_path = format!("{}/.env", install_dir);
+    let mut env_content = std::fs::read_to_string(&env_path)
+        .unwrap_or_default();
+
+    let vars = vec![
+        ("SHUFFLE_URL", payload.shuffle_url.clone()),
+        ("SHUFFLE_WEBHOOK_URL", webhook_url.clone()),
+    ];
+
+    for (key, val) in &vars {
+        if env_content.contains(key) {
+            let re = regex::Regex::new(
+                &format!(r"{}=[^\n]*", key)
+            ).unwrap();
+            env_content = re.replace(
+                &env_content,
+                format!("{}={}", key, val).as_str()
+            ).to_string();
+        } else {
+            env_content.push_str(
+                &format!("\n{}={}", key, val)
+            );
+        }
+    }
+
+    std::fs::write(&env_path, &env_content).ok();
+
+    // Step 6: Update runtime env
+    std::env::set_var("SHUFFLE_URL", &payload.shuffle_url);
+    std::env::set_var("SHUFFLE_WEBHOOK_URL", &webhook_url);
+
+    Json(json!({
+        "status":      "ok",
+        "webhook_url": webhook_url,
+        "workflow_id": workflow_id,
+        "message":     "SOAR configured successfully!"
+    }))
+}
+
+pub async fn update_soar_config(
+    State(_state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<Value> {
+    let webhook_url = payload["webhook_url"]
+        .as_str().unwrap_or("").to_string();
+    let shuffle_url = payload["shuffle_url"]
+        .as_str().unwrap_or("").to_string();
+
+    if !webhook_url.is_empty() {
+        std::env::set_var("SHUFFLE_WEBHOOK_URL", &webhook_url);
+    }
+    if !shuffle_url.is_empty() {
+        std::env::set_var("SHUFFLE_URL", &shuffle_url);
+    }
+
+    // Update .env file
+    let install_dir = std::env::var("INSTALL_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    let env_path = format!("{}/.env", install_dir);
+    let mut env_content = std::fs::read_to_string(&env_path)
+        .unwrap_or_default();
+
+    if !webhook_url.is_empty() {
+        if env_content.contains("SHUFFLE_WEBHOOK_URL") {
+            let lines: Vec<String> = env_content.lines()
+                .map(|l| {
+                    if l.starts_with("SHUFFLE_WEBHOOK_URL=") {
+                        format!("SHUFFLE_WEBHOOK_URL={}", webhook_url)
+                    } else { l.to_string() }
+                }).collect();
+            env_content = lines.join("\n");
+        } else {
+            env_content.push_str(
+                &format!("\nSHUFFLE_WEBHOOK_URL={}", webhook_url)
+            );
+        }
+    }
+
+    std::fs::write(&env_path, env_content).ok();
+
+    Json(json!({
+        "status": "ok",
+        "message": "SOAR config updated"
     }))
 }
 
@@ -800,6 +1145,7 @@ pub async fn toggle_rule(
         "active_rules": count
     }))
 }
+
 
 
 
