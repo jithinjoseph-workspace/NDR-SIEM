@@ -196,6 +196,10 @@
   place-items: center;
 }
 
+.notification-wrap {
+  position: relative;
+}
+
 .icon-button span {
   position: absolute;
   right: -5px;
@@ -210,6 +214,117 @@
   color: #fff;
   font-size: 10px;
   font-weight: 800;
+}
+
+.notification-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 60;
+  width: min(360px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid rgba(110, 117, 136, 0.2);
+  border-radius: 8px;
+  background: #10192b;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38);
+}
+
+.notification-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(110, 117, 136, 0.14);
+  padding: 12px 14px;
+}
+
+.notification-head strong {
+  color: #f7f9ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.notification-head small,
+.notification-empty,
+.notification-row span,
+.notification-row em,
+.notification-row small {
+  color: #8d98ad;
+  font-size: 11px;
+}
+
+.notification-empty {
+  padding: 24px 14px;
+  text-align: center;
+}
+
+.notification-list {
+  max-height: 280px;
+  overflow: auto;
+}
+
+.notification-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  border-bottom: 1px solid rgba(110, 117, 136, 0.1);
+  padding: 11px 14px;
+}
+
+.notification-row strong,
+.notification-row span,
+.notification-row em {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notification-row strong {
+  color: #f7f9ff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.notification-row span {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+}
+
+.notification-row em {
+  margin-top: 2px;
+  font-style: normal;
+  color: #c6cede;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.notification-row small {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.notification-row b {
+  color: #f8a010;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.notification-link {
+  width: 100%;
+  border-top: 1px solid rgba(110, 117, 136, 0.14);
+  color: #69f6b8;
+  padding: 11px 14px;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.notification-link:hover {
+  background: rgba(105, 246, 184, 0.08);
 }
 
 .profile-button {

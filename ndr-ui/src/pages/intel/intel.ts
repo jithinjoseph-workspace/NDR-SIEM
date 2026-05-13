@@ -2,7 +2,7 @@ import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
-import { Websocket } from '../../services/websocket/websocket';
+import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Subscription } from 'rxjs';
 import { LucideAngularModule, Search, ShieldCheck, AlertCircle, RefreshCw, Hash, Bell } from 'lucide-angular';
 
@@ -24,7 +24,7 @@ export class Intel implements OnInit, OnDestroy {
   lastRefresh: string = '';
 
   // Real-time alerts
-  liveAlerts: any[] = [];
+  liveAlerts: ThreatNotification[] = [];
   newAlertCount: number = 0;
 
   SearchIcon      = Search;
@@ -35,51 +35,28 @@ export class Intel implements OnInit, OnDestroy {
   BellIcon        = Bell;
 
   private subs: Subscription[] = [];
+  private processedAlertHits = new Map<string, number>();
 
   constructor(
     private api: Api,
-    private ws: Websocket,
+    private notifications: Notifications,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
     this.loadIntel();
 
-    // Real-time threat intel alerts via WebSocket
     this.subs.push(
-      this.ws.hits$.subscribe((hit: any) => {
-        if (!hit.threat_intel) return;
+      this.notifications.alerts$.subscribe(alerts => {
+        this.liveAlerts = alerts.slice(0, 20);
+        this.syncDetectedNetworkAlerts(alerts);
+        this.cdr.detectChanges();
+      })
+    );
 
-        // New malicious IP detected in network!
-        const alert = {
-          time:      new Date().toLocaleTimeString(),
-          src_ip:    hit.src    || hit.suricata?.src || '-',
-          dst_ip:    hit.dst    || hit.suricata?.dst || '-',
-          severity:  hit.severity || 'HIGH',
-          score:     hit.score  || 0,
-          tags:      hit.tags   || [],
-        };
-
-        // Add to live alerts
-        this.liveAlerts.unshift(alert);
-        if (this.liveAlerts.length > 20) this.liveAlerts.pop();
-        this.newAlertCount++;
-
-        // Also add to detected in network
-        const existing = this.detectedInNetwork
-            .find(d => d.src_ip === alert.src_ip);
-        if (existing) {
-          existing.hits++;
-          existing.last_seen = Math.floor(Date.now() / 1000);
-        } else {
-          this.detectedInNetwork.unshift({
-            src_ip:    alert.src_ip,
-            dst_ip:    alert.dst_ip,
-            hits:      1,
-            last_seen: Math.floor(Date.now() / 1000),
-          });
-        }
-
+    this.subs.push(
+      this.notifications.unreadCount$.subscribe(count => {
+        this.newAlertCount = count;
         this.cdr.detectChanges();
       })
     );
@@ -93,6 +70,7 @@ export class Intel implements OnInit, OnDestroy {
         this.source            = data.source || 'abuse.ch';
         this.detectedInNetwork = data.detected_in_network || [];
         this.lastRefresh       = data.last_refresh || '';
+        this.syncDetectedNetworkAlerts(this.liveAlerts);
         this.loading = false;
         this.cdr.detectChanges();
       },
@@ -121,9 +99,35 @@ export class Intel implements OnInit, OnDestroy {
   }
 
   clearAlerts() {
-    this.liveAlerts = [];
-    this.newAlertCount = 0;
+    this.notifications.clearAlerts();
     this.cdr.detectChanges();
+  }
+
+  private syncDetectedNetworkAlerts(alerts: ThreatNotification[]) {
+    for (const alert of alerts) {
+      const key = alert.id;
+      const existing = this.detectedInNetwork.find(d => d.src_ip === alert.src_ip);
+      const processedHits = this.processedAlertHits.get(key) || 0;
+      const newHits = Math.max((alert.hits || 1) - processedHits, 0);
+
+      if (newHits === 0) {
+        continue;
+      }
+
+      this.processedAlertHits.set(key, alert.hits || 1);
+
+      if (existing) {
+        existing.hits += newHits;
+        existing.last_seen = Math.floor(Date.now() / 1000);
+      } else {
+        this.detectedInNetwork.unshift({
+          src_ip: alert.src_ip,
+          dst_ip: alert.dst_ip,
+          hits: alert.hits || 1,
+          last_seen: Math.floor(Date.now() / 1000),
+        });
+      }
+    }
   }
 
   getTimestamp(ts: number): string {
