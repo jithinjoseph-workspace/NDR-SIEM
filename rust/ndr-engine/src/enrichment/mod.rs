@@ -104,9 +104,10 @@ impl EnrichmentPipeline {
         let dst_asn = dst_external
             .then(|| self.asn.as_ref().and_then(|a| a.lookup(dst_ip)))
             .flatten();
-
         let is_malicious = self.threat_intel.is_malicious_ip(src_ip)
-    || self.threat_intel.is_malicious_ip(dst_ip);
+            || self.threat_intel.is_malicious_ip(dst_ip)
+            || self.threat_intel.is_malicious_domain(src_ip)
+            || self.threat_intel.is_malicious_domain(dst_ip);
 
         let direction = network_direction(src_ip, dst_ip).to_string();
 
