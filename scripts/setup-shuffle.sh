@@ -5,14 +5,14 @@ HOST_IP=$(ip -o -4 addr show 2>/dev/null | \
     awk '{print $4}' | cut -d/ -f1 | head -1)
 SHUFFLE_URL="http://${HOST_IP}:5001"
 # Load API key from .env
-SHUFFLE_API_KEY=$(grep "SHUFFLE_API_KEY" \
-    $INSTALL_DIR/.env 2>/dev/null | \
-    cut -d= -f2 | tr -d '[:space:]')
+
 log "Using API key: ${SHUFFLE_API_KEY:0:8}..."
 
 log()  { echo -e "\033[0;32m[NDR]\033[0m $1"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
-
+SHUFFLE_API_KEY=$(grep "SHUFFLE_API_KEY" \
+    $INSTALL_DIR/.env 2>/dev/null | \
+    cut -d= -f2 | tr -d '[:space:]')
 log "Setting up Shuffle SOAR webhook..."
 
 # Wait for Shuffle
@@ -54,6 +54,34 @@ except: pass
 fi
 
 log "Session: ${SESSION:0:20}..."
+
+# Get REAL API key from Shuffle
+log "Getting real API key..."
+REAL_KEY=$(curl -s \
+    -b "session_token=$SESSION" \
+    "$SHUFFLE_URL/api/v1/users/generateapikey" \
+    2>/dev/null | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    print(d.get('apikey',''))
+except: pass
+" 2>/dev/null)
+
+log "Real API key: ${REAL_KEY:0:8}..."
+
+if [ -n "$REAL_KEY" ]; then
+    # Save real key to .env
+    if grep -q "SHUFFLE_API_KEY" $INSTALL_DIR/.env 2>/dev/null; then
+        sed -i \
+            "s|SHUFFLE_API_KEY=.*|SHUFFLE_API_KEY=$REAL_KEY|" \
+            $INSTALL_DIR/.env
+    else
+        echo "SHUFFLE_API_KEY=$REAL_KEY" >> $INSTALL_DIR/.env
+    fi
+    log "✅ Real API key saved!"
+fi 
+ 
  # If no session — try API key directly
 if [ -z "$SESSION" ] && [ -n "$SHUFFLE_API_KEY" ]; then
     log "Using API key auth..."
@@ -126,8 +154,10 @@ WEBHOOK_URL="$SHUFFLE_URL/api/v1/workflows/$WORKFLOW_ID/run"
     log "✅ Webhook saved to .env"
 
     # Test webhook
+    # Test webhook with real API key
     TEST=$(curl -s -X POST "$WEBHOOK_URL" \
         -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $REAL_KEY" \
         -d '{"test":"ndr","score":85}' 2>/dev/null)
     log "Webhook test: $TEST"
 else

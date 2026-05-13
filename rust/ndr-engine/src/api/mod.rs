@@ -214,13 +214,21 @@ if risk.score >= 75.0 {
         });
 
         let url = shuffle_url.clone();
-        tokio::spawn(async move {
-            match reqwest::Client::new()
-                .post(&url)
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
+let api_key = std::env::var("SHUFFLE_API_KEY")
+    .unwrap_or_default();
+tokio::spawn(async move {
+    let client = reqwest::Client::new();
+    let mut req = client
+        .post(&url)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(5));
+    if !api_key.is_empty() {
+        req = req.header(
+            "Authorization",
+            format!("Bearer {}", api_key)
+        );
+    }
+    match req.send().await
             {
                 Ok(_)  => info!("✅ Alert sent to Shuffle SOAR"),
                 Err(e) => warn!("Shuffle webhook failed: {}", e),
@@ -827,7 +835,7 @@ pub async fn setup_soar(
             "description": "Auto-created by NDR Stack"
         }))
         .send()
-        .await;
+        .await; 
 
     let workflow_data: Value = match workflow_resp {
         Ok(r) => {
@@ -857,12 +865,34 @@ pub async fn setup_soar(
     tracing::info!("Workflow created: {}", workflow_id);
 
     // Step 4: Build webhook URL using external IP
-    let webhook_url = format!(
-        "{}/api/v1/workflows/{}/run",
-        payload.shuffle_url,
-        workflow_id
-    );
+// Get real API key from Shuffle
+let apikey_resp = client
+    .get(&format!("{}/api/v1/users/generateapikey", internal_url))
+    .header("Cookie", format!("session_token={}", session))
+    .send()
+    .await;
 
+let real_api_key = match apikey_resp {
+    Ok(r) => {
+        let body: Value = r.json().await.unwrap_or(json!({}));
+        body["apikey"].as_str().unwrap_or("").to_string()
+    }
+    Err(_) => "".to_string()
+};
+
+tracing::info!("Real API key: {}...",
+    &real_api_key[..8.min(real_api_key.len())]);
+
+// Save real API key to runtime env
+if !real_api_key.is_empty() {
+    std::env::set_var("SHUFFLE_API_KEY", &real_api_key);
+}
+
+// Build webhook URL
+let webhook_url = format!(
+    "{}/api/v1/workflows/{}/run",
+    payload.shuffle_url,
+    workflow_id);
     // Step 5: Save to .env file
     let install_dir = std::env::var("INSTALL_DIR")
         .unwrap_or_else(|_| ".".to_string());
@@ -870,10 +900,11 @@ pub async fn setup_soar(
     let mut env_content = std::fs::read_to_string(&env_path)
         .unwrap_or_default();
 
-    let vars = vec![
-        ("SHUFFLE_URL", payload.shuffle_url.clone()),
-        ("SHUFFLE_WEBHOOK_URL", webhook_url.clone()),
-    ];
+   let vars = vec![
+    ("SHUFFLE_URL", payload.shuffle_url.clone()),
+    ("SHUFFLE_WEBHOOK_URL", webhook_url.clone()),
+    ("SHUFFLE_API_KEY", real_api_key.clone()),
+];
 
     for (key, val) in &vars {
         if env_content.contains(key) {
@@ -1136,6 +1167,224 @@ pub async fn toggle_rule(
 }
 
 
+//get the executions from the workflow
+pub async fn get_soar_executions(
+    State(_state): State<AppState>,
+) -> Json<Value> {
+    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
+        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
+    let api_key = std::env::var("SHUFFLE_API_KEY")
+        .unwrap_or_default();
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    // Extract workflow ID from webhook URL
+    let workflow_id = webhook_url
+        .split("/workflows/")
+        .nth(1)
+        .and_then(|s| s.split("/run").next())
+        .unwrap_or("")
+        .to_string();
+
+    if workflow_id.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "SOAR not configured yet"
+        }));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+
+    match client
+        .get(&format!(
+            "{}/api/v1/workflows/{}/executions",
+            internal_url, workflow_id
+        ))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let data: Value = r.json().await.unwrap_or(json!([]));
+            Json(json!({
+                "status": "ok",
+                "executions": data
+            }))
+        }
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+//get the actions from the workflow
+pub async fn get_soar_actions(
+    State(_state): State<AppState>,
+) -> Json<Value> {
+    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
+        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
+    let api_key = std::env::var("SHUFFLE_API_KEY")
+        .unwrap_or_default();
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    let workflow_id = webhook_url
+        .split("/workflows/")
+        .nth(1)
+        .and_then(|s| s.split("/run").next())
+        .unwrap_or("")
+        .to_string();
+
+    if workflow_id.is_empty() {
+        return Json(json!({ "status": "error", "actions": [] }));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+
+    match client
+        .get(&format!(
+            "{}/api/v1/workflows/{}",
+            internal_url, workflow_id
+        ))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let data: Value = r.json().await.unwrap_or(json!({}));
+            let actions = data["actions"].clone();
+            Json(json!({
+                "status":  "ok",
+                "actions": actions
+            }))
+        }
+        Err(e) => Json(json!({
+            "status":  "error",
+            "actions": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+//configure slack 
+pub async fn configure_slack(
+    State(_state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let slack_webhook = payload["webhook_url"]
+        .as_str().unwrap_or("").to_string();
+
+    if slack_webhook.is_empty() {
+        return Json(json!({
+            "status":  "error",
+            "message": "webhook_url is required"
+        }));
+    }
+
+    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
+        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
+    let api_key = std::env::var("SHUFFLE_API_KEY")
+        .unwrap_or_default();
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    let workflow_id = webhook_url
+        .split("/workflows/")
+        .nth(1)
+        .and_then(|s| s.split("/run").next())
+        .unwrap_or("")
+        .to_string();
+
+    if workflow_id.is_empty() {
+        return Json(json!({
+            "status":  "error",
+            "message": "SOAR not configured yet"
+        }));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+
+    // Get current workflow
+    let wf_resp = client
+        .get(&format!(
+            "{}/api/v1/workflows/{}",
+            internal_url, workflow_id
+        ))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await;
+
+    let mut workflow: Value = match wf_resp {
+        Ok(r) => r.json().await.unwrap_or(json!({})),
+        Err(e) => return Json(json!({
+            "status":  "error",
+            "message": format!("Cannot fetch workflow: {}", e)
+        }))
+    };
+
+    // Build Slack HTTP action
+    let slack_action = json!({
+        "app_name":    "Http",
+        "app_version": "1.0.0",
+        "name":        "send_slack_alert",
+        "label":       "Send Slack Alert",
+        "parameters": [
+            { "name": "url",     "value": slack_webhook },
+            { "name": "method",  "value": "POST" },
+            { "name": "headers", "value": "Content-Type=application/json" },
+            { "name": "body",    "value": "{\"text\": \"🚨 NDR Alert: $exec.severity - $exec.src_ip → $exec.dst_ip (score: $exec.score)\"}" }
+        ]
+    });
+
+    // Append action to workflow
+    let actions = workflow["actions"]
+        .as_array_mut()
+        .map(|a| {
+            a.push(slack_action.clone());
+            a.clone()
+        })
+        .unwrap_or_else(|| vec![slack_action.clone()]);
+
+    workflow["actions"] = json!(actions);
+
+    // Save updated workflow back to Shuffle
+    match client
+        .put(&format!(
+            "{}/api/v1/workflows/{}",
+            internal_url, workflow_id
+        ))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&workflow)
+        .send()
+        .await
+    {
+        Ok(_) => {
+            // Save slack webhook to env
+            std::env::set_var("SLACK_WEBHOOK_URL", &slack_webhook);
+            Json(json!({
+                "status":  "ok",
+                "message": "Slack configured! Alerts will now be sent to Slack."
+            }))
+        }
+        Err(e) => Json(json!({
+            "status":  "error",
+            "message": format!("Failed to update workflow: {}", e)
+        }))
+    }
+}
 
 
 

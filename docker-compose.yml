@@ -30,8 +30,8 @@ services:
       - ${HOME_DIR}/.vector/data:/etc/vector/data
       - ${HOME_DIR}/logs:/logs
     depends_on:
-      - kafka
-      
+      kafka:
+        condition: service_healthy
 
   ndr-engine-1:
     build: ./rust
@@ -48,6 +48,7 @@ services:
       - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
+      - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -56,7 +57,8 @@ services:
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
 
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
 
   # Nginx Load Balancer — single entry point on port 3000
   nginx:
@@ -118,7 +120,6 @@ services:
       - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
     volumes:
       - shuffle-opensearch:/usr/share/opensearch/data
-  
 
   shuffle-orborus:
     image: ghcr.io/shuffle/shuffle-orborus:latest
@@ -141,5 +142,4 @@ volumes:
   shuffle-apps:
   shuffle-files:
   shuffle-opensearch:
-
 
