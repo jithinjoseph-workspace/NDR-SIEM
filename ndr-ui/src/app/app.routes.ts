@@ -43,9 +43,9 @@ export const routes: Routes = [
     path: 'soar',
     loadComponent: () => import('../pages/soar/soar').then(m => m.Soar)
   },
-  { 
-    path: 'settings', 
-    loadComponent: () => import('../pages/settings/settings').then(m => m.Settings) 
+  {
+    path: 'settings',
+    loadComponent: () => import('../pages/settings/settings').then(m => m.Settings)
   },
 
   { path: '**', redirectTo: 'dashboard' }

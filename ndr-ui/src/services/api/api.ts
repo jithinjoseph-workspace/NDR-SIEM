@@ -124,20 +124,15 @@ export class Api {
     return this.http.post(`${this.baseUrl}/soar/test`, {});
   }
 
-// ── Settings API ─────────────────────────────────────────────────────
 
-getSettings(): Observable<any> {
-  return this.http.get(`${this.baseUrl}/settings`);
+  getSettings(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/settings`);
 }
 
-updateSettings(settings: any): Observable<any> {
-  return this.http.post(`${this.baseUrl}/settings`, settings);
+updateSettings(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings`, data);
 }
 
-uploadIocs(content: string): Observable<any> {
-  return this.http.post(`${this.baseUrl}/settings/upload-iocs`, content, {
-    headers: { 'Content-Type': 'text/plain' }
-  });
 }
 
 }

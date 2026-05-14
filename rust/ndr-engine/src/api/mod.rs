@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use std::env;
-use reqwest::Url;
+
 
 
 fn agent_url() -> String {
@@ -109,7 +109,16 @@ pub async fn get_network_map(State(state): State<AppState>) -> Json<Value> {
 }
 
 pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
- let (src, dst) = match hit.source.as_str() {
+  // ── Get thresholds from ClickHouse ────────
+    let settings = state.ch_storage
+        .get_settings().await
+        .unwrap_or(json!({}));
+let store_threshold = settings["store_threshold"]
+    .as_f64().unwrap_or(10.0) as f32;
+let alert_threshold = settings["soar_threshold"]
+    .as_f64().unwrap_or(75.0) as f32;
+        
+    let (src, dst) = match hit.source.as_str() {
         "zeek" => (
             hit.zeek.source_ip.as_deref().unwrap_or("-"),
             hit.zeek.dest_ip.as_deref().unwrap_or("-"),
@@ -167,11 +176,18 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     }
     println!("╚════════════════════════════════════════════════════════════╝\n");
 
+// Only store hits above threshold
+    if risk.score < store_threshold {
+        return;
+    }
+
     // Persist to SQLite
     if let Err(e) = state.storage.store_hit(&hit, &risk, &detections, &enrichment) {
         warn!("Storage error: {}", e);
     }
 
+    // Persist to ClickHouse
+    let ch = state.ch_storage.clone();
     // Persist to ClickHouse
     let ch = state.ch_storage.clone();
     let ch_hit = crate::storage::clickhouse::NdrHit {
@@ -207,7 +223,7 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
 
 // ── Send webhook to Shuffle SOAR ──────────────
 // ── Send to Shuffle SOAR ──────────────────────
-if risk.score >= 75.0 {
+if risk.score >= alert_threshold {
     let shuffle_url = std::env::var("SHUFFLE_WEBHOOK_URL")
         .unwrap_or_default();
 
@@ -607,6 +623,7 @@ pub async fn get_threat_intel(State(state): State<AppState>) -> Json<Value> {
 }
 
 
+
 //lookup ioc
 //lookup ioc
 pub async fn lookup_ioc(
@@ -765,6 +782,9 @@ let call_url = shuffle_internal_url(&webhook_url);
         }))
     }
 }
+
+
+
 
 
 pub async fn setup_soar(
@@ -1420,7 +1440,52 @@ pub async fn configure_slack(
     }
 }
 
+// Get settings
+pub async fn get_settings(
+    State(state): State<AppState>
+) -> Json<Value> {
+    match state.ch_storage.get_settings().await {
+        Ok(settings) => Json(json!({
+            "status": "ok",
+            "settings": settings
+        })),
+        Err(_) => Json(json!({
+            "status": "ok",
+            "settings": {
+                "store_threshold":    10,
+                "alert_threshold":    75,
+                "critical_threshold": 90,
+                "soar_threshold":     75
+            }
+        }))
+    }
+}
 
+// Update settings
+pub async fn update_settings(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let settings = vec![
+        "store_threshold",
+        "alert_threshold", 
+        "critical_threshold",
+        "soar_threshold",
+    ];
+
+    for key in &settings {
+        if let Some(val) = payload[key].as_f64() {
+            let _ = state.ch_storage
+                .save_setting(key, &val.to_string())
+                .await;
+        }
+    }
+
+    Json(json!({
+        "status": "ok",
+        "message": "Settings saved!"
+    }))
+}
 
 pub async fn export_report(
     State(state): State<AppState>,
