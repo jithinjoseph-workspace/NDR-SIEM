@@ -15,12 +15,13 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
     healthcheck:
       test: [ "CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092" ]
       interval: 10s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 60s
 
   vector:
     image: timberio/vector:0.32.1-alpine
@@ -30,8 +31,8 @@ services:
       - ${HOME_DIR}/.vector/data:/etc/vector/data
       - ${HOME_DIR}/logs:/logs
     depends_on:
-      kafka:
-        condition: service_healthy
+      - kafka
+        
 
   ndr-engine-1:
     build: ./rust
@@ -49,6 +50,7 @@ services:
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
       - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
+      - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -57,8 +59,7 @@ services:
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
 
     depends_on:
-      kafka:
-        condition: service_healthy
+      - kafka
 
   # Nginx Load Balancer — single entry point on port 3000
   nginx:
@@ -117,7 +118,11 @@ services:
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx256m"
+      - "bootstrap.memory_lock=false"
+      - "discovery.type=single-node"
+    ports:
+      - "9200:9200"
     volumes:
       - shuffle-opensearch:/usr/share/opensearch/data
 

@@ -56,6 +56,40 @@ else
     echo "  ⚠️  Shuffle not running"
 fi
 
+# ── Refresh Shuffle API key ───────────────────
+log "Refreshing Shuffle API key..."
+SESSION=$(curl -s \
+    -X POST "http://localhost:5001/api/v1/login" \
+    -H "Content-Type: application/json" \
+    -d '{"username":"admin","password":"shufflepassword"}' \
+    2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for c in d.get('cookies',[]):
+    if c['key']=='session_token':
+        print(c['value'])
+" 2>/dev/null)
+
+if [ -n "$SESSION" ]; then
+    NEW_KEY=$(curl -s \
+        -b "session_token=$SESSION" \
+        "http://localhost:5001/api/v1/users/generateapikey" \
+        2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(d.get('apikey',''))
+" 2>/dev/null)
+
+    if [ -n "$NEW_KEY" ]; then
+        sed -i \
+            "s|SHUFFLE_API_KEY=.*|SHUFFLE_API_KEY=$NEW_KEY|" \
+            $INSTALL_DIR/.env
+        log "✅ Shuffle API key refreshed"
+        # Restart engine with new key
+        sudo docker compose up -d ndr-engine-1
+    fi
+fi
+
 # Wait for Kafka to be healthy
 echo "  → Waiting for Kafka..."
 sleep 10

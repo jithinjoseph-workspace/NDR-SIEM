@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use std::env;
+use reqwest::Url;
 
 
 fn agent_url() -> String {
@@ -224,7 +225,7 @@ if risk.score >= 75.0 {
             "community_id": hit.community_id,
         });
 
-        let url = shuffle_url.clone();
+        let url = shuffle_internal_url(&shuffle_url);
 let api_key = std::env::var("SHUFFLE_API_KEY")
     .unwrap_or_default();
 tokio::spawn(async move {
@@ -376,6 +377,28 @@ pub async fn stop_services() -> Json<Value> {
         Err(e) => Json(json!({"status": "error", "message": e.to_string()})),
     }
 }
+
+
+
+/// Convert external Shuffle URL to internal Docker URL
+fn shuffle_internal_url(external_url: &str) -> String {
+    let internal = std::env::var("SHUFFLE_INTERNAL_URL")
+        .unwrap_or_else(|_|
+            "http://shuffle-backend:5001".to_string());
+
+    // Extract path+query from external URL
+    // and replace host with internal
+    if let Ok(parsed) = reqwest::Url::parse(external_url) {
+        let path = parsed.path().to_string();
+        let query = parsed.query()
+            .map(|q| format!("?{}", q))
+            .unwrap_or_default();
+        return format!("{}{}{}", internal, path, query);
+    }
+    external_url.to_string()
+}
+
+
 
 //agent status 
 
@@ -711,7 +734,7 @@ pub async fn test_soar_webhook(
 ) -> Json<Value> {
     let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
         .unwrap_or_default();
-
+let call_url = shuffle_internal_url(&webhook_url);
     if webhook_url.is_empty() {
         return Json(json!({
             "status": "error",
@@ -720,7 +743,7 @@ pub async fn test_soar_webhook(
     }
 
     match reqwest::Client::new()
-        .post(&webhook_url)
+        .post(&call_url)
         .json(&json!({
             "alert_type": "test",
             "message":    "NDR test alert",
