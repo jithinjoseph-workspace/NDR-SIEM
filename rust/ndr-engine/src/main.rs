@@ -139,7 +139,7 @@ async fn main() {
 .route("/api/soar/executions",    get(api::get_soar_executions))
 .route("/api/soar/actions",       get(api::get_soar_actions))
 .route("/api/soar/action/slack",  post(api::configure_slack))
-
+.route("/api/settings", get(api::get_settings).post(api::update_settings))
         .with_state(state)
         .layer(cors);
 

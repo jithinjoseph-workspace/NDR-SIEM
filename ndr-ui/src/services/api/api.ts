@@ -124,5 +124,14 @@ export class Api {
     return this.http.post(`${this.baseUrl}/soar/test`, {});
   }
 
+
+  getSettings(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/settings`);
+}
+
+updateSettings(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings`, data);
+}
+
 }
 

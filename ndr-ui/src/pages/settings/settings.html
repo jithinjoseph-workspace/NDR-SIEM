@@ -1,0 +1,129 @@
+<div class="p-8 animate-in fade-in duration-500">
+    <div class="mb-8">
+        <h2 class="text-2xl font-display font-bold
+            text-white uppercase tracking-tight">
+            Settings
+        </h2>
+        <p class="text-on-surface-variant text-sm mt-1">
+            Configure detection thresholds and system settings
+        </p>
+    </div>
+
+    <div *ngIf="loading" 
+         class="text-on-surface-variant animate-pulse text-sm">
+        Loading settings...
+    </div>
+
+    <div *ngIf="!loading" class="max-w-2xl space-y-6">
+
+        <!-- Detection Thresholds -->
+        <div class="bg-surface-container-highest rounded-xl
+            border border-outline/10 overflow-hidden">
+            <div class="px-6 py-4 border-b border-outline/10">
+                <h3 class="text-white font-bold text-sm uppercase">
+                    🎯 Detection Thresholds
+                </h3>
+                <p class="text-on-surface-variant text-xs mt-1">
+                    Adjust score thresholds for storing and alerting
+                </p>
+            </div>
+            <div class="p-6 space-y-6">
+
+                <!-- Store Threshold -->
+                <div>
+                    <div class="flex justify-between mb-2">
+                        <label class="text-white text-sm font-bold">
+                            Store Threshold
+                        </label>
+                        <span class="text-primary font-mono font-bold">
+                            {{ thresholds.store_threshold }}
+                        </span>
+                    </div>
+                    <input type="range" min="0" max="50" step="1"
+                        [(ngModel)]="thresholds.store_threshold"
+                        class="w-full accent-primary"/>
+                    <p class="text-[10px] text-on-surface-variant mt-1">
+                        Minimum score to store in database
+                        (current: {{ thresholds.store_threshold }})
+                    </p>
+                </div>
+
+                <!-- Alert Threshold -->
+                <div>
+                    <div class="flex justify-between mb-2">
+                        <label class="text-white text-sm font-bold">
+                            Alert Threshold
+                        </label>
+                        <span class="text-yellow-400 font-mono font-bold">
+                            {{ thresholds.alert_threshold }}
+                        </span>
+                    </div>
+                    <input type="range" min="0" max="100" step="1"
+                        [(ngModel)]="thresholds.alert_threshold"
+                        class="w-full accent-yellow-400"/>
+                    <p class="text-[10px] text-on-surface-variant mt-1">
+                        Minimum score to show in alerts page
+                    </p>
+                </div>
+
+                <!-- Critical Threshold -->
+                <div>
+                    <div class="flex justify-between mb-2">
+                        <label class="text-white text-sm font-bold">
+                            Critical Threshold
+                        </label>
+                        <span class="text-red-400 font-mono font-bold">
+                            {{ thresholds.critical_threshold }}
+                        </span>
+                    </div>
+                    <input type="range" min="0" max="100" step="1"
+                        [(ngModel)]="thresholds.critical_threshold"
+                        class="w-full accent-red-400"/>
+                    <p class="text-[10px] text-on-surface-variant mt-1">
+                        Score for critical severity alerts
+                    </p>
+                </div>
+
+                <!-- SOAR Threshold -->
+                <div>
+                    <div class="flex justify-between mb-2">
+                        <label class="text-white text-sm font-bold">
+                            SOAR Threshold
+                        </label>
+                        <span class="text-primary font-mono font-bold">
+                            {{ thresholds.soar_threshold }}
+                        </span>
+                    </div>
+                    <input type="range" min="0" max="100" step="1"
+                        [(ngModel)]="thresholds.soar_threshold"
+                        class="w-full accent-primary"/>
+                    <p class="text-[10px] text-on-surface-variant mt-1">
+                        Minimum score to trigger SOAR automation
+                    </p>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Save button -->
+        <div class="flex items-center gap-4">
+            <button (click)="saveSettings()"
+                [disabled]="saving"
+                class="bg-primary text-black font-bold px-8 py-3
+                rounded-lg hover:bg-primary/90 disabled:opacity-50
+                transition-all text-sm">
+                {{ saving ? '⏳ Saving...' : '💾 Save Settings' }}
+            </button>
+
+            <span *ngIf="message"
+                class="text-primary text-sm font-bold">
+                {{ message }}
+            </span>
+            <span *ngIf="error"
+                class="text-red-400 text-sm font-bold">
+                {{ error }}
+            </span>
+        </div>
+
+    </div>
+</div>

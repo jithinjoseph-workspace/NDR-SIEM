@@ -2,6 +2,8 @@ use clickhouse::Client;
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 
+
+
 #[derive(Debug, Serialize, clickhouse::Row)]
 pub struct NdrEvent {
     pub timestamp:    u32,
@@ -216,10 +218,39 @@ pub async fn delete_rule_state(&self, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+//get settings
 
+pub async fn get_settings(&self) -> anyhow::Result<serde_json::Value> {
+    let query = "
+        SELECT key, value
+        FROM ndr.settings
+        FINAL
+        ORDER BY key
+    ";
+    let result = self.client
+        .query(query)
+        .fetch_all::<(String, String)>()
+        .await?;
+    let mut map = serde_json::Map::new();
+    for (key, val) in result {
+        if let Ok(n) = val.parse::<f64>() {
+            map.insert(key, serde_json::json!(n));
+        }
+    }
+    Ok(serde_json::Value::Object(map))
+}
 
-
-
+pub async fn save_setting(
+    &self, key: &str, value: &str
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.settings (key, value) \
+         VALUES ('{}', '{}')",
+        key, value
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
 
 
     //recent hits

@@ -48,3 +48,20 @@ CREATE TABLE IF NOT EXISTS ndr.rules_state (
     updated DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated)
 ORDER BY id;
+
+-- Settings table for configurable thresholds
+CREATE TABLE IF NOT EXISTS ndr.settings
+(
+    key        String,
+    value      String,
+    updated_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY key;
+
+-- Default thresholds
+INSERT INTO ndr.settings (key, value) VALUES
+    ('store_threshold',    '10'),
+    ('alert_threshold',    '75'),
+    ('critical_threshold', '90'),
+    ('soar_threshold',     '75');
