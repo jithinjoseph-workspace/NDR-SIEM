@@ -135,4 +135,4 @@ updateSettings(data: any): Observable<any> {
 
 }
 
-}
+
