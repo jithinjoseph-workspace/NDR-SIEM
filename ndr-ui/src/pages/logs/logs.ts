@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
 import { Subscription } from 'rxjs';
-import { LucideAngularModule, Search, Terminal, Download, Play } from 'lucide-angular';
+import { LucideAngularModule, Search, Terminal, RefreshCw } from 'lucide-angular';
 import { ActivatedRoute } from '@angular/router';
 
 @Component({
@@ -23,8 +23,7 @@ export class Logs implements OnInit, OnDestroy {
 
   TerminalIcon = Terminal;
   SearchIcon = Search;
-  DownloadIcon = Download;
-  PlayIcon = Play;
+  RefreshIcon = RefreshCw;
 
   private subs: Subscription[] = [];
 
