@@ -31,7 +31,8 @@ echo "  → Starting NDR Agent..."
 sudo systemctl start ndr-agent 2>/dev/null || \
     nohup python3 $INSTALL_DIR/scripts/ndr-agent.py > /tmp/ndr-agent.log 2>&1 &
 sleep 2
-
+# Fix Docker socket permissions
+sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 # Start Docker stack
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
@@ -86,6 +87,8 @@ print(d.get('apikey',''))
             $INSTALL_DIR/.env
         log "✅ Shuffle API key refreshed"
         # Restart engine with new key
+        sudo usermod -aG docker $USER
+        newgrp docker
         sudo docker compose up -d ndr-engine-1
     fi
 fi
@@ -93,6 +96,8 @@ fi
 # Wait for Kafka to be healthy
 echo "  → Waiting for Kafka..."
 sleep 10
+
+
 
 # Start Angular UI
 echo "  → Starting Angular UI..."
@@ -115,7 +120,7 @@ echo ""
 echo ""
 echo "📊 Status:"
 echo "  ClickHouse: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
-echo "  Docker: $(docker ps --format '{{.Names}}' | tr '\n' ' ')"
+echo "  Docker: $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ')"
 echo "  Agent:  $(curl -s http://localhost:3001/agent/status 2>/dev/null)"
 echo ""
 echo "✅ NDR Stack started"

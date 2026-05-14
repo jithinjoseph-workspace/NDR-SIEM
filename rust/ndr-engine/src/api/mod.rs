@@ -176,7 +176,7 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     }
 
     // Persist to ClickHouse
-    let ch = state.ch_storage.clone();
+ 
     // Persist to ClickHouse
     let ch = state.ch_storage.clone();
     let ch_hit = crate::storage::clickhouse::NdrHit {
@@ -710,29 +710,77 @@ pub async fn reload_rules_api(
 
 //soar status
 pub async fn get_soar_status(
-    State(_state): State<AppState>) -> Json<Value> {
-    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
-        .unwrap_or_default();
-    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
-    .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
+    State(state): State<AppState>
+) -> Json<Value> {
+    // Get from ClickHouse first
+    let config = state.ch_storage
+        .get_soar_config().await
+        .unwrap_or(json!({}));
+    
+    // Fall back to env vars
+    let webhook_url = config["webhook_url"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| 
+            std::env::var("SHUFFLE_WEBHOOK_URL")
+                .unwrap_or_default());
 
-    let shuffle_url = std::env::var("SHUFFLE_URL")
-    .unwrap_or_else(|_| "http://localhost:5001".to_string());
-    // Check if Shuffle is reachable
-    let connected = reqwest::Client::new()
-    .get(&format!("{}/api/v1/health", internal_url))
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false);
+    let shuffle_url = config["shuffle_url"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(||
+            std::env::var("SHUFFLE_URL")
+                .unwrap_or_default());
+
+    let connected = !webhook_url.is_empty();
+
+    // Get playbooks from ClickHouse
+    let playbooks = state.ch_storage
+        .get_soar_playbooks().await
+        .unwrap_or_default();
 
     Json(json!({
-        "connected":      connected,
-        "webhook_url":    webhook_url,
-        "shuffle_url":    shuffle_url,
-        "recent_actions": []
+        "connected":    connected,
+        "webhook_url":  webhook_url,
+        "shuffle_url":  shuffle_url,
+        "playbooks":    playbooks,
+        "active_count": playbooks.iter()
+            .filter(|p| p["enabled"] == true)
+            .count()
     }))
+}
+
+
+
+
+
+
+pub async fn toggle_playbook(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let id = payload["id"]
+        .as_str().unwrap_or("").to_string();
+    let enabled = payload["enabled"]
+        .as_bool().unwrap_or(false);
+
+    match state.ch_storage
+        .update_playbook_enabled(&id, enabled).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": format!(
+                "Playbook {} {}",
+                id,
+                if enabled { "enabled" } else { "disabled" }
+            )
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
 }
 
 pub async fn test_soar_webhook(
@@ -777,7 +825,7 @@ let call_url = shuffle_internal_url(&webhook_url);
 
 
 pub async fn setup_soar(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<SoarSetupPayload>,
 ) -> Json<Value> {
     let client = reqwest::Client::builder()
@@ -964,6 +1012,15 @@ let webhook_url = format!(
             );
         }
     }
+    // Save SOAR config to ClickHouse
+let _ = state.ch_storage.save_soar_config(
+    "webhook_url", &webhook_url).await;
+let _ = state.ch_storage.save_soar_config(
+    "workflow_id", &workflow_id).await;
+let _ = state.ch_storage.save_soar_config(
+    "api_key", &real_api_key).await;
+let _ = state.ch_storage.save_soar_config(
+    "shuffle_url", &payload.shuffle_url).await;
 
     std::fs::write(&env_path, &env_content).ok();
 
@@ -1705,7 +1762,98 @@ tr:nth-child(even){{background:#f9f9f9}}
     }
 }
 
+//configure email action
+pub async fn configure_email(
+    State(_state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let email = payload["email"]
+        .as_str().unwrap_or("").to_string();
 
+    if email.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "email is required"
+        }));
+    }
+
+    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
+        .unwrap_or_else(|_|
+            "http://shuffle-backend:5001".to_string());
+    let api_key = std::env::var("SHUFFLE_API_KEY")
+        .unwrap_or_default();
+    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
+        .unwrap_or_default();
+
+    let workflow_id = webhook_url
+        .split("/workflows/")
+        .nth(1)
+        .and_then(|s| s.split("/run").next())
+        .unwrap_or("").to_string();
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build().unwrap();
+
+    // Get current workflow
+    let wf_resp = client
+        .get(&format!(
+            "{}/api/v1/workflows/{}",
+            internal_url, workflow_id
+        ))
+        .header("Authorization",
+            format!("Bearer {}", api_key))
+        .send().await;
+
+    let mut workflow: Value = match wf_resp {
+        Ok(r) => r.json().await.unwrap_or(json!({})),
+        Err(e) => return Json(json!({
+            "status": "error",
+            "message": format!("Cannot fetch workflow: {}", e)
+        }))
+    };
+
+    // Add email action
+    let email_action = json!({
+        "app_name":    "Email",
+        "app_version": "1.0.0",
+        "name":        "send_email_alert",
+        "label":       "Send Email Alert",
+        "parameters": [
+            { "name": "to",      "value": email },
+            { "name": "subject", "value": "🚨 NDR Alert: $exec.severity" },
+            { "name": "body",    "value": "Threat detected!\nSource: $exec.src_ip\nDestination: $exec.dst_ip\nScore: $exec.score\nSeverity: $exec.severity" }
+        ]
+    });
+
+    let actions = workflow["actions"]
+        .as_array_mut()
+        .map(|a| { a.push(email_action.clone()); a.clone() })
+        .unwrap_or_else(|| vec![email_action.clone()]);
+
+    workflow["actions"] = json!(actions);
+
+    match client
+        .put(&format!(
+            "{}/api/v1/workflows/{}",
+            internal_url, workflow_id
+        ))
+        .header("Authorization",
+            format!("Bearer {}", api_key))
+        .json(&workflow)
+        .send().await
+    {
+        Ok(_) => Json(json!({
+            "status":  "ok",
+            "message": "Email configured!"
+        })),
+        Err(e) => Json(json!({
+            "status":  "error",
+            "message": e.to_string()
+        }))
+    }
+}
 
 
 //severity

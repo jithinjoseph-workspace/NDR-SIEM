@@ -48,40 +48,14 @@ export class Soar implements OnInit {
     manualShuffleUrl = '';
     showSettings   = false;
 
-    playbooks = [
-        {
-            id: 1,
-            name: 'High Severity Alert → Slack',
-            description: 'Send Slack message when score > 75',
-            trigger: 'Score > 75',
-            enabled: true,
-            runs: 0,
-        },
-        {
-            id: 2,
-            name: 'Malicious IP → Block + Email',
-            description: 'Auto-block and send email alert',
-            trigger: 'Threat Intel match',
-            enabled: true,
-            runs: 0,
-        },
-        {
-            id: 3,
-            name: 'Critical Alert → PagerDuty',
-            description: 'Page on-call when score > 90',
-            trigger: 'Score > 90',
-            enabled: false,
-            runs: 0,
-        },
-        {
-            id: 4,
-            name: 'Alert → Jira Ticket',
-            description: 'Create Jira incident ticket',
-            trigger: 'Any alert',
-            enabled: false,
-            runs: 0,
-        },
-    ];
+
+    showSlackInput = false;
+    showEmailInput = false;
+    slackWebhook   = '';
+    emailAddress   = '';
+
+
+    playbooks: any[] = [];
 
     recentActions: any[] = [];
 
@@ -106,10 +80,11 @@ export class Soar implements OnInit {
 
                 // Decide which view to show
                 if (this.webhookUrl) {
-                    this.view = 'connected';
-                } else {
-                    this.view = 'setup';
-                }
+    this.view = 'connected';
+    this.loadExecutions();
+} else {
+    this.view = 'setup';
+}
                 this.cdr.detectChanges();
             },
             error: () => {
@@ -184,10 +159,12 @@ export class Soar implements OnInit {
     }
 
     togglePlaybook(pb: any) {
-        pb.enabled = !pb.enabled;
-        this.cdr.detectChanges();
-    }
-
+    pb.enabled = !pb.enabled;
+    this.api.togglePlaybook({
+        id:      pb.id,
+        enabled: pb.enabled
+    }).subscribe();
+}
     openShuffle() {
         const url = this.shuffleUiUrl ||
             this.shuffleUrl.replace(':5001', ':3002');
@@ -200,4 +177,83 @@ export class Soar implements OnInit {
         this.manualShuffleUrl = this.shuffleUiUrl;
         this.cdr.detectChanges();
     }
+
+
+
+    loadExecutions() {
+    this.api.getSoarExecutions().subscribe({
+        next: (data: any) => {
+            const execs = data.executions || [];
+            if (Array.isArray(execs)) {
+                this.recentActions = execs
+                    .slice(0, 10)
+                    .map((e: any) => {
+                        try {
+                            const arg = JSON.parse(
+                                e.execution_argument || '{}'
+                            );
+                            return {
+                                name: `${arg.severity || 'ALERT'}: ${arg.src_ip} → ${arg.dst_ip}`,
+                                time: new Date(
+                                    (e.started_at || 0) * 1000
+                                ).toLocaleString(),
+                                status: e.status,
+                                score: arg.score
+                            };
+                        } catch {
+                            return null;
+                        }
+                    })
+                    .filter((e: any) => e !== null);
+                this.cdr.detectChanges();
+            }
+        }
+    });
+}
+
+saveSlack() {
+    this.api.configureSoarSlack({
+        webhook_url: this.slackWebhook
+    }).subscribe({
+        next: (data: any) => {
+            if (data.status === 'ok') {
+                this.showSlackInput = false;
+                alert('✅ Slack configured!');
+            }
+        }
+    });
+}
+
+saveEmail() {
+    this.api.configureSoarEmail({
+        email: this.emailAddress
+    }).subscribe({
+        next: (data: any) => {
+            if (data.status === 'ok') {
+                this.showEmailInput = false;
+                alert('✅ Email configured!');
+            }
+        }
+    });
+}
+
+
+loadSoarStatus() {
+    this.api.getSoarStatus().subscribe({
+        next: (data: any) => {
+            this.soarConnected = data.connected;
+            this.webhookUrl    = data.webhook_url;
+            this.playbooks     = data.playbooks || [];
+            
+            if (this.webhookUrl) {
+                this.view = 'connected';
+                this.loadExecutions();
+            } else {
+                this.view = 'setup';
+            }
+            this.cdr.detectChanges();
+        }
+    });
+}
+
 }

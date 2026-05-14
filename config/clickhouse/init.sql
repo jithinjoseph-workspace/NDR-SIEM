@@ -65,3 +65,51 @@ INSERT INTO ndr.settings (key, value) VALUES
     ('alert_threshold',    '75'),
     ('critical_threshold', '90'),
     ('soar_threshold',     '75');
+
+-- SOAR configuration table
+CREATE TABLE IF NOT EXISTS ndr.soar_config
+(
+    key        String,
+    value      String,
+    updated_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY key;
+
+-- SOAR playbooks table
+CREATE TABLE IF NOT EXISTS ndr.soar_playbooks
+(
+    id          String,
+    name        String,
+    description String,
+    trigger     String,
+    action_type String,
+    config      String,
+    enabled     UInt8 DEFAULT 1,
+    runs        UInt64 DEFAULT 0,
+    created_at  DateTime DEFAULT now(),
+    updated_at  DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY id;
+
+-- Insert default playbooks
+INSERT INTO ndr.soar_playbooks 
+    (id, name, description, trigger, action_type, enabled)
+VALUES
+    ('pb-slack',    
+     'High Severity Alert → Slack',
+     'Send Slack message when score > 75',
+     'score > 75', 'slack', 1),
+    ('pb-email',    
+     'Malicious IP → Block + Email',
+     'Auto-block and send email alert',
+     'threat_intel', 'email', 1),
+    ('pb-pagerduty',
+     'Critical Alert → PagerDuty',
+     'Page on-call when score > 90',
+     'score > 90', 'pagerduty', 0),
+    ('pb-jira',     
+     'Alert → Jira Ticket',
+     'Create Jira incident ticket',
+     'any', 'jira', 0);

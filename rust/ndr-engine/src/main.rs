@@ -65,8 +65,11 @@ async fn main() {
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
         detection:  Arc::new(tokio::sync::RwLock::new(detection::DetectionEngine::new("rules"))),
-        ch_storage:  Arc::new(storage::ClickhouseStorage::new()),
-        storage:    Arc::new(storage),
+ch_storage: {
+    let ch = Arc::new(storage::ClickhouseStorage::new());
+    ch.init_tables().await;
+    ch
+},        storage:    Arc::new(storage),
         tx:         tx.clone(),
     };
 
@@ -104,6 +107,39 @@ async fn main() {
     }
 
 
+// Auto-restore SOAR config from ClickHouse
+let ch = state.ch_storage.clone();
+tokio::spawn(async move {
+    tokio::time::sleep(
+        std::time::Duration::from_secs(5)
+    ).await;
+    
+    if let Ok(config) = ch.get_soar_config().await {
+        if let Some(url) = config["webhook_url"]
+            .as_str() {
+            if !url.is_empty() {
+                std::env::set_var(
+                    "SHUFFLE_WEBHOOK_URL", url);
+                tracing::info!(
+                    "✅ SOAR webhook restored: {}", 
+                    &url[..30.min(url.len())]
+                );
+            }
+        }
+        if let Some(key) = config["api_key"]
+            .as_str() {
+            if !key.is_empty() {
+                std::env::set_var(
+                    "SHUFFLE_API_KEY", key);
+                tracing::info!(
+                    "✅ SOAR API key restored");
+            }
+        }
+    }
+});
+
+
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -124,22 +160,24 @@ async fn main() {
         .route("/api/hits",          get(api::get_hits))
         .route("/api/network-map", get(api::get_network_map))
         .route("/api/scale-status", get(api::get_scale_status))
-       .route("/api/rules",          get(api::get_rules).post(api::create_rule))
-       .route("/api/rules/reload",   post(api::reload_rules_api))     // ← MUST be before /:id
-       .route("/api/rules/:id",      get(api::get_rule_by_id).delete(api::delete_rule))
-       .route("/api/threat-intel",     get(api::get_threat_intel))
-       .route("/api/threat-intel/:ip", get(api::lookup_ioc))
-       .route("/api/rules/:id/toggle", post(api::toggle_rule))
+        .route("/api/rules",          get(api::get_rules).post(api::create_rule))
+        .route("/api/rules/reload",   post(api::reload_rules_api))     // ← MUST be before /:id
+        .route("/api/rules/:id",      get(api::get_rule_by_id).delete(api::delete_rule))
+        .route("/api/threat-intel",     get(api::get_threat_intel))
+        .route("/api/threat-intel/:ip", get(api::lookup_ioc))
+        .route("/api/rules/:id/toggle", post(api::toggle_rule))
         .route("/api/export", get(api::export_report))
         .route("/api/threat-intel/add", post(api::add_manual_ioc))
-.route("/api/soar/status",  get(api::get_soar_status))
-.route("/api/soar/setup",   post(api::setup_soar))
-.route("/api/soar/config",  post(api::update_soar_config))
-.route("/api/soar/test",    post(api::test_soar_webhook))
-.route("/api/soar/executions",    get(api::get_soar_executions))
-.route("/api/soar/actions",       get(api::get_soar_actions))
-.route("/api/soar/action/slack",  post(api::configure_slack))
-.route("/api/settings", get(api::get_settings).post(api::update_settings))
+        .route("/api/soar/status",  get(api::get_soar_status))
+        .route("/api/soar/setup",   post(api::setup_soar))
+        .route("/api/soar/config",  post(api::update_soar_config))
+        .route("/api/soar/test",    post(api::test_soar_webhook))
+        .route("/api/soar/executions",    get(api::get_soar_executions))
+        .route("/api/soar/actions",       get(api::get_soar_actions))
+        .route("/api/soar/action/slack",  post(api::configure_slack))
+        .route("/api/settings", get(api::get_settings).post(api::update_settings))
+        .route("/api/soar/action/email", post(api::configure_email))       
+        .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
         .with_state(state)
         .layer(cors);
 

@@ -33,12 +33,12 @@ class AgentHandler(BaseHTTPRequestHandler):
             
             # Check Docker containers
             vector = subprocess.run(
-                "sudo docker ps --filter name=vector --filter status=running --format '{{.Names}}' 2>/dev/null",
+                "docker ps --filter name=vector --filter status=running --format '{{.Names}}' 2>/dev/null",
                 shell=True, capture_output=True, text=True
             ).stdout.strip() != ""
     
             kafka = subprocess.run(
-                "sudo docker ps --filter name=kafka --filter status=running --format '{{.Names}}' 2>/dev/null",
+                "docker ps --filter name=kafka --filter status=running --format '{{.Names}}' 2>/dev/null",
                 shell=True, capture_output=True, text=True
             ).stdout.strip() != ""
 

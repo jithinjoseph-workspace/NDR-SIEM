@@ -553,6 +553,7 @@ log "Starting Docker service..."
 sudo systemctl enable docker
 sudo systemctl start docker || true
 sudo usermod -aG docker $USERNAME
+sudo chmod 666 /var/run/docker.sock
 
 log "Waiting for Docker to initialize..."
 for i in {1..20}; do

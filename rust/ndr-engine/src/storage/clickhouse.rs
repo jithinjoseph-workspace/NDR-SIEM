@@ -99,6 +99,48 @@ impl ClickhouseStorage {
         }
     }
 
+    pub async fn init_tables(&self) {
+    let install_dir = std::env::var("INSTALL_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    
+    // Try Docker path first, then local path
+    let paths = vec![
+        "/app/config/clickhouse/init.sql".to_string(),
+        format!("{}/config/clickhouse/init.sql", install_dir),
+        "./config/clickhouse/init.sql".to_string(),
+    ];
+    
+    for sql_path in &paths {
+        if let Ok(sql) = std::fs::read_to_string(sql_path) {
+           for stmt in sql.split(';') {
+    let stmt = stmt.trim()
+        .lines()
+        .filter(|l| !l.trim().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    if !stmt.is_empty() {
+        if let Err(e) = self.client
+            .query(&stmt)
+            .execute()
+            .await {
+            tracing::debug!(
+                "SQL init stmt skipped: {}", e
+            );
+        }
+    }
+}
+            tracing::info!(
+                "✅ ClickHouse tables initialized from {}", 
+                sql_path
+            );
+            return;
+        }
+    }
+    tracing::warn!("init.sql not found!");
+}
+
 
 //threat intel hits
     pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -217,6 +259,96 @@ pub async fn delete_rule_state(&self, id: &str) -> anyhow::Result<()> {
         .await?;
     Ok(())
 }
+
+
+//save soar config
+pub async fn save_soar_config(
+    &self, key: &str, value: &str
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.soar_config (key, value) \
+         VALUES ('{}', '{}')",
+        key, value
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+
+//get soar config
+pub async fn get_soar_config(
+    &self
+) -> anyhow::Result<serde_json::Value> {
+    let query = "
+        SELECT key, value
+        FROM ndr.soar_config
+        FINAL
+        ORDER BY key
+    ";
+    let result = self.client
+        .query(query)
+        .fetch_all::<(String, String)>()
+        .await?;
+    let mut map = serde_json::Map::new();
+    for (key, val) in result {
+        map.insert(key, serde_json::json!(val));
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
+
+//soar playbooks
+pub async fn get_soar_playbooks(
+    &self
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let query = "
+        SELECT id, name, description,
+               trigger, action_type,
+               config, enabled, runs
+        FROM ndr.soar_playbooks
+        FINAL
+        ORDER BY created_at
+    ";
+    let result = self.client
+        .query(query)
+        .fetch_all::<(
+            String, String, String,
+            String, String, String,
+            u8, u64
+        )>()
+        .await?;
+    Ok(result.iter().map(|r| serde_json::json!({
+        "id":          r.0,
+        "name":        r.1,
+        "description": r.2,
+        "trigger":     r.3,
+        "action_type": r.4,
+        "config":      r.5,
+        "enabled":     r.6 == 1,
+        "runs":        r.7
+    })).collect())
+}
+
+//enable/disable playbook
+pub async fn update_playbook_enabled(
+    &self, id: &str, enabled: bool
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.soar_playbooks \
+         (id, name, description, trigger, \
+          action_type, enabled) \
+         SELECT id, name, description, trigger, \
+                action_type, {}
+         FROM ndr.soar_playbooks
+         WHERE id = '{}'",
+        if enabled { 1 } else { 0 }, id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+
+
 
 //get settings
 
