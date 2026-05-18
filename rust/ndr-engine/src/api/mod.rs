@@ -18,7 +18,12 @@ use tracing::{info, warn};
 use std::env;
 use std::time::Duration;
 use base64::Engine;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
+// Jira dedup cache: key = "src_dst", value = timestamp
+static JIRA_DEDUP: std::sync::LazyLock<Mutex<HashMap<String, i64>>> = 
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
@@ -502,6 +507,22 @@ for integration in &integrations {
         config["token"].as_str(),
         config["project_key"].as_str()
     ) {
+        // Dedup: only one ticket per IP pair per hour
+        let dedup_key = format!("{}_{}", src, dst);
+        let now = chrono::Utc::now().timestamp();
+        let should_create = {
+            let mut cache = JIRA_DEDUP.lock().unwrap();
+            let last = cache.get(&dedup_key).copied().unwrap_or(0);
+            if now - last > 3600 {
+                cache.insert(dedup_key.clone(), now);
+                true
+            } else {
+                false
+            }
+        };
+        if !should_create {
+            info!("⏭️ Jira dedup: skipping {} → {}", src, dst);
+        } else {
         let issue_url = format!(
             "{}/rest/api/3/issue", url
         );
@@ -569,6 +590,7 @@ for integration in &integrations {
                 Err(e) => warn!("Jira failed: {}", e),
             }
         });
+        } // end should_create
     }
 }
         _ => {}
