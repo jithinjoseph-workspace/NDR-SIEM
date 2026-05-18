@@ -6,14 +6,29 @@ HOST_IP=$(ip -o -4 addr show 2>/dev/null | \
 SHUFFLE_URL="http://${HOST_IP}:5001"
 # Load API key from .env
 
-log "Using API key: ${SHUFFLE_API_KEY:0:8}..."
-
 log()  { echo -e "\033[0;32m[NDR]\033[0m $1"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+
 SHUFFLE_API_KEY=$(grep "SHUFFLE_API_KEY" \
     $INSTALL_DIR/.env 2>/dev/null | \
     cut -d= -f2 | tr -d '[:space:]')
+log "Using API key: ${SHUFFLE_API_KEY:0:8}..."
+
 log "Setting up Shuffle SOAR webhook..."
+
+
+# ── Skip if already configured ────────────────
+EXISTING_WEBHOOK=$(grep "SHUFFLE_WEBHOOK_URL" \
+    $INSTALL_DIR/.env 2>/dev/null | \
+    cut -d= -f2 | tr -d '[:space:]')
+
+if [ -n "$EXISTING_WEBHOOK" ] && \
+   [[ "$EXISTING_WEBHOOK" == http* ]]; then
+    log "✅ Webhook already configured — skipping workflow creation"
+    log "   URL: ${EXISTING_WEBHOOK:0:40}..."
+    rm -f /tmp/shuffle-cookies.txt
+    exit 0
+fi
 
 # Wait for Shuffle
 for i in {1..30}; do

@@ -1,25 +1,33 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, OnDestroy, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
 import { Subscription } from 'rxjs';
-import { LucideAngularModule, ShieldAlert, ExternalLink, Filter, MoreHorizontal } from 'lucide-angular';
+import {
+  LucideAngularModule,
+  AlertTriangle,
+  ExternalLink,
+  MoreHorizontal,
+  RefreshCw,
+  ShieldAlert,
+} from 'lucide-angular';
 
 @Component({
   selector: 'app-alerts',
   standalone: true,
   imports: [CommonModule, LucideAngularModule],
   templateUrl: './alerts.html',
-  styleUrl: './alerts.css'
+  styleUrl: './alerts.css',
 })
 export class Alerts implements OnInit, OnDestroy {
   alerts: any[] = [];
   loading: boolean = true;
 
   ShieldAlertIcon = ShieldAlert;
+  AlertTriangleIcon = AlertTriangle;
   ExternalLinkIcon = ExternalLink;
-  FilterIcon = Filter;
   MoreIcon = MoreHorizontal;
+  RefreshIcon = RefreshCw;
 
   private subs: Subscription[] = [];
 
@@ -32,15 +40,15 @@ export class Alerts implements OnInit, OnDestroy {
   ngOnInit() {
     this.loadAlerts();
 
-    // Real-time — add new hit to top of list via WebSocket
+    // Real-time - add new hit to top of list via WebSocket
     this.subs.push(
       this.ws.hits$.subscribe(hit => {
         this.alerts.unshift({
-          severity:    hit.severity?.toUpperCase() || 'LOW',
-          source:      `${hit.src || hit.suricata?.src || '-'} → ${hit.dst || hit.suricata?.dst || '-'}`,
+          severity: hit.severity?.toUpperCase() || 'LOW',
+          source: `${hit.src || hit.suricata?.src || '-'} -> ${hit.dst || hit.suricata?.dst || '-'}`,
           description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
-          time:        new Date().toLocaleTimeString(),
-          score:       hit.score,
+          time: new Date().toLocaleTimeString(),
+          score: hit.score,
           community_id: hit.cid,
         });
         // Keep max 100 alerts
@@ -55,14 +63,14 @@ export class Alerts implements OnInit, OnDestroy {
     this.api.getAlerts().subscribe({
       next: (data: any[]) => {
         this.alerts = data.map(hit => ({
-          severity:     hit.severity?.toUpperCase() || 'LOW',
-          source:       `${hit.src_ip || '-'} → ${hit.dst_ip || '-'}`,
-          description:  hit.sigma_hits?.join(', ') || 'Correlation hit',
-          time:         new Date(hit.timestamp * 1000).toLocaleString(),
-          score:        hit.score,
+          severity: hit.severity?.toUpperCase() || 'LOW',
+          source: `${hit.src_ip || '-'} -> ${hit.dst_ip || '-'}`,
+          description: hit.sigma_hits?.join(', ') || 'Correlation hit',
+          time: new Date(hit.timestamp * 1000).toLocaleString(),
+          score: hit.score,
           threat_intel: hit.threat_intel,
-          src_country:  hit.src_country,
-          dst_country:  hit.dst_country,
+          src_country: hit.src_country,
+          dst_country: hit.dst_country,
         }));
         this.loading = false;
         this.cdr.detectChanges();
@@ -70,16 +78,42 @@ export class Alerts implements OnInit, OnDestroy {
       error: () => {
         this.loading = false;
         this.cdr.detectChanges();
-      }
+      },
     });
+  }
+
+  get totalAlerts() {
+    return this.alerts.length;
+  }
+
+  get priorityAlerts() {
+    return this.alerts.filter(alert => ['CRITICAL', 'HIGH'].includes(alert.severity?.toUpperCase())).length;
+  }
+
+  get mediumAlerts() {
+    return this.alerts.filter(alert => alert.severity?.toUpperCase() === 'MEDIUM').length;
+  }
+
+  get intelAlerts() {
+    return this.alerts.filter(alert => alert.threat_intel).length;
+  }
+
+  getScoreClass(score: number) {
+    if (score > 70) return 'score-high';
+    if (score > 40) return 'score-medium';
+    return 'score-low';
   }
 
   getSeverityClass(severity: string) {
     switch (severity?.toUpperCase()) {
-      case 'CRITICAL': return 'bg-red-500/10 text-red-400 border-red-500/20';
-      case 'HIGH':     return 'bg-orange-500/10 text-orange-400 border-orange-500/20';
-      case 'MEDIUM':   return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
-      default:         return 'bg-primary/10 text-primary border-primary/20';
+      case 'CRITICAL':
+        return 'bg-red-500/10 text-red-400 border-red-500/20';
+      case 'HIGH':
+        return 'bg-orange-500/10 text-orange-400 border-orange-500/20';
+      case 'MEDIUM':
+        return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
+      default:
+        return 'bg-primary/10 text-primary border-primary/20';
     }
   }
 

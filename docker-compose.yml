@@ -57,7 +57,7 @@ services:
       - ${HOME_DIR}/logs:/logs
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
-
+      - ${INSTALL_DIR}/config:/app/config
     depends_on:
       - kafka
 

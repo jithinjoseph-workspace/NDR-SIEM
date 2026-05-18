@@ -133,6 +133,24 @@ updateSettings(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/settings`, data);
 }
 
+getSoarExecutions(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/soar/executions`);
+}
+
+configureSoarSlack(data: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/action/slack`, data);
+}
+
+configureSoarEmail(data: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/action/email`, data);
+}
+
+togglePlaybook(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/playbook/toggle`, data);
+}
+
 }
 
 
