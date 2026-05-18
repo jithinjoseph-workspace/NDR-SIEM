@@ -498,16 +498,16 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     //severity breakdown
     pub async fn get_severity_breakdown(&self) -> anyhow::Result<serde_json::Value> {
         let critical: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE severity = 'critical'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'critical'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let high: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE severity = 'high'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'high'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let medium: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE severity = 'medium'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'medium'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let low: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE severity = 'low'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'low'")
             .fetch_one::<u64>().await.unwrap_or(0);
 
         Ok(serde_json::json!({
