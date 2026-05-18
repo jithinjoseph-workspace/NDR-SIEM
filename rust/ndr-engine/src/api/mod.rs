@@ -16,7 +16,8 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use std::env;
-
+use std::time::Duration;
+use base64::Engine;
 
 
 fn agent_url() -> String {
@@ -209,6 +210,371 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
             .filter(|t| seen.insert(t.clone()))
             .collect()
     };
+
+
+// ── Execute playbooks directly ────────────────
+if risk.score >= alert_threshold {
+let playbooks = state.ch_storage
+    .get_soar_playbooks().await
+    .unwrap_or_default();
+
+for pb in &playbooks {
+    if pb["enabled"] != true { continue; }
+
+    let trigger = pb["trigger"]
+        .as_str().unwrap_or("");
+
+    // Check if trigger matches
+    let triggered = match trigger {
+        t if t.starts_with("score >") => {
+            let threshold = t
+                .replace("score >", "")
+                .trim()
+                .parse::<f32>()
+                .unwrap_or(75.0);
+            risk.score >= threshold
+        }
+        "threat_intel" => enrichment.is_malicious,
+        "any"          => true,
+        _              => false
+    };
+
+    if !triggered { continue; }
+
+    let action_type = pb["action_type"]
+        .as_str().unwrap_or("").to_string();
+    let config: serde_json::Value =
+        serde_json::from_str(
+            pb["config"].as_str().unwrap_or("{}")
+        ).unwrap_or(json!({}));
+    let pb_name = pb["name"]
+        .as_str().unwrap_or("").to_string();
+
+    match action_type.as_str() {
+        "slack" => {
+            if let Some(url) = config["webhook_url"]
+                .as_str() {
+                let msg = json!({
+                    "text": format!(
+                        "🚨 *NDR Alert* | *{}*\n\
+                        Source: `{}` → Dest: `{}`\n\
+                        Score: *{}/100* | Threat Intel: {}\n\
+                        Tags: {}",
+                        risk.severity.as_str(),
+                        src, dst,
+                        risk.score as u32,
+                        if enrichment.is_malicious 
+                            { "⚠️ YES" } else { "No" },
+                        risk.tags.join(", ")
+                    )
+                });
+                let url = url.to_string();
+                tokio::spawn(async move {
+                    let _ = reqwest::Client::new()
+                        .post(&url)
+                        .json(&msg)
+                        .timeout(
+                            std::time::Duration
+                                ::from_secs(5)
+                        )
+                        .send().await;
+                });
+                info!("✅ Slack playbook fired: {}", 
+                    pb_name);
+            }
+        }
+        "webhook" => {
+            let url_val = config["url"]
+                .as_str()
+                .or(config["webhook_url"].as_str())
+                .unwrap_or("").to_string();
+            if !url_val.is_empty() {
+                let url = url_val;
+                let payload = json!({
+                    "alert_type":   "ndr_threat",
+                    "src_ip":       src,
+                    "dst_ip":       dst,
+                    "score":        risk.score,
+                    "severity":     risk.severity.as_str(),
+                    "threat_intel": enrichment.is_malicious,
+                    "tags":         risk.tags,
+                    "timestamp":    chrono::Utc::now()
+                        .to_rfc3339()
+                });
+                let url = url.to_string();
+                tokio::spawn(async move {
+                    let _ = reqwest::Client::new()
+                        .post(&url)
+                        .json(&payload)
+                        .timeout(
+                            std::time::Duration
+                                ::from_secs(5)
+                        )
+                        .send().await;
+                });
+                info!("✅ Webhook playbook fired: {}",
+                    pb_name);
+            }
+        }
+        _ => {}
+    }
+}
+} // end playbooks threshold check
+
+
+// Execute integrations - only above alert threshold
+if risk.score >= alert_threshold {
+let integrations = state.ch_storage
+    .get_integrations().await
+    .unwrap_or_default();
+
+for integration in &integrations {
+    if integration["enabled"] != true { continue; }
+    
+    let int_type = integration["type"]
+        .as_str().unwrap_or("").to_string();
+    let config = &integration["config"];
+    let int_name = integration["name"]
+        .as_str().unwrap_or("").to_string();
+
+    match int_type.as_str() {
+        "slack" | "discord" => {
+            if let Some(url) = config["webhook_url"]
+                .as_str() {
+                let msg = json!({
+                    "text": format!(
+                        "🚨 *{}* | Score: {}/100\n\
+                        {} → {}\nTags: {}",
+                        risk.severity.as_str(),
+                        risk.score as u32,
+                        src, dst,
+                        risk.tags.join(", ")
+                    )
+                });
+                let url = url.to_string();
+                tokio::spawn(async move {
+                    let _ = reqwest::Client::new()
+                        .post(&url)
+                        .json(&msg)
+                        .timeout(Duration::from_secs(5))
+                        .send().await;
+                });
+                info!("✅ {} fired", int_name);
+            }
+        }
+        "teams" => {
+            if let Some(url) = config["webhook_url"]
+                .as_str() {
+                let msg = json!({
+                    "@type": "MessageCard",
+                    "@context": "http://schema.org/extensions",
+                    "summary": "NDR Alert",
+                    "themeColor": "FF0000",
+                    "title": format!(
+                        "🚨 NDR Alert: {}",
+                        risk.severity.as_str()
+                    ),
+                    "sections": [{
+                        "facts": [
+                            {"name": "Source", "value": src},
+                            {"name": "Destination", "value": dst},
+                            {"name": "Score", "value": format!("{}/100", risk.score as u32)},
+                            {"name": "Severity", "value": risk.severity.as_str()},
+                            {"name": "Tags", "value": risk.tags.join(", ")}
+                        ]
+                    }]
+                });
+                let url = url.to_string();
+                tokio::spawn(async move {
+                    let _ = reqwest::Client::new()
+                        .post(&url)
+                        .json(&msg)
+                        .timeout(Duration::from_secs(5))
+                        .send().await;
+                });
+                info!("✅ Teams alert sent");
+            }
+        }
+        "telegram" => {
+            if let (Some(token), Some(chat_id)) = (
+                config["bot_token"].as_str(),
+                config["chat_id"].as_str()
+            ) {
+                let url = format!(
+                    "https://api.telegram.org/bot{}/sendMessage",
+                    token
+                );
+                let msg = json!({
+                    "chat_id": chat_id,
+                    "text": format!(
+                        "🚨 NDR Alert\nSeverity: {}\nSource: {}\nDest: {}\nScore: {}/100\nTags: {}",
+                        risk.severity.as_str(),
+                        src, dst,
+                        risk.score as u32,
+                        risk.tags.join(", ")
+                    ),
+                    "parse_mode": "HTML"
+                });
+                tokio::spawn(async move {
+                    let _ = reqwest::Client::new()
+                        .post(&url)
+                        .json(&msg)
+                        .timeout(Duration::from_secs(5))
+                        .send().await;
+                });
+                info!("✅ Telegram alert sent");
+            }
+        }
+        "pagerduty" => {
+            if let Some(key) = config["routing_key"]
+                .as_str() {
+                let payload = json!({
+                    "routing_key": key,
+                    "event_action": "trigger",
+                    "payload": {
+                        "summary": format!(
+                            "NDR Alert: {} - {} → {}",
+                            risk.severity.as_str(),
+                            src, dst
+                        ),
+                        "severity": match risk.severity.as_str() {
+                            "CRITICAL" => "critical",
+                            "HIGH"     => "error",
+                            "MEDIUM"   => "warning",
+                            _          => "info"
+                        },
+                        "source": src,
+                        "custom_details": {
+                            "score":        risk.score,
+                            "dst_ip":       dst,
+                            "tags":         risk.tags,
+                            "threat_intel": enrichment.is_malicious
+                        }
+                    }
+                });
+                tokio::spawn(async move {
+                    let _ = reqwest::Client::new()
+                        .post(
+                            "https://events.pagerduty.com/v2/enqueue"
+                        )
+                        .json(&payload)
+                        .timeout(Duration::from_secs(5))
+                        .send().await;
+                });
+                info!("✅ PagerDuty alert sent");
+            }
+        }
+        "webhook" => {
+            let url_val = config["url"]
+                .as_str()
+                .or(config["webhook_url"].as_str())
+                .unwrap_or("").to_string();
+            if !url_val.is_empty() {
+                let url = url_val;
+                let payload = json!({
+                    "alert_type":   "ndr_threat",
+                    "src_ip":       src,
+                    "dst_ip":       dst,
+                    "score":        risk.score,
+                    "severity":     risk.severity.as_str(),
+                    "threat_intel": enrichment.is_malicious,
+                    "tags":         risk.tags,
+                    "timestamp":    chrono::Utc::now()
+                        .to_rfc3339()
+                });
+                let url = url.to_string();
+                let int_name_c = int_name.clone();
+                tokio::spawn(async move {
+                    let _ = reqwest::Client::new()
+                        .post(&url)
+                        .json(&payload)
+                        .timeout(Duration::from_secs(5))
+                        .send().await;
+                });
+                info!("✅ Webhook integration fired: {}",
+                    int_name);
+            }
+        }
+        "jira" => {
+    if let (Some(url), Some(email), Some(token), Some(project)) = (
+        config["url"].as_str(),
+        config["email"].as_str(),
+        config["token"].as_str(),
+        config["project_key"].as_str()
+    ) {
+        let issue_url = format!(
+            "{}/rest/api/3/issue", url
+        );
+        let creds = base64::engine::general_purpose::STANDARD.encode(
+            format!("{}:{}", email, token)
+        );
+        let priority = match risk.severity.as_str() {
+            "CRITICAL" => "Highest",
+            "HIGH"     => "High",
+            "MEDIUM"   => "Medium",
+            _          => "Low"
+        };
+        let description = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [{
+                    "type": "text",
+                    "text": format!(
+                        "NDR Alert Details\n\nSeverity: {}\nScore: {}/100\nSource IP: {}\nDestination IP: {}\nThreat Intel: {}\nTags: {}\nTime: {}",
+                        risk.severity.as_str(),
+                        risk.score as u32,
+                        src, dst,
+                        if enrichment.is_malicious { "MALICIOUS" } else { "Clean" },
+                        risk.tags.join(", "),
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+                    )
+                }]
+            }]
+        });
+        let payload = json!({
+            "fields": {
+                "project": { "key": project },
+                "summary": format!(
+                    "🚨 NDR Alert: {} | {} → {} | Score: {}/100",
+                    risk.severity.as_str(),
+                    src, dst,
+                    risk.score as u32
+                ),
+                "description": description,
+                "issuetype": { "name": "Bug" },
+                "priority": { "name": priority },
+                "labels": ["NDR-Alert", "security"]
+            }
+        });
+        let issue_url = issue_url.to_string();
+        let creds = creds.to_string();
+        let int_name_j = int_name.clone();
+        tokio::spawn(async move {
+            match reqwest::Client::new()
+                .post(&issue_url)
+                .header("Authorization",
+                    format!("Basic {}", creds))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .json(&payload)
+                .timeout(Duration::from_secs(10))
+                .send().await {
+                Ok(r) if r.status().is_success() =>
+                    info!("✅ Jira ticket created: {}",
+                        int_name_j),
+                Ok(r) => warn!("Jira error: {}",
+                    r.status()),
+                Err(e) => warn!("Jira failed: {}", e),
+            }
+        });
+    }
+}
+        _ => {}
+    }
+}
+} // end alert_threshold check
 
 // ── Send webhook to Shuffle SOAR ──────────────
 // ── Send to Shuffle SOAR ──────────────────────
@@ -741,15 +1107,19 @@ pub async fn get_soar_status(
         .get_soar_playbooks().await
         .unwrap_or_default();
 
-    Json(json!({
-        "connected":    connected,
-        "webhook_url":  webhook_url,
-        "shuffle_url":  shuffle_url,
-        "playbooks":    playbooks,
-        "active_count": playbooks.iter()
-            .filter(|p| p["enabled"] == true)
-            .count()
-    }))
+  let active_count = playbooks.iter()
+    .filter(|p| p["enabled"] == true)
+    .count();
+
+Json(json!({
+    "connected":    connected,
+    "webhook_url":  webhook_url,
+    "shuffle_url":  shuffle_url,
+    "playbooks":    playbooks,
+    "active_count": active_count,
+    "shuffle_connected": connected,
+    "ndr_playbooks_count": active_count
+}))
 }
 
 
@@ -782,6 +1152,51 @@ pub async fn toggle_playbook(
         }))
     }
 }
+
+pub async fn create_playbook(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let id = format!("pb-{}",
+        chrono::Utc::now().timestamp());
+    let name = payload["name"]
+        .as_str().unwrap_or("New Playbook").to_string();
+    let description = payload["description"]
+        .as_str().unwrap_or("").to_string();
+    let trigger = payload["trigger"]
+        .as_str().unwrap_or("score > 75").to_string();
+    let action_type = payload["action_type"]
+        .as_str().unwrap_or("webhook").to_string();
+    let action_config = payload["action_config"]
+        .to_string()
+        .replace("'", "\\'");
+
+    let query = format!(
+        "INSERT INTO ndr.soar_playbooks \
+         (id, name, description, trigger, \
+          action_type, config, enabled) \
+         VALUES ('{}','{}','{}','{}','{}','{}',1)",
+        id, name, description,
+        trigger, action_type, action_config
+    );
+
+    match state.ch_storage.create_playbook(
+        &id, &name, &description,
+        &trigger, &action_type, &action_config
+    ).await {
+        Ok(_) => Json(json!({
+            "status":  "ok",
+            "id":      id,
+            "message": "Playbook created!"
+        })),
+        Err(e) => Json(json!({
+            "status":  "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+
 
 pub async fn test_soar_webhook(
     State(_state): State<AppState>
@@ -1761,6 +2176,216 @@ tr:nth-child(even){{background:#f9f9f9}}
         }
     }
 }
+
+
+
+// GET /api/soar/integrations
+pub async fn get_integrations(
+    State(state): State<AppState>
+) -> Json<Value> {
+    match state.ch_storage.get_integrations().await {
+        Ok(integrations) => Json(json!({
+            "status": "ok",
+            "integrations": integrations
+        })),
+        Err(_) => Json(json!({
+            "status": "ok",
+            "integrations": []
+        }))
+    }
+}
+
+// POST /api/soar/integrations
+pub async fn save_integration(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let id = format!("int-{}",
+        chrono::Utc::now().timestamp());
+    let name = payload["name"]
+        .as_str().unwrap_or("").to_string();
+    let int_type = payload["type"]
+        .as_str().unwrap_or("").to_string();
+    let config = payload["config"].to_string();
+
+    if name.is_empty() || int_type.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "name and type required"
+        }));
+    }
+
+    // Test connection before saving
+    let test_result = test_integration(
+        &int_type, &config).await;
+
+    match state.ch_storage.save_integration(
+        &id, &name, &int_type, &config
+    ).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "id": id,
+            "test": test_result,
+            "message": format!(
+                "{} integration saved!", name
+            )
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// Test integration connection
+async fn test_integration(
+    int_type: &str,
+    config: &str
+) -> String {
+    let config: Value = serde_json::from_str(config)
+        .unwrap_or(json!({}));
+    
+    match int_type {
+        "slack" | "teams" | "discord" | "webhook" => {
+            let url = config["webhook_url"]
+                .as_str().unwrap_or("");
+            if url.is_empty() {
+                return "No URL configured".to_string();
+            }
+            let test_msg = json!({
+                "text": "✅ NDR Stack test message"
+            });
+            match reqwest::Client::new()
+                .post(url)
+                .json(&test_msg)
+                .timeout(std::time::Duration::from_secs(5))
+                .send().await {
+                Ok(_) => "✅ Connected".to_string(),
+                Err(e) => format!("❌ {}", e)
+            }
+        }
+        "pagerduty" => {
+            let key = config["routing_key"]
+                .as_str().unwrap_or("");
+            if key.is_empty() {
+                return "No routing key".to_string();
+            }
+            "✅ PagerDuty configured".to_string()
+        }
+        "telegram" => {
+            let token = config["bot_token"]
+                .as_str().unwrap_or("");
+            let chat_id = config["chat_id"]
+                .as_str().unwrap_or("");
+            if token.is_empty() || chat_id.is_empty() {
+                return "Missing token or chat_id".to_string();
+            }
+            let url = format!(
+                "https://api.telegram.org/bot{}/sendMessage",
+                token
+            );
+            let msg = json!({
+                "chat_id": chat_id,
+                "text": "✅ NDR Stack connected!"
+            });
+            match reqwest::Client::new()
+                .post(&url)
+                .json(&msg)
+                .timeout(std::time::Duration::from_secs(5))
+                .send().await {
+                Ok(_) => "✅ Telegram connected".to_string(),
+                Err(e) => format!("❌ {}", e)
+            }
+        }
+        "jira" => {
+    let url = config["url"].as_str().unwrap_or("");
+    let email = config["email"].as_str().unwrap_or("");
+    let token = config["token"].as_str().unwrap_or("");
+    let project = config["project_key"].as_str().unwrap_or("");
+    if url.is_empty() || email.is_empty() || token.is_empty() {
+        return "Missing Jira config".to_string();
+    }
+    let test_url = format!("{}/rest/api/3/project/{}", url, project);
+    let creds = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", email, token));
+    match reqwest::Client::new()
+        .get(&test_url)
+        .header("Authorization", format!("Basic {}", creds))
+        .header("Accept", "application/json")
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await {
+        Ok(r) if r.status().is_success() =>
+            "✅ Jira connected".to_string(),
+        Ok(r) => format!("❌ Jira error: {}", r.status()),
+        Err(e) => format!("❌ {}", e)
+    }
+}
+        _ => "Unknown integration".to_string()
+    }
+}
+
+// POST /api/soar/integrations/test
+pub async fn test_integration_endpoint(
+    State(_state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let int_type = payload["type"]
+        .as_str().unwrap_or("").to_string();
+    let config = payload["config"].to_string();
+    
+    let result = test_integration(&int_type, &config).await;
+    Json(json!({
+        "status": if result.starts_with("✅") 
+            { "ok" } else { "error" },
+        "message": result
+    }))
+}
+
+// POST /api/soar/integrations/toggle
+pub async fn toggle_integration(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let id = payload["id"]
+        .as_str().unwrap_or("").to_string();
+    let enabled = payload["enabled"]
+        .as_bool().unwrap_or(false);
+    
+    match state.ch_storage
+        .toggle_integration(&id, enabled).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Integration updated"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// DELETE /api/soar/integrations
+pub async fn delete_integration(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let id = payload["id"]
+        .as_str().unwrap_or("").to_string();
+    
+    match state.ch_storage
+        .delete_integration(&id).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Integration deleted"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+
+
 
 //configure email action
 pub async fn configure_email(

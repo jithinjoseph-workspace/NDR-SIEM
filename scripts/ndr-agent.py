@@ -94,10 +94,14 @@ class AgentHandler(BaseHTTPRequestHandler):
             subprocess.run(["sudo", "rm", "-f", "/var/run/suricata.pid"], capture_output=True)
             subprocess.run(["sudo", "rm", "-f", "/run/suricata.pid"], capture_output=True)
             subprocess.run(["sudo", "rm", "-f", "/var/run/suricata/suricata.pid"], capture_output=True)
-    
+            
+            # Clear Vector checkpoints so it reads from current position
+            subprocess.run(["sudo", "rm", "-rf",
+                f"{HOME_DIR}/.vector/data/suricata",
+                f"{HOME_DIR}/.vector/data/zeek"],
+                capture_output=True)            
             # Start Zeek
-            subprocess.Popen(["sudo", "/opt/zeek/bin/zeek", "-i", iface, "local",
-                            f"Log::default_logdir={LOGDIR}/zeek"],
+            subprocess.Popen(["sudo", "/opt/zeek/bin/zeek", "-i", iface, "local",f"Log::default_logdir={LOGDIR}/zeek"],
                             stdout=open("/tmp/zeek.log", "w"),
                             stderr=subprocess.STDOUT)
     
@@ -123,6 +127,18 @@ class AgentHandler(BaseHTTPRequestHandler):
             subprocess.run(["sudo", "rm", "-f", "/var/run/suricata.pid"], capture_output=True)
             subprocess.run(["sudo", "rm", "-f", "/run/suricata.pid"], capture_output=True)
             subprocess.run(["sudo", "rm", "-f", "/tmp/suricata.pid"], capture_output=True)
+            # Clear Vector checkpoints to prevent replay
+            subprocess.run(["sudo", "rm", "-rf",
+                f"{HOME_DIR}/.vector/data/suricata",
+                f"{HOME_DIR}/.vector/data/zeek"],
+                capture_output=True)
+            # Rotate logs
+            subprocess.run(["sudo", "logrotate", "-f",
+                "/etc/logrotate.d/suricata-ndr"],
+                capture_output=True)
+            subprocess.run(["sudo", "logrotate", "-f",
+                "/etc/logrotate.d/zeek-ndr"],
+                capture_output=True)
             self.send_json({"status": "stopped"})
 
         elif self.path == "/agent/interface":
