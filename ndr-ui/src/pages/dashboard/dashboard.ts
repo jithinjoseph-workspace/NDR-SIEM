@@ -7,6 +7,7 @@ import { Subscription } from 'rxjs';
 import { LucideAngularModule, TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight } from 'lucide-angular';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartOptions } from 'chart.js';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-dashboard',
@@ -28,6 +29,7 @@ export class Dashboard implements OnInit, OnDestroy {
   low: number = 0;
   topSrcIps: any[] = [];
   topDstIps: any[] = [];
+  recentCriticalAlerts: any[] = [];
 
   private subs: Subscription[] = [];
   private refreshInterval: any;
@@ -68,6 +70,7 @@ export class Dashboard implements OnInit, OnDestroy {
     private api: Api,
     private ws: Websocket,
     private chartService: ChartDataService,
+    private router: Router,
     private cdr: ChangeDetectorRef
   ) { }
 
@@ -97,9 +100,19 @@ export class Dashboard implements OnInit, OnDestroy {
     );
 
     this.subs.push(
-      this.ws.hits$.subscribe(() => {
+      this.ws.hits$.subscribe(hit => {
         this.totalHits++;
         this.hitsLastHour++;
+        const severity = hit.severity?.toUpperCase() || 'LOW';
+        if (['CRITICAL', 'HIGH'].includes(severity)) {
+          this.recentCriticalAlerts = [{
+            severity,
+            src_ip: hit.src || hit.suricata?.src || '-',
+            dst_ip: hit.dst || hit.suricata?.dst || '-',
+            score: hit.score || 0,
+            time: new Date().toLocaleTimeString(),
+          }, ...this.recentCriticalAlerts].slice(0, 5);
+        }
         this.cdr.detectChanges();
       })
     );
@@ -107,6 +120,14 @@ export class Dashboard implements OnInit, OnDestroy {
 
   exportReport(format: string) {
     this.api.exportReport(format);
+  }
+
+  openAlerts(filter?: Record<string, string>) {
+    this.router.navigate(['/alerts'], { queryParams: filter || {} });
+  }
+
+  openNetworkMap() {
+    this.router.navigate(['/network-map']);
   }
 
   loadAllStats() {
@@ -131,6 +152,20 @@ export class Dashboard implements OnInit, OnDestroy {
     this.api.getTopIps().subscribe(data => {
       this.topSrcIps = data.top_src_ips || [];
       this.topDstIps = data.top_dst_ips || [];
+      this.cdr.detectChanges();
+    });
+
+    this.api.getAlerts().subscribe(data => {
+      this.recentCriticalAlerts = (data || [])
+        .filter(hit => ['CRITICAL', 'HIGH'].includes(hit.severity?.toUpperCase()))
+        .slice(0, 5)
+        .map(hit => ({
+          severity: hit.severity?.toUpperCase() || 'LOW',
+          src_ip: hit.src_ip || '-',
+          dst_ip: hit.dst_ip || '-',
+          score: hit.score || 0,
+          time: hit.timestamp ? new Date(hit.timestamp * 1000).toLocaleString() : '-',
+        }));
       this.cdr.detectChanges();
     });
   }

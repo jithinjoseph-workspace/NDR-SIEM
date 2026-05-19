@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
 import { Subscription } from 'rxjs';
+import { ActivatedRoute } from '@angular/router';
 import {
   LucideAngularModule,
   AlertTriangle,
@@ -21,7 +22,10 @@ import {
 })
 export class Alerts implements OnInit, OnDestroy {
   alerts: any[] = [];
+  private allAlerts: any[] = [];
   loading: boolean = true;
+  activeSeverity: string = '';
+  priorityOnly: boolean = false;
 
   ShieldAlertIcon = ShieldAlert;
   AlertTriangleIcon = AlertTriangle;
@@ -34,25 +38,37 @@ export class Alerts implements OnInit, OnDestroy {
   constructor(
     private api: Api,
     private ws: Websocket,
+    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
+    this.subs.push(
+      this.route.queryParamMap.subscribe(params => {
+        this.activeSeverity = params.get('severity')?.toUpperCase() || '';
+        this.priorityOnly = params.get('priority') === 'true';
+        this.applyFilters();
+        this.cdr.detectChanges();
+      })
+    );
+
     this.loadAlerts();
 
     // Real-time - add new hit to top of list via WebSocket
     this.subs.push(
       this.ws.hits$.subscribe(hit => {
-        this.alerts.unshift({
+        const alert = {
           severity: hit.severity?.toUpperCase() || 'LOW',
           source: `${hit.src || hit.suricata?.src || '-'} -> ${hit.dst || hit.suricata?.dst || '-'}`,
           description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
           time: new Date().toLocaleTimeString(),
           score: hit.score,
           community_id: hit.cid,
-        });
+        };
+        this.allAlerts.unshift(alert);
         // Keep max 100 alerts
-        if (this.alerts.length > 100) this.alerts.pop();
+        if (this.allAlerts.length > 100) this.allAlerts.pop();
+        this.applyFilters();
         this.cdr.detectChanges();
       })
     );
@@ -62,7 +78,7 @@ export class Alerts implements OnInit, OnDestroy {
     this.loading = true;
     this.api.getAlerts().subscribe({
       next: (data: any[]) => {
-        this.alerts = data.map(hit => ({
+        this.allAlerts = data.map(hit => ({
           severity: hit.severity?.toUpperCase() || 'LOW',
           source: `${hit.src_ip || '-'} -> ${hit.dst_ip || '-'}`,
           description: hit.sigma_hits?.join(', ') || 'Correlation hit',
@@ -72,6 +88,7 @@ export class Alerts implements OnInit, OnDestroy {
           src_country: hit.src_country,
           dst_country: hit.dst_country,
         }));
+        this.applyFilters();
         this.loading = false;
         this.cdr.detectChanges();
       },
@@ -79,6 +96,15 @@ export class Alerts implements OnInit, OnDestroy {
         this.loading = false;
         this.cdr.detectChanges();
       },
+    });
+  }
+
+  private applyFilters() {
+    this.alerts = this.allAlerts.filter(alert => {
+      const severity = alert.severity?.toUpperCase();
+      if (this.activeSeverity && severity !== this.activeSeverity) return false;
+      if (this.priorityOnly && !['CRITICAL', 'HIGH'].includes(severity)) return false;
+      return true;
     });
   }
 

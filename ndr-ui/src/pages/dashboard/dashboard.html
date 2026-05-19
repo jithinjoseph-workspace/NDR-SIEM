@@ -48,7 +48,13 @@
       </div>
     </article>
 
-    <article class="metric-card metric-secondary">
+    <article
+      class="metric-card metric-secondary clickable-card"
+      role="button"
+      tabindex="0"
+      (click)="openAlerts()"
+      (keydown.enter)="openAlerts()"
+      (keydown.space)="openAlerts()">
       <div class="metric-topline">
         <div class="metric-icon">
           <lucide-icon [name]="ShieldIcon" class="w-5 h-5"></lucide-icon>
@@ -62,7 +68,14 @@
       </div>
     </article>
 
-    <article class="metric-card metric-danger" [class.has-alerts]="critical > 0">
+    <article
+      class="metric-card metric-danger clickable-card"
+      role="button"
+      tabindex="0"
+      [class.has-alerts]="critical > 0"
+      (click)="openAlerts({ severity: 'CRITICAL' })"
+      (keydown.enter)="openAlerts({ severity: 'CRITICAL' })"
+      (keydown.space)="openAlerts({ severity: 'CRITICAL' })">
       <div class="metric-topline">
         <div class="metric-icon">
           <lucide-icon [name]="AlertIcon" class="w-5 h-5"></lucide-icon>
@@ -76,7 +89,13 @@
       </div>
     </article>
 
-    <article class="metric-card severity-card">
+    <article
+      class="metric-card severity-card clickable-card"
+      role="button"
+      tabindex="0"
+      (click)="openAlerts({ priority: 'true' })"
+      (keydown.enter)="openAlerts({ priority: 'true' })"
+      (keydown.space)="openAlerts({ priority: 'true' })">
       <div class="metric-topline">
         <div class="metric-icon neutral">
           <lucide-icon [name]="TrendingUpIcon" class="w-5 h-5"></lucide-icon>
@@ -126,34 +145,73 @@
       </div>
     </section>
 
-    <section class="panel ip-panel">
-      <div class="panel-header compact">
-        <div>
-          <h4>Top Source IPs</h4>
-          <p>Highest observed source activity.</p>
-        </div>
-      </div>
-
-      <div class="ip-list" *ngIf="topSrcIps.length > 0; else emptyIps">
-        <div *ngFor="let ip of topSrcIps.slice(0, 5)" class="ip-row">
-          <div class="ip-row-header">
-            <span>{{ ip.ip }}</span>
-            <strong>{{ ip.count }} events</strong>
-          </div>
-          <div class="ip-meter">
-            <i [style.width.%]="(ip.count / (topSrcIps[0]?.count || 1)) * 100"></i>
+    <div class="side-stack">
+      <section class="panel critical-panel">
+        <div class="panel-header compact">
+          <div>
+            <h4>Recent Critical Alerts</h4>
+            <p>Latest high-priority correlation hits.</p>
           </div>
         </div>
-      </div>
 
-      <ng-template #emptyIps>
-        <div class="empty-state">
-          <span>No source IP data yet</span>
-          Monitoring results will appear here when events arrive.
+        <div class="critical-list" *ngIf="recentCriticalAlerts.length > 0; else emptyCriticalAlerts">
+          <div *ngFor="let alert of recentCriticalAlerts" class="critical-row">
+            <div class="critical-row-main">
+              <span [class]="'critical-severity ' + alert.severity.toLowerCase()">{{ alert.severity }}</span>
+              <strong>{{ alert.score | number:'1.0-0' }}</strong>
+            </div>
+            <div class="critical-flow">
+              <span>{{ alert.src_ip }}</span>
+              <span>-></span>
+              <span>{{ alert.dst_ip }}</span>
+            </div>
+            <div class="critical-time">{{ alert.time }}</div>
+          </div>
         </div>
-      </ng-template>
 
-      <button class="panel-link">View All IPs</button>
-    </section>
+        <ng-template #emptyCriticalAlerts>
+          <div class="empty-state">
+            <span>No critical alerts yet</span>
+            High-priority hits will appear here when detected.
+          </div>
+        </ng-template>
+      </section>
+
+      <section
+        class="panel ip-panel clickable-panel"
+        role="button"
+        tabindex="0"
+        (click)="openNetworkMap()"
+        (keydown.enter)="openNetworkMap()"
+        (keydown.space)="openNetworkMap()">
+        <div class="panel-header compact">
+          <div>
+            <h4>Top Source IPs</h4>
+            <p>Highest observed source activity.</p>
+          </div>
+        </div>
+
+        <div class="ip-list" *ngIf="topSrcIps.length > 0; else emptyIps">
+          <div *ngFor="let ip of topSrcIps.slice(0, 5)" class="ip-row">
+            <div class="ip-row-header">
+              <span>{{ ip.ip }}</span>
+              <strong>{{ ip.count }} events</strong>
+            </div>
+            <div class="ip-meter">
+              <i [style.width.%]="(ip.count / (topSrcIps[0]?.count || 1)) * 100"></i>
+            </div>
+          </div>
+        </div>
+
+        <ng-template #emptyIps>
+          <div class="empty-state">
+            <span>No source IP data yet</span>
+            Monitoring results will appear here when events arrive.
+          </div>
+        </ng-template>
+
+        <button class="panel-link" type="button" (click)="openNetworkMap()">View All IPs</button>
+      </section>
+    </div>
   </div>
 </section>

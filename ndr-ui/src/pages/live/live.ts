@@ -42,17 +42,17 @@ export class Live implements OnInit, OnDestroy {
 
         if (msg.type === 'zeek') {
           event = 'ZEEK';
-          data = `${msg.src || '-'} → ${msg.dst || '-'} [${msg.proto || '-'}] ${msg.service || ''} ${msg.conn_state || ''}`;
+          data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.proto || '-'}] ${msg.service || ''} ${msg.conn_state || ''}`;
           color = 'border-primary/30';
           this.eventCount++;
         } else if (msg.type === 'suricata') {
           event = 'SURICATA';
-          data = `${msg.src || '-'} → ${msg.dst || '-'} [${msg.event_type || '-'}]`;
+          data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.event_type || '-'}]`;
           color = 'border-secondary/30';
           this.eventCount++;
         } else if (msg.type === 'hit') {
           event = 'HIT';
-          data = `🔥 Score:${msg.score?.toFixed(0)} | ${msg.severity?.toUpperCase()} | ${msg.tags?.join(', ') || ''} | CID:${msg.cid || '-'}`;
+          data = `Score:${msg.score?.toFixed(0)} | ${msg.severity?.toUpperCase()} | ${msg.tags?.join(', ') || ''} | CID:${msg.cid || '-'}`;
           color = 'border-tertiary/50';
           this.hitCount++;
         }

@@ -181,6 +181,31 @@
   padding: 18px;
 }
 
+.clickable-card {
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.clickable-card:hover,
+.clickable-card:focus-visible {
+  border-color: rgba(105, 246, 184, 0.28);
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.22);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.clickable-panel {
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.clickable-panel:hover,
+.clickable-panel:focus-visible {
+  border-color: rgba(105, 246, 184, 0.28);
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.22);
+  outline: none;
+}
+
 .metric-card::before {
   content: '';
   position: absolute;
@@ -336,6 +361,12 @@
   gap: 16px;
 }
 
+.side-stack {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
 .panel {
   padding: 20px;
 }
@@ -384,9 +415,87 @@
 .ip-panel {
   display: flex;
   min-width: 0;
-  min-height: 430px;
+  min-height: 0;
   overflow: hidden;
   flex-direction: column;
+}
+
+.critical-panel {
+  min-width: 0;
+}
+
+.critical-list {
+  display: grid;
+  gap: 10px;
+}
+
+.critical-row {
+  min-width: 0;
+  border: 1px solid rgba(110, 117, 136, 0.12);
+  border-radius: 8px;
+  background: rgba(11, 19, 35, 0.48);
+  padding: 11px;
+}
+
+.critical-row-main,
+.critical-flow {
+  display: flex;
+  align-items: center;
+}
+
+.critical-row-main {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.critical-row-main strong {
+  color: #f7f9ff;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.critical-severity {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.critical-severity.critical {
+  background: rgba(255, 113, 106, 0.13);
+  color: #ff918b;
+}
+
+.critical-severity.high {
+  background: rgba(248, 160, 16, 0.13);
+  color: #ffc06c;
+}
+
+.critical-flow {
+  min-width: 0;
+  gap: 7px;
+  color: #f7f9ff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.critical-flow span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.critical-flow span:nth-child(2) {
+  color: #8d98ad;
+}
+
+.critical-time {
+  margin-top: 6px;
+  color: #8d98ad;
+  font-size: 11px;
 }
 
 .ip-list {
