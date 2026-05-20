@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS ndr.soar_config
 (
     key        String,
     value      String,
+    tenant_id  String DEFAULT 'default',
     updated_at DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(updated_at)
@@ -89,6 +90,7 @@ CREATE TABLE IF NOT EXISTS ndr.soar_playbooks
     config      String,
     enabled     UInt8 DEFAULT 1,
     runs        UInt64 DEFAULT 0,
+    tenant_id   String DEFAULT 'default',
     created_at  DateTime DEFAULT now(),
     updated_at  DateTime DEFAULT now()
 )
@@ -105,6 +107,7 @@ CREATE TABLE IF NOT EXISTS ndr.soar_integrations
     type        String,
     config      String,
     enabled     UInt8 DEFAULT 1,
+    tenant_id   String DEFAULT 'default',
     created_at  DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(created_at)
