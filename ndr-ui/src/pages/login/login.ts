@@ -25,7 +25,11 @@ export class Login {
     private ws: Websocket
   ) {
     if (this.auth.isLoggedIn()) {
-      this.router.navigate(['/dashboard']);
+      if (this.auth.isAdmin()) {
+        this.router.navigate(['/admin']);
+      } else {
+        this.router.navigate(['/dashboard']);
+      }
     }
   }
 

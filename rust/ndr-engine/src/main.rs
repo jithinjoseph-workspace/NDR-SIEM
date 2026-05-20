@@ -54,6 +54,11 @@ async fn main() {
     // ── Build AppState ────────────────────────────────────────────────────
     let (tx, _) = broadcast::channel::<String>(512);
 
+    let redis_url = std::env::var("REDIS_URL")
+        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let redis_client = redis::Client::open(redis_url)
+        .expect("Redis connection failed");
+
     let storage = storage::SqliteStorage::new("ndr.db")
         .expect("Failed to open SQLite database");
 
@@ -66,13 +71,15 @@ async fn main() {
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
         detection:  Arc::new(tokio::sync::RwLock::new(detection::DetectionEngine::new("rules"))),
-ch_storage: {
-    let ch = Arc::new(storage::ClickhouseStorage::new());
-    ch.init_tables().await;
-    let _ = ch.create_default_admin().await;
-    ch
-},        storage:    Arc::new(storage),
+        ch_storage: {
+            let ch = Arc::new(storage::ClickhouseStorage::new());
+            ch.init_tables().await;
+            let _ = ch.create_default_admin().await;
+            ch
+        },
+        storage:    Arc::new(storage),
         tx:         tx.clone(),
+        redis:      Arc::new(redis_client),
     };
 
     // ── Background: session reaper (every 30s) ────────────────────────────

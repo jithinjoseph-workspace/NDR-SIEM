@@ -91,6 +91,33 @@ pub struct AppState {
     pub storage:    Arc<SqliteStorage>,
     pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
+    pub redis:      Arc<redis::Client>,
+}
+
+pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
+    let redis = state.redis.clone();
+    let msg_str = msg.to_string();
+    let channel = format!("tenant:{}", tenant_id);
+    let is_default = tenant_id == "default";
+    let msg_for_redis = msg_str.clone();
+    tokio::spawn(async move {
+        if let Ok(mut conn) = redis.get_async_connection().await {
+            let _: Result<(), _> = redis::cmd("PUBLISH")
+                .arg(&channel)
+                .arg(&msg_for_redis)
+                .query_async(&mut conn)
+                .await;
+            
+            if !is_default {
+                let _: Result<(), _> = redis::cmd("PUBLISH")
+                    .arg("tenant:default")
+                    .arg(&msg_for_redis)
+                    .query_async(&mut conn)
+                    .await;
+            }
+        }
+    });
+    let _ = state.tx.send(msg_str);
 }
 
 
@@ -197,10 +224,10 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
 
     let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
     if let Some(obj) = msg.as_object_mut() {
-        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id));
+        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
 
-    let _ = state.tx.send(msg.to_string());
+    publish_event(state, &tenant_id, &msg.to_string());
 }
 
 
@@ -776,10 +803,10 @@ tokio::spawn(async move {
 
     let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
     if let Some(obj) = hit_msg.as_object_mut() {
-        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id));
+        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
 
-    let _ = state.tx.send(hit_msg.to_string());
+    publish_event(state, &tenant_id, &hit_msg.to_string());
 }
 
 
