@@ -150,6 +150,35 @@ configureSoarEmail(data: any): Observable<any> {
 togglePlaybook(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/soar/playbook/toggle`, data);
 }
+createPlaybook(data: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/playbook/create`, data);
+}
+
+getIntegrations(): Observable<any> {
+    return this.http.get(
+        `${this.baseUrl}/soar/integrations`);
+}
+
+saveIntegration(data: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/integrations`, data);
+}
+
+testIntegration(data: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/integrations/test`, data);
+}
+
+toggleIntegration(data: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/integrations/toggle`, data);
+}
+
+deleteIntegration(data: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/integrations/delete`, data);
+}
 
 }
 

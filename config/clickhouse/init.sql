@@ -93,23 +93,17 @@ CREATE TABLE IF NOT EXISTS ndr.soar_playbooks
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY id;
 
--- Insert default playbooks
-INSERT INTO ndr.soar_playbooks 
-    (id, name, description, trigger, action_type, enabled)
-VALUES
-    ('pb-slack',    
-     'High Severity Alert → Slack',
-     'Send Slack message when score > 75',
-     'score > 75', 'slack', 1),
-    ('pb-email',    
-     'Malicious IP → Block + Email',
-     'Auto-block and send email alert',
-     'threat_intel', 'email', 1),
-    ('pb-pagerduty',
-     'Critical Alert → PagerDuty',
-     'Page on-call when score > 90',
-     'score > 90', 'pagerduty', 0),
-    ('pb-jira',     
-     'Alert → Jira Ticket',
-     'Create Jira incident ticket',
-     'any', 'jira', 0);
+
+
+-- SOAR integrations table
+CREATE TABLE IF NOT EXISTS ndr.soar_integrations
+(
+    id          String,
+    name        String,
+    type        String,
+    config      String,
+    enabled     UInt8 DEFAULT 1,
+    created_at  DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(created_at)
+ORDER BY id;

@@ -353,6 +353,24 @@ ZEEKCONF
     --force 2>/dev/null || true
 log "✅ Zeek configured"
 
+
+sudo tee /etc/logrotate.d/zeek-ndr > /dev/null << 'EOF'
+/home/user/logs/zeek/conn.log {
+    su root root
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    dateext
+    dateformat -%Y%m%d
+}
+EOF
+log "✅ Zeek log rotation configured"
+
+
 # ── Configure Suricata ────────────────────────
 log "Configuring Suricata..."
 sudo cp /etc/suricata/suricata.yaml \
@@ -369,6 +387,27 @@ sudo sed -i \
 log "Updating Suricata rules..."
 sudo suricata-update 2>/dev/null || true
 log "✅ Suricata configured on interface: $IFACE"
+
+
+
+# ── Suricata log rotation ─────────────────────
+log "Configuring Suricata log rotation..."
+sudo tee /etc/logrotate.d/suricata-ndr > /dev/null << 'EOF'
+/home/user/logs/suricata/eve.json {
+    su root root
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    dateext
+    dateformat -%Y%m%d
+}
+EOF
+log "✅ Suricata log rotation configured"
+
 
 # ── Create required directories ───────────────
 log "Creating directories..."
@@ -592,6 +631,37 @@ fi
 
 log "✅ Docker stack started"
 
+
+log "✅ Docker stack started"
+
+# ── Set Kafka retention ───────────────────────
+log "Setting Kafka retention policy..."
+sleep 15
+sudo docker exec kafka \
+    /opt/kafka/bin/kafka-configs.sh \
+    --bootstrap-server localhost:9092 \
+    --alter --entity-type topics \
+    --entity-name ndr-events \
+    --add-config retention.ms=3600000 \
+    2>/dev/null || true
+log "✅ Kafka retention set to 1 hour"
+
+# ── Fix broken ClickHouse parts ───────────────
+log "Configuring ClickHouse merge tree settings..."
+sudo tee /etc/clickhouse-server/config.d/fix.xml \
+    > /dev/null << 'EOF'
+<clickhouse>
+    <merge_tree>
+        <max_suspicious_broken_parts>300</max_suspicious_broken_parts>
+    </merge_tree>
+</clickhouse>
+EOF
+sudo service clickhouse-server restart
+sleep 5
+log "✅ ClickHouse configured"
+
+# ── Setup Shuffle SOAR ────────────────────────
+
 # ── Setup Shuffle SOAR ────────────────────────
 step "Setting up Shuffle SOAR"
 log "Starting Shuffle SOAR services..."
@@ -703,5 +773,5 @@ echo "║  status:  ./status.sh                    ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 echo "💡 Live reload: Edit Angular on Windows → auto-updates!"
-INSTALLEOF
+
 

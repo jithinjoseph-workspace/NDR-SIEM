@@ -260,6 +260,80 @@ pub async fn delete_rule_state(&self, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+//soar integrations
+
+pub async fn get_integrations(
+    &self
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let query = "
+        SELECT id, name, type, config, enabled
+        FROM ndr.soar_integrations
+        FINAL
+        ORDER BY created_at
+    ";
+    let result = self.client
+        .query(query)
+        .fetch_all::<(String,String,String,String,u8)>()
+        .await?;
+    Ok(result.iter().map(|r| {
+        let config: serde_json::Value =
+            serde_json::from_str(&r.3)
+                .unwrap_or(json!({}));
+        json!({
+            "id":      r.0,
+            "name":    r.1,
+            "type":    r.2,
+            "config":  config,
+            "enabled": r.4 == 1
+        })
+    }).collect())
+}
+
+pub async fn save_integration(
+    &self,
+    id: &str,
+    name: &str,
+    int_type: &str,
+    config: &str,
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.soar_integrations \
+         (id, name, type, config, enabled) \
+         VALUES ('{}','{}','{}','{}',1)",
+        id, name, int_type,
+        config.replace("'", "\\'")
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn toggle_integration(
+    &self, id: &str, enabled: bool
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.soar_integrations \
+         (id, name, type, config, enabled) \
+         SELECT id, name, type, config, {}
+         FROM ndr.soar_integrations
+         WHERE id = '{}'",
+        if enabled { 1 } else { 0 }, id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn delete_integration(
+    &self, id: &str
+) -> anyhow::Result<()> {
+    let query = format!(
+        "ALTER TABLE ndr.soar_integrations \
+         DELETE WHERE id = '{}'",
+        id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
 
 //save soar config
 pub async fn save_soar_config(
@@ -347,7 +421,26 @@ pub async fn update_playbook_enabled(
     Ok(())
 }
 
-
+pub async fn create_playbook(
+    &self,
+    id: &str,
+    name: &str,
+    description: &str,
+    trigger: &str,
+    action_type: &str,
+    config: &str,
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.soar_playbooks \
+         (id, name, description, trigger, \
+          action_type, config, enabled) \
+         VALUES ('{}','{}','{}','{}','{}','{}',1)",
+        id, name, description,
+        trigger, action_type, config
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
 
 
 //get settings

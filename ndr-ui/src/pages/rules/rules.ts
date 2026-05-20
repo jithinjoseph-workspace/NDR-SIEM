@@ -173,11 +173,23 @@ export class Rules implements OnInit {
     this.api.getAlerts().subscribe({
       next: (data: any[]) => {
         this.totalHits = data.length;
+        // Count hits per rule
+        const hitCounts: any = {};
+        data.forEach((h: any) => {
+          (h.sigma_hits || []).forEach((rule: string) => {
+            hitCounts[rule] = (hitCounts[rule] || 0) + 1;
+          });
+        });
+        this.rules = this.rules.map(r => ({
+          ...r,
+          hits: hitCounts[r.name] || 0
+        }));
         this.cdr.detectChanges();
       },
       error: () => { }
     });
   }
+
   openAddForm() {
     this.isEditing = false;
     this.editingId = '';

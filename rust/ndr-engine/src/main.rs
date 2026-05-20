@@ -178,6 +178,11 @@ tokio::spawn(async move {
         .route("/api/settings", get(api::get_settings).post(api::update_settings))
         .route("/api/soar/action/email", post(api::configure_email))       
         .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
+        .route("/api/soar/playbook/create",post(api::create_playbook))
+        .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))
+        .route("/api/soar/integrations/test",post(api::test_integration_endpoint))
+        .route("/api/soar/integrations/toggle",post(api::toggle_integration))
+        .route("/api/soar/integrations/delete",post(api::delete_integration))
         .with_state(state)
         .layer(cors);
 

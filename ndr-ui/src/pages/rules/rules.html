@@ -1,5 +1,7 @@
-<section class="rules-shell" [class.form-open]="showForm">
-  <header class="rules-header">
+<div class="p-8 animate-in fade-in duration-500">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-8">
     <div>
       <div class="eyebrow">Detection Content</div>
       <h2>Rules Management</h2>
@@ -18,8 +20,11 @@
     </div>
   </header>
 
-  <div *ngIf="message"
-       [class]="'rules-message ' + (messageType === 'success' ? 'success' : 'error')">
+  <!-- Message -->
+  <div *ngIf="message" [class]="'mb-4 px-4 py-3 rounded text-xs font-bold ' +
+         (messageType === 'success' ?
+           'bg-primary/10 text-primary border border-primary/20' :
+           'bg-red-500/10 text-red-400 border border-red-500/20')">
     {{ message }}
   </div>
 
@@ -32,35 +37,50 @@
         <span>Total Rules</span>
         <strong>{{ rules.length }}</strong>
       </div>
-    </article>
+      <div class="text-[10px] text-on-surface-variant uppercase mt-1">Active</div>
+    </div>
+    <div class="bg-surface-container-highest p-4 rounded-lg border border-outline/10 text-center">
+      <div class="text-2xl font-bold text-orange-400">{{ totalHits }}</div>
+      <div class="text-[10px] text-on-surface-variant uppercase mt-1">Total Hits</div>
+    </div>
+  </div>
 
-    <article class="metric-card active">
-      <div class="metric-icon">
-        <lucide-icon [name]="PowerIcon" class="w-5 h-5"></lucide-icon>
-      </div>
-      <div>
-        <span>Active</span>
-        <strong>{{ activeRulesCount }}</strong>
-      </div>
-    </article>
+  <!-- Add/Edit Form -->
+  <div *ngIf="showForm"
+    class="mb-6 bg-surface-container-highest rounded-xl border border-primary/20 overflow-hidden animate-in slide-in-from-top-2">
 
-    <article class="metric-card hits">
-      <div class="metric-icon">
-        <lucide-icon [name]="InfoIcon" class="w-5 h-5"></lucide-icon>
-      </div>
+    <!-- Form Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10 bg-primary/5">
       <div>
         <span>Total Hits</span>
         <strong>{{ totalHits }}</strong>
       </div>
-    </article>
-  </section>
+      <button (click)="showForm = false; resetForm()" class="text-on-surface-variant hover:text-white">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
 
-  <div class="rules-workspace">
-    <main class="rules-list-panel">
-      <div class="panel-heading">
+    <div class="p-6 space-y-5">
+
+      <!-- Title + Severity -->
+      <div class="grid grid-cols-3 gap-4">
+        <div class="col-span-2">
+          <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+            Rule Title *
+          </label>
+          <input [(ngModel)]="ruleForm.title" placeholder="e.g. Suricata Alert Detection"
+            class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs focus:outline-none focus:border-primary/50" />
+        </div>
         <div>
-          <h3>Rule Library</h3>
-          <p>{{ loading ? 'Loading detection content' : rules.length + ' rules available' }}</p>
+          <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+            Severity
+          </label>
+          <select [(ngModel)]="ruleForm.severity"
+            class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs">
+            <option *ngFor="let s of severityOptions" [value]="s.value">
+              {{ s.label }} — {{ s.description }}
+            </option>
+          </select>
         </div>
         <span class="live-note">
           <span></span>
@@ -72,34 +92,22 @@
         <p>Loading rules...</p>
       </div>
 
-      <div *ngIf="!loading" class="rules-list">
-        <article *ngFor="let rule of rules" class="rule-card">
-          <div class="rule-main">
-            <div class="rule-symbol">
-              <lucide-icon [name]="GavelIcon" class="w-5 h-5"></lucide-icon>
-            </div>
+      <!-- Field + Matcher + Value -->
+      <div>
+        <div class="flex items-center gap-2 mb-2">
+          <label class="text-[10px] text-on-surface-variant uppercase font-bold">
+            Detection Condition *
+          </label>
+          <button (click)="showFieldInfo = !showFieldInfo"
+            class="text-on-surface-variant hover:text-primary text-[10px]">
+            ℹ️ Field Reference
+          </button>
+        </div>
 
-            <div class="rule-copy">
-              <div class="rule-title-row">
-                <h4>{{ rule.name }}</h4>
-                <span [class]="'severity-badge ' + getSeverityBadgeClass(rule.severity)">
-                  {{ rule.severity }}
-                </span>
-              </div>
-
-              <p *ngIf="rule.description" class="rule-description">
-                {{ rule.description }}
-              </p>
-              <p *ngIf="!rule.description" class="rule-description muted">
-                No description provided.
-              </p>
-
-              <div class="rule-meta">
-                <span>{{ rule.type }}</span>
-                <span>{{ rule.conditions }} condition(s)</span>
-                <span *ngFor="let tag of rule.tags?.slice(0,2)" class="tag">{{ tag }}</span>
-              </div>
-            </div>
+        <!-- Field info -->
+        <div *ngIf="showFieldInfo" class="mb-3 p-3 bg-black/30 rounded border border-outline/10 text-[10px]">
+          <div class="font-bold text-white mb-2">
+            Available Fields (use exact names):
           </div>
 
           <div class="rule-controls">
@@ -129,61 +137,20 @@
       </div>
     </main>
 
-    <aside *ngIf="showForm" class="rule-form-panel">
-      <div class="form-header">
-        <div>
-          <span>{{ isEditing ? 'Edit Rule' : 'New Rule' }}</span>
-          <h3>{{ isEditing ? 'Update SIGMA Rule' : 'Create SIGMA Rule' }}</h3>
-        </div>
-        <button (click)="showForm = false; resetForm()" title="Close form">
-          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
-        </button>
-      </div>
-
-      <div class="form-body">
-        <section class="form-section">
-          <div class="section-heading">
-            <h4>Basic Info</h4>
-            <p>Name and severity shown in the rule library.</p>
-          </div>
-
-          <label>
-            <span>Rule Title *</span>
-            <input [(ngModel)]="ruleForm.title"
-                   placeholder="e.g. Suricata Alert Detection"/>
-          </label>
-
-          <label>
-            <span>Severity</span>
-            <select [(ngModel)]="ruleForm.severity">
-              <option *ngFor="let s of severityOptions" [value]="s.value">
-                {{ s.label }} - {{ s.description }}
+        <div class="grid grid-cols-3 gap-4">
+          <!-- Field -->
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+              Field Name
+            </label>
+            <select [(ngModel)]="ruleForm.field"
+              class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs">
+              <option *ngFor="let f of fieldOptions" [value]="f.value">
+                {{ f.label }}
               </option>
             </select>
-          </label>
-
-          <label>
-            <span>Description</span>
-            <input [(ngModel)]="ruleForm.description"
-                   placeholder="What does this rule detect?"/>
-          </label>
-        </section>
-
-        <section class="form-section">
-          <div class="section-heading inline-heading">
-            <div>
-              <h4>Detection Condition</h4>
-              <p>Choose the event field and matching behavior.</p>
-            </div>
-            <button (click)="showFieldInfo = !showFieldInfo" class="text-link">
-              Field Reference
-            </button>
-          </div>
-
-          <div *ngIf="showFieldInfo" class="field-reference">
-            <div *ngFor="let f of fieldOptions">
-              <code>{{ f.value }}</code>
-              <span>{{ f.description }}</span>
+            <div *ngIf="selectedField" class="text-[9px] text-on-surface-variant mt-1 font-mono">
+              field: {{ selectedField.value }}
             </div>
           </div>
 
@@ -197,41 +164,27 @@
               </select>
               <small *ngIf="selectedField">field: {{ selectedField.value }}</small>
             </label>
+            <select [(ngModel)]="ruleForm.matcher"
+              class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs">
+              <option *ngFor="let m of matcherOptions" [value]="m.value">
+                {{ m.label }} — {{ m.description }}
+              </option>
+            </select>
+          </div>
 
-            <label>
-              <span>Match Type</span>
-              <select [(ngModel)]="ruleForm.matcher">
-                <option *ngFor="let m of matcherOptions" [value]="m.value">
-                  {{ m.label }} - {{ m.description }}
-                </option>
-              </select>
+          <!-- Value -->
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+              Value *
             </label>
-          </div>
-
-          <label>
-            <span>Value *</span>
-            <input [(ngModel)]="ruleForm.value"
-                   [placeholder]="getPlaceholder()"/>
-          </label>
-
-          <div *ngIf="selectedField" class="example-row">
-            <span>Examples</span>
-            <button *ngFor="let ex of selectedField.examples"
-                    (click)="ruleForm.value = ex">
-              {{ ex }}
-            </button>
-          </div>
-
-          <div *ngIf="ruleForm.field === 'conn_state'" class="conn-guide">
-            <button (click)="showConnHelp = !showConnHelp" class="text-link">
-              {{ showConnHelp ? 'Hide' : 'Show' }} connection state guide
-            </button>
-
-            <div *ngIf="showConnHelp" class="conn-grid">
-              <button *ngFor="let cs of connStateHelp"
-                      (click)="ruleForm.value = cs.state">
-                <strong>{{ cs.state }}</strong>
-                <span>{{ cs.meaning }}</span>
+            <input [(ngModel)]="ruleForm.value" [placeholder]="getPlaceholder()"
+              class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs focus:outline-none focus:border-primary/50" />
+            <!-- Quick examples -->
+            <div *ngIf="selectedField" class="flex gap-1 mt-1 flex-wrap">
+              <span class="text-[9px] text-on-surface-variant">Click:</span>
+              <button *ngFor="let ex of selectedField.examples" (click)="ruleForm.value = ex"
+                class="text-[9px] text-primary hover:underline font-mono bg-primary/5 px-1 rounded">
+                {{ ex }}
               </button>
             </div>
           </div>
@@ -243,50 +196,92 @@
             <p>Start from common detection patterns.</p>
           </div>
 
-          <div class="template-grid">
-            <button (click)="ruleForm.field='event_type'; ruleForm.value='alert'; ruleForm.matcher='equals'; ruleForm.title='Suricata Alert Detected'; ruleForm.severity='high'; ruleForm.description='Detects any Suricata alert'">
-              Suricata Alert
-            </button>
-            <button (click)="ruleForm.field='conn_state'; ruleForm.value='S0'; ruleForm.matcher='equals'; ruleForm.title='Port Scan Detection'; ruleForm.severity='medium'; ruleForm.description='Detects port scans via unanswered connections'">
-              Port Scan
-            </button>
-            <button (click)="ruleForm.field='event_type'; ruleForm.value='http'; ruleForm.matcher='equals'; ruleForm.title='HTTP Traffic Monitor'; ruleForm.severity='low'; ruleForm.description='Monitors HTTP traffic'">
-              HTTP Monitor
-            </button>
-            <button (click)="ruleForm.field='event_type'; ruleForm.value='tls'; ruleForm.matcher='equals'; ruleForm.title='TLS Traffic Monitor'; ruleForm.severity='low'; ruleForm.description='Monitors TLS/HTTPS traffic'">
-              TLS Monitor
-            </button>
-            <button (click)="ruleForm.field='alert.severity'; ruleForm.value='1'; ruleForm.matcher='equals'; ruleForm.title='Critical Suricata Alert'; ruleForm.severity='critical'; ruleForm.description='Detects highest severity Suricata alerts'">
-              Critical Alert
-            </button>
-            <button (click)="ruleForm.field='conn_state'; ruleForm.value='REJ'; ruleForm.matcher='equals'; ruleForm.title='Connection Rejected'; ruleForm.severity='medium'; ruleForm.description='Detects rejected connections'">
-              Rejected Conn
-            </button>
-          </div>
-        </section>
-
-        <section class="yaml-preview">
-          <div class="section-heading">
-            <h4>SIGMA YAML Preview</h4>
-          </div>
-          <div class="yaml-code">
-            <div>title: <span>{{ ruleForm.title || '...' }}</span></div>
-            <div>level: <span [class]="getSeverityClass(ruleForm.severity)">{{ ruleForm.severity }}</span></div>
-            <div>detection:</div>
-            <div class="indent">keywords:</div>
-            <div class="indent deep">
-              <span class="yaml-key">{{ ruleForm.field }}|{{ ruleForm.matcher }}</span>:
-              <span class="yaml-value">'{{ ruleForm.value || '...' }}'</span>
+        <!-- Connection state help -->
+        <div *ngIf="ruleForm.field === 'conn_state'" class="mt-3">
+          <button (click)="showConnHelp = !showConnHelp" class="text-[10px] text-primary hover:underline">
+            {{ showConnHelp ? 'Hide' : 'Show' }} connection state guide
+          </button>
+          <div *ngIf="showConnHelp" class="mt-2 grid grid-cols-3 gap-2">
+            <div *ngFor="let cs of connStateHelp" (click)="ruleForm.value = cs.state"
+              class="p-2 bg-surface-container-low rounded border border-outline/10 cursor-pointer hover:border-primary/30">
+              <div class="text-primary font-mono font-bold text-xs">{{ cs.state }}</div>
+              <div class="text-[10px] text-on-surface-variant">{{ cs.meaning }}</div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Description -->
+      <div>
+        <label class="text-[10px] text-on-surface-variant uppercase font-bold block mb-1">
+          Description (optional)
+        </label>
+        <input [(ngModel)]="ruleForm.description" placeholder="What does this rule detect?"
+          class="w-full bg-surface-container-low border border-outline/20 text-white rounded px-3 py-2 text-xs focus:outline-none focus:border-primary/50" />
+      </div>
+
+      <!-- YAML Preview -->
+      <div class="p-4 bg-black/40 rounded-lg border border-outline/10 font-mono text-[11px]">
+        <div class="text-primary font-bold mb-2">📋 SIGMA YAML Preview:</div>
+        <div class="text-on-surface-variant space-y-0.5">
+          <div>title: <span class="text-white">{{ ruleForm.title || '...' }}</span></div>
+          <div>level: <span [class]="getSeverityClass(ruleForm.severity)">{{ ruleForm.severity }}</span></div>
+          <div>detection:</div>
+          <div class="pl-4">keywords:</div>
+          <div class="pl-8">
+            <span class="text-yellow-400">{{ ruleForm.field }}|{{ ruleForm.matcher }}</span>:
+            <span class="text-green-400"> '{{ ruleForm.value || '...' }}'</span>
           </div>
         </section>
       </div>
 
-      <div class="form-footer">
-        <button (click)="saveRule()" [disabled]="saving" class="primary-action">
-          {{ saving ? 'Saving...' : (isEditing ? 'Update Rule' : 'Save Rule') }}
+      <!-- Quick Templates -->
+      <div>
+        <div class="text-[10px] text-on-surface-variant uppercase font-bold mb-2">
+          Quick Templates:
+        </div>
+        <div class="flex gap-2 flex-wrap">
+          <button
+            (click)="ruleForm.field='event_type'; ruleForm.value='alert'; ruleForm.matcher='equals'; ruleForm.title='Suricata Alert Detected'; ruleForm.severity='high'; ruleForm.description='Detects any Suricata alert'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white">
+            🚨 Suricata Alert
+          </button>
+          <button
+            (click)="ruleForm.field='conn_state'; ruleForm.value='S0'; ruleForm.matcher='equals'; ruleForm.title='Port Scan Detection'; ruleForm.severity='medium'; ruleForm.description='Detects port scans via unanswered connections'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white">
+            🔍 Port Scan
+          </button>
+          <button
+            (click)="ruleForm.field='event_type'; ruleForm.value='http'; ruleForm.matcher='equals'; ruleForm.title='HTTP Traffic Monitor'; ruleForm.severity='low'; ruleForm.description='Monitors HTTP traffic'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white">
+            🌐 HTTP Monitor
+          </button>
+          <button
+            (click)="ruleForm.field='event_type'; ruleForm.value='tls'; ruleForm.matcher='equals'; ruleForm.title='TLS Traffic Monitor'; ruleForm.severity='low'; ruleForm.description='Monitors TLS/HTTPS traffic'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white">
+            🔒 TLS Monitor
+          </button>
+          <button
+            (click)="ruleForm.field='alert.severity'; ruleForm.value='1'; ruleForm.matcher='equals'; ruleForm.title='Critical Suricata Alert'; ruleForm.severity='critical'; ruleForm.description='Detects highest severity Suricata alerts'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white">
+            ☠️ Critical Alert
+          </button>
+          <button
+            (click)="ruleForm.field='conn_state'; ruleForm.value='REJ'; ruleForm.matcher='equals'; ruleForm.title='Connection Rejected'; ruleForm.severity='medium'; ruleForm.description='Detects rejected connections'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white">
+            🚫 Rejected Conn
+          </button>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex gap-3 pt-2 border-t border-outline/10">
+        <button (click)="saveRule()" [disabled]="saving"
+          class="bg-primary text-black text-xs font-bold px-6 py-2 rounded hover:bg-primary/90 disabled:opacity-50">
+          {{ saving ? 'Saving...' : (isEditing ? '✏️ Update Rule' : '💾 Save Rule') }}
         </button>
-        <button (click)="showForm = false; resetForm()" class="secondary-action">
+        <button (click)="showForm = false; resetForm()"
+          class="bg-surface-container-low text-on-surface-variant text-xs font-bold px-4 py-2 rounded hover:text-white">
           Cancel
         </button>
       </div>
@@ -297,4 +292,82 @@
     <lucide-icon [name]="InfoIcon" class="w-4 h-4"></lucide-icon>
     Rules activate immediately after saving. No engine restart is needed.
   </div>
-</section>
+
+  <!-- Rules List -->
+  <div *ngIf="!loading" class="grid grid-cols-1 gap-4">
+    <div *ngFor="let rule of rules"
+      class="bg-surface-container-highest p-5 rounded-lg border border-outline/10 flex items-center justify-between group hover:border-primary/30 transition-all">
+      <div class="flex items-center gap-5">
+        <div
+          class="p-3 rounded bg-surface-container-low text-on-surface-variant group-hover:text-primary transition-colors">
+          <lucide-icon [name]="GavelIcon" class="w-6 h-6"></lucide-icon>
+        </div>
+        <div>
+          <h3 class="text-white font-bold">{{ rule.name }}</h3>
+          <div class="flex items-center gap-3 mt-1 flex-wrap">
+            <span
+              class="text-[10px] bg-surface-container-low px-2 py-0.5 rounded uppercase font-bold border border-outline/5 text-on-surface-variant">
+              {{ rule.type }}
+            </span>
+            <span
+              [class]="'text-[10px] font-bold border px-2 py-0.5 rounded uppercase ' + getSeverityBadgeClass(rule.severity)">
+              {{ rule.severity }}
+            </span>
+            <span class="text-[10px] text-on-surface-variant">
+              {{ rule.conditions }} condition(s)
+            </span>
+            <span class="text-[10px] text-orange-400 font-bold">
+              {{ rule.hits || 0 }} hits
+            </span>
+            <span *ngFor="let tag of rule.tags?.slice(0,2)"
+              class="text-[9px] text-on-surface-variant bg-surface-container-low px-1.5 py-0.5 rounded font-mono">
+              {{ tag }}
+            </span>
+          </div>
+          <div *ngIf="rule.description" class="text-[10px] text-on-surface-variant mt-1 italic">
+            {{ rule.description }}
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-6">
+        <div class="flex flex-col items-end">
+          <span class="text-[10px] text-on-surface-variant uppercase font-bold">Status</span>
+          <span [class]="rule.status === 'ACTIVE' ?
+            'text-primary text-xs font-bold' :
+            'text-on-surface-variant text-xs'">
+            {{ rule.status }}
+          </span>
+        </div>
+        <div class="flex items-center gap-1">
+          <!-- Edit button -->
+          <button (click)="openEditForm(rule)" title="Edit rule"
+            class="p-2 rounded hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors">
+            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+          <!-- Toggle button -->
+          <button (click)="toggleRule(rule)" [title]="rule.status === 'ACTIVE' ? 'Disable' : 'Enable'" [class]="'p-2 rounded hover:bg-surface-container-low transition-colors ' +
+                    (rule.status === 'ACTIVE' ? 'text-primary' : 'text-on-surface-variant')">
+            <lucide-icon [name]="PowerIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+          <!-- Delete button -->
+          <button (click)="deleteRule(rule)" title="Delete rule"
+            class="p-2 rounded hover:bg-surface-container-low text-on-surface-variant hover:text-red-400 transition-colors">
+            <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Empty -->
+    <div *ngIf="rules.length === 0" class="py-20 flex flex-col items-center justify-center text-on-surface-variant">
+      <lucide-icon [name]="GavelIcon" class="w-12 h-12 mb-4 opacity-20"></lucide-icon>
+      <p class="text-sm">No SIGMA rules loaded</p>
+      <p class="text-xs mt-1">Click "New Rule" to create one</p>
+    </div>
+  </div>
+
+  <div class="mt-4 text-[11px] text-on-surface-variant">
+    ℹ️ Rules activate immediately after saving — no engine restart needed.
+  </div>
+</div>

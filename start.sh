@@ -14,7 +14,21 @@ sudo modprobe br_netfilter 2>/dev/null || true
 # ── Set interface ─────────────────────────────
 if [ -f "$INSTALL_DIR/.env" ]; then
     source "$INSTALL_DIR/.env"
+
 fi
+
+WEBHOOK=$(clickhouse-client --user=ndr \
+    --password=ndr123 \
+    --query "SELECT value FROM ndr.soar_config \
+    FINAL WHERE key='webhook_url'" 2>/dev/null)
+if [ -n "$WEBHOOK" ]; then
+    sed -i \
+        "s|SHUFFLE_WEBHOOK_URL=.*|SHUFFLE_WEBHOOK_URL=$WEBHOOK|" \
+        $INSTALL_DIR/.env
+    log "✅ SOAR webhook restored"
+fi
+
+
 IFACE=${IFACE:-$(ip -o -4 addr show 2>/dev/null | \
     grep -v "127.0.0.1\|docker\|br-\|veth" | \
     awk '{print $2}' | head -1)}
@@ -37,6 +51,25 @@ sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
 sudo docker compose up -d
+
+# ── Set Kafka retention ───────────────────────
+sleep 15
+sudo docker exec kafka \
+    /opt/kafka/bin/kafka-configs.sh \
+    --bootstrap-server localhost:9092 \
+    --alter --entity-type topics \
+    --entity-name ndr-events \
+    --add-config retention.ms=3600000 \
+    2>/dev/null || true
+
+
+    
+# ── Smart Vector checkpoint reset ────────────
+log "Resetting Vector checkpoints..."
+sudo rm -rf $HOME_DIR/.vector/data/suricata \
+    $HOME_DIR/.vector/data/zeek 2>/dev/null || true
+mkdir -p $HOME_DIR/.vector/data
+log "✅ Vector checkpoints cleared"
 
 # ── Check Shuffle SOAR ────────────────────────
 echo "  → Checking Shuffle SOAR..."
@@ -87,8 +120,6 @@ print(d.get('apikey',''))
             $INSTALL_DIR/.env
         log "✅ Shuffle API key refreshed"
         # Restart engine with new key
-        sudo usermod -aG docker $USER
-        newgrp docker
         sudo docker compose up -d ndr-engine-1
     fi
 fi
