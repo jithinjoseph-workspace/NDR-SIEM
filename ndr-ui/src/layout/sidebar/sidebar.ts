@@ -38,9 +38,11 @@ export class Sidebar implements OnInit {
     const user = this.auth.getUser();
     const isDefaultTenant = user?.tenant_id === 'default';
 
-    if (this.auth.isAdmin()) {
+    if (this.auth.isAdmin() || user?.role === 'tenant_admin') {
       this.navItems = [
-        { label: 'Admin Panel', route: '/admin', icon: Users },
+        isDefaultTenant
+          ? { label: 'Admin Panel', route: '/admin', icon: Users }
+          : { label: 'Tenant Users', route: '/tenant-admin', icon: Users },
       ];
     } else {
       this.navItems = [

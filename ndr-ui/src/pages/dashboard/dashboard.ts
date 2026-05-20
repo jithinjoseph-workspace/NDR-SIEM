@@ -30,6 +30,8 @@ export class Dashboard implements OnInit, OnDestroy {
   topSrcIps: any[] = [];
   topDstIps: any[] = [];
   recentCriticalAlerts: any[] = [];
+  chartLabels: string[] = [];
+  chartData: number[] = [];
 
   private subs: Subscription[] = [];
   private refreshInterval: any;
@@ -96,6 +98,8 @@ export class Dashboard implements OnInit, OnDestroy {
     }
     Dashboard.savedTenantId = currentTenant;
 
+    this.chartService.start();
+
     // Restore saved state if exists
     this.chartLabels = ['', '', '', '', '', ''];
     if (Dashboard.savedChartData.length > 0) {
@@ -144,6 +148,14 @@ export class Dashboard implements OnInit, OnDestroy {
 
   exportReport(format: string) {
     this.api.exportReport(format);
+  }
+
+  openAlerts(queryParams: Record<string, string> = {}) {
+    this.router.navigate(['/alerts'], { queryParams });
+  }
+
+  openNetworkMap() {
+    this.router.navigate(['/network-map']);
   }
 
   loadAllStats() {
@@ -201,11 +213,20 @@ export class Dashboard implements OnInit, OnDestroy {
     Dashboard.savedChartData = [...this.chartData];
   }
 
+  syncChartFromService() {
+    const snapshot = this.chartService.getSnapshot();
+    this.chartLabels = [...snapshot.labels];
+    this.chartData = [...snapshot.data];
+    this.eventsLastHour = this.chartService.getLatestEventsLastHour();
+    this.updateChartData();
+    Dashboard.savedChartData = [...this.chartData];
+  }
+
   updateChartData() {
     this.lineChartData = {
-      labels: snapshot.labels,
+      labels: [...this.chartLabels],
       datasets: [{
-        data: snapshot.data,
+        data: [...this.chartData],
         label: 'Events',
         fill: true,
         tension: 0.4,

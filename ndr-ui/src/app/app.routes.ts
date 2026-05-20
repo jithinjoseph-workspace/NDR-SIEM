@@ -80,5 +80,11 @@ export const routes: Routes = [
     loadComponent: () => import('../pages/admin/admin')
       .then(m => m.Admin)
   },
+  {
+    path: 'tenant-admin',
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/tenant-admin/tenant-admin')
+      .then(m => m.TenantAdmin)
+  },
   { path: '**', redirectTo: 'login' }
 ];
