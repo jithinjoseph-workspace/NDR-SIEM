@@ -43,6 +43,13 @@
         'bg-surface-container text-on-surface-variant hover:text-white')">
       🏢 Tenants
     </button>
+    <button (click)="activeTab='engines'"
+      [class]="'px-4 py-2 rounded-lg text-xs font-bold transition-all ' +
+      (activeTab === 'engines' ?
+        'bg-primary text-black' :
+        'bg-surface-container text-on-surface-variant hover:text-white')">
+      ⚙️ Engines
+    </button>
   </div>
 
   <!-- Users Tab -->
@@ -194,6 +201,64 @@
           class="px-6 py-8 text-center
           text-on-surface-variant text-sm">
           No tenants yet — add your first company!
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Engines Tab -->
+  <div *ngIf="activeTab === 'engines'">
+    <div class="bg-surface-container-highest rounded-xl
+      border border-outline/10">
+      <div class="px-6 py-4 border-b border-outline/10
+        flex items-center justify-between">
+        <div>
+          <h3 class="text-white font-bold text-sm uppercase">
+            NDR Engine Cluster
+          </h3>
+          <p class="text-on-surface-variant text-xs mt-1">
+            {{ engines.length }} engines running
+          </p>
+        </div>
+        <button (click)="scaleUp()"
+          [disabled]="scaling"
+          class="px-4 py-2 bg-primary/10 text-primary
+          text-xs font-bold rounded-lg
+          hover:bg-primary/20 disabled:opacity-50">
+          {{ scaling ? '⏳ Starting...' : '➕ Add Engine' }}
+        </button>
+      </div>
+      <div class="divide-y divide-outline/5">
+        <div *ngFor="let engine of engines"
+          class="px-6 py-4 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-2 h-2 rounded-full
+              bg-primary animate-pulse"></div>
+            <div>
+              <div class="text-white font-bold text-sm">
+                {{ engine.name }}
+              </div>
+              <div class="text-on-surface-variant text-xs">
+                {{ engine.status }}
+              </div>
+            </div>
+          </div>
+          <button
+            *ngIf="engines.length > 1"
+            (click)="scaleDown(engine.name)"
+            class="text-xs px-3 py-1.5 rounded-lg
+            bg-red-500/10 text-red-400
+            hover:bg-red-500/20">
+            Stop
+          </button>
+        </div>
+        <div *ngIf="engines.length === 0 && !loadingEngines"
+          class="px-6 py-8 text-center text-on-surface-variant text-sm">
+          No engines running in cluster.
+        </div>
+        <div *ngIf="loadingEngines"
+          class="px-6 py-8 text-center text-on-surface-variant text-sm animate-pulse">
+          Loading engines...
         </div>
       </div>
     </div>

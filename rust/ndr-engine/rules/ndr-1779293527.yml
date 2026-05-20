@@ -1,0 +1,13 @@
+id: ndr-1779293527
+title: Critical Suricata Alert
+description: Detects highest severity Suricata alerts
+level: critical
+tags:
+  []
+logsource:
+  product: ndr
+detection:
+  keywords:
+    alert.severity|equals:
+      - '1'
+  condition: keywords

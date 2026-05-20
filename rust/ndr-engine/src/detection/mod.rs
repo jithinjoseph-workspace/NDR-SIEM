@@ -2,7 +2,7 @@
 // License: Apache-2.0
 
 mod sigma;
-pub use sigma::{SigmaRule, DetectionMatch, load_rules_from_dir};
+pub use sigma::{SigmaRule, DetectionMatch, load_rules_from_dir, parse_rule_content};
 
 use crate::normalizer::NormalizedEvent;
 use sigma::Logic;

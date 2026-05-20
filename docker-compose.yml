@@ -56,6 +56,7 @@ services:
       - RULES_DIR=/app/ndr-engine/rules
       - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
+      - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
 
     volumes:
@@ -64,6 +65,7 @@ services:
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
       - ${INSTALL_DIR}/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - kafka
       - redis
@@ -86,6 +88,7 @@ services:
       - RULES_DIR=/app/ndr-engine/rules
       - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
+      - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
 
     volumes:
@@ -94,6 +97,7 @@ services:
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
       - ${INSTALL_DIR}/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - kafka
       - redis
@@ -116,6 +120,7 @@ services:
       - RULES_DIR=/app/ndr-engine/rules
       - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
+      - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
 
     volumes:
@@ -124,6 +129,7 @@ services:
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
       - ${INSTALL_DIR}/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - kafka
       - redis

@@ -63,6 +63,30 @@ sudo docker exec kafka \
     2>/dev/null || true
 
 
+# Create topic with 3 partitions
+sudo docker exec kafka \
+    /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server localhost:9092 \
+    --create --if-not-exists \
+    --topic ndr-events \
+    --partitions 3 \
+    --replication-factor 1
+log "✅ Kafka partitions ready for scaling"
+
+# Verify
+sudo docker exec kafka \
+    /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server localhost:9092 \
+    --describe --topic ndr-events
+
+# Check consumer group now
+sleep 5
+sudo docker exec kafka \
+    /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server localhost:9092 \
+    --group ndr-engine-group \
+    --describe
+
     
 # ── Smart Vector checkpoint reset ────────────
 log "Resetting Vector checkpoints..."

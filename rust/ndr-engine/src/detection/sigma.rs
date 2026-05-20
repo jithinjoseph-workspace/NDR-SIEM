@@ -97,7 +97,11 @@ pub fn load_rules_from_dir(dir: impl AsRef<Path>) -> Vec<SigmaRule> {
 
 fn parse_rule_file(path: &Path) -> anyhow::Result<SigmaRule> {
     let content = std::fs::read_to_string(path)?;
-    let doc: HashMap<String, serde_yaml::Value> = serde_yaml::from_str(&content)?;
+    parse_rule_content(&content)
+}
+
+pub fn parse_rule_content(content: &str) -> anyhow::Result<SigmaRule> {
+    let doc: HashMap<String, serde_yaml::Value> = serde_yaml::from_str(content)?;
 
     let get_str = |k: &str| -> String {
         doc.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string()

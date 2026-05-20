@@ -113,10 +113,10 @@ async fn handle_ws(
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
                         parsed.get("tenant_id")
                             .and_then(|t| t.as_str())
-                            .map(|t| t == tenant_id || t == "default")
-                            .unwrap_or(true)
+                            .map(|t| t == tenant_id)
+                            .unwrap_or(false)
                     } else {
-                        true
+                        false
                     }
                 };
 

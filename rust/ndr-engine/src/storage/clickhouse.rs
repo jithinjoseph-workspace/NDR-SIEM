@@ -349,6 +349,7 @@ pub async fn create_tenant(
                 "ALTER TABLE ndr.soar_playbooks ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_config ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.rules_state ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.sigma_rules ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -495,6 +496,77 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             .execute()
             .await?;
         Ok(())
+    }
+    pub async fn get_sigma_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, String)>> {
+        let result = self.client
+            .query("SELECT id, content FROM ndr.sigma_rules FINAL WHERE enabled = 1 AND (tenant_id = ? OR tenant_id = 'default')")
+            .bind(tenant_id)
+            .fetch_all::<(String, String)>()
+            .await?;
+        Ok(result)
+    }
+
+    pub async fn get_all_enabled_sigma_rules(&self) -> anyhow::Result<Vec<(String, String)>> {
+        let result = self.client
+            .query("SELECT id, content FROM ndr.sigma_rules FINAL WHERE enabled = 1")
+            .fetch_all::<(String, String)>()
+            .await?;
+        Ok(result)
+    }
+
+    pub async fn save_sigma_rule(&self, id: &str, name: &str, content: &str, tenant_id: &str) -> anyhow::Result<()> {
+        self.client
+            .query("INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, now(), now())")
+            .bind(id)
+            .bind(name)
+            .bind(content)
+            .bind(tenant_id)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_sigma_rule(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        self.client
+            .query("ALTER TABLE ndr.sigma_rules DELETE WHERE id = ? AND tenant_id = ?")
+            .bind(id)
+            .bind(tenant_id)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn toggle_sigma_rule(&self, id: &str, enabled: bool, tenant_id: &str) -> anyhow::Result<()> {
+        let query = if tenant_id == "default" {
+            "INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, enabled, updated_at) SELECT id, name, content, tenant_id, ?, now() FROM ndr.sigma_rules FINAL WHERE id = ?"
+        } else {
+            "INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, enabled, updated_at) SELECT id, name, content, tenant_id, ?, now() FROM ndr.sigma_rules FINAL WHERE id = ? AND tenant_id = ?"
+        };
+        let mut q = self.client.query(query).bind(enabled as u8).bind(id);
+        if tenant_id != "default" {
+            q = q.bind(tenant_id);
+        }
+        q.execute().await?;
+        Ok(())
+    }
+
+    pub async fn get_sigma_rule_by_id(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<(String, String, String, String, u8)>> {
+        let result = self.client
+            .query("SELECT id, name, content, tenant_id, enabled FROM ndr.sigma_rules FINAL WHERE id = ? AND (tenant_id = ? OR tenant_id = 'default') LIMIT 1")
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_all::<(String, String, String, String, u8)>()
+            .await?;
+        Ok(result.first().cloned())
+    }
+
+    pub async fn get_all_sigma_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, String, String, String, u8)>> {
+        let result = self.client
+            .query("SELECT id, name, content, tenant_id, enabled FROM ndr.sigma_rules FINAL WHERE tenant_id = ? OR tenant_id = 'default'")
+            .bind(tenant_id)
+            .fetch_all::<(String, String, String, String, u8)>()
+            .await?;
+        Ok(result)
     }
 
 //soar integrations
