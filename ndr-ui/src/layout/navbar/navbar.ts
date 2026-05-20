@@ -2,6 +2,7 @@ import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { AuthService } from '../../services/auth/auth';
 import { LucideAngularModule, Search, Bell, User, ChevronDown } from 'lucide-angular';
 import { Websocket } from '../../services/websocket/websocket';
 
@@ -13,41 +14,43 @@ import { Websocket } from '../../services/websocket/websocket';
   styleUrl: './navbar.css',
 })
 export class Navbar implements OnInit {
-  SearchIcon     = Search;
-  BellIcon       = Bell;
-  UserIcon       = User;
+  SearchIcon = Search;
+  BellIcon = Bell;
+  UserIcon = User;
   ChevronDownIcon = ChevronDown;
 
   systemStatus = 'OPERATIONAL';
-  searchText   = '';
+  searchText = '';
   showSuggestions = false;
-  alertCount   = 0;
+  showUserMenu = false;
+  alertCount = 0;
 
   // Search suggestions
   suggestions = [
-    { label: 'Network Logs',   hint: 'View all events',         route: '/logs',        icon: '📋' },
-    { label: 'Alerts',         hint: 'View correlation hits',   route: '/alerts',      icon: '🚨' },
-    { label: 'Rules',          hint: 'Manage SIGMA rules',      route: '/rules',       icon: '⚙️' },
-    { label: 'Threat Intel',   hint: 'IOC lookup',              route: '/intel',       icon: '🛡️' },
-    { label: 'Network Map',    hint: 'Topology view',           route: '/network-map', icon: '🗺️' },
-    { label: 'System Health',  hint: 'Service status',          route: '/health',      icon: '💚' },
-    { label: 'Live Stream',    hint: 'Real-time events',        route: '/live',        icon: '📡' },
+    { label: 'Network Logs', hint: 'View all events', route: '/logs', icon: '📋' },
+    { label: 'Alerts', hint: 'View correlation hits', route: '/alerts', icon: '🚨' },
+    { label: 'Rules', hint: 'Manage SIGMA rules', route: '/rules', icon: '⚙️' },
+    { label: 'Threat Intel', hint: 'IOC lookup', route: '/intel', icon: '🛡️' },
+    { label: 'Network Map', hint: 'Topology view', route: '/network-map', icon: '🗺️' },
+    { label: 'System Health', hint: 'Service status', route: '/health', icon: '💚' },
+    { label: 'Live Stream', hint: 'Real-time events', route: '/live', icon: '📡' },
   ];
 
   filteredSuggestions: any[] = [];
 
   constructor(
+    private auth: AuthService,
     private router: Router,
     private ws: Websocket,
     private cdr: ChangeDetectorRef
-  ) {}
+  ) { }
 
   ngOnInit() {
     // Update system status from WebSocket
     this.ws.lastAgentStatus$.subscribe(data => {
       if (!data) return;
       const allRunning = data.zeek === 'running' &&
-                         data.suricata === 'running';
+        data.suricata === 'running';
       this.systemStatus = allRunning ? 'OPERATIONAL' : 'DEGRADED';
       this.cdr.detectChanges();
     });
@@ -71,9 +74,9 @@ export class Navbar implements OnInit {
     if (ipPattern.test(term)) {
       this.filteredSuggestions.unshift({
         label: `Search IP: ${this.searchText}`,
-        hint:  'Search in Network Logs',
+        hint: 'Search in Network Logs',
         route: `/logs?search=${this.searchText}`,
-        icon:  '🔍'
+        icon: '🔍'
       });
     }
 
@@ -81,9 +84,9 @@ export class Navbar implements OnInit {
     if (term.length > 2) {
       this.filteredSuggestions.push({
         label: `Search rules: "${this.searchText}"`,
-        hint:  'Find SIGMA rules',
+        hint: 'Find SIGMA rules',
         route: `/rules?search=${this.searchText}`,
-        icon:  '⚙️'
+        icon: '⚙️'
       });
     }
 
@@ -144,5 +147,13 @@ export class Navbar implements OnInit {
       this.showSuggestions = false;
       this.cdr.detectChanges();
     }, 200);
+  }
+
+  get currentUser() {
+    return this.auth.getUser();
+  }
+
+  logout() {
+    this.auth.logout();
   }
 }

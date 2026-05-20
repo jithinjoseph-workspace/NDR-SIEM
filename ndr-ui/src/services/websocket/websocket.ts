@@ -22,7 +22,11 @@ export class Websocket {
   connect() {
     console.log('Connecting to websocket...');
     try {
-      this.socket = new WebSocket('ws://localhost:3000/ws');
+            const token = localStorage.getItem('ndr_token') || '';
+      const wsUrl = token 
+        ? `ws://localhost:3000/ws?token=${token}`
+        : 'ws://localhost:3000/ws';
+      this.socket = new WebSocket(wsUrl);
 
       this.socket.onmessage = (event) => {
         // Run inside Angular zone so UI updates instantly

@@ -55,6 +55,7 @@ services:
       - RULES_DIR=/app/ndr-engine/rules
       - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -92,6 +93,7 @@ services:
       - SHUFFLE_DEFAULT_USERNAME=admin
       - SHUFFLE_DEFAULT_PASSWORD=shufflepassword
       - SHUFFLE_DEFAULT_APIKEY=${SHUFFLE_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
       - ORG_ID=default
       - SHUFFLE_BASE_URL=http://shuffle-backend:5001
       - SHUFFLE_CLOUD_SYNC=false

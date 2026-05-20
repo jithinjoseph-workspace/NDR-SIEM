@@ -17,6 +17,39 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 use std::env;
 use std::time::Duration;
+
+use jsonwebtoken::{encode, decode, Header, 
+    Validation, EncodingKey, DecodingKey};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Claims {
+    sub: String,
+    role: String,
+    tenant_id: String,
+    exp: usize,
+}
+
+fn generate_jwt(username: &str, role: &str, 
+    tenant_id: &str) -> String {
+    let secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| 
+            "ndr-secret-key-2026".to_string());
+    let expiry = chrono::Utc::now()
+        .timestamp() as usize + 86400; // 24 hours
+    let claims = Claims {
+        sub: username.to_string(),
+        role: role.to_string(),
+        tenant_id: tenant_id.to_string(),
+        exp: expiry,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes())
+    ).unwrap_or_default()
+}
+
+
 use base64::Engine;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -60,6 +93,68 @@ pub struct AppState {
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
 }
 
+
+
+// JWT Claims extractor
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct AuthClaims {
+    pub sub: String,
+    pub role: String,
+    pub tenant_id: String,
+    pub exp: usize,
+}
+
+pub fn extract_claims(
+    headers: &axum::http::HeaderMap
+) -> Option<AuthClaims> {
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))?;
+
+    let secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| 
+            "ndr-secret-key-2026".to_string());
+
+    decode::<AuthClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default()
+    ).ok().map(|d| d.claims)
+}
+
+
+// Auth middleware
+pub async fn auth_middleware(
+    headers: axum::http::HeaderMap,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path().to_string();
+    
+    // Public routes - no auth needed
+    let public = ["/api/auth/login", "/api/health", "/ws"];
+    if public.iter().any(|p| path.starts_with(p)) {
+        return next.run(request).await;
+    }
+
+    // Extract JWT
+    match extract_claims(&headers) {
+        Some(claims) => {
+            request.extensions_mut().insert(claims);
+            next.run(request).await
+        }
+        None => {
+            axum::response::Response::builder()
+                .status(401)
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(
+                    r#"{"status":"error","message":"Unauthorized"}"#
+                ))
+                .unwrap()
+        }
+    }
+}
 
 pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
     let src = event.source_ip.as_deref().unwrap_or("-");
@@ -105,8 +200,9 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
 
 
 //network map
-pub async fn get_network_map(State(state): State<AppState>) -> Json<Value> {
-    match state.ch_storage.get_network_map().await {
+pub async fn get_network_map(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_network_map_by_tenant(&tenant_id).await {
         Ok(data) => Json(data),
         Err(_) => Json(json!({"nodes": [], "edges": []}))
     }
@@ -201,6 +297,8 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     dst_country:  enrichment.dst_geo.as_ref()
                     .map(|g| g.country_code.clone())
                     .unwrap_or_default(),
+    tenant_id:    std::env::var("TENANT_ID")
+                    .unwrap_or_else(|_| "default".to_string()),
     };
     tokio::spawn(async move {
         if let Err(e) = ch.insert_hit(ch_hit).await {
@@ -488,7 +586,7 @@ for integration in &integrations {
                         .to_rfc3339()
                 });
                 let url = url.to_string();
-                let int_name_c = int_name.clone();
+                let _int_name_c = int_name.clone();
                 tokio::spawn(async move {
                     let _ = reqwest::Client::new()
                         .post(&url)
@@ -673,6 +771,14 @@ tokio::spawn(async move {
     let _ = state.tx.send(hit_msg.to_string());
 }
 
+
+
+
+
+
+
+
+
 // ── GET /health ───────────────────────────────────────────────────────────
 
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
@@ -818,8 +924,11 @@ pub async fn get_agent_status() -> Json<Value> {
 
 // ── ClickHouse API endpoints ──────────────────────────────────────────────
 
-pub async fn get_stats(State(state): State<AppState>) -> Json<Value> {
-    match state.ch_storage.get_stats().await {
+pub async fn get_stats(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_stats_by_tenant(&tenant_id).await {
         Ok(stats) => Json(stats),
         Err(e) => {
             tracing::warn!("Stats query error: {}", e);
@@ -835,8 +944,11 @@ pub async fn get_stats(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
-pub async fn get_recent_events(State(state): State<AppState>) -> Json<Value> {
-    match state.ch_storage.get_recent_events(50).await {
+pub async fn get_recent_events(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_recent_events_by_tenant(50, &tenant_id).await {
         Ok(events) => Json(json!(events)),
         Err(e) => {
             tracing::warn!("Recent events query error: {}", e);
@@ -845,9 +957,12 @@ pub async fn get_recent_events(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
-pub async fn get_top_ips(State(state): State<AppState>) -> Json<Value> {
-    let src = state.ch_storage.get_top_src_ips(10).await.unwrap_or_default();
-    let dst = state.ch_storage.get_top_dst_ips(10).await.unwrap_or_default();
+pub async fn get_top_ips(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    let src = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id).await.unwrap_or_default();
+    let dst = state.ch_storage.get_top_dst_ips_by_tenant(10, &tenant_id).await.unwrap_or_default();
     Json(json!({
         "top_src_ips": src,
         "top_dst_ips": dst,
@@ -855,8 +970,11 @@ pub async fn get_top_ips(State(state): State<AppState>) -> Json<Value> {
 }
 
 
-pub async fn get_hits(State(state): State<AppState>) -> Json<Value> {
-    match state.ch_storage.get_recent_hits(50).await {
+pub async fn get_hits(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_recent_hits_by_tenant(50, &tenant_id).await {
         Ok(hits) => Json(json!(hits)),
         Err(e) => {
             tracing::warn!("Hits query error: {}", e);
@@ -1972,17 +2090,21 @@ pub async fn update_settings(
 
 pub async fn export_report(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,) -> axum::response::Response {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
     let format = params.get("format").map(|s: &String| s.as_str()).unwrap_or("json");
     let hours: u32 = params.get("hours").and_then(|h: &String| h.parse().ok()).unwrap_or(24);
 
-    let stats    = state.ch_storage.get_stats().await
+    let stats    = state.ch_storage.get_stats_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
-    let hits     = state.ch_storage.get_recent_hits(100).await
+    let hits     = state.ch_storage.get_recent_hits_by_tenant(100, &tenant_id).await
         .unwrap_or_default();
-    let top_ips  = state.ch_storage.get_top_src_ips(10).await
+    let top_ips  = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id).await
         .unwrap_or_default();
-    let severity = state.ch_storage.get_severity_breakdown().await
+    let severity = state.ch_storage.get_severity_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
     let threat   = state.ch_storage.get_threat_intel_hits().await
         .unwrap_or_default();
@@ -2504,8 +2626,11 @@ pub async fn configure_email(
 
 
 //severity
-pub async fn get_severity(State(state): State<AppState>) -> Json<Value> {
-    match state.ch_storage.get_severity_breakdown().await {
+pub async fn get_severity(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_severity_by_tenant(&tenant_id).await {
         Ok(data) => Json(data),
         Err(e) => {
             tracing::warn!("Severity query error: {}", e);
@@ -2516,6 +2641,280 @@ pub async fn get_severity(State(state): State<AppState>) -> Json<Value> {
                 "low": 0
             }))
         }
+    }
+}
+
+// POST /api/auth/login
+pub async fn login(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let username = payload["username"]
+        .as_str().unwrap_or("").to_string();
+    let password = payload["password"]
+        .as_str().unwrap_or("").to_string();
+
+    if username.is_empty() || password.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Username and password required"
+        }));
+    }
+
+    match state.ch_storage
+        .verify_user(&username, &password).await {
+        Ok(Some(user)) => {
+            let token = generate_jwt(
+                &username,
+                user["role"].as_str()
+                    .unwrap_or("analyst"),
+                user["tenant_id"].as_str()
+                    .unwrap_or("default")
+            );
+            Json(json!({
+                "status": "ok",
+                "token": token,
+                "user": {
+                    "username": username,
+                    "role": user["role"],
+                    "tenant_id": user["tenant_id"]
+                }
+            }))
+        }
+        Ok(None) => Json(json!({
+            "status": "error",
+            "message": "Invalid username or password"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// GET /api/auth/me
+pub async fn get_me(
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    let secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| 
+            "ndr-secret-key-2026".to_string());
+
+    match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default()
+    ) {
+        Ok(data) => Json(json!({
+            "status": "ok",
+            "user": {
+                "username": data.claims.sub,
+                "role": data.claims.role,
+                "tenant_id": data.claims.tenant_id
+            }
+        })),
+        Err(_) => Json(json!({
+            "status": "error",
+            "message": "Invalid token"
+        }))
+    }
+}
+
+// POST /api/auth/logout
+pub async fn logout() -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "message": "Logged out"
+    }))
+}
+
+
+// GET /api/auth/users
+pub async fn get_users(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    match state.ch_storage.get_users().await {
+        Ok(users) => Json(json!({
+            "status": "ok",
+            "users": users
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "users": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/auth/users
+pub async fn create_user(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let username = payload["username"]
+        .as_str().unwrap_or("").to_string();
+    let password = payload["password"]
+        .as_str().unwrap_or("").to_string();
+    let role = payload["role"]
+        .as_str().unwrap_or("analyst").to_string();
+    let tenant_id = payload["tenant_id"]
+        .as_str().unwrap_or("default").to_string();
+
+    if username.is_empty() || password.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Username and password required"
+        }));
+    }
+
+    let hash = bcrypt::hash(&password, 12)
+        .unwrap_or_default();
+
+    match state.ch_storage.create_user(
+        &username, &hash, &role, &tenant_id
+    ).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": format!("User {} created!", username)
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// DELETE /api/auth/users/:id
+pub async fn delete_user(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    match state.ch_storage.delete_user(&id).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "User deleted"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// GET /api/auth/tenants
+pub async fn get_tenants(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    match state.ch_storage.get_tenants().await {
+        Ok(tenants) => Json(json!({
+            "status": "ok",
+            "tenants": tenants
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "tenants": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/auth/tenants
+pub async fn create_tenant(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let name = payload["name"]
+        .as_str().unwrap_or("").to_string();
+    let id = payload["id"]
+        .as_str().unwrap_or("").to_string();
+
+    if name.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Tenant name required"
+        }));
+    }
+
+    match state.ch_storage
+        .create_tenant(&id, &name).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": format!("Tenant {} created!", name)
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+//jira ticket
+pub async fn get_jira_tickets(
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let url = payload["url"].as_str().unwrap_or("");
+    let email = payload["email"].as_str().unwrap_or("");
+    let token = payload["token"].as_str().unwrap_or("");
+    let project = payload["project_key"]
+        .as_str().unwrap_or("");
+
+    if url.is_empty() || email.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "tickets": []
+        }));
+    }
+
+    let creds = base64::engine::general_purpose::STANDARD
+        .encode(format!("{}:{}", email, token));
+    
+    let jql_url = format!(
+        "{}/rest/api/3/search?jql=project={}+ORDER+BY+created+DESC&maxResults=20",
+        url, project
+    );
+
+    match reqwest::Client::new()
+        .get(&jql_url)
+        .header("Authorization", format!("Basic {}", creds))
+        .header("Accept", "application/json")
+        .timeout(Duration::from_secs(10))
+        .send().await {
+        Ok(r) => {
+            let data: Value = r.json().await
+                .unwrap_or(json!({}));
+            let issues = data["issues"]
+                .as_array()
+                .map(|issues| issues.iter().map(|i| {
+                    let fields = &i["fields"];
+                    json!({
+                        "id": i["id"],
+                        "key": i["key"],
+                        "summary": fields["summary"],
+                        "status": fields["status"]["name"],
+                        "priority": fields["priority"]["name"],
+                        "created": fields["created"],
+                        "url": format!("{}/browse/{}", 
+                            url, i["key"].as_str().unwrap_or(""))
+                    })
+                }).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            Json(json!({
+                "status": "ok",
+                "tickets": issues
+            }))
+        }
+        Err(e) => Json(json!({
+            "status": "error",
+            "tickets": [],
+            "message": e.to_string()
+        }))
     }
 }
 

@@ -1,52 +1,84 @@
 import { Routes } from '@angular/router';
+import { authGuard } from '../services/auth/auth-guard';
 
 export const routes: Routes = [
   { path: '', redirectTo: 'dashboard', pathMatch: 'full' },
   {
+    path: 'login',
+    loadComponent: () => import('../pages/login/login')
+      .then(m => m.Login)
+  },
+  {
     path: 'dashboard',
-    loadComponent: () => import('../pages/dashboard/dashboard').then(m => m.Dashboard)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/dashboard/dashboard')
+      .then(m => m.Dashboard)
   },
   {
     path: 'alerts',
-    loadComponent: () => import('../pages/alerts/alerts').then(m => m.Alerts)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/alerts/alerts')
+      .then(m => m.Alerts)
   },
   {
     path: 'logs',
-    loadComponent: () => import('../pages/logs/logs').then(m => m.Logs)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/logs/logs')
+      .then(m => m.Logs)
   },
   {
     path: 'live',
-    loadComponent: () => import('../pages/live/live').then(m => m.Live)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/live/live')
+      .then(m => m.Live)
   },
   {
     path: 'rules',
-    loadComponent: () => import('../pages/rules/rules').then(m => m.Rules)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/rules/rules')
+      .then(m => m.Rules)
   },
   {
     path: 'intel',
-    loadComponent: () => import('../pages/intel/intel').then(m => m.Intel)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/intel/intel')
+      .then(m => m.Intel)
   },
   {
     path: 'health',
-    loadComponent: () => import('../pages/health/health').then(m => m.Health)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/health/health')
+      .then(m => m.Health)
   },
   {
     path: 'setup',
-    loadComponent: () => import('../pages/setup/setup').then(m => m.Setup)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/setup/setup')
+      .then(m => m.Setup)
   },
   {
     path: 'network-map',
-    loadComponent: () => import('../pages/network-map/network-map').then(m => m.NetworkMap)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/network-map/network-map')
+      .then(m => m.NetworkMap)
   },
-
   {
     path: 'soar',
-    loadComponent: () => import('../pages/soar/soar').then(m => m.Soar)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/soar/soar')
+      .then(m => m.Soar)
   },
   {
     path: 'settings',
-    loadComponent: () => import('../pages/settings/settings').then(m => m.Settings)
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/settings/settings')
+      .then(m => m.Settings)
   },
-
-  { path: '**', redirectTo: 'dashboard' }
+  {
+    path: 'admin',
+    canActivate: [authGuard],
+    loadComponent: () => import('../pages/admin/admin')
+      .then(m => m.Admin)
+  },
+  { path: '**', redirectTo: 'login' }
 ];

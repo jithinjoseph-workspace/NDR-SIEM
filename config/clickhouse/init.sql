@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_events (
     proto        String,
     event_type   String,
     community_id String,
-    raw          String
+    raw          String,
+    tenant_id    String DEFAULT 'default'
 ) ENGINE = MergeTree()
 ORDER BY (timestamp, src_ip, dst_ip)
 TTL timestamp + INTERVAL 30 DAY;
@@ -26,7 +27,8 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_hits (
     sigma_hits   Array(String),
     threat_intel UInt8,
     src_country  String,
-    dst_country  String
+    dst_country  String,
+    tenant_id    String DEFAULT 'default'
 ) ENGINE = MergeTree()
 ORDER BY (timestamp, severity, score)
 TTL timestamp + INTERVAL 90 DAY;
@@ -107,3 +109,36 @@ CREATE TABLE IF NOT EXISTS ndr.soar_integrations
 )
 ENGINE = ReplacingMergeTree(created_at)
 ORDER BY id;
+
+-- Users table
+CREATE TABLE IF NOT EXISTS ndr.users
+(
+    id           String DEFAULT toString(generateUUIDv4()),
+    username     String,
+    password_hash String,
+    role         String DEFAULT 'analyst',
+    tenant_id    String DEFAULT 'default',
+    created_at   DateTime DEFAULT now(),
+    last_login   DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(created_at)
+ORDER BY username;
+
+-- Insert default admin user
+-- Password: ndr@admin123 (bcrypt hash)
+INSERT INTO ndr.users (username, password_hash, role)
+VALUES ('admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewHCr8eKFGjlSHKi', 'admin')
+ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS ndr.tenants
+(
+    id         String,
+    name       String,
+    active     UInt8 DEFAULT 1,
+    created_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(created_at)
+ORDER BY id;
+
+INSERT INTO ndr.tenants (id, name, active)
+VALUES ('default', 'Default Organization', 1);

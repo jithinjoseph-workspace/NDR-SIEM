@@ -1,4 +1,5 @@
 use clickhouse::Client;
+use bcrypt;
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 
@@ -16,6 +17,7 @@ pub struct NdrEvent {
     pub event_type:   String,
     pub community_id: String,
     pub raw:          String,
+    pub tenant_id:    String,
 }
 
 #[derive(Debug, Serialize, clickhouse::Row)]
@@ -31,6 +33,7 @@ pub struct NdrHit {
     pub threat_intel: u8,
     pub src_country:  String,
     pub dst_country:  String,
+    pub tenant_id:    String,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -83,6 +86,136 @@ pub struct ClickhouseStorage {
 }
 
 impl ClickhouseStorage {
+
+
+// ── User auth ─────────────────────────────────
+pub async fn verify_user(
+    &self,
+    username: &str,
+    password: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let query = format!(
+        "SELECT id, username, password_hash, role, tenant_id
+         FROM ndr.users FINAL
+         WHERE username = '{}'
+         LIMIT 1",
+        username
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String, String, String, String, String)>()
+        .await?;
+
+    if let Some(user) = result.first() {
+        let hash = &user.2;
+        if bcrypt::verify(password, hash)
+            .unwrap_or(false) {
+            return Ok(Some(serde_json::json!({
+                "id":        user.0,
+                "username":  user.1,
+                "role":      user.3,
+                "tenant_id": user.4
+            })));
+        }
+    }
+    Ok(None)
+}
+
+pub async fn create_default_admin(&self) -> anyhow::Result<()> {
+    // Check if admin exists
+    let count: u64 = self.client
+        .query("SELECT count() FROM ndr.users WHERE username = 'admin'")
+        .fetch_one::<u64>()
+        .await
+        .unwrap_or(0);
+
+    if count == 0 {
+        let hash = bcrypt::hash("ndr@admin123", 12)
+            .unwrap_or_default();
+        let query = format!(
+            "INSERT INTO ndr.users \
+             (username, password_hash, role, tenant_id) \
+             VALUES ('admin', '{}', 'admin', 'default')",
+            hash
+        );
+        self.client.query(&query).execute().await?;
+        tracing::info!("✅ Default admin user created");
+    }
+    Ok(())
+}
+
+
+pub async fn get_users(
+    &self
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let result = self.client
+        .query("SELECT id, username, role, tenant_id, toString(created_at) FROM ndr.users FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,String,String,String)>()
+        .await?;
+    Ok(result.iter().map(|r| json!({
+        "id": r.0,
+        "username": r.1,
+        "role": r.2,
+        "tenant_id": r.3,
+        "created_at": r.4
+    })).collect())
+}
+
+pub async fn create_user(
+    &self,
+    username: &str,
+    password_hash: &str,
+    role: &str,
+    tenant_id: &str,
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.users \
+         (username, password_hash, role, tenant_id) \
+         VALUES ('{}','{}','{}','{}')",
+        username, password_hash, role, tenant_id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn delete_user(
+    &self, id: &str
+) -> anyhow::Result<()> {
+    let query = format!(
+        "ALTER TABLE ndr.users DELETE WHERE id = '{}'",
+        id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn get_tenants(
+    &self
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let result = self.client
+        .query("SELECT id, name, active FROM ndr.tenants FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,u8)>()
+        .await?;
+    Ok(result.iter().map(|r| json!({
+        "id": r.0,
+        "name": r.1,
+        "active": r.2 == 1
+    })).collect())
+}
+
+pub async fn create_tenant(
+    &self,
+    id: &str,
+    name: &str,
+) -> anyhow::Result<()> {
+    let query = format!(
+        "INSERT INTO ndr.tenants (id, name, active) \
+         VALUES ('{}','{}',1)",
+        id, name
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
     pub fn new() -> Self {
         let url = std::env::var("CLICKHOUSE_URL")
             .unwrap_or_else(|_| "http://localhost:8123".to_string());
@@ -140,6 +273,9 @@ impl ClickhouseStorage {
     }
     tracing::warn!("init.sql not found!");
 }
+
+
+
 
 
 //threat intel hits
@@ -611,7 +747,170 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         }))
     }
 
+    pub async fn get_stats_by_tenant(
+        &self, tenant_id: &str
+    ) -> anyhow::Result<serde_json::Value> {
+        let f = if tenant_id == "default" { "1=1".to_string() }
+                else { format!("tenant_id='{}'", tenant_id) };
+        let et: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_events WHERE {}", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let ht: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_hits WHERE {}", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let e1h: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_events WHERE {} AND timestamp > now() - INTERVAL 1 HOUR", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let h1h: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_hits WHERE {} AND timestamp > now() - INTERVAL 1 HOUR", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let zeek: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_events WHERE {} AND source='zeek'", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let suri: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_events WHERE {} AND source='suricata'", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        Ok(serde_json::json!({
+            "events_total": et, "hits_total": ht,
+            "events_1h": e1h, "hits_1h": h1h,
+            "zeek_events": zeek, "suricata_events": suri
+        }))
+    }
 
+    pub async fn get_recent_events_by_tenant(
+        &self, limit: u64, tenant_id: &str
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let f = if tenant_id == "default" { "1=1".to_string() }
+                else { format!("tenant_id='{}'", tenant_id) };
+        let rows = self.client.query(&format!(
+            "SELECT src_ip,dst_ip,proto,source,severity,toString(timestamp) \
+             FROM ndr.ndr_events WHERE {} \
+             ORDER BY timestamp DESC LIMIT {}", f, limit))
+            .fetch_all::<(String,String,String,String,String,String)>()
+            .await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({
+            "src_ip":r.0,"dst_ip":r.1,"proto":r.2,
+            "source":r.3,"severity":r.4,"timestamp":r.5
+        })).collect())
+    }
 
-    
+    pub async fn get_top_src_ips_by_tenant(
+        &self, limit: u64, tenant_id: &str
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let f = if tenant_id == "default" { "1=1".to_string() }
+                else { format!("tenant_id='{}'", tenant_id) };
+        let rows = self.client.query(&format!(
+            "SELECT src_ip, count() as cnt \
+             FROM ndr.ndr_events WHERE {} \
+             GROUP BY src_ip ORDER BY cnt DESC LIMIT {}", f, limit))
+            .fetch_all::<(String,u64)>()
+            .await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({
+            "ip":r.0,"count":r.1
+        })).collect())
+    }
+
+    pub async fn get_top_dst_ips_by_tenant(
+        &self, limit: u64, tenant_id: &str
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let f = if tenant_id == "default" { "1=1".to_string() }
+                else { format!("tenant_id='{}'", tenant_id) };
+        let rows = self.client.query(&format!(
+            "SELECT dst_ip, count() as cnt \
+             FROM ndr.ndr_events WHERE {} \
+             GROUP BY dst_ip ORDER BY cnt DESC LIMIT {}", f, limit))
+            .fetch_all::<(String,u64)>()
+            .await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({
+            "ip":r.0,"count":r.1
+        })).collect())
+    }
+
+    pub async fn get_recent_hits_by_tenant(
+        &self, limit: u64, tenant_id: &str
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let f = if tenant_id == "default" { "1=1".to_string() }
+                else { format!("tenant_id='{}'", tenant_id) };
+        let rows = self.client.query(&format!(
+            "SELECT src_ip,dst_ip,score,severity,toString(timestamp) \
+             FROM ndr.ndr_hits WHERE {} \
+             ORDER BY timestamp DESC LIMIT {}", f, limit))
+            .fetch_all::<(String,String,f32,String,String)>()
+            .await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({
+            "src_ip":r.0,"dst_ip":r.1,"score":r.2,
+            "severity":r.3,"timestamp":r.4
+        })).collect())
+    }
+
+    pub async fn get_severity_by_tenant(
+        &self, tenant_id: &str
+    ) -> anyhow::Result<serde_json::Value> {
+        let f = if tenant_id == "default" { "1=1".to_string() }
+                else { format!("tenant_id='{}'", tenant_id) };
+        let critical: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='CRITICAL'", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let high: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='HIGH'", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let medium: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='MEDIUM'", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        let low: u64 = self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='LOW'", f))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        Ok(serde_json::json!({
+            "critical":critical,"high":high,
+            "medium":medium,"low":low
+        }))
+    }
+
+    pub async fn get_network_map_by_tenant(
+        &self, tenant_id: &str
+    ) -> anyhow::Result<serde_json::Value> {
+        let f = if tenant_id == "default" { "1=1".to_string() }
+                else { format!("tenant_id='{}'", tenant_id) };
+        let pairs = self.client.query(&format!("
+            SELECT src_ip, dst_ip,
+                count() as connections,
+                groupArray(DISTINCT proto) as protocols
+            FROM ndr.ndr_events 
+            WHERE {} AND src_ip != '' AND dst_ip != ''
+              AND timestamp > now() - INTERVAL 1 HOUR
+            GROUP BY src_ip, dst_ip
+            ORDER BY connections DESC
+            LIMIT 100", f))
+            .fetch_all::<NetworkPair>()
+            .await.unwrap_or_default();
+        let mut nodes: std::collections::HashMap<String, serde_json::Value> = 
+            std::collections::HashMap::new();
+        let mut edges: Vec<serde_json::Value> = Vec::new();
+        for pair in &pairs {
+            nodes.entry(pair.src_ip.clone()).or_insert(serde_json::json!({
+                "id": pair.src_ip, "label": pair.src_ip,
+                "type": if pair.src_ip.starts_with("10.") || 
+                    pair.src_ip.starts_with("192.168.") ||
+                    pair.src_ip.starts_with("172.")
+                    { "internal" } else { "external" }
+            }));
+            nodes.entry(pair.dst_ip.clone()).or_insert(serde_json::json!({
+                "id": pair.dst_ip, "label": pair.dst_ip,
+                "type": if pair.dst_ip.starts_with("10.") ||
+                    pair.dst_ip.starts_with("192.168.") ||
+                    pair.dst_ip.starts_with("172.")
+                    { "internal" } else { "external" }
+            }));
+            edges.push(serde_json::json!({
+                "source": pair.src_ip, "target": pair.dst_ip,
+                "connections": pair.connections,
+                "protocols": pair.protocols
+            }));
+        }
+        Ok(serde_json::json!({
+            "nodes": nodes.values().collect::<Vec<_>>(),
+            "edges": edges
+        }))
+    }
+
 }

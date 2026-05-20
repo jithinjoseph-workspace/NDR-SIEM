@@ -71,91 +71,117 @@ export class Soar implements OnInit {
     manualShuffleUrl = '';
 
     //SOAR Integrations
-    
+
     integrations: any[] = [];
-showNewIntegration = false;
-intType     = 'slack';
-intName     = '';
-intConfig: any = {};
-testingInt  = false;
-testResult  = '';
-savingInt   = false;
+    showNewIntegration = false;
+    intType = 'slack';
+    intName = '';
+    intConfig: any = {};
+    testingInt = false;
+    testResult = '';
+    savingInt = false;
+
+    // Jira ticket tracker
+    jiraTickets: any[] = [];
+    loadingTickets = false;
 
 
-integrationTypes = [
-    { 
-        type: 'slack', 
-        name: 'Slack',
-        icon: '💬',
-        fields: [
-            { key: 'webhook_url', label: 'Webhook URL', 
-              placeholder: 'https://hooks.slack.com/...' }
-        ]
-    },
-    { 
-        type: 'teams', 
-        name: 'Microsoft Teams',
-        icon: '🟦',
-        fields: [
-            { key: 'webhook_url', label: 'Webhook URL',
-              placeholder: 'https://outlook.office.com/webhook/...' }
-        ]
-    },
-    { 
-        type: 'discord', 
-        name: 'Discord',
-        icon: '🎮',
-        fields: [
-            { key: 'webhook_url', label: 'Webhook URL',
-              placeholder: 'https://discord.com/api/webhooks/...' }
-        ]
-    },
-    { 
-        type: 'telegram', 
-        name: 'Telegram',
-        icon: '✈️',
-        fields: [
-            { key: 'bot_token', label: 'Bot Token',
-              placeholder: '1234567890:ABC...' },
-            { key: 'chat_id', label: 'Chat ID',
-              placeholder: '-1001234567890' }
-        ]
-    },
-    { 
-        type: 'pagerduty', 
-        name: 'PagerDuty',
-        icon: '🚨',
-        fields: [
-            { key: 'routing_key', label: 'Routing Key',
-              placeholder: 'abc123...' }
-        ]
-    },
+    integrationTypes = [
+        {
+            type: 'slack',
+            name: 'Slack',
+            icon: '💬',
+            fields: [
+                {
+                    key: 'webhook_url', label: 'Webhook URL',
+                    placeholder: 'https://hooks.slack.com/...'
+                }
+            ]
+        },
+        {
+            type: 'teams',
+            name: 'Microsoft Teams',
+            icon: '🟦',
+            fields: [
+                {
+                    key: 'webhook_url', label: 'Webhook URL',
+                    placeholder: 'https://outlook.office.com/webhook/...'
+                }
+            ]
+        },
+        {
+            type: 'discord',
+            name: 'Discord',
+            icon: '🎮',
+            fields: [
+                {
+                    key: 'webhook_url', label: 'Webhook URL',
+                    placeholder: 'https://discord.com/api/webhooks/...'
+                }
+            ]
+        },
+        {
+            type: 'telegram',
+            name: 'Telegram',
+            icon: '✈️',
+            fields: [
+                {
+                    key: 'bot_token', label: 'Bot Token',
+                    placeholder: '1234567890:ABC...'
+                },
+                {
+                    key: 'chat_id', label: 'Chat ID',
+                    placeholder: '-1001234567890'
+                }
+            ]
+        },
+        {
+            type: 'pagerduty',
+            name: 'PagerDuty',
+            icon: '🚨',
+            fields: [
+                {
+                    key: 'routing_key', label: 'Routing Key',
+                    placeholder: 'abc123...'
+                }
+            ]
+        },
 
-    {
-    type: 'jira',
-    name: 'Jira',
-    icon: '🎫',
-    fields: [
-        { key: 'url', label: 'Jira URL',
-          placeholder: 'https://yoursite.atlassian.net' },
-        { key: 'email', label: 'Email',
-          placeholder: 'your@email.com' },
-        { key: 'token', label: 'API Token',
-          placeholder: 'ATATT3x...' },
-        { key: 'project_key', label: 'Project Key',
-          placeholder: 'NAR' }
-    ]
-},
-    { 
-        type: 'webhook', 
-        name: 'Custom Webhook',
-        icon: '🔗',
-        fields: [
-            { key: 'webhook_url', label: 'Webhook URL',
-              placeholder: 'https://your-endpoint.com/alert' }
-        ]
-    }
-];
+        {
+            type: 'jira',
+            name: 'Jira',
+            icon: '🎫',
+            fields: [
+                {
+                    key: 'url', label: 'Jira URL',
+                    placeholder: 'https://yoursite.atlassian.net'
+                },
+                {
+                    key: 'email', label: 'Email',
+                    placeholder: 'your@email.com'
+                },
+                {
+                    key: 'token', label: 'API Token',
+                    placeholder: 'ATATT3x...'
+                },
+                {
+                    key: 'project_key', label: 'Project Key',
+                    placeholder: 'NAR'
+                }
+            ]
+        },
+        {
+            type: 'webhook',
+            name: 'Custom Webhook',
+            icon: '🔗',
+            fields: [
+                {
+                    key: 'webhook_url', label: 'Webhook URL',
+                    placeholder: 'https://your-endpoint.com/alert'
+                }
+            ]
+        }
+    ];
 
 
     constructor(
@@ -179,7 +205,8 @@ integrationTypes = [
                 if (this.webhookUrl) {
                     this.view = 'connected';
                     this.loadExecutions();
-                    this.loadIntegrations(); 
+                    this.loadIntegrations();
+                    setTimeout(() => this.loadJiraTickets(), 1000);
                 } else {
                     this.view = 'setup';
                 }
@@ -193,18 +220,19 @@ integrationTypes = [
         });
     }
 
-getIntIcon(type: string): string {
-    const icons: any = {
-        'slack':     '💬',
-        'teams':     '🟦',
-        'discord':   '🎮',
-        'telegram':  '✈️',
-        'pagerduty': '🚨',
-        'webhook':   '🔗',
-        'email':     '📧'
-    };
-    return icons[type] || '🔔';
-}
+    getIntIcon(type: string): string {
+        const icons: any = {
+            'slack': '💬',
+            'teams': '🟦',
+            'discord': '🎮',
+            'telegram': '✈️',
+            'pagerduty': '🚨',
+            'webhook': '🔗',
+            'email': '📧',
+            'jira': '🎫'
+        };
+        return icons[type] || '🔔';
+    }
 
     setupSoar() {
         if (!this.shuffleUrl || !this.username || !this.password) {
@@ -390,76 +418,167 @@ getIntIcon(type: string): string {
     }
 
 
-get selectedIntType() {
-    return this.integrationTypes
-        .find(t => t.type === this.intType);
-}
+    get selectedIntType() {
+        return this.integrationTypes
+            .find(t => t.type === this.intType);
+    }
 
-loadIntegrations() {
-    this.api.getIntegrations().subscribe({
-        next: (data: any) => {
-            this.integrations = data.integrations || [];
-            this.cdr.detectChanges();
-        }
-    });
-}
-
-testIntegration() {
-    this.testingInt = true;
-    this.testResult = '';
-    this.api.testIntegration({
-        type:   this.intType,
-        config: this.intConfig
-    }).subscribe({
-        next: (data: any) => {
-            this.testingInt = false;
-            this.testResult = data.message;
-            this.cdr.detectChanges();
-        },
-        error: () => {
-            this.testingInt = false;
-            this.testResult = '❌ Connection failed';
-            this.cdr.detectChanges();
-        }
-    });
-}
-
-saveIntegration() {
-    this.savingInt = true;
-    this.api.saveIntegration({
-        name:   this.intName || this.selectedIntType?.name,
-        type:   this.intType,
-        config: this.intConfig
-    }).subscribe({
-        next: (data: any) => {
-            this.savingInt          = false;
-            this.showNewIntegration = false;
-            this.intConfig          = {};
-            this.intName            = '';
-            this.loadIntegrations();
-            this.cdr.detectChanges();
-        },
-        error: () => {
-            this.savingInt = false;
-            this.cdr.detectChanges();
-        }
-    });
-}
-
-toggleIntegration(int: any) {
-    int.enabled = !int.enabled;
-    this.api.toggleIntegration({
-        id:      int.id,
-        enabled: int.enabled
-    }).subscribe();
-}
-
-deleteIntegration(int: any) {
-    if (!confirm(`Delete ${int.name}?`)) return;
-    this.api.deleteIntegration({ id: int.id })
-        .subscribe({
-            next: () => this.loadIntegrations()
+    loadIntegrations() {
+        this.api.getIntegrations().subscribe({
+            next: (data: any) => {
+                this.integrations = data.integrations || [];
+                this.cdr.detectChanges();
+            }
         });
-}
+    }
+
+
+    loadJiraTickets() {
+        const jiraInt = this.integrations.find(
+            i => i.type === 'jira' && i.enabled
+        );
+        if (!jiraInt) return;
+
+        this.loadingTickets = true;
+        const config = jiraInt.config;
+
+        this.api.getJiraTickets({
+            url: config.url,
+            email: config.email,
+            token: config.token,
+            project_key: config.project_key
+        }).subscribe({
+            next: (data: any) => {
+                this.jiraTickets = data.tickets || [];
+                this.loadingTickets = false;
+                this.cdr.detectChanges();
+            },
+            error: () => {
+                this.loadingTickets = false;
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    // Test all integrations
+    testingAll = false;
+    testAllResults: any[] = [];
+
+    testAllIntegrations() {
+        this.testingAll = true;
+        this.testAllResults = [];
+
+        const tests = this.integrations
+            .filter(i => i.enabled)
+            .map(i => this.api.testIntegration({
+                type: i.type,
+                config: i.config
+            }).toPromise().then(r => ({
+                name: i.name,
+                type: i.type,
+                result: r.message,
+                ok: r.status === 'ok'
+            })).catch(() => ({
+                name: i.name,
+                type: i.type,
+                result: '❌ Failed',
+                ok: false
+            })));
+
+        Promise.all(tests).then(results => {
+            this.testAllResults = results;
+            this.testingAll = false;
+            this.cdr.detectChanges();
+        });
+    }
+
+    // Integration stats
+    get activeIntegrations(): number {
+        return this.integrations.filter(i => i.enabled).length;
+    }
+
+    get totalIntegrations(): number {
+        return this.integrations.length;
+    }
+
+    getIntegrationsByType(): any[] {
+        const types = ['slack', 'teams', 'discord',
+            'telegram', 'pagerduty', 'jira', 'webhook'];
+        return types.map(t => ({
+            type: t,
+            icon: this.getIntIcon(t),
+            name: this.integrationTypes
+                .find(it => it.type === t)?.name || t,
+            count: this.integrations
+                .filter(i => i.type === t).length,
+            active: this.integrations
+                .filter(i => i.type === t && i.enabled).length
+        })).filter(t => t.count > 0);
+    }
+    ticketColor(severity: string): string {
+        switch (severity?.toUpperCase()) {
+            case 'CRITICAL': return 'text-red-400';
+            case 'HIGH': return 'text-orange-400';
+            case 'MEDIUM': return 'text-yellow-400';
+            default: return 'text-blue-400';
+        }
+    }
+    testIntegration() {
+        this.testingInt = true;
+        this.testResult = '';
+        this.api.testIntegration({
+            type: this.intType,
+            config: this.intConfig
+        }).subscribe({
+            next: (data: any) => {
+                this.testingInt = false;
+                this.testResult = data.message;
+                this.cdr.detectChanges();
+            },
+            error: () => {
+                this.testingInt = false;
+                this.testResult = '❌ Connection failed';
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    saveIntegration() {
+        this.savingInt = true;
+        this.api.saveIntegration({
+            name: this.intName || this.selectedIntType?.name,
+            type: this.intType,
+            config: this.intConfig
+        }).subscribe({
+            next: (data: any) => {
+                this.savingInt = false;
+                this.showNewIntegration = false;
+                this.intConfig = {};
+                this.intName = '';
+                this.loadIntegrations();
+                this.cdr.detectChanges();
+            },
+            error: () => {
+                this.savingInt = false;
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    toggleIntegration(int: any) {
+        int.enabled = !int.enabled;
+        this.api.toggleIntegration({
+            id: int.id,
+            enabled: int.enabled
+        }).subscribe();
+    }
+
+    deleteIntegration(int: any) {
+        if (!confirm(`Delete ${int.name}?`)) return;
+        this.api.deleteIntegration({ id: int.id })
+            .subscribe({
+                next: () => this.loadIntegrations()
+            });
+    }
 
 }

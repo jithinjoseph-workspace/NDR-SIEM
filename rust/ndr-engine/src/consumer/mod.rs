@@ -115,6 +115,7 @@ async fn process_event(raw: Value, state: &Arc<AppState>) {
                         .unwrap_or_default(),
         community_id: event.community_id.clone().unwrap_or_default(),
         raw:          raw.to_string(),
+        tenant_id:    std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string()),
     };
 
     tokio::spawn(async move {

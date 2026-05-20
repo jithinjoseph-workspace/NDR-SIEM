@@ -44,15 +44,28 @@
       <span>{{ alertCount }}</span>
     </button>
 
-    <button class="profile-button">
+    <button class="profile-button" (click)="showUserMenu=!showUserMenu"
+      style="position:relative">
       <span class="avatar">
         <lucide-icon [name]="UserIcon" class="w-5 h-5"></lucide-icon>
       </span>
       <span class="profile-copy">
-        <strong>Analyst 01</strong>
-        <small>Admin Level</small>
+        <strong>{{ currentUser?.username || 'User' }}</strong>
+        <small>{{ currentUser?.role || 'analyst' }}</small>
       </span>
       <lucide-icon [name]="ChevronDownIcon" class="w-3 h-3 chevron-icon"></lucide-icon>
+      <!-- Dropdown -->
+      <div *ngIf="showUserMenu"
+        style="position:absolute;top:100%;right:0;
+        background:#1a1a2e;border:1px solid rgba(255,255,255,0.1);
+        border-radius:8px;padding:8px;min-width:150px;z-index:1000">
+        <button (click)="logout()"
+          style="width:100%;text-align:left;padding:8px 12px;
+          color:#ff4444;font-size:12px;border-radius:4px;
+          background:none;border:none;cursor:pointer">
+          🚪 Logout
+        </button>
+      </div>
     </button>
   </div>
 </header>

@@ -1,0 +1,117 @@
+<div class="min-h-screen bg-surface flex items-center
+  justify-center p-4"
+  style="background: linear-gradient(135deg, #0a0a1a 0%, #0d1117 50%, #0a1628 100%)">
+
+  <!-- Background grid -->
+  <div class="absolute inset-0 opacity-5"
+    style="background-image: linear-gradient(#69f6b8 1px, transparent 1px),
+    linear-gradient(90deg, #69f6b8 1px, transparent 1px);
+    background-size: 50px 50px">
+  </div>
+
+  <div class="relative w-full max-w-md">
+    <!-- Logo -->
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center
+        w-16 h-16 rounded-2xl bg-primary/20
+        border border-primary/30 mb-4">
+        <span class="text-3xl">🛡️</span>
+      </div>
+      <h1 class="text-3xl font-bold text-white
+        font-display tracking-tight">
+        NDR COMMAND
+      </h1>
+      <p class="text-on-surface-variant text-sm mt-1">
+        TACTICAL OBSERVATORY
+      </p>
+    </div>
+
+    <!-- Login card -->
+    <div class="bg-surface-container-highest/80
+      backdrop-blur-xl rounded-2xl border border-outline/20
+      p-8 shadow-2xl">
+      
+      <h2 class="text-white font-bold text-lg mb-6">
+        Sign in to your account
+      </h2>
+
+      <!-- Error -->
+      <div *ngIf="error"
+        class="mb-4 px-4 py-3 rounded-lg
+        bg-red-500/10 border border-red-500/20
+        text-red-400 text-sm">
+        {{ error }}
+      </div>
+
+      <!-- Username -->
+      <div class="mb-4">
+        <label class="text-xs text-on-surface-variant
+          uppercase font-bold block mb-2">
+          Username
+        </label>
+        <input
+          [(ngModel)]="username"
+          (keyup.enter)="login()"
+          placeholder="Enter username"
+          class="w-full bg-surface-container
+          border border-outline/20 rounded-xl
+          px-4 py-3 text-white placeholder-on-surface-variant/50
+          outline-none focus:border-primary/50
+          transition-colors"/>
+      </div>
+
+      <!-- Password -->
+      <div class="mb-6">
+        <label class="text-xs text-on-surface-variant
+          uppercase font-bold block mb-2">
+          Password
+        </label>
+        <div class="relative">
+          <input
+            [(ngModel)]="password"
+            (keyup.enter)="login()"
+            [type]="showPassword ? 'text' : 'password'"
+            placeholder="Enter password"
+            class="w-full bg-surface-container
+            border border-outline/20 rounded-xl
+            px-4 py-3 text-white placeholder-on-surface-variant/50
+            outline-none focus:border-primary/50
+            transition-colors pr-12"/>
+          <button
+            (click)="showPassword = !showPassword"
+            class="absolute right-3 top-1/2 -translate-y-1/2
+            text-on-surface-variant hover:text-white text-sm">
+            {{ showPassword ? '🙈' : '👁️' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Login button -->
+      <button
+        (click)="login()"
+        [disabled]="loading"
+        class="w-full bg-primary text-black font-bold
+        py-3 rounded-xl hover:bg-primary/90
+        disabled:opacity-50 disabled:cursor-not-allowed
+        transition-all active:scale-95 text-sm uppercase
+        tracking-wider">
+        {{ loading ? '⏳ Signing in...' : 'Sign In' }}
+      </button>
+
+      <!-- Default credentials hint -->
+      <div class="mt-6 p-3 rounded-lg bg-surface-container
+        border border-outline/10">
+        <p class="text-xs text-on-surface-variant text-center">
+          Default: <span class="text-primary font-mono">admin</span>
+          / <span class="text-primary font-mono">ndr@admin123</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="text-center text-on-surface-variant
+      text-xs mt-6">
+      NDR Stack v1.0 — Powered by Zeek + Suricata
+    </p>
+  </div>
+</div>
