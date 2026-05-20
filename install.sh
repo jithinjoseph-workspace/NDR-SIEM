@@ -704,6 +704,23 @@ else
     warn "  Run: bash $INSTALL_DIR/scripts/setup-shuffle.sh"
 fi
 
+# ── Create proxy config ─────────────────────────
+cat > $INSTALL_DIR/ndr-ui/proxy.conf.json << 'PROXYEOF'
+{
+  "/api": {
+    "target": "http://localhost:3000",
+    "secure": false,
+    "changeOrigin": true
+  },
+  "/ws": {
+    "target": "ws://localhost:3000",
+    "secure": false,
+    "ws": true
+  }
+}
+PROXYEOF
+log "✅ Proxy config created"
+
 # ── Start Angular UI ──────────────────────────
 log "Starting Angular UI..."
 

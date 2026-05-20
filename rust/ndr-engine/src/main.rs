@@ -12,7 +12,7 @@ mod scoring;
 mod storage;
 
 use api::{websocket::ws_handler, AppState};
-use axum::{routing::{get, post}, Router};
+use axum::{routing::{get, post, delete}, Router};
 use tower_http::cors::{Any, CorsLayer};
 use enrichment::{AsnLookup, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
@@ -68,6 +68,7 @@ async fn main() {
 ch_storage: {
     let ch = Arc::new(storage::ClickhouseStorage::new());
     ch.init_tables().await;
+    let _ = ch.create_default_admin().await;
     ch
 },        storage:    Arc::new(storage),
         tx:         tx.clone(),
@@ -183,7 +184,15 @@ tokio::spawn(async move {
         .route("/api/soar/integrations/test",post(api::test_integration_endpoint))
         .route("/api/soar/integrations/toggle",post(api::toggle_integration))
         .route("/api/soar/integrations/delete",post(api::delete_integration))
+        .route("/api/soar/jira/tickets", post(api::get_jira_tickets))
+        .route("/api/auth/login", post(api::login))
+        .route("/api/auth/logout", post(api::logout))
+        .route("/api/auth/me", get(api::get_me))
+        .route("/api/auth/users",get(api::get_users).post(api::create_user))
+        .route("/api/auth/users/:id",delete(api::delete_user))
+        .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
         .with_state(state)
+        .layer(axum::middleware::from_fn(api::auth_middleware))
         .layer(cors);
 
     info!("🌐 API active");

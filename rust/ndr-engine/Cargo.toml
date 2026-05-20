@@ -26,3 +26,5 @@ rskafka         = { version = "0.5", features = [] }
 tower-http      = { version = "0.5", features = ["cors"] }
 clickhouse      = { version = "0.11", features = ["watch"] }
 url = "2"
+jsonwebtoken = "9"
+bcrypt = "0.15"

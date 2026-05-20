@@ -180,6 +180,31 @@ deleteIntegration(data: any): Observable<any> {
         `${this.baseUrl}/soar/integrations/delete`, data);
 }
 
+getJiraTickets(config: any): Observable<any> {
+    return this.http.post(
+        `${this.baseUrl}/soar/jira/tickets`, config);
+}
+ // User management
+  getUsers(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/auth/users`);
+  }
+
+  createUser(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/users`, data);
+  }
+
+  deleteUser(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/auth/users/${id}`);
+  }
+
+  // Tenant management
+  getTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/auth/tenants`);
+  }
+
+  createTenant(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/tenants`, data);
+  }
 }
 
 

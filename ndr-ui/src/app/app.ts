@@ -1,10 +1,11 @@
 import { Component, OnInit, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterOutlet } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { Router, RouterOutlet, NavigationEnd } from '@angular/router';
 import { Sidebar } from '../layout/sidebar/sidebar';
 import { Navbar } from '../layout/navbar/navbar';
 import { Websocket } from '../services/websocket/websocket';
+import { AuthService } from '../services/auth/auth';
+import { filter } from 'rxjs/operators';
 
 @Component({
   selector: 'app-root',
@@ -15,25 +16,32 @@ import { Websocket } from '../services/websocket/websocket';
   encapsulation: ViewEncapsulation.None
 })
 export class App implements OnInit {
+  showShell = false;
+
   constructor(
     private wsService: Websocket,
-    private http: HttpClient
-  ) { }
+    private router: Router,
+    private auth: AuthService
+  ) {}
 
   ngOnInit() {
-    // Load theme from backend settings
-    this.http.get<any>('http://localhost:3000/api/settings').subscribe({
-      next: (s) => {
-        const theme = s?.theme || 'dark';
-        document.documentElement.setAttribute('data-theme', theme);
-      },
-      error: () => {
-        // Default to dark on error
-        document.documentElement.setAttribute('data-theme', 'dark');
-      }
-    });
+    // Determine shell visibility on every navigation
+    this.router.events
+      .pipe(filter(e => e instanceof NavigationEnd))
+      .subscribe((e: any) => {
+        const url: string = e.urlAfterRedirects || e.url;
+        const isLoginPage = url === '/login' || url.startsWith('/login?');
+        this.showShell = !isLoginPage && this.auth.isLoggedIn();
+      });
 
-    // Connect inside Angular lifecycle — zone is fully ready here
-    this.wsService.connect();
+    // Initial check (before first NavigationEnd fires)
+    const url = this.router.url;
+    const isLoginPage = url === '/login' || url.startsWith('/login?');
+    this.showShell = !isLoginPage && this.auth.isLoggedIn();
+
+    // Connect WebSocket only when authenticated
+    if (this.auth.isLoggedIn()) {
+      this.wsService.connect();
+    }
   }
 }
