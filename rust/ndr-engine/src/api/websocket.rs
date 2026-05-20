@@ -35,37 +35,41 @@ async fn handle_ws(
         .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string());
     let client = reqwest::Client::new();
 
-    // Push interfaces immediately
-    if let Ok(resp) = client.get(
-        format!("{}/agent/interfaces", agent)
-    ).send().await {
-        if let Ok(ifaces) = resp.json::<serde_json::Value>().await {
-            let msg = serde_json::json!({
-                "type": "interfaces",
-                "interfaces": ifaces
-            });
-            let _ = socket.send(Message::Text(msg.to_string())).await;
+    // Push interfaces only to default tenant
+    if tenant_id == "default" {
+        if let Ok(resp) = client.get(
+            format!("{}/agent/interfaces", agent)
+        ).send().await {
+            if let Ok(ifaces) = resp.json::<serde_json::Value>().await {
+                let msg = serde_json::json!({
+                    "type": "interfaces",
+                    "interfaces": ifaces
+                });
+                let _ = socket.send(Message::Text(msg.to_string())).await;
+            }
         }
     }
 
-    // Push agent status immediately
-    if let Ok(resp) = client.get(
-        format!("{}/agent/status", agent)
-    ).send().await {
-        if let Ok(data) = resp.json::<serde_json::Value>().await {
-            let msg = serde_json::json!({
-                "type": "agent_status",
-                "zeek": data.get("zeek")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("stopped"),
-                "suricata": data.get("suricata")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("stopped"),
-                "interface": data.get("interface")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("eth0"),
-            });
-            let _ = socket.send(Message::Text(msg.to_string())).await;
+    // Push agent status only to default tenant (local sensor)
+    if tenant_id == "default" {
+        if let Ok(resp) = client.get(
+            format!("{}/agent/status", agent)
+        ).send().await {
+            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                let msg = serde_json::json!({
+                    "type": "agent_status",
+                    "zeek": data.get("zeek")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stopped"),
+                    "suricata": data.get("suricata")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stopped"),
+                    "interface": data.get("interface")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("eth0"),
+                });
+                let _ = socket.send(Message::Text(msg.to_string())).await;
+            }
         }
     }
 

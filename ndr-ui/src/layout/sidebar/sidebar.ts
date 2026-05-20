@@ -35,10 +35,12 @@ export class Sidebar implements OnInit {
   constructor(private auth: AuthService) {}
 
   ngOnInit() {
+    const user = this.auth.getUser();
+    const isDefaultTenant = user?.tenant_id === 'default';
+
     if (this.auth.isAdmin()) {
       this.navItems = [
         { label: 'Admin Panel', route: '/admin', icon: Users },
-        // You can add other admin-specific menus here
       ];
     } else {
       this.navItems = [
@@ -50,9 +52,13 @@ export class Sidebar implements OnInit {
         { label: 'Rules', route: '/rules', icon: ShieldAlert },
         { label: 'Threat Intel', route: '/intel', icon: Search },
         { label: 'System Health', route: '/health', icon: Database },
-        { label: 'Sensor Setup', route: '/setup', icon: Settings },
-        { label: 'SOAR',    route: '/soar',    icon: Zap }
       ];
+
+      if (isDefaultTenant) {
+        this.navItems.push({ label: 'Sensor Setup', route: '/setup', icon: Settings });
+      }
+
+      this.navItems.push({ label: 'SOAR', route: '/soar', icon: Zap });
     }
 
     this.bottomItems = [

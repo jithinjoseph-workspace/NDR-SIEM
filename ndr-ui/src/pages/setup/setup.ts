@@ -1,8 +1,10 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
+import { AuthService } from '../../services/auth/auth';
 import { Subscription } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { LucideAngularModule, Settings, Play, Square, RefreshCcw, ShieldCheck, Activity } from 'lucide-angular';
@@ -34,10 +36,18 @@ export class Setup implements OnInit, OnDestroy {
   constructor(
     private api: Api,
     private ws: Websocket,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private auth: AuthService,
+    private router: Router
   ) {}
 
   ngOnInit() {
+    const user = this.auth.getUser();
+    if (user?.tenant_id !== 'default') {
+      this.router.navigate(['/dashboard']);
+      return;
+    }
+
     // HTTP on load — interfaces
     this.api.getInterfaces().subscribe(data => {
       this.interfaces = data || [];
