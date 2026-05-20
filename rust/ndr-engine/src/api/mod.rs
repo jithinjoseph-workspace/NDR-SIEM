@@ -160,7 +160,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
     let src = event.source_ip.as_deref().unwrap_or("-");
     let dst = event.dest_ip.as_deref().unwrap_or("-");
 
-    let msg = match event.event_source {
+    let mut msg = match event.event_source {
         crate::normalizer::EventSource::Zeek => {
             let cs       = event.conn_state.as_deref().unwrap_or("-");
             let cs_desc  = conn_state_description(cs);
@@ -194,6 +194,11 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
         }
         _ => return,
     };
+
+    let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
+    if let Some(obj) = msg.as_object_mut() {
+        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id));
+    }
 
     let _ = state.tx.send(msg.to_string());
 }
@@ -740,7 +745,7 @@ tokio::spawn(async move {
     }
 }
 
-    let hit_msg = json!({
+    let mut hit_msg = json!({
         "type":            "hit",
         "cid":             hit.community_id,
         "event_type":      hit.suricata.event_type,
@@ -768,6 +773,12 @@ tokio::spawn(async move {
             "conn_state_desc":  cs_desc,
         },
     });
+
+    let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
+    if let Some(obj) = hit_msg.as_object_mut() {
+        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id));
+    }
+
     let _ = state.tx.send(hit_msg.to_string());
 }
 
@@ -1053,7 +1064,11 @@ pub async fn get_rule_by_id(
 }
 
 //rules endpoint
-pub async fn get_rules(State(state): State<AppState>) -> Json<Value> {
+pub async fn get_rules(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     // Get all rules from disk
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
@@ -1061,7 +1076,7 @@ pub async fn get_rules(State(state): State<AppState>) -> Json<Value> {
 
     // Get disabled rules from ClickHouse
     let disabled = state.ch_storage
-        .get_disabled_rules().await
+        .get_disabled_rules(&tenant_id).await
         .unwrap_or_default();
 
     // Return ALL rules with enabled/disabled state
@@ -1187,14 +1202,16 @@ pub async fn add_manual_ioc(
 
 // auto reload rules 
 pub async fn reload_rules_api(
-    State(state): State<AppState>
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
 
     // Get disabled rules from ClickHouse
     let disabled = state.ch_storage
-        .get_disabled_rules().await
+        .get_disabled_rules(&tenant_id).await
         .unwrap_or_default();
 
     let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
@@ -1228,22 +1245,31 @@ pub async fn get_soar_status(
         .get_soar_config_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
     
-    // Fall back to env vars
+    // Fall back to env vars// Only fall back to env vars for default tenant
     let webhook_url = config["webhook_url"]
         .as_str()
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| 
-            std::env::var("SHUFFLE_WEBHOOK_URL")
-                .unwrap_or_default());
-
+        .unwrap_or_else(|| {
+            if tenant_id == "default" {
+                std::env::var("SHUFFLE_WEBHOOK_URL")
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        });
     let shuffle_url = config["shuffle_url"]
         .as_str()
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .unwrap_or_else(||
-            std::env::var("SHUFFLE_URL")
-                .unwrap_or_default());
+        .unwrap_or_else(|| {
+            if tenant_id == "default" {
+                std::env::var("SHUFFLE_URL")
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        });
 
     let connected = !webhook_url.is_empty();
 
@@ -1719,8 +1745,10 @@ detection:
 
 pub async fn delete_rule(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(rule_id): axum::extract::Path<String>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
     let file_path = format!("{}/{}.yml", rules_dir, rule_id);
@@ -1729,11 +1757,11 @@ pub async fn delete_rule(
         Ok(_) => {
             // Also remove state from ClickHouse
             state.ch_storage
-                .delete_rule_state(&rule_id).await.ok();
+                .delete_rule_state(&rule_id, &tenant_id).await.ok();
 
             // Reload rules
             let disabled = state.ch_storage
-                .get_disabled_rules().await
+                .get_disabled_rules(&tenant_id).await
                 .unwrap_or_default();
             let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
             let active = all_rules.into_iter()
@@ -1786,12 +1814,14 @@ pub async fn get_scale_status(State(state): State<AppState>) -> Json<Value> {
 //rules enable disable
 pub async fn toggle_rule(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(rule_id): axum::extract::Path<String>,
     Json(payload): Json<TogglePayload>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     // Save state to ClickHouse
     if let Err(e) = state.ch_storage
-        .set_rule_enabled(&rule_id, payload.enabled).await {
+        .set_rule_enabled(&rule_id, payload.enabled, &tenant_id).await {
         return Json(json!({
             "status": "error",
             "message": e.to_string()
@@ -1806,7 +1836,7 @@ pub async fn toggle_rule(
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
     let disabled = state.ch_storage
-        .get_disabled_rules().await
+        .get_disabled_rules(&tenant_id).await
         .unwrap_or_default();
     let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
     let active = all_rules.into_iter()
@@ -1826,14 +1856,26 @@ pub async fn toggle_rule(
 
 //get the executions from the workflow
 pub async fn get_soar_executions(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let config = state.ch_storage
+        .get_soar_config_by_tenant(&tenant_id).await
+        .unwrap_or(json!({}));
+
     let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
         .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
-    let api_key = std::env::var("SHUFFLE_API_KEY")
-        .unwrap_or_default();
-    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
-        .unwrap_or_default();
+    let api_key = config["api_key"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| std::env::var("SHUFFLE_API_KEY").unwrap_or_default());
+    let webhook_url = config["webhook_url"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| std::env::var("SHUFFLE_WEBHOOK_URL").unwrap_or_default());
 
     // Extract workflow ID from webhook URL
     let workflow_id = webhook_url
@@ -1881,14 +1923,26 @@ pub async fn get_soar_executions(
 
 //get the actions from the workflow
 pub async fn get_soar_actions(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let config = state.ch_storage
+        .get_soar_config_by_tenant(&tenant_id).await
+        .unwrap_or(json!({}));
+
     let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
         .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
-    let api_key = std::env::var("SHUFFLE_API_KEY")
-        .unwrap_or_default();
-    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
-        .unwrap_or_default();
+    let api_key = config["api_key"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| std::env::var("SHUFFLE_API_KEY").unwrap_or_default());
+    let webhook_url = config["webhook_url"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| std::env::var("SHUFFLE_WEBHOOK_URL").unwrap_or_default());
 
     let workflow_id = webhook_url
         .split("/workflows/")

@@ -37,6 +37,7 @@ pub struct NdrHit {
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+#[allow(dead_code)]
 pub struct TopIp {
     pub ip:    String,
     pub count: u64,
@@ -53,6 +54,7 @@ pub struct NetworkPair {
 
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+#[allow(dead_code)]
 pub struct RecentEvent {
     pub timestamp:    u32,
     pub source:       String,
@@ -63,6 +65,7 @@ pub struct RecentEvent {
     pub community_id: String,
 }
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+#[allow(dead_code)]
 pub struct RecentHit {
     pub timestamp:    u32,
     pub community_id: String,
@@ -85,6 +88,7 @@ pub struct ClickhouseStorage {
     client: Client,
 }
 
+#[allow(dead_code)]
 impl ClickhouseStorage {
 
 
@@ -344,6 +348,7 @@ pub async fn create_tenant(
                 "ALTER TABLE ndr.soar_integrations ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_playbooks ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_config ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.rules_state ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -459,32 +464,38 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         }))
     }
     
-    pub async fn set_rule_enabled(&self,id: &str,enabled: bool) -> anyhow::Result<()> {
-    self.client.query("INSERT INTO ndr.rules_state (id, enabled, updated) VALUES (?, ?, now())").bind(id).bind(enabled as u8).execute().await?;
-    Ok(())
-}
+    pub async fn set_rule_enabled(&self, id: &str, enabled: bool, tenant_id: &str) -> anyhow::Result<()> {
+        self.client.query("INSERT INTO ndr.rules_state (id, enabled, tenant_id, updated) VALUES (?, ?, ?, now())")
+            .bind(id)
+            .bind(enabled as u8)
+            .bind(tenant_id)
+            .execute().await?;
+        Ok(())
+    }
 
-pub async fn get_disabled_rules(&self) -> anyhow::Result<Vec<String>> {
-    let ids = self.client
-        .query(
-            "SELECT id FROM ndr.rules_state
-             FINAL
-             WHERE enabled = 0"
-        )
-        .fetch_all::<String>()
-        .await
-        .unwrap_or_default();
-    Ok(ids)
-}
+    pub async fn get_disabled_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<String>> {
+        let ids = self.client
+            .query(
+                "SELECT id FROM ndr.rules_state
+                 FINAL
+                 WHERE enabled = 0 AND tenant_id = ?"
+            )
+            .bind(tenant_id)
+            .fetch_all::<String>()
+            .await
+            .unwrap_or_default();
+        Ok(ids)
+    }
 
-pub async fn delete_rule_state(&self, id: &str) -> anyhow::Result<()> {
-    self.client
-        .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ?")
-        .bind(id)
-        .execute()
-        .await?;
-    Ok(())
-}
+    pub async fn delete_rule_state(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        self.client
+            .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ? AND tenant_id = ?")
+            .bind(id)
+            .bind(tenant_id)
+            .execute()
+            .await?;
+        Ok(())
+    }
 
 //soar integrations
 
@@ -867,8 +878,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_stats_by_tenant(
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
-        let f = if tenant_id == "default" { "1=1".to_string() }
-                else { format!("tenant_id='{}'", tenant_id) };
+        let f = format!("tenant_id='{}'", tenant_id);
         let et: u64 = self.client.query(&format!(
             "SELECT count() FROM ndr.ndr_events WHERE {}", f))
             .fetch_one::<u64>().await.unwrap_or(0);
@@ -897,8 +907,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_recent_events_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = if tenant_id == "default" { "1=1".to_string() }
-                else { format!("tenant_id='{}'", tenant_id) };
+        let f = format!("tenant_id='{}'", tenant_id);
         let rows = self.client.query(&format!(
             "SELECT src_ip,dst_ip,proto,source,severity,toString(timestamp) \
              FROM ndr.ndr_events WHERE {} \
@@ -914,8 +923,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_top_src_ips_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = if tenant_id == "default" { "1=1".to_string() }
-                else { format!("tenant_id='{}'", tenant_id) };
+        let f = format!("tenant_id='{}'", tenant_id);
         let rows = self.client.query(&format!(
             "SELECT src_ip, count() as cnt \
              FROM ndr.ndr_events WHERE {} \
@@ -930,8 +938,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_top_dst_ips_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = if tenant_id == "default" { "1=1".to_string() }
-                else { format!("tenant_id='{}'", tenant_id) };
+        let f = format!("tenant_id='{}'", tenant_id);
         let rows = self.client.query(&format!(
             "SELECT dst_ip, count() as cnt \
              FROM ndr.ndr_events WHERE {} \
@@ -946,8 +953,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_recent_hits_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = if tenant_id == "default" { "1=1".to_string() }
-                else { format!("tenant_id='{}'", tenant_id) };
+        let f = format!("tenant_id='{}'", tenant_id);
         let rows = self.client.query(&format!(
             "SELECT src_ip,dst_ip,score,severity,toString(timestamp) \
              FROM ndr.ndr_hits WHERE {} \
@@ -963,8 +969,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_severity_by_tenant(
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
-        let f = if tenant_id == "default" { "1=1".to_string() }
-                else { format!("tenant_id='{}'", tenant_id) };
+        let f = format!("tenant_id='{}'", tenant_id);
         let critical: u64 = self.client.query(&format!(
             "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='CRITICAL'", f))
             .fetch_one::<u64>().await.unwrap_or(0);
@@ -986,8 +991,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_network_map_by_tenant(
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
-        let f = if tenant_id == "default" { "1=1".to_string() }
-                else { format!("tenant_id='{}'", tenant_id) };
+        let f = format!("tenant_id='{}'", tenant_id);
         let pairs = self.client.query(&format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
