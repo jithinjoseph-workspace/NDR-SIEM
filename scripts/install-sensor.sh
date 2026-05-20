@@ -82,12 +82,42 @@ apt-get install -y -qq \
 # ── Install Zeek ──────────────────────────────────────────────────────────
 log "Installing Zeek..."
 if ! command -v zeek &>/dev/null && ! command -v /opt/zeek/bin/zeek &>/dev/null; then
-    echo 'deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_22.04/ /' \
-        > /etc/apt/sources.list.d/security:zeek.list
-    curl -fsSL https://download.opensuse.org/repositories/security:zeek/xUbuntu_22.04/Release.key \
-        | gpg --dearmor > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>/dev/null
-    apt-get update -qq
-    apt-get install -y -qq zeek > /dev/null
+    # Auto-detect Ubuntu version
+    UBUNTU_VER=$(lsb_release -rs 2>/dev/null || echo "22.04")
+    UBUNTU_MAJOR=$(echo $UBUNTU_VER | cut -d. -f1)
+    log "Detected Ubuntu $UBUNTU_VER"
+
+    # Install Zeek based on Ubuntu version
+    if [ "$UBUNTU_MAJOR" = "20" ]; then
+        # Ubuntu 20.04 - use PPA
+        log "Using Zeek PPA for Ubuntu 20.04..."
+        apt-get install -y -qq software-properties-common > /dev/null
+        add-apt-repository -y ppa:zeek/zeek > /dev/null 2>&1
+        apt-get update -qq
+        apt-get install -y -qq zeek > /dev/null 2>&1 || \
+        apt-get install -y -qq zeek-lts > /dev/null 2>&1 || true
+    elif [ "$UBUNTU_MAJOR" = "22" ]; then
+        # Ubuntu 22.04
+        echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_22.04/ /" \
+            > /etc/apt/sources.list.d/security:zeek.list
+        curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_22.04/Release.key" \
+            | gpg --dearmor \
+            > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>/dev/null
+        apt-get update -qq
+        apt-get install -y -qq zeek > /dev/null
+    elif [ "$UBUNTU_MAJOR" = "24" ]; then
+        # Ubuntu 24.04
+        echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/ /" \
+            > /etc/apt/sources.list.d/security:zeek.list
+        curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_24.04/Release.key" \
+            | gpg --dearmor \
+            > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>/dev/null
+        apt-get update -qq
+        apt-get install -y -qq zeek > /dev/null
+    else
+        warn "Unsupported Ubuntu version $UBUNTU_VER for Zeek auto-install"
+        warn "Install manually: https://zeek.org/get-zeek/"
+    fi
     echo 'export PATH=$PATH:/opt/zeek/bin' >> /etc/profile
     export PATH=$PATH:/opt/zeek/bin
     log "✅ Zeek installed"
@@ -111,13 +141,23 @@ fi
 # ── Install Vector ────────────────────────────────────────────────────────
 log "Installing Vector..."
 if ! command -v vector &>/dev/null; then
-    curl -fsSL https://repositories.timber.io/public/vector/gpg.3543DB2D0A2BC4B8.key \
-        | gpg --dearmor > /usr/share/keyrings/timber-vector-archive-keyring.gpg 2>/dev/null
-    echo "deb [signed-by=/usr/share/keyrings/timber-vector-archive-keyring.gpg] \
-        https://repositories.timber.io/public/vector/deb/ubuntu jammy main" \
-        > /etc/apt/sources.list.d/timber-vector.list
-    apt-get update -qq
-    apt-get install -y -qq vector > /dev/null
+    # Try official Vector install script
+    log "Downloading Vector..."
+    curl -fsSL https://sh.vector.dev | bash -s -- --yes > /dev/null 2>&1 || {
+        # Fallback: download binary directly
+        warn "Vector script failed, trying direct download..."
+        VECTOR_VERSION="0.32.1"
+        ARCH=$(dpkg --print-architecture)
+        if [ "$ARCH" = "amd64" ]; then
+            VECTOR_URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector_${VECTOR_VERSION}-1_amd64.deb"
+        else
+            VECTOR_URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector_${VECTOR_VERSION}-1_arm64.deb"
+        fi
+        wget -q "$VECTOR_URL" -O /tmp/vector.deb && \
+        dpkg -i /tmp/vector.deb > /dev/null 2>&1 && \
+        rm /tmp/vector.deb || \
+        warn "Vector install failed — install manually from https://vector.dev"
+    }
     log "✅ Vector installed"
 else
     log "✅ Vector already installed"

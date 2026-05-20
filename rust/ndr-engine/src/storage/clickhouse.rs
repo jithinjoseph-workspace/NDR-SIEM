@@ -208,12 +208,80 @@ pub async fn create_tenant(
     id: &str,
     name: &str,
 ) -> anyhow::Result<()> {
+    // 1. Insert into main tenants table
     let query = format!(
         "INSERT INTO ndr.tenants (id, name, active) \
          VALUES ('{}','{}',1)",
         id, name
     );
     self.client.query(&query).execute().await?;
+
+    // 2. Create dedicated database for tenant
+    let db_name = format!("ndr_{}", id.replace("-", "_"));
+    self.client.query(&format!(
+        "CREATE DATABASE IF NOT EXISTS {}", db_name
+    )).execute().await?;
+
+    // 3. Load init.sql and create tables in the tenant DB namespace dynamically
+    let install_dir = std::env::var("INSTALL_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    let paths = vec![
+        "/app/config/clickhouse/init.sql".to_string(),
+        format!("{}/config/clickhouse/init.sql", install_dir),
+        "./config/clickhouse/init.sql".to_string(),
+    ];
+
+    let mut sql_content = None;
+    for sql_path in &paths {
+        if let Ok(sql) = std::fs::read_to_string(sql_path) {
+            sql_content = Some(sql);
+            break;
+        }
+    }
+
+    if let Some(sql) = sql_content {
+        for stmt in sql.split(';') {
+            let stmt = stmt.trim()
+                .lines()
+                .filter(|l| !l.trim().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string();
+
+            if stmt.is_empty() {
+                continue;
+            }
+
+            // Skip main tables and other configurations not needed inside individual tenant databases
+            if stmt.contains("CREATE DATABASE IF NOT EXISTS ndr") 
+                || stmt.contains("ndr.users") 
+                || stmt.contains("ndr.tenants") 
+                || stmt.contains("ndr.rules_state")
+            {
+                continue;
+            }
+
+            // Replace database namespace with tenant DB and set its default tenant_id
+            let mut tenant_stmt = stmt.replace("ndr.", &format!("{}.", db_name));
+            tenant_stmt = tenant_stmt.replace("DEFAULT 'default'", &format!("DEFAULT '{}'", id));
+
+            if let Err(e) = self.client
+                .query(&tenant_stmt)
+                .execute().await {
+                tracing::warn!(
+                    "Dynamic table creation warning for tenant DB {}: {}. Error: {}", 
+                    db_name, tenant_stmt, e
+                );
+            }
+        }
+        tracing::info!(
+            "✅ Tenant DB created and schema dynamically initialized from init.sql: {}", db_name
+        );
+    } else {
+        tracing::warn!("init.sql not found while provisioning tenant DB {}!", db_name);
+    }
+
     Ok(())
 }
     pub fn new() -> Self {
@@ -268,6 +336,22 @@ pub async fn create_tenant(
                 "✅ ClickHouse tables initialized from {}", 
                 sql_path
             );
+            
+            // Ensure tenant_id columns exist
+            for alter in &[
+                "ALTER TABLE ndr.ndr_events ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.soar_integrations ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.soar_playbooks ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.soar_config ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+            ] {
+                if let Err(e) = self.client
+                    .query(alter)
+                    .execute().await {
+                    tracing::debug!("Column add skipped: {}", e);
+                }
+            }
+            tracing::info!("✅ tenant_id columns verified");
             return;
         }
     }
@@ -279,20 +363,21 @@ pub async fn create_tenant(
 
 
 //threat intel hits
-    pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-    let hits = self.client
-        .query("
-            SELECT
-                src_ip,
-                dst_ip,
-                count() as hits,
-                max(timestamp) as last_seen
-            FROM ndr_hits
-            WHERE threat_intel = 1
-            GROUP BY src_ip, dst_ip
-            ORDER BY hits DESC
-            LIMIT 50
-        ")
+    pub async fn get_threat_intel_hits_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    let filter = format!("tenant_id='{}'", tenant_id);
+    let query = format!("
+        SELECT
+            src_ip,
+            dst_ip,
+            count() as hits,
+            max(timestamp) as last_seen
+        FROM ndr_hits
+        WHERE threat_intel = 1 AND {}
+        GROUP BY src_ip, dst_ip
+        ORDER BY hits DESC
+        LIMIT 50
+    ", filter);
+    let hits = self.client.query(&query)
         .fetch_all::<ThreatIntelHit>()
         .await
         .unwrap_or_default();
@@ -304,6 +389,11 @@ pub async fn create_tenant(
         "last_seen": h.last_seen,
     })).collect())
 }
+
+pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+    self.get_threat_intel_hits_by_tenant("default").await
+}
+
     // ── Insert methods ────────────────────────────────────────────────────
 
     pub async fn insert_event(&self, event: NdrEvent) -> anyhow::Result<()> {
@@ -398,24 +488,26 @@ pub async fn delete_rule_state(&self, id: &str) -> anyhow::Result<()> {
 
 //soar integrations
 
-pub async fn get_integrations(
-    &self
+pub async fn get_integrations_by_tenant(
+    &self, tenant_id: &str
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let query = "
+    let filter = format!("tenant_id='{}'", tenant_id);
+    let query = format!("
         SELECT id, name, type, config, enabled
         FROM ndr.soar_integrations
         FINAL
+        WHERE {}
         ORDER BY created_at
-    ";
+    ", filter);
     let result = self.client
-        .query(query)
+        .query(&query)
         .fetch_all::<(String,String,String,String,u8)>()
         .await?;
     Ok(result.iter().map(|r| {
         let config: serde_json::Value =
             serde_json::from_str(&r.3)
-                .unwrap_or(json!({}));
-        json!({
+                .unwrap_or(serde_json::json!({}));
+        serde_json::json!({
             "id":      r.0,
             "name":    r.1,
             "type":    r.2,
@@ -425,46 +517,53 @@ pub async fn get_integrations(
     }).collect())
 }
 
+pub async fn get_integrations(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+    self.get_integrations_by_tenant("default").await
+}
+
 pub async fn save_integration(
     &self,
     id: &str,
     name: &str,
     int_type: &str,
     config: &str,
+    tenant_id: &str,
 ) -> anyhow::Result<()> {
     let query = format!(
         "INSERT INTO ndr.soar_integrations \
-         (id, name, type, config, enabled) \
-         VALUES ('{}','{}','{}','{}',1)",
+         (id, name, type, config, enabled, tenant_id) \
+         VALUES ('{}','{}','{}','{}',1,'{}')",
         id, name, int_type,
-        config.replace("'", "\\'")
+        config.replace("'", "\\'"), tenant_id
     );
     self.client.query(&query).execute().await?;
     Ok(())
 }
 
 pub async fn toggle_integration(
-    &self, id: &str, enabled: bool
+    &self, id: &str, enabled: bool, tenant_id: &str
 ) -> anyhow::Result<()> {
+    let filter = format!("tenant_id='{}'", tenant_id);
     let query = format!(
         "INSERT INTO ndr.soar_integrations \
-         (id, name, type, config, enabled) \
-         SELECT id, name, type, config, {}
-         FROM ndr.soar_integrations
-         WHERE id = '{}'",
-        if enabled { 1 } else { 0 }, id
+         (id, name, type, config, enabled, tenant_id) \
+         SELECT id, name, type, config, {}, tenant_id \
+         FROM ndr.soar_integrations \
+         WHERE id = '{}' AND {}",
+        if enabled { 1 } else { 0 }, id, filter
     );
     self.client.query(&query).execute().await?;
     Ok(())
 }
 
 pub async fn delete_integration(
-    &self, id: &str
+    &self, id: &str, tenant_id: &str
 ) -> anyhow::Result<()> {
+    let filter = format!("tenant_id='{}'", tenant_id);
     let query = format!(
         "ALTER TABLE ndr.soar_integrations \
-         DELETE WHERE id = '{}'",
-        id
+         DELETE WHERE id = '{}' AND {}",
+        id, filter
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -472,31 +571,37 @@ pub async fn delete_integration(
 
 
 //save soar config
-pub async fn save_soar_config(
-    &self, key: &str, value: &str
+pub async fn save_soar_config_by_tenant(
+    &self, key: &str, value: &str, tenant_id: &str
 ) -> anyhow::Result<()> {
     let query = format!(
-        "INSERT INTO ndr.soar_config (key, value) \
-         VALUES ('{}', '{}')",
-        key, value
+        "INSERT INTO ndr.soar_config (key, value, tenant_id) \
+         VALUES ('{}', '{}', '{}')",
+        key, value, tenant_id
     );
     self.client.query(&query).execute().await?;
     Ok(())
 }
 
+pub async fn save_soar_config(&self, key: &str, value: &str) -> anyhow::Result<()> {
+    self.save_soar_config_by_tenant(key, value, "default").await
+}
+
 
 //get soar config
-pub async fn get_soar_config(
-    &self
+pub async fn get_soar_config_by_tenant(
+    &self, tenant_id: &str
 ) -> anyhow::Result<serde_json::Value> {
-    let query = "
+    let filter = format!("tenant_id='{}'", tenant_id);
+    let query = format!("
         SELECT key, value
         FROM ndr.soar_config
         FINAL
+        WHERE {}
         ORDER BY key
-    ";
+    ", filter);
     let result = self.client
-        .query(query)
+        .query(&query)
         .fetch_all::<(String, String)>()
         .await?;
     let mut map = serde_json::Map::new();
@@ -506,21 +611,27 @@ pub async fn get_soar_config(
     Ok(serde_json::Value::Object(map))
 }
 
+pub async fn get_soar_config(&self) -> anyhow::Result<serde_json::Value> {
+    self.get_soar_config_by_tenant("default").await
+}
+
 
 //soar playbooks
-pub async fn get_soar_playbooks(
-    &self
+pub async fn get_soar_playbooks_by_tenant(
+    &self, tenant_id: &str
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let query = "
+    let filter = format!("tenant_id='{}'", tenant_id);
+    let query = format!("
         SELECT id, name, description,
                trigger, action_type,
                config, enabled, runs
         FROM ndr.soar_playbooks
         FINAL
+        WHERE {}
         ORDER BY created_at
-    ";
+    ", filter);
     let result = self.client
-        .query(query)
+        .query(&query)
         .fetch_all::<(
             String, String, String,
             String, String, String,
@@ -539,19 +650,24 @@ pub async fn get_soar_playbooks(
     })).collect())
 }
 
+pub async fn get_soar_playbooks(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+    self.get_soar_playbooks_by_tenant("default").await
+}
+
 //enable/disable playbook
 pub async fn update_playbook_enabled(
-    &self, id: &str, enabled: bool
+    &self, id: &str, enabled: bool, tenant_id: &str
 ) -> anyhow::Result<()> {
+    let filter = format!("tenant_id='{}'", tenant_id);
     let query = format!(
         "INSERT INTO ndr.soar_playbooks \
          (id, name, description, trigger, \
-          action_type, enabled) \
+          action_type, enabled, tenant_id) \
          SELECT id, name, description, trigger, \
-                action_type, {}
-         FROM ndr.soar_playbooks
-         WHERE id = '{}'",
-        if enabled { 1 } else { 0 }, id
+                action_type, {}, tenant_id \
+         FROM ndr.soar_playbooks \
+         WHERE id = '{}' AND {}",
+        if enabled { 1 } else { 0 }, id, filter
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -565,14 +681,15 @@ pub async fn create_playbook(
     trigger: &str,
     action_type: &str,
     config: &str,
+    tenant_id: &str,
 ) -> anyhow::Result<()> {
     let query = format!(
         "INSERT INTO ndr.soar_playbooks \
          (id, name, description, trigger, \
-          action_type, config, enabled) \
-         VALUES ('{}','{}','{}','{}','{}','{}',1)",
+          action_type, config, enabled, tenant_id) \
+         VALUES ('{}','{}','{}','{}','{}','{}',1,'{}')",
         id, name, description,
-        trigger, action_type, config
+        trigger, action_type, config, tenant_id
     );
     self.client.query(&query).execute().await?;
     Ok(())

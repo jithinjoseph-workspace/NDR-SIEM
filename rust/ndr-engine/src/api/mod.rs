@@ -781,8 +781,9 @@ tokio::spawn(async move {
 
 // ── GET /health ───────────────────────────────────────────────────────────
 
-pub async fn health(State(state): State<AppState>) -> Json<Value> {
-    let ch_stats = state.ch_storage.get_stats().await.unwrap_or(json!({}));
+pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let ch_stats = state.ch_storage.get_stats_by_tenant(&tenant_id).await.unwrap_or(json!({}));
 
     // Get all service status from agent
     let agent_url = std::env::var("NDR_AGENT_URL")
@@ -1086,9 +1087,10 @@ pub async fn get_rules(State(state): State<AppState>) -> Json<Value> {
 }
 
 //threat intelegence endpoint
-pub async fn get_threat_intel(State(state): State<AppState>) -> Json<Value> {
+pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let ti = &state.enrichment.threat_intel;
-    let detected = state.ch_storage.get_threat_intel_hits().await
+    let detected = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id).await
         .unwrap_or_default();
 
     Json(json!({
@@ -1216,11 +1218,14 @@ pub async fn reload_rules_api(
 
 //soar status
 pub async fn get_soar_status(
-    State(state): State<AppState>
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+
     // Get from ClickHouse first
     let config = state.ch_storage
-        .get_soar_config().await
+        .get_soar_config_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
     
     // Fall back to env vars
@@ -1244,7 +1249,7 @@ pub async fn get_soar_status(
 
     // Get playbooks from ClickHouse
     let playbooks = state.ch_storage
-        .get_soar_playbooks().await
+        .get_soar_playbooks_by_tenant(&tenant_id).await
         .unwrap_or_default();
 
   let active_count = playbooks.iter()
@@ -1269,15 +1274,17 @@ Json(json!({
 
 pub async fn toggle_playbook(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let id = payload["id"]
         .as_str().unwrap_or("").to_string();
     let enabled = payload["enabled"]
         .as_bool().unwrap_or(false);
 
     match state.ch_storage
-        .update_playbook_enabled(&id, enabled).await {
+        .update_playbook_enabled(&id, enabled, &tenant_id).await {
         Ok(_) => Json(json!({
             "status": "ok",
             "message": format!(
@@ -1295,8 +1302,10 @@ pub async fn toggle_playbook(
 
 pub async fn create_playbook(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let id = format!("pb-{}",
         chrono::Utc::now().timestamp());
     let name = payload["name"]
@@ -1311,18 +1320,11 @@ pub async fn create_playbook(
         .to_string()
         .replace("'", "\\'");
 
-    let query = format!(
-        "INSERT INTO ndr.soar_playbooks \
-         (id, name, description, trigger, \
-          action_type, config, enabled) \
-         VALUES ('{}','{}','{}','{}','{}','{}',1)",
-        id, name, description,
-        trigger, action_type, action_config
-    );
+
 
     match state.ch_storage.create_playbook(
         &id, &name, &description,
-        &trigger, &action_type, &action_config
+        &trigger, &action_type, &action_config, &tenant_id
     ).await {
         Ok(_) => Json(json!({
             "status":  "ok",
@@ -2325,9 +2327,11 @@ tr:nth-child(even){{background:#f9f9f9}}
 
 // GET /api/soar/integrations
 pub async fn get_integrations(
-    State(state): State<AppState>
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap
 ) -> Json<Value> {
-    match state.ch_storage.get_integrations().await {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_integrations_by_tenant(&tenant_id).await {
         Ok(integrations) => Json(json!({
             "status": "ok",
             "integrations": integrations
@@ -2342,8 +2346,10 @@ pub async fn get_integrations(
 // POST /api/soar/integrations
 pub async fn save_integration(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let id = format!("int-{}",
         chrono::Utc::now().timestamp());
     let name = payload["name"]
@@ -2364,7 +2370,7 @@ pub async fn save_integration(
         &int_type, &config).await;
 
     match state.ch_storage.save_integration(
-        &id, &name, &int_type, &config
+        &id, &name, &int_type, &config, &tenant_id
     ).await {
         Ok(_) => Json(json!({
             "status": "ok",
@@ -2487,15 +2493,17 @@ pub async fn test_integration_endpoint(
 // POST /api/soar/integrations/toggle
 pub async fn toggle_integration(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let id = payload["id"]
         .as_str().unwrap_or("").to_string();
     let enabled = payload["enabled"]
         .as_bool().unwrap_or(false);
     
     match state.ch_storage
-        .toggle_integration(&id, enabled).await {
+        .toggle_integration(&id, enabled, &tenant_id).await {
         Ok(_) => Json(json!({
             "status": "ok",
             "message": "Integration updated"
@@ -2510,13 +2518,15 @@ pub async fn toggle_integration(
 // DELETE /api/soar/integrations
 pub async fn delete_integration(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let id = payload["id"]
         .as_str().unwrap_or("").to_string();
     
     match state.ch_storage
-        .delete_integration(&id).await {
+        .delete_integration(&id, &tenant_id).await {
         Ok(_) => Json(json!({
             "status": "ok",
             "message": "Integration deleted"

@@ -32,6 +32,19 @@ export class Dashboard implements OnInit, OnDestroy {
 
   private subs: Subscription[] = [];
   private refreshInterval: any;
+  private static chartInitialized: boolean = false;
+  private static savedChartData: number[] = [];
+  private static savedTotalEvents: number = 0;
+  private static savedTotalHits: number = 0;
+  private static savedTenantId: string = '';
+
+  static clearCache() {
+    Dashboard.chartInitialized = false;
+    Dashboard.savedChartData = [];
+    Dashboard.savedTotalEvents = 0;
+    Dashboard.savedTotalHits = 0;
+    Dashboard.savedTenantId = '';
+  }
 
   TrendingUpIcon = TrendingUp;
   AlertIcon = TriangleAlert;
@@ -72,11 +85,24 @@ export class Dashboard implements OnInit, OnDestroy {
   ) { }
 
   ngOnInit() {
-    // Initialize chart with empty data first
-    this.chartLabels = ['', '', '', '', '', ''];
-    this.chartData = [0, 0, 0, 0, 0, 0];
-    this.updateChartData();
+    // Clear cache if a different tenant has logged in
+    const currentUser = JSON.parse(localStorage.getItem('ndr_user') || '{}');
+    const currentTenant = currentUser?.tenant_id || '';
+    if (Dashboard.savedTenantId && Dashboard.savedTenantId !== currentTenant) {
+      Dashboard.clearCache();
+    }
+    Dashboard.savedTenantId = currentTenant;
 
+    // Restore saved state if exists
+    this.chartLabels = ['', '', '', '', '', ''];
+    if (Dashboard.savedChartData.length > 0) {
+      this.chartData = [...Dashboard.savedChartData];
+      this.totalEvents = Dashboard.savedTotalEvents;
+      this.totalHits = Dashboard.savedTotalHits;
+    } else {
+      this.chartData = [0, 0, 0, 0, 0, 0];
+    }
+    this.updateChartData();
     this.loadAllStats();
 
     // Refresh every 30 seconds
@@ -106,7 +132,7 @@ export class Dashboard implements OnInit, OnDestroy {
 
   exportReport(format: string) {
     this.api.exportReport(format);
-  } 
+  }
 
   loadAllStats() {
     this.api.getStats().subscribe(data => {
@@ -116,6 +142,21 @@ export class Dashboard implements OnInit, OnDestroy {
       this.hitsLastHour = data.hits_1h || 0;
       this.zeekEvents = data.zeek_events || 0;
       this.suricataEvents = data.suricata_events || 0;
+
+      if (!Dashboard.chartInitialized) {
+        this.chartData = [
+          this.eventsLastHour, this.eventsLastHour, this.eventsLastHour,
+          this.eventsLastHour, this.eventsLastHour, this.eventsLastHour
+        ];
+        Dashboard.chartInitialized = true;
+        this.updateChartData();
+      }
+
+      // Persist state for same-tenant navigation
+      Dashboard.savedChartData = [...this.chartData];
+      Dashboard.savedTotalEvents = this.totalEvents;
+      Dashboard.savedTotalHits = this.totalHits;
+
       this.cdr.detectChanges();
     });
 
@@ -145,6 +186,7 @@ export class Dashboard implements OnInit, OnDestroy {
     this.chartLabels.push(now);
     this.chartData.push(this.eventsLastHour);
     this.updateChartData();
+    Dashboard.savedChartData = [...this.chartData];
   }
 
   updateChartData() {

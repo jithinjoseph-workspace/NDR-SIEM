@@ -14,6 +14,7 @@ mod storage;
 use api::{websocket::ws_handler, AppState};
 use axum::{routing::{get, post, delete}, Router};
 use tower_http::cors::{Any, CorsLayer};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
 use enrichment::{AsnLookup, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -144,7 +145,11 @@ tokio::spawn(async move {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers([
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            ACCEPT,
+        ]);
 
     let app = Router::new()
         .route("/ws",              get(ws_handler))
