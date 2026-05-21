@@ -1,0 +1,103 @@
+// NDR Engine — Kafka Consumer (pure-Rust via rdkafka)
+// License: Apache-2.0
+
+use rdkafka::config::ClientConfig;
+use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::message::Message;
+use std::sync::Arc;
+use tracing::{error, info, warn};
+
+use crate::api::AppState;
+use crate::normalizer::{NormalizedEvent, EventSource};
+use crate::storage::clickhouse::NdrEvent;
+
+pub async fn start_consumer(state: Arc<AppState>) {
+    let brokers = std::env::var("KAFKA_BROKERS")
+        .unwrap_or_else(|_| "kafka:9092".to_string());
+    
+    let instance_id = std::env::var("INSTANCE_ID")
+        .unwrap_or_else(|_| "1".to_string());
+    
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("group.id", "ndr-engine-group")
+        .set("bootstrap.servers", &brokers)
+        .set("enable.auto.commit", "true")
+        .set("auto.offset.reset", "latest")
+        .set("client.id", format!("ndr-engine-{}", instance_id))
+        .create()
+        .expect("Consumer creation failed");
+
+    consumer
+        .subscribe(&["ndr-events"])
+        .expect("Topic subscription failed");
+
+    info!("Kafka consumer ready — group: ndr-engine-group instance: {}", instance_id);
+
+    loop {
+        match consumer.recv().await {
+            Ok(msg) => {
+                let payload = match msg.payload() {
+                    Some(p) => p,
+                    None => continue,
+                };
+                
+                let raw: serde_json::Value = match serde_json::from_slice(payload) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                // Parse event (same logic as before)
+                let Some(event) = NormalizedEvent::from_raw(raw.clone()) else { continue; };
+
+                if event.should_drop() { continue; }
+
+                let tenant_id = std::env::var("TENANT_ID")
+                    .unwrap_or_else(|_| "default".to_string());
+
+                // Insert to ClickHouse
+                let source_str = match event.event_source {
+                    EventSource::Zeek     => "zeek",
+                    EventSource::Suricata => "suricata",
+                    _ => "unknown",
+                }.to_string();
+
+                let ch = state.ch_storage.clone();
+                let ch_event = NdrEvent {
+                    timestamp: chrono::Utc::now().timestamp() as u32,
+                    source: source_str,
+                    src_ip: event.source_ip.clone().unwrap_or_default(),
+                    dst_ip: event.dest_ip.clone().unwrap_or_default(),
+                    src_port: event.source_port.unwrap_or(0),
+                    dst_port: event.dest_port.unwrap_or(0),
+                    proto: event.proto.clone().unwrap_or_default(),
+                    event_type: event.event_type.clone()
+                        .or(event.log_source.clone())
+                        .unwrap_or_default(),
+                    community_id: event.community_id.clone().unwrap_or_default(),
+                    raw: raw.to_string(),
+                    tenant_id: tenant_id.clone(),
+                };
+
+                let ch_clone = ch.clone();
+                let event_clone = ch_event;
+                tokio::spawn(async move {
+                    if let Err(e) = ch_clone.insert_event(event_clone).await {
+                        warn!("ClickHouse event insert error: {}", e);
+                    }
+                });
+
+                // Broadcast and correlate
+                crate::api::broadcast_raw_event(&state, &event);
+                if let Some(hit) = state.correlator.process(event) {
+                    crate::api::process_correlation_hit(&state, hit).await;
+                }
+            }
+            Err(e) => {
+                error!("Kafka error: {}", e);
+                tokio::time::sleep(
+                    tokio::time::Duration::from_secs(1)
+                ).await;
+            }
+        }
+    }
+}

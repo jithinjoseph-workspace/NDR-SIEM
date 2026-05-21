@@ -1,0 +1,28 @@
+<aside class="sidebar-shell">
+  <div class="brand-block">
+    <div class="brand-mark">N</div>
+    <div>
+      <h1>NDR Command</h1>
+      <p>Tactical Observatory</p>
+    </div>
+  </div>
+
+  <nav class="nav-list">
+    <a
+      *ngFor="let item of navItems"
+      [routerLink]="item.route"
+      routerLinkActive="active"
+      class="nav-link"
+    >
+      <lucide-icon [name]="item.icon" class="w-5 h-5"></lucide-icon>
+      <span>{{ item.label }}</span>
+    </a>
+  </nav>
+
+  <div class="sidebar-footer">
+    <a *ngFor="let item of bottomItems" [routerLink]="item.route" class="footer-link">
+      <lucide-icon [name]="item.icon" class="w-4 h-4"></lucide-icon>
+      <span>{{ item.label }}</span>
+    </a>
+  </div>
+</aside>

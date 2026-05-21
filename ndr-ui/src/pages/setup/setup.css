@@ -1,0 +1,33 @@
+:host {
+    display: block;
+    height: 100%;
+}
+
+.bg-surface-container-highest {
+    background: linear-gradient(135deg, rgba(30, 32, 40, 0.8) 0%, rgba(20, 22, 28, 0.9) 100%);
+    backdrop-filter: blur(10px);
+}
+
+select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a4abbf'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    background-size: 1rem;
+}
+
+button {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.text-primary {
+    color: #69f6b8;
+}
+
+.border-primary\/20 {
+    border-color: rgba(105, 246, 184, 0.2);
+}
+
+.bg-primary\/10 {
+    background-color: rgba(105, 246, 184, 0.1);
+}

@@ -1,0 +1,13 @@
+id: ndr-1779291058
+title: Connection Rejected
+description: Detects rejected connections
+level: medium
+tags:
+  []
+logsource:
+  product: ndr
+detection:
+  keywords:
+    conn_state|equals:
+      - 'REJ'
+  condition: keywords

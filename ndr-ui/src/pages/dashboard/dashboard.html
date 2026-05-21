@@ -1,0 +1,159 @@
+<section class="dashboard-shell">
+  <div class="dashboard-header">
+    <div>
+      <div class="eyebrow">Network Detection & Response</div>
+      <h2>Operational Overview</h2>
+      <p>Live infrastructure telemetry, correlated detections, and source activity.</p>
+    </div>
+
+    <div class="dashboard-actions">
+      <div class="export-menu group">
+        <button class="secondary-action">
+          Export Report
+          <span class="chevron">v</span>
+        </button>
+
+        <div class="export-dropdown">
+          <button (click)="exportReport('pdf')">PDF Report</button>
+          <button (click)="exportReport('csv')">CSV Export</button>
+          <button (click)="exportReport('json')">JSON Export</button>
+        </div>
+      </div>
+
+      <button class="primary-action">Force Scan</button>
+    </div>
+  </div>
+
+  <div class="status-strip">
+    <div>
+      <span class="status-dot"></span>
+      WebSocket telemetry active
+    </div>
+    <div>Refresh interval: 30s</div>
+    <div>{{ eventsLastHour }} events in the last hour</div>
+  </div>
+
+  <div class="metrics-grid">
+    <article class="metric-card metric-primary">
+      <div class="metric-topline">
+        <div class="metric-icon">
+          <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="metric-badge">+{{ eventsLastHour }} /hr</span>
+      </div>
+      <div>
+        <h3>Total Events</h3>
+        <p class="metric-value">{{ totalEvents.toLocaleString() }}</p>
+        <p class="metric-detail">Zeek {{ zeekEvents }} / Suricata {{ suricataEvents }}</p>
+      </div>
+    </article>
+
+    <article class="metric-card metric-secondary">
+      <div class="metric-topline">
+        <div class="metric-icon">
+          <lucide-icon [name]="ShieldIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <lucide-icon [name]="ArrowIcon" class="w-4 h-4 metric-trend"></lucide-icon>
+      </div>
+      <div>
+        <h3>Correlation Hits</h3>
+        <p class="metric-value">{{ totalHits }}</p>
+        <p class="metric-detail">{{ hitsLastHour }} new hits in the last hour</p>
+      </div>
+    </article>
+
+    <article class="metric-card metric-danger" [class.has-alerts]="critical > 0">
+      <div class="metric-topline">
+        <div class="metric-icon">
+          <lucide-icon [name]="AlertIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="metric-badge danger">{{ critical > 0 ? 'Action Needed' : 'Clear' }}</span>
+      </div>
+      <div>
+        <h3>Critical Alerts</h3>
+        <p class="metric-value">{{ critical }}</p>
+        <p class="metric-detail">High {{ high }} / Medium {{ medium }}</p>
+      </div>
+    </article>
+
+    <article class="metric-card severity-card">
+      <div class="metric-topline">
+        <div class="metric-icon neutral">
+          <lucide-icon [name]="TrendingUpIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="metric-badge muted">Severity</span>
+      </div>
+      <div class="severity-bars">
+        <div class="severity-row critical">
+          <span>Critical</span>
+          <div><i [style.width.%]="(critical / ((critical + high + medium + low) || 1)) * 100"></i></div>
+          <strong>{{ critical }}</strong>
+        </div>
+        <div class="severity-row high">
+          <span>High</span>
+          <div><i [style.width.%]="(high / ((critical + high + medium + low) || 1)) * 100"></i></div>
+          <strong>{{ high }}</strong>
+        </div>
+        <div class="severity-row medium">
+          <span>Medium</span>
+          <div><i [style.width.%]="(medium / ((critical + high + medium + low) || 1)) * 100"></i></div>
+          <strong>{{ medium }}</strong>
+        </div>
+        <div class="severity-row low">
+          <span>Low</span>
+          <div><i [style.width.%]="(low / ((critical + high + medium + low) || 1)) * 100"></i></div>
+          <strong>{{ low }}</strong>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <div class="dashboard-grid">
+    <section class="panel chart-panel">
+      <div class="panel-header">
+        <div>
+          <h4>Live Event Stream</h4>
+          <p>Event volume sampled from the active monitoring window.</p>
+        </div>
+        <div class="live-pill">
+          <span></span>
+          Live
+        </div>
+      </div>
+
+      <div class="chart-frame">
+        <canvas baseChart [data]="lineChartData" [options]="lineChartOptions" type="line"></canvas>
+      </div>
+    </section>
+
+    <section class="panel ip-panel">
+      <div class="panel-header compact">
+        <div>
+          <h4>Top Source IPs</h4>
+          <p>Highest observed source activity.</p>
+        </div>
+      </div>
+
+      <div class="ip-list" *ngIf="topSrcIps.length > 0; else emptyIps">
+        <div *ngFor="let ip of topSrcIps.slice(0, 5)" class="ip-row">
+          <div class="ip-row-header">
+            <span>{{ ip.ip }}</span>
+            <strong>{{ ip.count }} events</strong>
+          </div>
+          <div class="ip-meter">
+            <i [style.width.%]="(ip.count / (topSrcIps[0]?.count || 1)) * 100"></i>
+          </div>
+        </div>
+      </div>
+
+      <ng-template #emptyIps>
+        <div class="empty-state">
+          <span>No source IP data yet</span>
+          Monitoring results will appear here when events arrive.
+        </div>
+      </ng-template>
+
+      <button class="panel-link">View All IPs</button>
+    </section>
+  </div>
+</section>

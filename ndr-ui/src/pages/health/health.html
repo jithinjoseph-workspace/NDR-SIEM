@@ -1,0 +1,104 @@
+<section class="health-shell">
+  <div class="health-header">
+    <div>
+      <div class="eyebrow">Infrastructure Health</div>
+      <h2>System Health Monitor</h2>
+      <p>Service availability, processing volume, and monitoring pipeline readiness.</p>
+    </div>
+
+    <div class="health-summary">
+      <span class="summary-dot"></span>
+      <div>
+        <strong>{{ runningCount }}/{{ services.length }} services healthy</strong>
+        <span>Auto-refresh every 10 seconds</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="health-strip">
+    <div>
+      <span>Telemetry</span>
+      <strong>WebSocket connected</strong>
+    </div>
+    <div>
+      <span>SIGMA rules</span>
+      <strong>{{ sigmaRules }}</strong>
+    </div>
+    <div>
+      <span>Active sessions</span>
+      <strong>{{ sessions }}</strong>
+    </div>
+  </div>
+
+  <div class="health-metrics">
+    <article class="health-card">
+      <div class="card-icon">
+        <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div>
+        <span>Total Events</span>
+        <strong>{{ totalEvents.toLocaleString() }}</strong>
+        <small>All processed telemetry</small>
+      </div>
+    </article>
+
+    <article class="health-card">
+      <div class="card-icon">
+        <lucide-icon [name]="CpuIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div>
+        <span>Events / Hour</span>
+        <strong>{{ eventsPerHour }}</strong>
+        <small>Recent ingestion rate</small>
+      </div>
+    </article>
+
+    <article class="health-card">
+      <div class="card-icon">
+        <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div>
+        <span>Correlation Hits</span>
+        <strong>{{ totalHits }}</strong>
+        <small>Detection matches</small>
+      </div>
+    </article>
+
+    <article class="health-card">
+      <div class="card-icon success">
+        <lucide-icon [name]="CheckIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div>
+        <span>Services</span>
+        <strong>{{ runningCount }}/{{ services.length }}</strong>
+        <small>Healthy service count</small>
+      </div>
+    </article>
+  </div>
+
+  <section class="services-panel">
+    <div class="panel-header">
+      <div>
+        <h3>Service Operations</h3>
+        <p>Runtime state for host processes, containers, and data services.</p>
+      </div>
+      <span class="refresh-pill">10s refresh</span>
+    </div>
+
+    <div class="service-grid">
+      <article *ngFor="let srv of services" class="service-card">
+        <div class="service-main">
+          <span class="service-dot" [class]="getStatusDotClass(srv.status)"></span>
+          <div>
+            <h4>{{ srv.name }}</h4>
+            <p>{{ srv.label }}</p>
+          </div>
+        </div>
+
+        <span class="service-badge" [class]="getStatusBadgeClass(srv.status)">
+          {{ getStatusLabel(srv.status) }}
+        </span>
+      </article>
+    </div>
+  </section>
+</section>

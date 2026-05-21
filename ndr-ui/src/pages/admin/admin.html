@@ -1,0 +1,393 @@
+<div class="p-8 animate-in fade-in duration-500">
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-8">
+    <div>
+      <h2 class="text-2xl font-display font-bold
+        text-white uppercase tracking-tight">
+        Admin Panel
+      </h2>
+      <p class="text-on-surface-variant text-sm mt-1">
+        Manage users, tenants and system settings
+      </p>
+    </div>
+    <div class="flex items-center gap-2 px-4 py-2
+      bg-red-500/10 rounded-lg border border-red-500/20">
+      <span class="text-red-400 text-xs font-bold">
+        🔐 SUPER ADMIN
+      </span>
+    </div>
+  </div>
+
+  <!-- Message -->
+  <div *ngIf="userMsg"
+    [class]="'mb-4 px-4 py-3 rounded text-xs font-bold ' +
+    (userMsgType === 'success' ?
+      'bg-primary/10 text-primary border border-primary/20' :
+      'bg-red-500/10 text-red-400 border border-red-500/20')">
+    {{ userMsg }}
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex gap-2 mb-6">
+    <button (click)="activeTab='users'"
+      [class]="'px-4 py-2 rounded-lg text-xs font-bold transition-all ' +
+      (activeTab === 'users' ?
+        'bg-primary text-black' :
+        'bg-surface-container text-on-surface-variant hover:text-white')">
+      👥 Users
+    </button>
+    <button (click)="activeTab='tenants'"
+      [class]="'px-4 py-2 rounded-lg text-xs font-bold transition-all ' +
+      (activeTab === 'tenants' ?
+        'bg-primary text-black' :
+        'bg-surface-container text-on-surface-variant hover:text-white')">
+      🏢 Tenants
+    </button>
+    <button (click)="activeTab='engines'"
+      [class]="'px-4 py-2 rounded-lg text-xs font-bold transition-all ' +
+      (activeTab === 'engines' ?
+        'bg-primary text-black' :
+        'bg-surface-container text-on-surface-variant hover:text-white')">
+      ⚙️ Engines
+    </button>
+  </div>
+
+  <!-- Users Tab -->
+  <div *ngIf="activeTab === 'users'">
+    <div class="bg-surface-container-highest rounded-xl
+      border border-outline/10">
+      <div class="px-6 py-4 border-b border-outline/10
+        flex items-center justify-between">
+        <h3 class="text-white font-bold text-sm uppercase">
+          System Users
+        </h3>
+        <button (click)="showAddUser=true"
+          class="flex items-center gap-2 bg-primary/10
+          text-primary text-xs font-bold px-4 py-2
+          rounded-lg hover:bg-primary/20">
+          ➕ Add User
+        </button>
+      </div>
+
+      <!-- Users table -->
+      <div *ngIf="loadingUsers"
+        class="px-6 py-8 text-center
+        text-on-surface-variant animate-pulse">
+        Loading users...
+      </div>
+
+      <table *ngIf="!loadingUsers"
+        class="w-full">
+        <thead>
+          <tr class="border-b border-outline/10">
+            <th class="px-6 py-3 text-left text-[10px]
+              text-on-surface-variant uppercase">
+              Username
+            </th>
+            <th class="px-6 py-3 text-left text-[10px]
+              text-on-surface-variant uppercase">
+              Role
+            </th>
+            <th class="px-6 py-3 text-left text-[10px]
+              text-on-surface-variant uppercase">
+              Tenant
+            </th>
+            <th class="px-6 py-3 text-left text-[10px]
+              text-on-surface-variant uppercase">
+              Created
+            </th>
+            <th class="px-6 py-3 text-right text-[10px]
+              text-on-surface-variant uppercase">
+              Actions
+            </th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-outline/5">
+          <tr *ngFor="let user of users"
+            class="hover:bg-surface-container/50">
+            <td class="px-6 py-4">
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-full
+                  bg-primary/20 flex items-center
+                  justify-center text-primary font-bold text-xs">
+                  {{ user.username[0].toUpperCase() }}
+                </div>
+                <span class="text-white text-sm">
+                  {{ user.username }}
+                </span>
+              </div>
+            </td>
+            <td class="px-6 py-4">
+              <span [class]="'text-[10px] font-bold px-2 py-1 rounded ' + getRoleBadge(user.role)">
+                {{ user.role | uppercase }}
+              </span>
+            </td>
+            <td class="px-6 py-4 text-on-surface-variant text-sm">
+              {{ user.tenant_id }}
+            </td>
+            <td class="px-6 py-4 text-on-surface-variant text-xs">
+              {{ user.created_at | date:'short' }}
+            </td>
+            <td class="px-6 py-4 text-right">
+              <button
+                *ngIf="user.username !== currentUser?.username"
+                (click)="deleteUser(user)"
+                class="text-xs px-3 py-1.5 rounded-lg
+                bg-red-500/10 text-red-400
+                hover:bg-red-500/20">
+                Delete
+              </button>
+            </td>
+          </tr>
+          <tr *ngIf="users.length === 0">
+            <td colspan="5" class="px-6 py-8
+              text-center text-on-surface-variant text-sm">
+              No users found
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Tenants Tab -->
+  <div *ngIf="activeTab === 'tenants'">
+    <div class="bg-surface-container-highest rounded-xl
+      border border-outline/10">
+      <div class="px-6 py-4 border-b border-outline/10
+        flex items-center justify-between">
+        <h3 class="text-white font-bold text-sm uppercase">
+          Tenants / Companies
+        </h3>
+        <button (click)="showAddTenant=true"
+          class="flex items-center gap-2 bg-primary/10
+          text-primary text-xs font-bold px-4 py-2
+          rounded-lg hover:bg-primary/20">
+          ➕ Add Tenant
+        </button>
+      </div>
+
+      <div class="divide-y divide-outline/5">
+        <div *ngFor="let tenant of tenants"
+          class="px-6 py-4 flex items-center justify-between">
+          <div class="flex items-center gap-4">
+            <div class="w-10 h-10 rounded-lg
+              bg-primary/20 flex items-center
+              justify-center text-lg">
+              🏢
+            </div>
+            <div>
+              <div class="text-white font-bold">
+                {{ tenant.name }}
+              </div>
+              <div class="text-on-surface-variant text-xs font-mono">
+                ID: {{ tenant.id }}
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-4">
+            <span class="text-xs text-on-surface-variant">
+              {{ tenant.user_count || 0 }} users
+            </span>
+            <span [class]="'text-[10px] font-bold px-2 py-1 rounded ' +
+              (tenant.active ?
+                'bg-primary/20 text-primary' :
+                'bg-surface-container text-on-surface-variant')">
+              {{ tenant.active ? 'ACTIVE' : 'INACTIVE' }}
+            </span>
+          </div>
+        </div>
+        <div *ngIf="tenants.length === 0"
+          class="px-6 py-8 text-center
+          text-on-surface-variant text-sm">
+          No tenants yet — add your first company!
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Engines Tab -->
+  <div *ngIf="activeTab === 'engines'">
+    <div class="bg-surface-container-highest rounded-xl
+      border border-outline/10">
+      <div class="px-6 py-4 border-b border-outline/10
+        flex items-center justify-between">
+        <div>
+          <h3 class="text-white font-bold text-sm uppercase">
+            NDR Engine Cluster
+          </h3>
+          <p class="text-on-surface-variant text-xs mt-1">
+            {{ engines.length }} engines running
+          </p>
+        </div>
+        <button (click)="scaleUp()"
+          [disabled]="scaling"
+          class="px-4 py-2 bg-primary/10 text-primary
+          text-xs font-bold rounded-lg
+          hover:bg-primary/20 disabled:opacity-50">
+          {{ scaling ? '⏳ Starting...' : '➕ Add Engine' }}
+        </button>
+      </div>
+      <div class="divide-y divide-outline/5">
+        <div *ngFor="let engine of engines"
+          class="px-6 py-4 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-2 h-2 rounded-full
+              bg-primary animate-pulse"></div>
+            <div>
+              <div class="text-white font-bold text-sm">
+                {{ engine.name }}
+              </div>
+              <div class="text-on-surface-variant text-xs">
+                {{ engine.status }}
+              </div>
+            </div>
+          </div>
+          <button
+            *ngIf="engines.length > 1"
+            (click)="scaleDown(engine.name)"
+            class="text-xs px-3 py-1.5 rounded-lg
+            bg-red-500/10 text-red-400
+            hover:bg-red-500/20">
+            Stop
+          </button>
+        </div>
+        <div *ngIf="engines.length === 0 && !loadingEngines"
+          class="px-6 py-8 text-center text-on-surface-variant text-sm">
+          No engines running in cluster.
+        </div>
+        <div *ngIf="loadingEngines"
+          class="px-6 py-8 text-center text-on-surface-variant text-sm animate-pulse">
+          Loading engines...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add User Modal -->
+  <div *ngIf="showAddUser"
+    class="fixed inset-0 bg-black/60 z-50
+    flex items-center justify-center p-4">
+    <div class="bg-surface-container-highest rounded-2xl
+      border border-outline/20 p-6 w-full max-w-md">
+      <h3 class="text-white font-bold text-lg mb-4">
+        ➕ Add New User
+      </h3>
+      <div class="space-y-4">
+        <div>
+          <label class="text-xs text-on-surface-variant uppercase">
+            Username
+          </label>
+          <input [(ngModel)]="newUser.username"
+            placeholder="username"
+            class="w-full mt-1 bg-surface-container
+            border border-outline/20 rounded-lg px-3 py-2.5
+            text-white text-sm outline-none focus:border-primary"/>
+        </div>
+        <div>
+          <label class="text-xs text-on-surface-variant uppercase">
+            Password
+          </label>
+          <input [(ngModel)]="newUser.password"
+            type="password"
+            placeholder="password"
+            class="w-full mt-1 bg-surface-container
+            border border-outline/20 rounded-lg px-3 py-2.5
+            text-white text-sm outline-none focus:border-primary"/>
+        </div>
+        <div>
+          <label class="text-xs text-on-surface-variant uppercase">
+            Role
+          </label>
+          <select [(ngModel)]="newUser.role"
+            class="w-full mt-1 bg-surface-container
+            border border-outline/20 rounded-lg px-3 py-2.5
+            text-white text-sm outline-none">
+            <option value="admin">Admin</option>
+            <option value="analyst">Analyst</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-on-surface-variant uppercase">
+            Tenant
+          </label>
+          <select [(ngModel)]="newUser.tenant_id"
+            class="w-full mt-1 bg-surface-container
+            border border-outline/20 rounded-lg px-3 py-2.5
+            text-white text-sm outline-none">
+            <option value="default">default</option>
+            <option *ngFor="let t of tenants" [value]="t.id">
+              {{ t.name }}
+            </option>
+          </select>
+        </div>
+      </div>
+      <div class="flex gap-3 mt-6">
+        <button (click)="addUser()"
+          [disabled]="savingUser"
+          class="flex-1 bg-primary text-black font-bold
+          py-2.5 rounded-lg text-sm disabled:opacity-50">
+          {{ savingUser ? '⏳ Creating...' : '✅ Create User' }}
+        </button>
+        <button (click)="showAddUser=false"
+          class="px-4 bg-surface-container text-white
+          py-2.5 rounded-lg text-sm">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Tenant Modal -->
+  <div *ngIf="showAddTenant"
+    class="fixed inset-0 bg-black/60 z-50
+    flex items-center justify-center p-4">
+    <div class="bg-surface-container-highest rounded-2xl
+      border border-outline/20 p-6 w-full max-w-md">
+      <h3 class="text-white font-bold text-lg mb-4">
+        🏢 Add New Tenant
+      </h3>
+      <div *ngIf="tenantMsg"
+        class="mb-4 text-xs font-bold p-2 rounded
+        bg-primary/10 text-primary">
+        {{ tenantMsg }}
+      </div>
+      <div class="space-y-4">
+        <div>
+          <label class="text-xs text-on-surface-variant uppercase">
+            Company Name
+          </label>
+          <input [(ngModel)]="newTenant.name"
+            placeholder="Acme Corporation"
+            class="w-full mt-1 bg-surface-container
+            border border-outline/20 rounded-lg px-3 py-2.5
+            text-white text-sm outline-none focus:border-primary"/>
+        </div>
+        <div *ngIf="newTenant.name">
+          <label class="text-xs text-on-surface-variant uppercase">
+            Tenant ID (auto-generated)
+          </label>
+          <div class="mt-1 px-3 py-2.5 bg-surface-container
+            border border-outline/10 rounded-lg
+            text-primary text-sm font-mono">
+            {{ newTenant.name.toLowerCase().replace(/[^a-z0-9]/g, '-') }}
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-3 mt-6">
+        <button (click)="addTenant()"
+          [disabled]="savingTenant"
+          class="flex-1 bg-primary text-black font-bold
+          py-2.5 rounded-lg text-sm disabled:opacity-50">
+          {{ savingTenant ? '⏳ Creating...' : '✅ Create Tenant' }}
+        </button>
+        <button (click)="showAddTenant=false"
+          class="px-4 bg-surface-container text-white
+          py-2.5 rounded-lg text-sm">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,77 @@
+<div class="p-8 h-full flex flex-col animate-in zoom-in-95 duration-500">
+  <div class="flex items-center justify-between mb-8">
+    <div class="flex items-center gap-4">
+      <div class="p-3 bg-primary/10 rounded-full border border-primary/20 relative">
+        <lucide-icon [name]="RadioIcon" class="w-6 h-6 text-primary"></lucide-icon>
+        <span class="absolute top-0 right-0 w-2 h-2 bg-primary rounded-full animate-ping"></span>
+      </div>
+      <div>
+        <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">Live Event Stream</h2>
+        <p class="text-on-surface-variant text-sm mt-0.5">Real-time events from Zeek + Suricata via WebSocket</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-4 bg-surface-container-highest px-4 py-2 rounded-lg border border-outline/10">
+      <div class="flex flex-col items-end">
+        <span class="text-[10px] text-on-surface-variant uppercase font-bold">Events</span>
+        <span class="text-xs font-mono text-primary">{{ eventCount }}</span>
+      </div>
+      <div class="h-6 w-px bg-outline/20"></div>
+      <div class="flex flex-col items-end">
+        <span class="text-[10px] text-on-surface-variant uppercase font-bold">Hits</span>
+        <span class="text-xs font-mono text-tertiary">{{ hitCount }}</span>
+      </div>
+      <div class="h-6 w-px bg-outline/20"></div>
+      <button (click)="clearMessages()"
+              class="text-[10px] text-on-surface-variant hover:text-white uppercase font-bold transition-colors">
+        Clear
+      </button>
+    </div>
+  </div>
+
+  <div class="flex-1 bg-surface-container-low rounded-xl border border-outline/10 p-6 overflow-hidden flex flex-col relative">
+    <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(105,246,184,0.03),transparent)] pointer-events-none"></div>
+
+    <!-- Empty state -->
+    <div *ngIf="messages.length === 0"
+         class="flex-1 flex flex-col items-center justify-center text-on-surface-variant">
+      <lucide-icon [name]="ActivityIcon" class="w-12 h-12 mb-4 opacity-20"></lucide-icon>
+      <p class="text-sm">Waiting for events...</p>
+      <p class="text-xs mt-1">Start monitoring from Sensor Setup</p>
+    </div>
+
+    <!-- Stream -->
+    <div #streamContainer
+         *ngIf="messages.length > 0"
+         class="flex-1 overflow-auto space-y-2 font-mono text-[11px] relative">
+      <div *ngFor="let msg of messages"
+           class="flex gap-4 p-3 bg-surface-container-highest/40 rounded border-l-2 hover:bg-surface-container-highest/60 transition-all animate-in slide-in-from-left-2"
+           [class]="msg.color">
+        <span class="text-primary font-bold whitespace-nowrap">{{ msg.timestamp }}</span>
+        <span [ngClass]="{
+          'text-primary bg-primary/10': msg.event === 'ZEEK',
+          'text-secondary bg-secondary/10': msg.event === 'SURICATA',
+          'text-tertiary bg-tertiary/10': msg.event === 'HIT'
+        }" class="uppercase px-1 rounded-sm font-bold whitespace-nowrap">
+          {{ msg.event }}
+        </span>
+        <span class="text-on-surface-variant flex-1 truncate">{{ msg.data }}</span>
+        <lucide-icon [name]="ZapIcon" class="w-3 h-3 text-primary opacity-50 shrink-0"></lucide-icon>
+      </div>
+    </div>
+
+    <div class="mt-4 pt-4 border-t border-outline/10 flex items-center justify-between text-on-surface-variant italic text-[10px]">
+      <div class="flex items-center gap-2">
+        <lucide-icon [name]="ActivityIcon" class="w-2.5 h-2.5 animate-bounce text-primary"></lucide-icon>
+        <span>{{ messages.length }} messages in buffer</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span>Auto-scroll:</span>
+        <button (click)="autoScroll = !autoScroll"
+                [class]="autoScroll ? 'text-primary' : 'text-on-surface-variant'"
+                class="font-bold uppercase">
+          {{ autoScroll ? 'ON' : 'OFF' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,119 @@
+import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { Api } from '../../services/api/api';
+import { Websocket } from '../../services/websocket/websocket';
+import { Subscription } from 'rxjs';
+import { LucideAngularModule, Search, Terminal, Download, Play } from 'lucide-angular';
+import { ActivatedRoute } from '@angular/router';
+
+@Component({
+  selector: 'app-logs',
+  standalone: true,
+  imports: [CommonModule, LucideAngularModule, FormsModule],
+  templateUrl: './logs.html',
+  styleUrl: './logs.css'
+})
+export class Logs implements OnInit, OnDestroy {
+  logs: any[] = [];
+  filteredLogs: any[] = [];
+  searchText: string = '';
+  totalCount: number = 0;
+  loading: boolean = true;
+
+  TerminalIcon = Terminal;
+  SearchIcon = Search;
+  DownloadIcon = Download;
+  PlayIcon = Play;
+
+  private subs: Subscription[] = [];
+
+  constructor(
+    private api: Api,
+    private ws: Websocket,
+    private cdr: ChangeDetectorRef,
+    private route: ActivatedRoute  // ← add this
+
+  ) { }
+
+  ngOnInit() {
+    this.route.queryParams.subscribe(params => {
+      if (params['search']) {
+        this.searchText = params['search'];
+        this.onSearch();
+      }
+    });
+
+    this.loadLogs();
+
+    // Real-time new events via WebSocket
+    this.subs.push(
+      this.ws.events$.subscribe((event: any) => {
+        const log = {
+          ts: new Date().toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+          }),
+          proto: event.proto?.toUpperCase() || '-',
+          src: event.src || '-',
+          dst: event.dst || '-',
+          source: event.type || '-',
+          action: 'ALLOW',
+        };
+        this.logs.unshift(log);
+        if (this.logs.length > 200) this.logs.pop();
+        this.applyFilter();
+        this.cdr.detectChanges();
+      })
+    );
+  }
+
+  loadLogs() {
+    this.loading = true;
+    this.api.getRecentEvents().subscribe({
+      next: (data: any[]) => {
+        this.logs = data.map(e => ({
+          ts: new Date(e.timestamp * 1000).toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+          }),
+          proto: e.proto?.toUpperCase() || '-',
+          src: e.src_ip || '-',
+          dst: e.dst_ip || '-',
+          source: e.source || '-',
+          action: 'ALLOW',
+          event_type: e.event_type || '-',
+        }));
+        this.totalCount = data.length;
+        this.applyFilter();
+        this.loading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.loading = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  applyFilter() {
+    if (!this.searchText) {
+      this.filteredLogs = this.logs;
+    } else {
+      const s = this.searchText.toLowerCase();
+      this.filteredLogs = this.logs.filter(l =>
+        l.src?.toLowerCase().includes(s) ||
+        l.dst?.toLowerCase().includes(s) ||
+        l.proto?.toLowerCase().includes(s) ||
+        l.source?.toLowerCase().includes(s)
+      );
+    }
+  }
+
+  onSearch() {
+    this.applyFilter();
+    this.cdr.detectChanges();
+  }
+
+  ngOnDestroy() {
+    this.subs.forEach(s => s.unsubscribe());
+  }
+}

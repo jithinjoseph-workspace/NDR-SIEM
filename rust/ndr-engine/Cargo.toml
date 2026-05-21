@@ -1,0 +1,32 @@
+[package]
+name = "ndr-engine"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Production-grade NDR correlation engine (Apache-2.0)"
+
+[dependencies]
+axum            = { version = "0.7", features = ["ws"] }
+tokio           = { version = "1",   features = ["full"] }
+serde           = { version = "1",   features = ["derive"] }
+serde_json      = "1"
+serde_yaml      = "0.9"
+dashmap         = "5"
+maxminddb       = "0.24"
+reqwest         = { version = "0.12", features = ["json"] }
+base64 = "0.21"
+ipnetwork       = "0.20"
+chrono          = { version = "0.4", features = ["serde"] }
+regex           = "1"
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite        = { version = "0.31", features = ["bundled"] }
+anyhow          = "1"
+rdkafka         = { version = "0.36", features = ["cmake-build"] }
+tower-http      = { version = "0.5", features = ["cors"] }
+clickhouse      = { version = "0.11", features = ["watch"] }
+url = "2"
+jsonwebtoken = "9"
+bcrypt = "0.15"
+redis = { version = "0.23", features = ["tokio-comp"] }
+futures-util = "0.3"

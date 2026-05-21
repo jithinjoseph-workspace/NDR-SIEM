@@ -1,0 +1,16 @@
+title: Suricata High Severity Alert
+id: ndr-001
+description: Fires on any Suricata alert with severity 1 (high)
+status: experimental
+level: high
+author: NDR Engine
+tags:
+  - attack.execution
+logsource:
+  product: suricata
+  category: alert
+detection:
+  selection:
+    event_type: alert
+    alert.severity: "1"
+  condition: all of selection
