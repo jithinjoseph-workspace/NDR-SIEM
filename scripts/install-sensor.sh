@@ -33,6 +33,7 @@ IFACE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --cloud-url)   CLOUD_URL="$2";  shift 2 ;;
+        --kafka-url)   KAFKA_URL="$2";  shift 2 ;;
         --tenant-id)   TENANT_ID="$2";  shift 2 ;;
         --api-key)     API_KEY="$2";    shift 2 ;;
         --interface)   IFACE="$2";      shift 2 ;;
@@ -53,10 +54,36 @@ fi
 
 # ── Detect interface ──────────────────────────────────────────────────────
 if [ -z "$IFACE" ]; then
-    IFACE=$(ip -o -4 addr show 2>/dev/null | \
-        grep -v "127.0.0.1\|docker\|br-\|veth" | \
-        awk '{print $2}' | head -1)
-    log "Auto-detected interface: $IFACE"
+    # Get all available interfaces
+    IFACES=$(ip -o -4 addr show 2>/dev/null | \
+        grep -v "127.0.0.1\|docker\|br-\|veth\|lo" | \
+        awk '{print $2}')
+
+    IFACE_COUNT=$(echo "$IFACES" | grep -c .)
+
+    if [ "$IFACE_COUNT" -eq 1 ]; then
+        # Only one interface - auto select
+        IFACE=$(echo "$IFACES" | head -1)
+        log "Auto-detected interface: $IFACE"
+    else
+        # Multiple interfaces - show menu
+        echo ""
+        echo "Available network interfaces:"
+        echo "─────────────────────────────"
+        i=1
+        while IFS= read -r iface; do
+            IP=$(ip -o -4 addr show "$iface" 2>/dev/null | \
+                awk '{print $4}' | cut -d/ -f1)
+            echo "  $i) $iface ($IP)"
+            i=$((i+1))
+        done <<< "$IFACES"
+        echo "─────────────────────────────"
+        echo ""
+        read -p "Select interface [1]: " IFACE_NUM
+        IFACE_NUM=${IFACE_NUM:-1}
+        IFACE=$(echo "$IFACES" | sed -n "${IFACE_NUM}p")
+        log "Selected interface: $IFACE"
+    fi
 fi
 
 # ── Check OS ──────────────────────────────────────────────────────────────
@@ -141,23 +168,46 @@ fi
 # ── Install Vector ────────────────────────────────────────────────────────
 log "Installing Vector..."
 if ! command -v vector &>/dev/null; then
-    # Try official Vector install script
-    log "Downloading Vector..."
-    curl -fsSL https://sh.vector.dev | bash -s -- --yes > /dev/null 2>&1 || {
-        # Fallback: download binary directly
-        warn "Vector script failed, trying direct download..."
-        VECTOR_VERSION="0.32.1"
-        ARCH=$(dpkg --print-architecture)
+    # Install Vector via apt (fastest method)
+    log "Installing Vector via apt..."
+    ARCH=$(dpkg --print-architecture)
+    VECTOR_VERSION="0.32.1"
+
+    # Try apt repository first
+    if curl -fsSL https://repositories.vector.dev/gpg.key \
+        | gpg --dearmor \
+        > /usr/share/keyrings/vector-keyring.gpg 2>/dev/null; then
+        echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/vector-keyring.gpg] \
+            https://repositories.vector.dev/ubuntu/ stable vector-0" \
+            > /etc/apt/sources.list.d/vector.list
+        apt-get update -qq 2>/dev/null
+        apt-get install -y -qq vector > /dev/null 2>&1 && \
+            log "✅ Vector installed via apt" || {
+            # Fallback: direct .deb download
+            warn "Apt failed, trying direct download..."
+            if [ "$ARCH" = "amd64" ]; then
+                VECTOR_URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector_${VECTOR_VERSION}-1_amd64.deb"
+            else
+                VECTOR_URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector_${VECTOR_VERSION}-1_arm64.deb"
+            fi
+            wget -q --timeout=30 "$VECTOR_URL" -O /tmp/vector.deb 2>/dev/null && \
+            dpkg -i /tmp/vector.deb > /dev/null 2>&1 && \
+            rm -f /tmp/vector.deb || \
+            warn "Vector install failed — install manually: https://vector.dev"
+        }
+    else
+        # Direct download fallback
+        warn "Repository setup failed, trying direct download..."
         if [ "$ARCH" = "amd64" ]; then
             VECTOR_URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector_${VECTOR_VERSION}-1_amd64.deb"
         else
             VECTOR_URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector_${VECTOR_VERSION}-1_arm64.deb"
         fi
-        wget -q "$VECTOR_URL" -O /tmp/vector.deb && \
+        wget -q --timeout=30 "$VECTOR_URL" -O /tmp/vector.deb 2>/dev/null && \
         dpkg -i /tmp/vector.deb > /dev/null 2>&1 && \
-        rm /tmp/vector.deb || \
-        warn "Vector install failed — install manually from https://vector.dev"
-    }
+        rm -f /tmp/vector.deb || \
+        warn "Vector install failed — install manually: https://vector.dev"
+    fi
     log "✅ Vector installed"
 else
     log "✅ Vector already installed"
@@ -182,7 +232,10 @@ EOF
 
 # ── Extract Kafka host from cloud URL ─────────────────────────────────────
 CLOUD_HOST=$(echo $CLOUD_URL | sed 's|https\?://||' | cut -d/ -f1)
-KAFKA_URL="${CLOUD_HOST}:9092"
+# Use provided kafka URL or derive from cloud URL
+if [ -z "$KAFKA_URL" ]; then
+    KAFKA_URL="${CLOUD_HOST}:9092"
+fi
 
 # ── Configure Vector ──────────────────────────────────────────────────────
 log "Configuring Vector → $KAFKA_URL..."

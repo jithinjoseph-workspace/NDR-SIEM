@@ -184,7 +184,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/health", "/ws"];
+    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -3431,3 +3431,51 @@ pub async fn get_jira_tickets(
     }
 }
 
+
+// ── Sensor Registration & Heartbeat ──────────────────────────────────────
+
+pub async fn sensor_register(
+    State(_state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+
+    let hostname  = payload["hostname"].as_str().unwrap_or("unknown");
+    let interface = payload["interface"].as_str().unwrap_or("unknown");
+    let os        = payload["os"].as_str().unwrap_or("unknown");
+
+    tracing::info!(
+        "Sensor registered: {} tenant={} iface={} os={}",
+        hostname, tenant_id, interface, os
+    );
+
+    Json(json!({
+        "status":    "ok",
+        "message":   "Sensor registered",
+        "tenant_id": tenant_id
+    }))
+}
+
+pub async fn sensor_heartbeat(
+    State(_state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+
+    tracing::info!(
+        "Heartbeat from tenant={} zeek={} suricata={}",
+        tenant_id,
+        payload["zeek"].as_str().unwrap_or("unknown"),
+        payload["suricata"].as_str().unwrap_or("unknown")
+    );
+
+    Json(json!({"status": "ok"}))
+}
