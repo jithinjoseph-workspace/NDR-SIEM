@@ -2,6 +2,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{State, Query};
 use crate::api::AppState;
 use std::collections::HashMap;
+use futures_util::StreamExt;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -73,7 +74,33 @@ async fn handle_ws(
         }
     }
 
-    // Listen to broadcast channel — filter by tenant_id
+    // Try Redis subscription first
+    let channel = format!("tenant:{}", tenant_id);
+    if let Ok(conn) = state.redis.get_async_connection().await {
+        let mut pubsub = conn.into_pubsub();
+        if pubsub.subscribe(&channel).await.is_ok() {
+            let mut stream = pubsub.on_message();
+            loop {
+                tokio::select! {
+                    msg = stream.next() => {
+                        match msg {
+                            Some(m) => {
+                                if let Ok(payload) = m.get_payload::<String>() {
+                                    if socket.send(Message::Text(payload)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            None => break
+                        }
+                    }
+                }
+            }
+            return;
+        }
+    }
+
+    // Fallback to local broadcast channel — filter by tenant_id
     let mut rx = state.tx.subscribe();
     loop {
         match rx.recv().await {
@@ -86,10 +113,10 @@ async fn handle_ws(
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
                         parsed.get("tenant_id")
                             .and_then(|t| t.as_str())
-                            .map(|t| t == tenant_id || t == "default")
-                            .unwrap_or(true)
+                            .map(|t| t == tenant_id)
+                            .unwrap_or(false)
                     } else {
-                        true
+                        false
                     }
                 };
 

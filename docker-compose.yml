@@ -50,11 +50,13 @@ services:
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=1
+      - REDIS_URL=redis://ndr-redis:6379
       - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
       - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
+      - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
 
     volumes:
@@ -63,8 +65,82 @@ services:
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
       - ${INSTALL_DIR}/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - kafka
+      - redis
+
+  ndr-engine-2:
+    build: ./rust
+    container_name: ndr-engine-2
+    stop_grace_period: 5s
+    privileged: true
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+      - NDR_AGENT_URL=http://${HOST_IP}:3001
+      - CLICKHOUSE_URL=http://${HOST_IP}:8123
+      - CLICKHOUSE_USER=ndr
+      - CLICKHOUSE_PASSWORD=ndr123
+      - INSTANCE_ID=2
+      - REDIS_URL=redis://ndr-redis:6379
+      - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
+      - INSTALL_DIR=${INSTALL_DIR}
+      - RULES_DIR=/app/ndr-engine/rules
+      - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
+      - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
+      - HOST_INSTALL_DIR=${INSTALL_DIR}
+      - JWT_SECRET=${JWT_SECRET}
+
+    volumes:
+      - ${INSTALL_DIR}/scripts:/scripts
+      - ${HOME_DIR}/logs:/logs
+      - ${HOME_DIR}/ndr-config:/config
+      - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
+      - ${INSTALL_DIR}/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - kafka
+      - redis
+
+  ndr-engine-3:
+    build: ./rust
+    container_name: ndr-engine-3
+    stop_grace_period: 5s
+    privileged: true
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+      - NDR_AGENT_URL=http://${HOST_IP}:3001
+      - CLICKHOUSE_URL=http://${HOST_IP}:8123
+      - CLICKHOUSE_USER=ndr
+      - CLICKHOUSE_PASSWORD=ndr123
+      - INSTANCE_ID=3
+      - REDIS_URL=redis://ndr-redis:6379
+      - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
+      - INSTALL_DIR=${INSTALL_DIR}
+      - RULES_DIR=/app/ndr-engine/rules
+      - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
+      - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
+      - HOST_INSTALL_DIR=${INSTALL_DIR}
+      - JWT_SECRET=${JWT_SECRET}
+
+    volumes:
+      - ${INSTALL_DIR}/scripts:/scripts
+      - ${HOME_DIR}/logs:/logs
+      - ${HOME_DIR}/ndr-config:/config
+      - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
+      - ${INSTALL_DIR}/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - kafka
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: ndr-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
 
   # Nginx Load Balancer — single entry point on port 3000
   nginx:
@@ -76,6 +152,8 @@ services:
       - ${INSTALL_DIR}/config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - ndr-engine-1
+      - ndr-engine-2
+      - ndr-engine-3
     restart: unless-stopped
 
   # shuffle setting for soar-integration
@@ -154,4 +232,5 @@ volumes:
   shuffle-apps:
   shuffle-files:
   shuffle-opensearch:
+  redis:
 

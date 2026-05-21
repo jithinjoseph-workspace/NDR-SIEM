@@ -145,3 +145,16 @@ ORDER BY id;
 
 INSERT INTO ndr.tenants (id, name, active)
 VALUES ('default', 'Default Organization', 1);
+
+CREATE TABLE IF NOT EXISTS ndr.sigma_rules
+(
+    id          String,
+    name        String,
+    content     String,
+    enabled     UInt8 DEFAULT 1,
+    tenant_id   String DEFAULT 'default',
+    created_at  DateTime DEFAULT now(),
+    updated_at  DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY id;

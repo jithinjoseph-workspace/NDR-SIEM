@@ -11,60 +11,70 @@ export const routes: Routes = [
   {
     path: 'dashboard',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/dashboard/dashboard')
       .then(m => m.Dashboard)
   },
   {
     path: 'alerts',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/alerts/alerts')
       .then(m => m.Alerts)
   },
   {
     path: 'logs',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/logs/logs')
       .then(m => m.Logs)
   },
   {
     path: 'live',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/live/live')
       .then(m => m.Live)
   },
   {
     path: 'rules',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/rules/rules')
       .then(m => m.Rules)
   },
   {
     path: 'intel',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/intel/intel')
       .then(m => m.Intel)
   },
   {
     path: 'health',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/health/health')
       .then(m => m.Health)
   },
   {
     path: 'setup',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/setup/setup')
       .then(m => m.Setup)
   },
   {
     path: 'network-map',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/network-map/network-map')
       .then(m => m.NetworkMap)
   },
   {
     path: 'soar',
     canActivate: [authGuard],
+    data: { role: 'analyst' },
     loadComponent: () => import('../pages/soar/soar')
       .then(m => m.Soar)
   },
@@ -77,6 +87,7 @@ export const routes: Routes = [
   {
     path: 'admin',
     canActivate: [authGuard],
+    data: { role: 'admin' },
     loadComponent: () => import('../pages/admin/admin')
       .then(m => m.Admin)
   },

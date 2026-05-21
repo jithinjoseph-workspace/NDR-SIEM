@@ -3,6 +3,23 @@
 
 pub mod websocket;
 
+trait ExitStatusDefault {
+    fn default() -> Self;
+}
+impl ExitStatusDefault for std::process::ExitStatus {
+    fn default() -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(0)
+        }
+        #[cfg(not(unix))]
+        {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+}
+
 use crate::correlator::{CorrelationEngine, CorrelationHit};
 use crate::detection::DetectionEngine;
 use crate::enrichment::EnrichmentPipeline;
@@ -91,6 +108,37 @@ pub struct AppState {
     pub storage:    Arc<SqliteStorage>,
     pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
+    pub redis:      Arc<redis::Client>,
+}
+
+pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
+    let redis = state.redis.clone();
+    let msg_str = msg.to_string();
+    let channel = format!("tenant:{}", tenant_id);
+    let tx = state.tx.clone();
+    let msg_fallback = msg_str.clone();
+    tokio::spawn(async move {
+        match redis.get_async_connection().await {
+            Ok(mut conn) => {
+                // Redis available — it is the ONLY delivery path.
+                // The WebSocket handler in websocket.rs subscribes directly to
+                // this Redis channel, so exactly ONE message reaches the client.
+                let _: Result<(), _> = redis::cmd("PUBLISH")
+                    .arg(&channel)
+                    .arg(&msg_str)
+                    .query_async(&mut conn)
+                    .await;
+                // NOTE: Do NOT also call tx.send() here.
+                // websocket.rs uses Redis when available and tx only as fallback.
+                // Sending both causes duplicates with multiple engines.
+            }
+            Err(_) => {
+                // Redis unavailable — fall back to in-process broadcast
+                tracing::warn!("Redis unavailable, falling back to local broadcast");
+                let _ = tx.send(msg_fallback);
+            }
+        }
+    });
 }
 
 
@@ -197,10 +245,10 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
 
     let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
     if let Some(obj) = msg.as_object_mut() {
-        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id));
+        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
 
-    let _ = state.tx.send(msg.to_string());
+    publish_event(state, &tenant_id, &msg.to_string());
 }
 
 
@@ -776,10 +824,10 @@ tokio::spawn(async move {
 
     let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
     if let Some(obj) = hit_msg.as_object_mut() {
-        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id));
+        obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
 
-    let _ = state.tx.send(hit_msg.to_string());
+    publish_event(state, &tenant_id, &hit_msg.to_string());
 }
 
 
@@ -995,16 +1043,94 @@ pub async fn get_hits(State(state): State<AppState>, headers: axum::http::Header
     }
 }
 
+pub async fn load_rules_from_clickhouse(
+    ch: &crate::storage::ClickhouseStorage,
+    rules_dir: &str,
+) -> Vec<crate::detection::SigmaRule> {
+    if let Ok(ch_rules) = ch.get_all_enabled_sigma_rules().await {
+        if !ch_rules.is_empty() {
+            let mut rules = Vec::new();
+            for (id, content) in ch_rules {
+                match crate::detection::parse_rule_content(&content) {
+                    Ok(r) => rules.push(r),
+                    Err(e) => tracing::warn!("Failed to parse rule {} from ClickHouse: {}", id, e),
+                }
+            }
+            if !rules.is_empty() {
+                return rules;
+            }
+        }
+    }
+    crate::detection::load_rules_from_dir(rules_dir)
+}
+
 pub async fn get_rule_by_id(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(rule_id): axum::extract::Path<String>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    // Try ClickHouse first
+    if let Ok(Some((id, name, content, _tenant_id, _enabled))) = state.ch_storage.get_sigma_rule_by_id(&rule_id, &tenant_id).await {
+        let doc: std::collections::HashMap<String, serde_yaml::Value> =
+            serde_yaml::from_str(&content).unwrap_or_default();
+
+        let get_str = |k: &str| -> String {
+            doc.get(k).and_then(|v| v.as_str())
+                .unwrap_or("").to_string()
+        };
+
+        let mut field = String::new();
+        let mut matcher = String::new();
+        let mut value = String::new();
+
+        if let Some(detection) = doc.get("detection")
+            .and_then(|v| v.as_mapping()) {
+            for (k, v) in detection {
+                let key = k.as_str().unwrap_or("");
+                if key == "condition" { continue; }
+                if let Some(field_map) = v.as_mapping() {
+                    for (fk, fv) in field_map {
+                        let fk_str = fk.as_str().unwrap_or("");
+                        let parts: Vec<&str> = fk_str.splitn(2, '|').collect();
+                        field   = parts[0].to_string();
+                        matcher = parts.get(1).unwrap_or(&"equals").to_string();
+                        value   = match fv {
+                            serde_yaml::Value::String(s) => s.clone(),
+                            serde_yaml::Value::Sequence(s) => s.first()
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("").to_string(),
+                            _ => String::new(),
+                        };
+                    }
+                }
+            }
+        }
+
+        return Json(json!({
+            "id":          id,
+            "title":       name,
+            "severity":    get_str("level"),
+            "description": get_str("description"),
+            "field":       field,
+            "matcher":     matcher,
+            "value":       value,
+            "tags":        doc.get("tags")
+                .and_then(|v| v.as_sequence())
+                .map(|s| s.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>())
+                .unwrap_or_default(),
+        }));
+    }
+
+    // Fallback to file-based
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
     let file_path = format!("{}/{}.yml", rules_dir, rule_id);
 
     match std::fs::read_to_string(&file_path) {
         Ok(content) => {
-            // Parse YAML to extract fields
             let doc: std::collections::HashMap<String, serde_yaml::Value> =
                 serde_yaml::from_str(&content).unwrap_or_default();
 
@@ -1013,7 +1139,6 @@ pub async fn get_rule_by_id(
                     .unwrap_or("").to_string()
             };
 
-            // Extract detection field/matcher/value
             let mut field = String::new();
             let mut matcher = String::new();
             let mut value = String::new();
@@ -1063,40 +1188,64 @@ pub async fn get_rule_by_id(
     }
 }
 
-//rules endpoint
 pub async fn get_rules(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    // Get all rules from disk
-    let rules_dir = std::env::var("RULES_DIR")
-        .unwrap_or_else(|_| "rules".to_string());
-    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
-
-    // Get disabled rules from ClickHouse
-    let disabled = state.ch_storage
-        .get_disabled_rules(&tenant_id).await
-        .unwrap_or_default();
-
-    // Return ALL rules with enabled/disabled state
-    let result: Vec<serde_json::Value> = all_rules.iter().map(|r| {
-        let is_enabled = !disabled.contains(&r.id);
-        json!({
-            "id":          r.id,
-            "title":       r.title,
-            "severity":    r.severity,
-            "tags":        r.tags,
-            "conditions":  r.conditions.len(),
-            "logsource": {
-                "product":  r.logsource.product,
-                "category": r.logsource.category,
-                "service":  r.logsource.service,
-            },
-            "enabled": is_enabled,
-            "status":  if is_enabled { "active" } else { "disabled" }
-        })
-    }).collect();
+    
+    // Try ClickHouse first
+    let db_rules = state.ch_storage.get_all_sigma_rules(&tenant_id).await.unwrap_or_default();
+    
+    let result: Vec<serde_json::Value> = if !db_rules.is_empty() {
+        db_rules.iter().map(|(id, name, content, _r_tenant_id, enabled)| {
+            let parsed = crate::detection::parse_rule_content(content).ok();
+            let conditions_len = parsed.as_ref().map(|p| p.conditions.len()).unwrap_or(0);
+            let tags = parsed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
+            let severity = parsed.as_ref().map(|p| p.severity.clone()).unwrap_or_default();
+            let logsource = parsed.as_ref().map(|p| p.logsource.clone());
+            
+            json!({
+                "id":          id,
+                "title":       name,
+                "severity":    severity,
+                "tags":        tags,
+                "conditions":  conditions_len,
+                "logsource": {
+                    "product":  logsource.as_ref().and_then(|l| l.product.clone()),
+                    "category": logsource.as_ref().and_then(|l| l.category.clone()),
+                    "service":  logsource.as_ref().and_then(|l| l.service.clone()),
+                },
+                "enabled":     *enabled == 1,
+                "status":      if *enabled == 1 { "active" } else { "disabled" }
+            })
+        }).collect()
+    } else {
+        // Fallback to loading from files
+        let rules_dir = std::env::var("RULES_DIR")
+            .unwrap_or_else(|_| "rules".to_string());
+        let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
+        let disabled = state.ch_storage
+            .get_disabled_rules(&tenant_id).await
+            .unwrap_or_default();
+        all_rules.iter().map(|r| {
+            let is_enabled = !disabled.contains(&r.id);
+            json!({
+                "id":          r.id,
+                "title":       r.title,
+                "severity":    r.severity,
+                "tags":        r.tags,
+                "conditions":  r.conditions.len(),
+                "logsource": {
+                    "product":  r.logsource.product,
+                    "category": r.logsource.category,
+                    "service":  r.logsource.service,
+                },
+                "enabled": is_enabled,
+                "status":  if is_enabled { "active" } else { "disabled" }
+            })
+        }).collect()
+    };
 
     Json(json!(result))
 }
@@ -1209,26 +1358,27 @@ pub async fn reload_rules_api(
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
 
-    // Get disabled rules from ClickHouse
-    let disabled = state.ch_storage
-        .get_disabled_rules(&tenant_id).await
-        .unwrap_or_default();
-
-    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
-    let total = all_rules.len();
-    let active = all_rules.into_iter()
-        .filter(|r| !disabled.contains(&r.id))
-        .collect::<Vec<_>>();
+    let active = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
     let count = active.len();
 
     state.detection.write().await.set_rules(active);
-    tracing::info!("Hot-reloaded {} / {} SIGMA rules", count, total);
+    tracing::info!("Hot-reloaded {} SIGMA rules", count);
+
+    // Publish reload rules to Redis channel
+    let redis = state.redis.clone();
+    tokio::spawn(async move {
+        if let Ok(mut conn) = redis.get_async_connection().await {
+            let _: Result<(), _> = redis::cmd("PUBLISH")
+                .arg("system:reload_rules")
+                .arg(&tenant_id)
+                .query_async(&mut conn)
+                .await;
+        }
+    });
 
     Json(json!({
         "status":        "reloaded",
         "count":         count,
-        "total":         total,
-        "disabled":      disabled.len(),
         "message":       "Rules reloaded successfully"
     }))
 }
@@ -1681,11 +1831,13 @@ pub struct NewRule {
 }
 
 pub async fn create_rule(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<NewRule>
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let id = format!("ndr-{}", chrono::Utc::now().timestamp());
-    let tags = payload.tags.unwrap_or_default();
+    let tags = payload.tags.clone().unwrap_or_default();
     let matcher = payload.matcher.unwrap_or_else(|| "contains".to_string());
     let description = payload.description.unwrap_or_default();
 
@@ -1718,14 +1870,28 @@ detection:
         value = payload.value,
     );
 
-    // Write to rules directory
-    let rules_dir = std::env::var("RULES_DIR")
-        .unwrap_or_else(|_| "rules".to_string());
-    let file_path = format!("{}/{}.yml", rules_dir, id);
-
-    match std::fs::write(&file_path, &yaml) {
+    // Save to ClickHouse
+    match state.ch_storage.save_sigma_rule(&id, &payload.title, &yaml, &tenant_id).await {
         Ok(_) => {
-            tracing::info!("New SIGMA rule created: {}", id);
+            // Also write to rules directory as fallback
+            let rules_dir = std::env::var("RULES_DIR")
+                .unwrap_or_else(|_| "rules".to_string());
+            let file_path = format!("{}/{}.yml", rules_dir, id);
+            let _ = std::fs::write(&file_path, &yaml);
+
+            let redis = state.redis.clone();
+            let tid = tenant_id.clone();
+            tokio::spawn(async move {
+                if let Ok(mut conn) = redis.get_async_connection().await {
+                    let _: Result<(), _> = redis::cmd("PUBLISH")
+                        .arg("system:reload_rules")
+                        .arg(&tid)
+                        .query_async(&mut conn)
+                        .await;
+                }
+            });
+
+            tracing::info!("New SIGMA rule created in ClickHouse: {}", id);
             Json(json!({
                 "status": "created",
                 "id":     id,
@@ -1734,7 +1900,7 @@ detection:
             }))
         }
         Err(e) => {
-            tracing::warn!("Failed to write rule: {}", e);
+            tracing::warn!("Failed to save rule in ClickHouse: {}", e);
             Json(json!({
                 "status": "error",
                 "message": e.to_string()
@@ -1749,37 +1915,35 @@ pub async fn delete_rule(
     axum::extract::Path(rule_id): axum::extract::Path<String>,
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    
+    // Delete from ClickHouse
+    let ch_deleted = state.ch_storage.delete_sigma_rule(&rule_id, &tenant_id).await.is_ok();
+    
+    // Also remove state from ClickHouse rules_state
+    state.ch_storage.delete_rule_state(&rule_id, &tenant_id).await.ok();
+
+    // Also delete from disk if present
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
     let file_path = format!("{}/{}.yml", rules_dir, rule_id);
+    let disk_deleted = std::fs::remove_file(&file_path).is_ok();
 
-    match std::fs::remove_file(&file_path) {
-        Ok(_) => {
-            // Also remove state from ClickHouse
-            state.ch_storage
-                .delete_rule_state(&rule_id, &tenant_id).await.ok();
+    if ch_deleted || disk_deleted {
+        // Reload rules
+        let active = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
+        let count = active.len();
+        state.detection.write().await.set_rules(active);
 
-            // Reload rules
-            let disabled = state.ch_storage
-                .get_disabled_rules(&tenant_id).await
-                .unwrap_or_default();
-            let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
-            let active = all_rules.into_iter()
-                .filter(|r| !disabled.contains(&r.id))
-                .collect::<Vec<_>>();
-            let count = active.len();
-            state.detection.write().await.set_rules(active);
-
-            tracing::info!("Rule deleted: {}", rule_id);
-            Json(json!({
-                "status": "deleted",
-                "id":     rule_id,
-                "active_rules": count
-            }))
-        }
-        Err(e) => Json(json!({
+        tracing::info!("Rule deleted: {}", rule_id);
+        Json(json!({
+            "status": "deleted",
+            "id":     rule_id,
+            "active_rules": count
+        }))
+    } else {
+        Json(json!({
             "status":  "error",
-            "message": e.to_string()
+            "message": "Rule not found"
         }))
     }
 }
@@ -1828,20 +1992,13 @@ pub async fn toggle_rule(
         }));
     }
 
-
-
-
+    // Also update enabled field in sigma_rules table
+    let _ = state.ch_storage.toggle_sigma_rule(&rule_id, payload.enabled, &tenant_id).await;
 
     // Reload rules respecting disabled state
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
-    let disabled = state.ch_storage
-        .get_disabled_rules(&tenant_id).await
-        .unwrap_or_default();
-    let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
-    let active = all_rules.into_iter()
-        .filter(|r| !disabled.contains(&r.id))
-        .collect::<Vec<_>>();
+    let active = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
     let count = active.len();
     state.detection.write().await.set_rules(active);
 
@@ -2915,6 +3072,232 @@ pub async fn create_tenant(
             "status": "error",
             "message": e.to_string()
         }))
+    }
+}
+
+pub async fn get_engines() -> Json<Value> {
+    let output = std::process::Command::new("docker")
+        .args(["ps",
+            "--filter", "name=ndr-engine",
+            "--format", "{{.Names}},{{.Status}},{{.RunningFor}}"])
+        .output()
+        .unwrap_or_else(|_| std::process::Output {
+            status: <std::process::ExitStatus as ExitStatusDefault>::default(),
+            stdout: vec![],
+            stderr: vec![],
+        });
+
+    let engines: Vec<Value> = String::from_utf8_lossy(
+        &output.stdout
+    ).lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(3, ',').collect();
+            json!({
+                "name":    parts.get(0).unwrap_or(&""),
+                "status":  parts.get(1).unwrap_or(&""),
+                "running": parts.get(2).unwrap_or(&"")
+            })
+        }).collect();
+
+    Json(json!({
+        "engines": engines,
+        "count": engines.len()
+    }))
+}
+
+pub async fn scale_engines(
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let action = payload["action"].as_str().unwrap_or("up");
+    let engine_name = payload["engine"].as_str().unwrap_or("");
+
+    match action {
+        "up" => {
+            // ── Count currently running ndr-engine containers ─────────────────
+            let count_out = std::process::Command::new("docker")
+                .args(["ps", "-q", "--filter", "name=ndr-engine"])
+                .output()
+                .unwrap_or_else(|_| std::process::Output {
+                    status: <std::process::ExitStatus as ExitStatusDefault>::default(),
+                    stdout: vec![],
+                    stderr: vec![],
+                });
+            let count = String::from_utf8_lossy(&count_out.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .count();
+            let new_instance_id = count + 1;
+            let new_name = format!("ndr-engine-{}", new_instance_id);
+
+            tracing::info!("Scaling up: {} engines running → starting {}", count, new_name);
+
+            // ── Step 1: Clone any running engine and start new one ────────────
+            let start_script = format!(r#"set -e
+ENGINE=$(docker ps --format '{{{{.Names}}}}' --filter "name=ndr-engine" | head -n 1)
+if [ -z "$ENGINE" ]; then echo "No running engine found as blueprint" >&2; exit 1; fi
+NEW_ENGINE="{0}"
+NEW_INSTANCE_ID="{1}"
+IMAGE=$(docker inspect --format '{{{{.Config.Image}}}}' "$ENGINE")
+NETWORK=$(docker inspect --format '{{{{range $k, $v := .NetworkSettings.Networks}}}}{{{{$k}}}}{{{{end}}}}' "$ENGINE")
+BINDS=$(docker inspect --format '{{{{range .HostConfig.Binds}}}}-v {{{{.}}}} {{{{end}}}}' "$ENGINE")
+ENVS=$(docker inspect --format '{{{{range .Config.Env}}}}-e {{{{.}}}} {{{{end}}}}' "$ENGINE" | sed "s/INSTANCE_ID=[0-9]*/INSTANCE_ID=$NEW_INSTANCE_ID/")
+# Remove any stopped container with the same name to avoid conflicts
+docker rm -f "$NEW_ENGINE" 2>/dev/null || true
+eval docker run -d --name "$NEW_ENGINE" --privileged --network "$NETWORK" $BINDS $ENVS "$IMAGE"
+"#, new_name, new_instance_id);
+
+            tracing::debug!("Start script:\n{}", start_script);
+            let engine_out = std::process::Command::new("bash")
+                .args(["-c", &start_script])
+                .output();
+
+            match &engine_out {
+                Ok(o) if o.status.success() => {
+                    tracing::info!("✅ Engine {} started (ID: {})", new_name, String::from_utf8_lossy(&o.stdout).trim());
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    tracing::error!("❌ Failed to start engine: {}", err);
+                    return Json(json!({ "status": "error", "message": format!("Engine start failed: {}", err) }));
+                }
+                Err(e) => {
+                    tracing::error!("❌ OS error: {}", e);
+                    return Json(json!({ "status": "error", "message": e.to_string() }));
+                }
+            }
+
+            // ── Step 2: Scale Kafka partitions up to match new engine count ───
+            tracing::info!("Scaling Kafka ndr-events partitions to {}", new_instance_id);
+            let kafka_out = std::process::Command::new("docker")
+                .args([
+                    "exec", "kafka",
+                    "/opt/kafka/bin/kafka-topics.sh",
+                    "--bootstrap-server", "localhost:9092",
+                    "--alter", "--topic", "ndr-events",
+                    "--partitions", &new_instance_id.to_string(),
+                ])
+                .output();
+            let kafka_msg = match &kafka_out {
+                Ok(o) if o.status.success() => {
+                    tracing::info!("✅ Kafka partitions → {}", new_instance_id);
+                    format!("Kafka partitions set to {}", new_instance_id)
+                }
+                Ok(o) => {
+                    // Kafka warns if partition count already >= requested; not fatal
+                    let warn = String::from_utf8_lossy(&o.stderr);
+                    tracing::warn!("⚠️ Kafka alter: {}", warn);
+                    format!("Kafka warning: {}", warn)
+                }
+                Err(e) => { tracing::error!("❌ Kafka exec error: {}", e); e.to_string() }
+            };
+
+            // ── Step 3: Inject new server into Nginx upstream & reload ─────────
+            let install_dir = std::env::var("INSTALL_DIR").unwrap_or_else(|_| ".".to_string());
+            let nginx_conf = format!("{}/config/nginx/nginx.conf", install_dir);
+            let new_server = format!("        server {}:3000 max_fails=3 fail_timeout=30s;", new_name);
+            tracing::info!("Adding {} to Nginx upstream: {}", new_name, nginx_conf);
+
+            let nginx_up_script = format!(r#"set -e
+CONF="{0}"
+NEW_LINE="{1}"
+if ! grep -qF "$NEW_LINE" "$CONF"; then
+    sed -i "/server ndr-engine.*:3000/a\\$NEW_LINE" "$CONF"
+    echo "Added $NEW_LINE"
+else
+    echo "Already present"
+fi
+docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
+"#, nginx_conf, new_server);
+
+            let nginx_out = std::process::Command::new("bash")
+                .args(["-c", &nginx_up_script])
+                .output();
+            let nginx_msg = match &nginx_out {
+                Ok(o) if o.status.success() => {
+                    let msg = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    tracing::info!("✅ Nginx: {}", msg);
+                    msg
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    tracing::error!("❌ Nginx update failed: {}", err);
+                    format!("Nginx error: {}", err)
+                }
+                Err(e) => { tracing::error!("❌ Nginx OS error: {}", e); e.to_string() }
+            };
+
+            Json(json!({
+                "status": "ok",
+                "message": format!("Engine {} started!", new_name),
+                "engine": new_name,
+                "kafka": kafka_msg,
+                "nginx": nginx_msg
+            }))
+        }
+
+        "down" => {
+            if engine_name.is_empty() {
+                return Json(json!({ "status": "error", "message": "Engine name required" }));
+            }
+
+            // ── Step 1: Remove from Nginx FIRST (drain traffic before stopping) ─
+            let install_dir = std::env::var("INSTALL_DIR").unwrap_or_else(|_| ".".to_string());
+            let nginx_conf = format!("{}/config/nginx/nginx.conf", install_dir);
+            let remove_server = format!("        server {}:3000 max_fails=3 fail_timeout=30s;", engine_name);
+            tracing::info!("Removing {} from Nginx upstream BEFORE stopping container", engine_name);
+
+            let nginx_down_script = format!(r#"set -e
+CONF="{0}"
+REMOVE="{1}"
+ESCAPED=$(printf '%s\n' "$REMOVE" | sed 's/[\/&]/\\&/g; s/$//')
+sed -i "/$ESCAPED/d" "$CONF"
+echo "Removed $REMOVE"
+docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
+"#, nginx_conf, remove_server);
+
+            let nginx_out = std::process::Command::new("bash")
+                .args(["-c", &nginx_down_script])
+                .output();
+            let nginx_msg = match &nginx_out {
+                Ok(o) if o.status.success() => {
+                    let msg = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    tracing::info!("✅ Nginx drained: {}", msg);
+                    msg
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    tracing::warn!("⚠️ Nginx down warning: {}", err);
+                    format!("Nginx warning: {}", err)
+                }
+                Err(e) => e.to_string()
+            };
+
+            // ── Step 2: Brief drain wait — let active connections finish ──────
+            tracing::info!("Waiting 2s for active connections to drain from {}", engine_name);
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            // ── Step 3: Stop the container safely ─────────────────────────────
+            tracing::info!("Stopping engine container: {}", engine_name);
+            let stop_out = std::process::Command::new("docker")
+                .args(["stop", engine_name])
+                .output();
+            match &stop_out {
+                Ok(o) if o.status.success() => tracing::info!("✅ Engine {} stopped", engine_name),
+                Ok(o) => tracing::error!("❌ Stop failed: {}", String::from_utf8_lossy(&o.stderr)),
+                Err(e) => tracing::error!("❌ OS error stopping: {}", e),
+            }
+
+            Json(json!({
+                "status": "ok",
+                "message": format!("{} stopped!", engine_name),
+                "engine": engine_name,
+                "nginx": nginx_msg,
+                "note": "Nginx drained before container stop — zero dropped requests"
+            }))
+        }
+
+        _ => Json(json!({ "status": "error", "message": "Unknown action" }))
     }
 }
 

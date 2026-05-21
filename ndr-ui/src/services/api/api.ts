@@ -205,6 +205,17 @@ getJiraTickets(config: any): Observable<any> {
   createTenant(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/auth/tenants`, data);
   }
+
+  getEngines(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/engines`);
+  }
+
+  scaleEngines(action: string, engine?: string): Observable<any> {
+    return this.http.post(
+      `${this.baseUrl}/admin/engines/scale`,
+      { action, engine }
+    );
+  }
 }
 
 

@@ -12,6 +12,7 @@ mod scoring;
 mod storage;
 
 use api::{websocket::ws_handler, AppState};
+use futures_util::StreamExt;
 use axum::{routing::{get, post, delete}, Router};
 use tower_http::cors::{Any, CorsLayer};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
@@ -54,6 +55,11 @@ async fn main() {
     // ── Build AppState ────────────────────────────────────────────────────
     let (tx, _) = broadcast::channel::<String>(512);
 
+    let redis_url = std::env::var("REDIS_URL")
+        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let redis_client = redis::Client::open(redis_url)
+        .expect("Redis connection failed");
+
     let storage = storage::SqliteStorage::new("ndr.db")
         .expect("Failed to open SQLite database");
 
@@ -66,13 +72,15 @@ async fn main() {
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
         detection:  Arc::new(tokio::sync::RwLock::new(detection::DetectionEngine::new("rules"))),
-ch_storage: {
-    let ch = Arc::new(storage::ClickhouseStorage::new());
-    ch.init_tables().await;
-    let _ = ch.create_default_admin().await;
-    ch
-},        storage:    Arc::new(storage),
+        ch_storage: {
+            let ch = Arc::new(storage::ClickhouseStorage::new());
+            ch.init_tables().await;
+            let _ = ch.create_default_admin().await;
+            ch
+        },
+        storage:    Arc::new(storage),
         tx:         tx.clone(),
+        redis:      Arc::new(redis_client.clone()),
     };
 
     // ── Background: session reaper (every 30s) ────────────────────────────
@@ -140,6 +148,78 @@ tokio::spawn(async move {
     }
 });
 
+    // ── Migrate rules to ClickHouse ──────────────────────────────────────────
+    {
+        let ch = state.ch_storage.clone();
+        let rules_dir = std::env::var("RULES_DIR")
+            .unwrap_or_else(|_| "rules".to_string());
+        
+        tokio::spawn(async move {
+            if let Ok(entries) = std::fs::read_dir(&rules_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    if ext != "yml" && ext != "yaml" { continue; }
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(doc) = serde_yaml::from_str::<std::collections::HashMap<String, serde_yaml::Value>>(&content) {
+                            let id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let name = doc.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            if !id.is_empty() {
+                                let exists = ch.get_sigma_rule_by_id(&id, "default").await.map(|r| r.is_some()).unwrap_or(false);
+                                if !exists {
+                                    if let Err(e) = ch.save_sigma_rule(&id, &name, &content, "default").await {
+                                        tracing::warn!("Failed to migrate rule {}: {}", id, e);
+                                    } else {
+                                        tracing::info!("Migrated rule {} to ClickHouse", id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // ── Load rules from ClickHouse (or file fallback) ───────────────────────
+    {
+        let ch = state.ch_storage.clone();
+        let det = state.detection.clone();
+        let rules_dir = std::env::var("RULES_DIR")
+            .unwrap_or_else(|_| "rules".to_string());
+        tokio::spawn(async move {
+            // Wait briefly for migration to complete
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let rules = api::load_rules_from_clickhouse(&ch, &rules_dir).await;
+            det.write().await.set_rules(rules);
+        });
+    }
+
+    // ── Subscribe to Redis "system:reload_rules" ───────────────────────────
+    {
+        let ch = state.ch_storage.clone();
+        let det = state.detection.clone();
+        let redis_client = redis_client.clone();
+        let rules_dir = std::env::var("RULES_DIR")
+            .unwrap_or_else(|_| "rules".to_string());
+        
+        tokio::spawn(async move {
+            if let Ok(conn) = redis_client.get_async_connection().await {
+                let mut pubsub = conn.into_pubsub();
+                if pubsub.subscribe("system:reload_rules").await.is_ok() {
+                    let mut stream = pubsub.on_message();
+                    while let Some(_) = stream.next().await {
+                        tracing::info!("Reloading rules via Redis signal...");
+                        let rules = api::load_rules_from_clickhouse(&ch, &rules_dir).await;
+                        let count = rules.len();
+                        det.write().await.set_rules(rules);
+                        tracing::info!("Hot-reloaded {} SIGMA rules from Redis signal", count);
+                    }
+                }
+            }
+        });
+    }
+
 
 
     let cors = CorsLayer::new()
@@ -196,6 +276,8 @@ tokio::spawn(async move {
         .route("/api/auth/users",get(api::get_users).post(api::create_user))
         .route("/api/auth/users/:id",delete(api::delete_user))
         .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
+        .route("/api/admin/engines", get(api::get_engines))
+        .route("/api/admin/engines/scale", post(api::scale_engines))
         .with_state(state)
         .layer(axum::middleware::from_fn(api::auth_middleware))
         .layer(cors);

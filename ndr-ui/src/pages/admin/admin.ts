@@ -40,6 +40,11 @@ export class Admin implements OnInit {
   savingTenant = false;
   tenantMsg = '';
 
+  // Engines
+  engines: any[] = [];
+  loadingEngines = false;
+  scaling = false;
+
   // Current user
   currentUser: any = {};
 
@@ -58,6 +63,7 @@ export class Admin implements OnInit {
     }
     this.loadUsers();
     this.loadTenants();
+    this.loadEngines();
   }
 
   loadUsers() {
@@ -175,5 +181,50 @@ export class Admin implements OnInit {
       case 'analyst': return 'bg-primary/20 text-primary';
       default: return 'bg-surface-container text-on-surface-variant';
     }
+  }
+
+  loadEngines() {
+    this.loadingEngines = true;
+    this.api.getEngines().subscribe({
+      next: (data: any) => {
+        this.engines = data.engines || [];
+        this.loadingEngines = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.loadingEngines = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  scaleUp() {
+    this.scaling = true;
+    this.api.scaleEngines('up').subscribe({
+      next: (data: any) => {
+        this.scaling = false;
+        this.showMsg(data.message, 'success');
+        setTimeout(() => this.loadEngines(), 3000);
+        this.cdr.detectChanges();
+      },
+      error: (err: any) => {
+        this.scaling = false;
+        this.showMsg(err.error?.message || 'Failed to scale up', 'error');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  scaleDown(engine: string) {
+    if (!confirm(`Stop ${engine}?`)) return;
+    this.api.scaleEngines('down', engine).subscribe({
+      next: (data: any) => {
+        this.showMsg(data.message, 'success');
+        setTimeout(() => this.loadEngines(), 2000);
+      },
+      error: (err: any) => {
+        this.showMsg(err.error?.message || 'Failed to scale down', 'error');
+      }
+    });
   }
 }
