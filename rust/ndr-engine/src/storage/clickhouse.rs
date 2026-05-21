@@ -90,7 +90,7 @@ pub struct ClickhouseStorage {
 
 pub fn default_permissions(role: &str) -> String {
   match role {
-    "admin" | "super_admin" =>
+    "super_admin" =>
       "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup",
     "tenant_admin" =>
       "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users",
