@@ -25,6 +25,14 @@ pkill -f "npm start" 2>/dev/null || true
 # Stop Docker stack
 echo "  → Stopping Docker stack..."
 cd $INSTALL_DIR
+# Stop dynamically created engines (engine-4, 5, etc.)
+DYNAMIC_ENGINES=$(sudo docker ps -a     --filter "name=ndr-engine-"     --format "{{.Names}}" |     grep -v -E "ndr-engine-[123]$" || true)
+
+if [ -n "$DYNAMIC_ENGINES" ]; then
+    echo "Stopping dynamic engines: $DYNAMIC_ENGINES"
+    echo "$DYNAMIC_ENGINES" | xargs sudo docker rm -f         2>/dev/null || true
+fi
+
 sudo docker compose down
 
 # Stop ClickHouse
