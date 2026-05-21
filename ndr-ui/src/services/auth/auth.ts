@@ -54,6 +54,16 @@ export class AuthService {
   }
 
   isAdmin(): boolean {
-    return this.getUser()?.role === 'admin';
+    return this.isSuperAdmin();
+  }
+
+  isSuperAdmin(): boolean {
+    const user = this.getUser();
+    return user?.role === 'super_admin' ||
+      (user?.role === 'admin' && user?.tenant_id === 'default');
+  }
+
+  isTenantAdmin(): boolean {
+    return this.getUser()?.role === 'tenant_admin';
   }
 }

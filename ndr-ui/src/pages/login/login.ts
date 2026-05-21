@@ -48,11 +48,11 @@ export class Login {
         if (res.token) {
           const role = res.user?.role;
           const tenantId = res.user?.tenant_id;
-          if (role === 'admin' && tenantId === 'default') {
+          if (role === 'super_admin' || (role === 'admin' && tenantId === 'default')) {
             this.router.navigate(['/admin']).then(() => {
               this.ws.connect();
             });
-          } else if (role === 'admin' || role === 'tenant_admin') {
+          } else if (role === 'tenant_admin') {
             this.router.navigate(['/tenant-admin']).then(() => {
               this.ws.connect();
             });

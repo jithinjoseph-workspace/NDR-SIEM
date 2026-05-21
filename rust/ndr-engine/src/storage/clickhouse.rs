@@ -92,8 +92,12 @@ pub fn default_permissions(role: &str) -> String {
   match role {
     "super_admin" =>
       "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup",
+    "admin" =>
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup",
     "tenant_admin" =>
       "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users",
+    "senior_analyst" =>
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health",
     "analyst" =>
       "dashboard,alerts,logs,live,network-map,intel,health",
     _ => "dashboard,alerts,health",
@@ -146,18 +150,25 @@ pub async fn create_default_admin(&self) -> anyhow::Result<()> {
         .await
         .unwrap_or(0);
 
+    let perms = default_permissions("super_admin");
     if count == 0 {
         let hash = bcrypt::hash("ndr@admin123", 12)
             .unwrap_or_default();
-        let perms = default_permissions("admin");
         let query = format!(
             "INSERT INTO ndr.users \
              (username, password_hash, role, tenant_id, permissions) \
-             VALUES ('admin', '{}', 'admin', 'default', '{}')",
+             VALUES ('admin', '{}', 'super_admin', 'default', '{}')",
             hash, perms
         );
         self.client.query(&query).execute().await?;
         tracing::info!("✅ Default admin user created");
+    } else {
+        let query = format!(
+            "ALTER TABLE ndr.users UPDATE role = 'super_admin', permissions = '{}' \
+             WHERE username = 'admin' AND tenant_id = 'default'",
+            perms
+        );
+        self.client.query(&query).execute().await?;
     }
     Ok(())
 }

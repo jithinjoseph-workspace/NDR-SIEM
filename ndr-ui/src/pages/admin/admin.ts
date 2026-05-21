@@ -22,8 +22,8 @@ export class Admin implements OnInit {
   newUser = {
     username: '',
     password: '',
-    role: 'analyst',
-    tenant_id: 'default'
+    role: 'tenant_admin',
+    tenant_id: ''
   };
   savingUser = false;
   userMsg = '';
@@ -101,15 +101,22 @@ export class Admin implements OnInit {
       this.showMsg('Username and password required', 'error');
       return;
     }
+    if (!this.newUser.tenant_id || this.newUser.tenant_id === 'default') {
+      this.showMsg('Select a tenant for the Tenant Admin', 'error');
+      return;
+    }
     this.savingUser = true;
-    this.api.createUser(this.newUser).subscribe({
+    this.api.createUser({
+      ...this.newUser,
+      role: 'tenant_admin'
+    }).subscribe({
       next: (data: any) => {
         this.savingUser = false;
         if (data.status === 'ok') {
           this.showAddUser = false;
           this.newUser = {
             username: '', password: '',
-            role: 'analyst', tenant_id: 'default'
+            role: 'tenant_admin', tenant_id: ''
           };
           this.loadUsers();
           this.showMsg('✅ User created!', 'success');
@@ -177,7 +184,9 @@ export class Admin implements OnInit {
 
   getRoleBadge(role: string): string {
     switch(role) {
+      case 'super_admin': return 'bg-red-500/20 text-red-400';
       case 'admin': return 'bg-red-500/20 text-red-400';
+      case 'tenant_admin': return 'bg-amber-500/20 text-amber-300';
       case 'analyst': return 'bg-primary/20 text-primary';
       default: return 'bg-surface-container text-on-surface-variant';
     }

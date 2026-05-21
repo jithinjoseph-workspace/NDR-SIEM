@@ -2992,16 +2992,52 @@ pub async fn get_users(
 // POST /api/auth/users
 pub async fn create_user(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
     let username = payload["username"]
         .as_str().unwrap_or("").to_string();
     let password = payload["password"]
         .as_str().unwrap_or("").to_string();
-    let role = payload["role"]
+    let requested_role = payload["role"]
         .as_str().unwrap_or("analyst").to_string();
-    let tenant_id = payload["tenant_id"]
+    let requested_tenant_id = payload["tenant_id"]
         .as_str().unwrap_or("default").to_string();
+
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        })),
+    };
+
+    let is_super_admin = claims.role == "super_admin"
+        || (claims.role == "admin" && claims.tenant_id == "default");
+
+    let (role, tenant_id) = if is_super_admin {
+        if requested_tenant_id.is_empty() || requested_tenant_id == "default" {
+            return Json(json!({
+                "status": "error",
+                "message": "Tenant Admin must be assigned to a tenant"
+            }));
+        }
+        ("tenant_admin".to_string(), requested_tenant_id)
+    } else if claims.role == "tenant_admin" {
+        let allowed_roles = ["analyst", "senior_analyst", "viewer"];
+        if !allowed_roles.contains(&requested_role.as_str()) {
+            return Json(json!({
+                "status": "error",
+                "message": "Tenant admins can only create tenant users"
+            }));
+        }
+        (requested_role, claims.tenant_id)
+    } else {
+        return Json(json!({
+            "status": "error",
+            "message": "Forbidden"
+        }));
+    };
 
     let permissions = match payload.get("permissions") {
         Some(val) => {
@@ -3430,4 +3466,3 @@ pub async fn get_jira_tickets(
         }))
     }
 }
-

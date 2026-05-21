@@ -7,7 +7,7 @@
         Admin Panel
       </h2>
       <p class="text-on-surface-variant text-sm mt-1">
-        Manage users, tenants and system settings
+        Manage tenants, tenant admins and system settings
       </p>
     </div>
     <div class="flex items-center gap-2 px-4 py-2
@@ -59,7 +59,7 @@
       <div class="px-6 py-4 border-b border-outline/10
         flex items-center justify-between">
         <h3 class="text-white font-bold text-sm uppercase">
-          System Users
+          Tenant Admins
         </h3>
         <button (click)="showAddUser=true"
           class="flex items-center gap-2 bg-primary/10
@@ -299,14 +299,11 @@
           <label class="text-xs text-on-surface-variant uppercase">
             Role
           </label>
-          <select [(ngModel)]="newUser.role"
+          <input value="Tenant Admin"
+            disabled
             class="w-full mt-1 bg-surface-container
             border border-outline/20 rounded-lg px-3 py-2.5
-            text-white text-sm outline-none">
-            <option value="admin">Admin</option>
-            <option value="analyst">Analyst</option>
-            <option value="viewer">Viewer</option>
-          </select>
+            text-on-surface-variant text-sm outline-none"/>
         </div>
         <div>
           <label class="text-xs text-on-surface-variant uppercase">
@@ -316,8 +313,11 @@
             class="w-full mt-1 bg-surface-container
             border border-outline/20 rounded-lg px-3 py-2.5
             text-white text-sm outline-none">
-            <option value="default">default</option>
-            <option *ngFor="let t of tenants" [value]="t.id">
+            <option value="">Select tenant</option>
+            <option *ngFor="let t of tenants"
+              [value]="t.id"
+              [hidden]="t.id === 'default'"
+              [disabled]="t.id === 'default'">
               {{ t.name }}
             </option>
           </select>
