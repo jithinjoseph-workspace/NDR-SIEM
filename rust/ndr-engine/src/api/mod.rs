@@ -2890,7 +2890,7 @@ pub async fn login(
         Ok(Some(user)) => {
             let role = user["role"].as_str().unwrap_or("analyst");
             let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
-            let permissions_str = if role == "admin" || role == "super_admin" {
+            let permissions_str = if role == "super_admin" || role == "tenant_admin" {
                 crate::storage::clickhouse::default_permissions(role)
             } else {
                 user["permissions"].as_str().unwrap_or("dashboard,alerts").to_string()
