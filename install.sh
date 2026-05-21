@@ -105,6 +105,8 @@ log "Detected OS: $NAME $VERSION_ID"
 USERNAME=$(whoami)
 HOME_DIR=$HOME
 INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+RUNTIME_DIR="$INSTALL_DIR/.runtime"
+IFACE_FILE="$RUNTIME_DIR/ndr_interface"
 OS_VERSION=$(echo $VERSION_ID | cut -d'.' -f1,2)
 
 log "Installing to: $INSTALL_DIR"
@@ -328,7 +330,8 @@ if [ -z "$IFACE" ]; then
     IFACE="eth0"
 fi
 log "Using interface: $IFACE"
-echo "$IFACE" > /tmp/ndr_interface
+mkdir -p "$RUNTIME_DIR"
+echo "$IFACE" > "$IFACE_FILE"
 
 # ── Configure Zeek ────────────────────────────
 log "Configuring Zeek..."
@@ -621,6 +624,7 @@ log "Building Docker stack (this takes a few minutes)..."
 cd $INSTALL_DIR
 
 sudo docker compose down 2>/dev/null || true
+sudo docker rm -f vector 2>/dev/null || true
 
 if [ "$DEPLOY_MODE" = "hybrid" ]; then
     log "Hybrid mode — using cloud: $CLOUD_KAFKA"
@@ -790,5 +794,3 @@ echo "║  status:  ./status.sh                    ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 echo "💡 Live reload: Edit Angular on Windows → auto-updates!"
-
-

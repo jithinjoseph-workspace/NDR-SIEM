@@ -50,6 +50,8 @@ log "Detected OS: $NAME $VERSION_ID"
 USERNAME=$(whoami)
 HOME_DIR=$HOME
 INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+RUNTIME_DIR="$INSTALL_DIR/.runtime"
+IFACE_FILE="$RUNTIME_DIR/ndr_interface"
 
 log "Installing to: $INSTALL_DIR"
 log "Running as:    $USERNAME"
@@ -185,7 +187,8 @@ if [ -z "$IFACE" ]; then
     IFACE="eth0"
 fi
 log "Using interface: $IFACE"
-echo "$IFACE" > /tmp/ndr_interface
+mkdir -p "$RUNTIME_DIR"
+echo "$IFACE" > "$IFACE_FILE"
 
 # ── Configure Zeek ────────────────────────────
 log "Configuring Zeek..."

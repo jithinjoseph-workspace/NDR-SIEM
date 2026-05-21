@@ -62,11 +62,29 @@ ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY key;
 
 -- Default thresholds
-INSERT INTO ndr.settings (key, value) VALUES
-    ('store_threshold',    '10'),
-    ('alert_threshold',    '75'),
-    ('critical_threshold', '90'),
-    ('soar_threshold',     '75');
+INSERT INTO ndr.settings (key, value)
+SELECT 'store_threshold', '10'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'store_threshold'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'alert_threshold', '75'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'alert_threshold'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'critical_threshold', '90'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'critical_threshold'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'soar_threshold', '75'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'soar_threshold'
+);
 
 -- SOAR configuration table
 CREATE TABLE IF NOT EXISTS ndr.soar_config
@@ -130,8 +148,10 @@ ORDER BY username;
 -- Insert default admin user
 -- Password: ndr@admin123 (bcrypt hash)
 INSERT INTO ndr.users (username, password_hash, role)
-VALUES ('admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewHCr8eKFGjlSHKi', 'admin')
-ON CONFLICT DO NOTHING;
+SELECT 'admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewHCr8eKFGjlSHKi', 'admin'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.users FINAL WHERE username = 'admin'
+);
 
 CREATE TABLE IF NOT EXISTS ndr.tenants
 (
@@ -144,7 +164,10 @@ ENGINE = ReplacingMergeTree(created_at)
 ORDER BY id;
 
 INSERT INTO ndr.tenants (id, name, active)
-VALUES ('default', 'Default Organization', 1);
+SELECT 'default', 'Default Organization', 1
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.tenants FINAL WHERE id = 'default'
+);
 
 CREATE TABLE IF NOT EXISTS ndr.sigma_rules
 (

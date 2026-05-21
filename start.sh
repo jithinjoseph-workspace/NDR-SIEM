@@ -1,5 +1,8 @@
 #!/bin/bash
 INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+HOME_DIR=$HOME
+RUNTIME_DIR="$INSTALL_DIR/.runtime"
+IFACE_FILE="$RUNTIME_DIR/ndr_interface"
 
 log()  { echo -e "\033[0;32m[NDR]\033[0m $1"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
@@ -32,7 +35,8 @@ fi
 IFACE=${IFACE:-$(ip -o -4 addr show 2>/dev/null | \
     grep -v "127.0.0.1\|docker\|br-\|veth" | \
     awk '{print $2}' | head -1)}
-echo "$IFACE" > /tmp/ndr_interface
+mkdir -p "$RUNTIME_DIR"
+echo "$IFACE" > "$IFACE_FILE"
 echo "  → Interface: $IFACE"
 
 # Start ClickHouse
@@ -50,6 +54,7 @@ sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 # Start Docker stack
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
+sudo docker rm -f vector 2>/dev/null || true
 sudo docker compose up -d
 
 # ── Set Kafka retention ───────────────────────
