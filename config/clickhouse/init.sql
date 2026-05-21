@@ -116,13 +116,14 @@ ORDER BY id;
 -- Users table
 CREATE TABLE IF NOT EXISTS ndr.users
 (
-    id           String DEFAULT toString(generateUUIDv4()),
-    username     String,
-    password_hash String,
-    role         String DEFAULT 'analyst',
-    tenant_id    String DEFAULT 'default',
-    created_at   DateTime DEFAULT now(),
-    last_login   DateTime DEFAULT now()
+    id            String DEFAULT toString(generateUUIDv4()),
+    username      String,
+    password_hash  String,
+    role          String DEFAULT 'analyst',
+    tenant_id     String DEFAULT 'default',
+    permissions   String DEFAULT 'dashboard,alerts',
+    created_at    DateTime DEFAULT now(),
+    last_login    DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(created_at)
 ORDER BY username;
