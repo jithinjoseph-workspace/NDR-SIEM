@@ -43,11 +43,12 @@ struct Claims {
     sub: String,
     role: String,
     tenant_id: String,
+    permissions: Vec<String>,
     exp: usize,
 }
 
 fn generate_jwt(username: &str, role: &str, 
-    tenant_id: &str) -> String {
+    tenant_id: &str, permissions: Vec<String>) -> String {
     let secret = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| 
             "ndr-secret-key-2026".to_string());
@@ -57,6 +58,7 @@ fn generate_jwt(username: &str, role: &str,
         sub: username.to_string(),
         role: role.to_string(),
         tenant_id: tenant_id.to_string(),
+        permissions,
         exp: expiry,
     };
     encode(
@@ -149,6 +151,7 @@ pub struct AuthClaims {
     pub sub: String,
     pub role: String,
     pub tenant_id: String,
+    pub permissions: Vec<String>,
     pub exp: usize,
 }
 
@@ -2885,20 +2888,32 @@ pub async fn login(
     match state.ch_storage
         .verify_user(&username, &password).await {
         Ok(Some(user)) => {
+            let role = user["role"].as_str().unwrap_or("analyst");
+            let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
+            let permissions_str = if role == "super_admin" || role == "tenant_admin" {
+                crate::storage::clickhouse::default_permissions(role)
+            } else {
+                user["permissions"].as_str().unwrap_or("dashboard,alerts").to_string()
+            };
+            let permissions_vec: Vec<String> = permissions_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
             let token = generate_jwt(
                 &username,
-                user["role"].as_str()
-                    .unwrap_or("analyst"),
-                user["tenant_id"].as_str()
-                    .unwrap_or("default")
+                role,
+                tenant_id,
+                permissions_vec.clone(),
             );
             Json(json!({
                 "status": "ok",
                 "token": token,
                 "user": {
                     "username": username,
-                    "role": user["role"],
-                    "tenant_id": user["tenant_id"]
+                    "role": role,
+                    "tenant_id": tenant_id,
+                    "permissions": permissions_vec
                 }
             }))
         }
@@ -2937,7 +2952,8 @@ pub async fn get_me(
             "user": {
                 "username": data.claims.sub,
                 "role": data.claims.role,
-                "tenant_id": data.claims.tenant_id
+                "tenant_id": data.claims.tenant_id,
+                "permissions": data.claims.permissions
             }
         })),
         Err(_) => Json(json!({
@@ -2987,6 +3003,22 @@ pub async fn create_user(
     let tenant_id = payload["tenant_id"]
         .as_str().unwrap_or("default").to_string();
 
+    let permissions = match payload.get("permissions") {
+        Some(val) => {
+            if let Some(arr) = val.as_array() {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            } else if let Some(s) = val.as_str() {
+                s.to_string()
+            } else {
+                crate::storage::clickhouse::default_permissions(&role)
+            }
+        }
+        None => crate::storage::clickhouse::default_permissions(&role),
+    };
+
     if username.is_empty() || password.is_empty() {
         return Json(json!({
             "status": "error",
@@ -2998,7 +3030,7 @@ pub async fn create_user(
         .unwrap_or_default();
 
     match state.ch_storage.create_user(
-        &username, &hash, &role, &tenant_id
+        &username, &hash, &role, &tenant_id, &permissions
     ).await {
         Ok(_) => Json(json!({
             "status": "ok",
@@ -3008,6 +3040,40 @@ pub async fn create_user(
             "status": "error",
             "message": e.to_string()
         }))
+    }
+}
+
+// PUT /api/auth/users/:id/permissions
+pub async fn update_user_permissions_api(
+    State(state): State<AppState>,
+    _headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let permissions = match payload.get("permissions") {
+        Some(val) => {
+            if let Some(arr) = val.as_array() {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            } else if let Some(s) = val.as_str() {
+                s.to_string()
+            } else {
+                "".to_string()
+            }
+        }
+        None => "".to_string(),
+    };
+
+    match state.ch_storage.update_user_permissions(&id, &permissions).await {
+        Ok(_) => Json(json!({
+            "status": "ok"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
     }
 }
 

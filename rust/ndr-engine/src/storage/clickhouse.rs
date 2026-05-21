@@ -88,6 +88,18 @@ pub struct ClickhouseStorage {
     client: Client,
 }
 
+pub fn default_permissions(role: &str) -> String {
+  match role {
+    "super_admin" =>
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup",
+    "tenant_admin" =>
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users",
+    "analyst" =>
+      "dashboard,alerts,logs,live,network-map,intel,health",
+    _ => "dashboard,alerts,health",
+  }.to_string()
+}
+
 #[allow(dead_code)]
 impl ClickhouseStorage {
 
@@ -99,7 +111,7 @@ pub async fn verify_user(
     password: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     let query = format!(
-        "SELECT id, username, password_hash, role, tenant_id
+        "SELECT id, username, password_hash, role, tenant_id, permissions
          FROM ndr.users FINAL
          WHERE username = '{}'
          LIMIT 1",
@@ -107,7 +119,7 @@ pub async fn verify_user(
     );
     let result = self.client
         .query(&query)
-        .fetch_all::<(String, String, String, String, String)>()
+        .fetch_all::<(String, String, String, String, String, String)>()
         .await?;
 
     if let Some(user) = result.first() {
@@ -115,10 +127,11 @@ pub async fn verify_user(
         if bcrypt::verify(password, hash)
             .unwrap_or(false) {
             return Ok(Some(serde_json::json!({
-                "id":        user.0,
-                "username":  user.1,
-                "role":      user.3,
-                "tenant_id": user.4
+                "id":          user.0,
+                "username":    user.1,
+                "role":        user.3,
+                "tenant_id":   user.4,
+                "permissions": user.5
             })));
         }
     }
@@ -136,11 +149,12 @@ pub async fn create_default_admin(&self) -> anyhow::Result<()> {
     if count == 0 {
         let hash = bcrypt::hash("ndr@admin123", 12)
             .unwrap_or_default();
+        let perms = default_permissions("admin");
         let query = format!(
             "INSERT INTO ndr.users \
-             (username, password_hash, role, tenant_id) \
-             VALUES ('admin', '{}', 'admin', 'default')",
-            hash
+             (username, password_hash, role, tenant_id, permissions) \
+             VALUES ('admin', '{}', 'admin', 'default', '{}')",
+            hash, perms
         );
         self.client.query(&query).execute().await?;
         tracing::info!("✅ Default admin user created");
@@ -153,15 +167,16 @@ pub async fn get_users(
     &self
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let result = self.client
-        .query("SELECT id, username, role, tenant_id, toString(created_at) FROM ndr.users FINAL ORDER BY created_at")
-        .fetch_all::<(String,String,String,String,String)>()
+        .query("SELECT id, username, role, tenant_id, permissions, toString(created_at) FROM ndr.users FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,String,String,String,String)>()
         .await?;
     Ok(result.iter().map(|r| json!({
         "id": r.0,
         "username": r.1,
         "role": r.2,
         "tenant_id": r.3,
-        "created_at": r.4
+        "permissions": r.4,
+        "created_at": r.5
     })).collect())
 }
 
@@ -171,14 +186,44 @@ pub async fn create_user(
     password_hash: &str,
     role: &str,
     tenant_id: &str,
+    permissions: &str,
 ) -> anyhow::Result<()> {
     let query = format!(
         "INSERT INTO ndr.users \
-         (username, password_hash, role, tenant_id) \
-         VALUES ('{}','{}','{}','{}')",
-        username, password_hash, role, tenant_id
+         (username, password_hash, role, tenant_id, permissions) \
+         VALUES ('{}','{}','{}','{}','{}')",
+        username, password_hash, role, tenant_id, permissions
     );
     self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn update_user_permissions(
+    &self,
+    id: &str,
+    permissions: &str,
+) -> anyhow::Result<()> {
+    let query = format!(
+        "SELECT id, username, password_hash, role, tenant_id
+         FROM ndr.users FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String, String, String, String, String)>()
+        .await?;
+
+    if let Some(user) = result.first() {
+        let insert_query = format!(
+            "INSERT INTO ndr.users \
+             (id, username, password_hash, role, tenant_id, permissions, created_at) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', now() + 1)",
+            user.0, user.1, user.2, user.3, user.4, permissions
+        );
+        self.client.query(&insert_query).execute().await?;
+    }
     Ok(())
 }
 
@@ -350,6 +395,7 @@ pub async fn create_tenant(
                 "ALTER TABLE ndr.soar_config ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.rules_state ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.sigma_rules ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS permissions String DEFAULT 'dashboard,alerts'",
             ] {
                 if let Err(e) = self.client
                     .query(alter)

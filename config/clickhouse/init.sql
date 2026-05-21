@@ -134,13 +134,14 @@ ORDER BY id;
 -- Users table
 CREATE TABLE IF NOT EXISTS ndr.users
 (
-    id           String DEFAULT toString(generateUUIDv4()),
-    username     String,
-    password_hash String,
-    role         String DEFAULT 'analyst',
-    tenant_id    String DEFAULT 'default',
-    created_at   DateTime DEFAULT now(),
-    last_login   DateTime DEFAULT now()
+    id            String DEFAULT toString(generateUUIDv4()),
+    username      String,
+    password_hash  String,
+    role          String DEFAULT 'analyst',
+    tenant_id     String DEFAULT 'default',
+    permissions   String DEFAULT 'dashboard,alerts',
+    created_at    DateTime DEFAULT now(),
+    last_login    DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(created_at)
 ORDER BY username;
@@ -148,10 +149,8 @@ ORDER BY username;
 -- Insert default admin user
 -- Password: ndr@admin123 (bcrypt hash)
 INSERT INTO ndr.users (username, password_hash, role)
-SELECT 'admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewHCr8eKFGjlSHKi', 'admin'
-WHERE NOT EXISTS (
-    SELECT 1 FROM ndr.users FINAL WHERE username = 'admin'
-);
+VALUES ('admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewHCr8eKFGjlSHKi', 'super_admin')
+ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS ndr.tenants
 (
