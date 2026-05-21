@@ -131,8 +131,7 @@ ORDER BY username;
 -- Insert default admin user
 -- Password: ndr@admin123 (bcrypt hash)
 INSERT INTO ndr.users (username, password_hash, role)
-VALUES ('admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewHCr8eKFGjlSHKi', 'super_admin')
-ON CONFLICT DO NOTHING;
+VALUES ('admin', '$2b$12$qB5uFqakHidExby4EbdH6.tFvW34sj7CAQFZdUCzk5YSi/kV3S09.', 'super_admin');
 
 CREATE TABLE IF NOT EXISTS ndr.tenants
 (

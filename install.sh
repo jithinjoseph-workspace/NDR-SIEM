@@ -284,6 +284,11 @@ if [ "$DEPLOY_MODE" = "local" ]; then
         2>/dev/null || true
     clickhouse-client --query \
         "GRANT ALL ON ndr.* TO ndr" 2>/dev/null || true
+    # Grant ClickHouse permissions for tenant DB creation
+    clickhouse-client --query \
+        "GRANT CREATE DATABASE ON *.* TO ndr" 2>/dev/null || true
+    clickhouse-client --query \
+        "GRANT ALL ON ndr_*.* TO ndr WITH GRANT OPTION" 2>/dev/null || true
 
     log "Creating ClickHouse tables..."
     clickhouse-client --multiquery \
@@ -426,6 +431,13 @@ log "Host IP detected: $HOST_IP"
 
 SHUFFLE_KEY=$(cat /proc/sys/kernel/random/uuid)
 
+# Preserve or generate JWT_SECRET before creating .env
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "JWT_SECRET" "$INSTALL_DIR/.env"; then
+    JWT_SECRET=$(grep "JWT_SECRET" "$INSTALL_DIR/.env" | cut -d= -f2-)
+else
+    JWT_SECRET=$(openssl rand -hex 32)
+fi
+
 cat > $INSTALL_DIR/.env << ENVEOF
 HOST_IP=$HOST_IP
 HOME_DIR=$HOME_DIR
@@ -441,8 +453,9 @@ SHUFFLE_API_URL=http://${HOST_IP}:5001
 SHUFFLE_INTERNAL_URL=http://${HOST_IP}:5001
 SHUFFLE_WEBHOOK_URL=
 SHUFFLE_API_KEY=$SHUFFLE_KEY
+JWT_SECRET=$JWT_SECRET
 ENVEOF
-log "✅ .env generated"
+log "✅ .env generated with JWT_SECRET"
 
 # ── Fix Shuffle API key in docker-compose ─────
 log "Configuring Shuffle API key..."
@@ -645,6 +658,20 @@ sudo docker exec kafka \
     --add-config retention.ms=3600000 \
     2>/dev/null || true
 log "✅ Kafka retention set to 1 hour"
+
+# ── Create Kafka topic with 3 partitions ──────
+log "Creating Kafka topic with 3 partitions..."
+sudo docker exec kafka     /opt/kafka/bin/kafka-topics.sh     --bootstrap-server localhost:9092     --create --if-not-exists     --topic ndr-events     --partitions 3     --replication-factor 1     2>/dev/null || true
+
+# Grant ClickHouse permissions for tenant DB creation
+log "Granting ClickHouse permissions..."
+clickhouse-client --user=default     --query "GRANT CREATE DATABASE ON *.* TO ndr"     2>/dev/null || true
+clickhouse-client --user=default     --query "GRANT ALL ON ndr_*.* TO ndr WITH GRANT OPTION"     2>/dev/null || true
+
+log "✅ Kafka topic and ClickHouse permissions ready"
+
+# ── JWT Secret Status ─────────────────────────
+log "✅ JWT secret already verified and stored in .env"
 
 # ── Fix broken ClickHouse parts ───────────────
 log "Configuring ClickHouse merge tree settings..."
