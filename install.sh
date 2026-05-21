@@ -284,6 +284,11 @@ if [ "$DEPLOY_MODE" = "local" ]; then
         2>/dev/null || true
     clickhouse-client --query \
         "GRANT ALL ON ndr.* TO ndr" 2>/dev/null || true
+    # Grant ClickHouse permissions for tenant DB creation
+    clickhouse-client --query \
+        "GRANT CREATE DATABASE ON *.* TO ndr" 2>/dev/null || true
+    clickhouse-client --query \
+        "GRANT ALL ON ndr_*.* TO ndr WITH GRANT OPTION" 2>/dev/null || true
 
     log "Creating ClickHouse tables..."
     clickhouse-client --multiquery \
