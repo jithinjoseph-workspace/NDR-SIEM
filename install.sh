@@ -730,8 +730,22 @@ log "Starting Angular UI..."
 
 # Run from shared folder for live reload!
 cd $INSTALL_DIR/ndr-ui
-nohup npm start > /tmp/ndr-ui.log 2>&1 &
-echo $! > /tmp/ndr-ui.pid
+if curl -s http://localhost:4200 > /dev/null 2>&1; then
+    log "Angular UI already running at http://localhost:4200"
+else
+    if [ -f /tmp/ndr-ui.pid ]; then
+        OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
+        if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
+            warn "Existing Angular UI process found - restarting it"
+            kill "$OLD_UI_PID" 2>/dev/null || true
+            sleep 2
+        fi
+        rm -f /tmp/ndr-ui.pid
+    fi
+
+    nohup npm start > /tmp/ndr-ui.log 2>&1 &
+    echo $! > /tmp/ndr-ui.pid
+fi
 
 log "Waiting for Angular UI to be ready..."
 for i in {1..60}; do
