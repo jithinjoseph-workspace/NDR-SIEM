@@ -102,6 +102,24 @@ if [ "$EUID" -ne 0 ]; then
     error "Please run as root: sudo $0"
 fi
 
+# ── Stop existing services ────────────────────────
+log "Stopping existing sensor services if any..."
+pkill -f agent.py 2>/dev/null || true
+systemctl stop ndr-vector 2>/dev/null || true
+systemctl stop ndr-agent 2>/dev/null || true
+systemctl stop suricata 2>/dev/null || true
+pkill -f zeek 2>/dev/null || true
+pkill -f vector 2>/dev/null || true
+
+sleep 3
+
+# Verify all stopped
+log "Verifying services stopped..."
+echo "  Agent:    $(pgrep -f agent.py >/dev/null && echo -e '${RED}running${NC}' || echo -e '${GREEN}stopped${NC}')"
+echo "  Vector:   $(pgrep -x vector >/dev/null && echo -e '${RED}running${NC}' || echo -e '${GREEN}stopped${NC}')"
+echo "  Suricata: $(pgrep -x Suricata >/dev/null && echo -e '${RED}running${NC}' || echo -e '${GREEN}stopped${NC}')"
+echo "  Zeek:     $(pgrep -x zeek >/dev/null && echo -e '${RED}running${NC}' || echo -e '${GREEN}stopped${NC}')"
+
 # ── Install dependencies ──────────────────────────
 log "Installing dependencies..."
 apt-get update -qq
