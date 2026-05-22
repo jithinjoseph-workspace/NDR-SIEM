@@ -531,12 +531,14 @@ chmod +x /opt/ndr-sensor/agent.py
 # ── Create systemd services ───────────────────────
 log "Creating systemd services..."
 
+VECTOR_BIN=$(which vector 2>/dev/null || echo "/usr/bin/vector")
+
 cat > /etc/systemd/system/ndr-vector.service << EOF
 [Unit]
 Description=NDR Vector Log Forwarder
 After=network.target
 [Service]
-ExecStart=/usr/bin/vector --config /etc/ndr/vector.toml
+ExecStart=$VECTOR_BIN --config /etc/ndr/vector.toml
 Restart=always
 RestartSec=5
 [Install]
