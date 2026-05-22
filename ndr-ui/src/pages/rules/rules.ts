@@ -99,7 +99,7 @@ export class Rules implements OnInit {
   ];
 
   connStateHelp = [
-    { state: 'S0', meaning: 'No reply — possible scan' },
+    { state: 'S0', meaning: 'No reply - possible scan' },
     { state: 'REJ', meaning: 'Connection rejected' },
     { state: 'SF', meaning: 'Normal connection' },
     { state: 'OTH', meaning: 'Mid-stream, no SYN' },
@@ -139,6 +139,10 @@ export class Rules implements OnInit {
 
   get selectedSeverity() {
     return this.severityOptions.find(s => s.value === this.ruleForm.severity);
+  }
+
+  get activeRulesCount() {
+    return this.rules.filter(r => r.status === 'ACTIVE').length;
   }
 
   ngOnInit() { this.loadRules(); }
@@ -258,7 +262,7 @@ export class Rules implements OnInit {
             next: (reload: any) => {
               const action = this.isEditing ? 'updated' : 'created';
               this.showMessage(
-                `✅ Rule "${this.ruleForm.title}" ${action}! ${reload.count} rules active.`,
+                `Rule "${this.ruleForm.title}" ${action}. ${reload.count} rules active.`,
                 'success'
               );
               this.showForm = false;
@@ -310,7 +314,7 @@ export class Rules implements OnInit {
       next: (data: any) => {
         rule.status = newEnabled ? 'ACTIVE' : 'INACTIVE';
         this.showMessage(
-          `Rule "${rule.name}" ${newEnabled ? 'enabled' : 'disabled'} — ${data.active_rules} rules active`,
+          `Rule "${rule.name}" ${newEnabled ? 'enabled' : 'disabled'} - ${data.active_rules} rules active`,
           'success'
         );
         this.cdr.detectChanges();

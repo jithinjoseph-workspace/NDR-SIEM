@@ -11,7 +11,7 @@
 html, body {
   height: 100%;
   margin: 0;
-  background-color: #070e1d;
-  color: #dfe5fa;
+  background-color: var(--color-surface, #070e1d);
+  color: var(--color-on-surface-variant, #dfe5fa);
   font-family: var(--font-sans);
 }

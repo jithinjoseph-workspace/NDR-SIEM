@@ -1,77 +1,95 @@
-<div class="p-8 h-full flex flex-col animate-in zoom-in-95 duration-500">
-  <div class="flex items-center justify-between mb-8">
-    <div class="flex items-center gap-4">
-      <div class="p-3 bg-primary/10 rounded-full border border-primary/20 relative">
-        <lucide-icon [name]="RadioIcon" class="w-6 h-6 text-primary"></lucide-icon>
-        <span class="absolute top-0 right-0 w-2 h-2 bg-primary rounded-full animate-ping"></span>
+<section class="live-shell">
+  <header class="live-header">
+    <div class="live-title-block">
+      <div class="live-icon">
+        <lucide-icon [name]="RadioIcon" class="w-6 h-6"></lucide-icon>
+        <span></span>
       </div>
       <div>
-        <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">Live Event Stream</h2>
-        <p class="text-on-surface-variant text-sm mt-0.5">Real-time events from Zeek + Suricata via WebSocket</p>
+        <div class="eyebrow">Real-Time Monitoring</div>
+        <h2>Live Event Stream</h2>
+        <p>Zeek and Suricata telemetry delivered over the active WebSocket channel.</p>
       </div>
     </div>
-    <div class="flex items-center gap-4 bg-surface-container-highest px-4 py-2 rounded-lg border border-outline/10">
-      <div class="flex flex-col items-end">
-        <span class="text-[10px] text-on-surface-variant uppercase font-bold">Events</span>
-        <span class="text-xs font-mono text-primary">{{ eventCount }}</span>
+
+    <div class="live-actions">
+      <div class="counter-tile">
+        <span>Events</span>
+        <strong>{{ eventCount }}</strong>
       </div>
-      <div class="h-6 w-px bg-outline/20"></div>
-      <div class="flex flex-col items-end">
-        <span class="text-[10px] text-on-surface-variant uppercase font-bold">Hits</span>
-        <span class="text-xs font-mono text-tertiary">{{ hitCount }}</span>
+      <div class="counter-tile hit">
+        <span>Hits</span>
+        <strong>{{ hitCount }}</strong>
       </div>
-      <div class="h-6 w-px bg-outline/20"></div>
-      <button (click)="clearMessages()"
-              class="text-[10px] text-on-surface-variant hover:text-white uppercase font-bold transition-colors">
+      <button (click)="clearMessages()" class="clear-button" type="button">
         Clear
       </button>
     </div>
+  </header>
+
+  <div class="live-status-strip">
+    <div>
+      <span class="status-dot"></span>
+      Stream listener active
+    </div>
+    <div>Buffer limit: 100 messages</div>
+    <div>{{ messages.length }} currently displayed</div>
   </div>
 
-  <div class="flex-1 bg-surface-container-low rounded-xl border border-outline/10 p-6 overflow-hidden flex flex-col relative">
-    <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(105,246,184,0.03),transparent)] pointer-events-none"></div>
-
-    <!-- Empty state -->
-    <div *ngIf="messages.length === 0"
-         class="flex-1 flex flex-col items-center justify-center text-on-surface-variant">
-      <lucide-icon [name]="ActivityIcon" class="w-12 h-12 mb-4 opacity-20"></lucide-icon>
-      <p class="text-sm">Waiting for events...</p>
-      <p class="text-xs mt-1">Start monitoring from Sensor Setup</p>
+  <section class="stream-panel">
+    <div class="stream-panel-header">
+      <div>
+        <h3>Incoming Events</h3>
+        <p>Newest messages appear at the top of the stream.</p>
+      </div>
+      <div class="live-pill">
+        <span></span>
+        Live
+      </div>
     </div>
 
-    <!-- Stream -->
-    <div #streamContainer
-         *ngIf="messages.length > 0"
-         class="flex-1 overflow-auto space-y-2 font-mono text-[11px] relative">
-      <div *ngFor="let msg of messages"
-           class="flex gap-4 p-3 bg-surface-container-highest/40 rounded border-l-2 hover:bg-surface-container-highest/60 transition-all animate-in slide-in-from-left-2"
-           [class]="msg.color">
-        <span class="text-primary font-bold whitespace-nowrap">{{ msg.timestamp }}</span>
-        <span [ngClass]="{
-          'text-primary bg-primary/10': msg.event === 'ZEEK',
-          'text-secondary bg-secondary/10': msg.event === 'SURICATA',
-          'text-tertiary bg-tertiary/10': msg.event === 'HIT'
-        }" class="uppercase px-1 rounded-sm font-bold whitespace-nowrap">
+    <div *ngIf="messages.length === 0" class="empty-state">
+      <div class="empty-icon">
+        <lucide-icon [name]="ActivityIcon" class="w-10 h-10"></lucide-icon>
+      </div>
+      <span>Waiting for events</span>
+      <p>Start monitoring from Sensor Setup to populate the live stream.</p>
+    </div>
+
+    <div #streamContainer *ngIf="messages.length > 0" class="stream-list">
+      <div *ngFor="let msg of messages" class="stream-row" [class]="msg.color">
+        <span class="stream-time">{{ msg.timestamp }}</span>
+        <span
+          [ngClass]="{
+            zeek: msg.event === 'ZEEK',
+            suricata: msg.event === 'SURICATA',
+            hit: msg.event === 'HIT'
+          }"
+          class="stream-badge"
+        >
           {{ msg.event }}
         </span>
-        <span class="text-on-surface-variant flex-1 truncate">{{ msg.data }}</span>
-        <lucide-icon [name]="ZapIcon" class="w-3 h-3 text-primary opacity-50 shrink-0"></lucide-icon>
+        <span class="stream-data">{{ msg.data }}</span>
+        <lucide-icon [name]="ZapIcon" class="stream-zap"></lucide-icon>
       </div>
     </div>
 
-    <div class="mt-4 pt-4 border-t border-outline/10 flex items-center justify-between text-on-surface-variant italic text-[10px]">
-      <div class="flex items-center gap-2">
-        <lucide-icon [name]="ActivityIcon" class="w-2.5 h-2.5 animate-bounce text-primary"></lucide-icon>
+    <footer class="stream-footer">
+      <div class="buffer-status">
+        <lucide-icon [name]="ActivityIcon" class="w-3 h-3"></lucide-icon>
         <span>{{ messages.length }} messages in buffer</span>
       </div>
-      <div class="flex items-center gap-2">
-        <span>Auto-scroll:</span>
-        <button (click)="autoScroll = !autoScroll"
-                [class]="autoScroll ? 'text-primary' : 'text-on-surface-variant'"
-                class="font-bold uppercase">
+      <div class="autoscroll-control">
+        <span>Auto-scroll</span>
+        <button
+          (click)="autoScroll = !autoScroll"
+          [class.enabled]="autoScroll"
+          class="toggle-button"
+          type="button"
+        >
           {{ autoScroll ? 'ON' : 'OFF' }}
         </button>
       </div>
-    </div>
-  </div>
-</div>
+    </footer>
+  </section>
+</section>

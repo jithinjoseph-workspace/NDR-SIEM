@@ -2,10 +2,12 @@ import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
+import { ChartDataService } from '../../services/chart-data/chart-data';
 import { Subscription } from 'rxjs';
 import { LucideAngularModule, TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight } from 'lucide-angular';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartOptions } from 'chart.js';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-dashboard',
@@ -27,6 +29,7 @@ export class Dashboard implements OnInit, OnDestroy {
   low: number = 0;
   topSrcIps: any[] = [];
   topDstIps: any[] = [];
+  recentCriticalAlerts: any[] = [];
   chartLabels: string[] = [];
   chartData: number[] = [];
 
@@ -81,6 +84,8 @@ export class Dashboard implements OnInit, OnDestroy {
   constructor(
     private api: Api,
     private ws: Websocket,
+    private chartService: ChartDataService,
+    private router: Router,
     private cdr: ChangeDetectorRef
   ) { }
 
@@ -92,6 +97,8 @@ export class Dashboard implements OnInit, OnDestroy {
       Dashboard.clearCache();
     }
     Dashboard.savedTenantId = currentTenant;
+
+    this.chartService.start();
 
     // Restore saved state if exists
     this.chartLabels = ['', '', '', '', '', ''];
@@ -105,11 +112,10 @@ export class Dashboard implements OnInit, OnDestroy {
     this.updateChartData();
     this.loadAllStats();
 
-    // Refresh every 30 seconds
+    // Refresh stats & re-sync chart every 30 seconds
     this.refreshInterval = setInterval(() => {
       this.loadAllStats();
-      this.addChartPoint();  // add point every 30s
-
+      this.syncChartFromService();
     }, 30000);
 
     // WebSocket real-time updates
@@ -122,9 +128,19 @@ export class Dashboard implements OnInit, OnDestroy {
     );
 
     this.subs.push(
-      this.ws.hits$.subscribe(() => {
+      this.ws.hits$.subscribe(hit => {
         this.totalHits++;
         this.hitsLastHour++;
+        const severity = hit.severity?.toUpperCase() || 'LOW';
+        if (['CRITICAL', 'HIGH'].includes(severity)) {
+          this.recentCriticalAlerts = [{
+            severity,
+            src_ip: hit.src || hit.suricata?.src || '-',
+            dst_ip: hit.dst || hit.suricata?.dst || '-',
+            score: hit.score || 0,
+            time: new Date().toLocaleTimeString(),
+          }, ...this.recentCriticalAlerts].slice(0, 5);
+        }
         this.cdr.detectChanges();
       })
     );
@@ -132,6 +148,14 @@ export class Dashboard implements OnInit, OnDestroy {
 
   exportReport(format: string) {
     this.api.exportReport(format);
+  }
+
+  openAlerts(queryParams: Record<string, string> = {}) {
+    this.router.navigate(['/alerts'], { queryParams });
+  }
+
+  openNetworkMap() {
+    this.router.navigate(['/network-map']);
   }
 
   loadAllStats() {
@@ -189,6 +213,15 @@ export class Dashboard implements OnInit, OnDestroy {
     Dashboard.savedChartData = [...this.chartData];
   }
 
+  syncChartFromService() {
+    const snapshot = this.chartService.getSnapshot();
+    this.chartLabels = [...snapshot.labels];
+    this.chartData = [...snapshot.data];
+    this.eventsLastHour = this.chartService.getLatestEventsLastHour();
+    this.updateChartData();
+    Dashboard.savedChartData = [...this.chartData];
+  }
+
   updateChartData() {
     this.lineChartData = {
       labels: [...this.chartLabels],
@@ -204,6 +237,7 @@ export class Dashboard implements OnInit, OnDestroy {
     };
     this.cdr.detectChanges();
   }
+
   ngOnDestroy() {
     this.subs.forEach(s => s.unsubscribe());
     if (this.refreshInterval) clearInterval(this.refreshInterval);

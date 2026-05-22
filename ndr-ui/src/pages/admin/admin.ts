@@ -1,6 +1,21 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import {
+  LucideAngularModule,
+  Building2,
+  CircleCheck,
+  Gauge,
+  Plus,
+  RefreshCw,
+  Search,
+  Server,
+  ShieldCheck,
+  Trash2,
+  UserPlus,
+  Users,
+  X,
+} from 'lucide-angular';
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Router } from '@angular/router';
@@ -8,44 +23,59 @@ import { Router } from '@angular/router';
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, LucideAngularModule],
   templateUrl: './admin.html',
-  styleUrl: './admin.css'
+  styleUrl: './admin.css',
 })
 export class Admin implements OnInit {
-  activeTab = 'users';
-  
-  // Users
+  BuildingIcon = Building2;
+  CheckIcon = CircleCheck;
+  GaugeIcon = Gauge;
+  PlusIcon = Plus;
+  RefreshIcon = RefreshCw;
+  SearchIcon = Search;
+  ServerIcon = Server;
+  ShieldIcon = ShieldCheck;
+  TrashIcon = Trash2;
+  UserPlusIcon = UserPlus;
+  UsersIcon = Users;
+  XIcon = X;
+
+  activeTab = 'tenants';
+
   users: any[] = [];
   loadingUsers = false;
   showAddUser = false;
+  userSearch = '';
+  selectedTenant = 'all';
+  pendingDeleteUser: any = null;
   newUser = {
     username: '',
     password: '',
-    role: 'analyst',
-    tenant_id: 'default'
+    role: 'tenant_admin',
+    tenant_id: '',
   };
   savingUser = false;
   userMsg = '';
   userMsgType = '';
 
-  // Tenants
   tenants: any[] = [];
   loadingTenants = false;
   showAddTenant = false;
+  tenantSearch = '';
   newTenant = {
     name: '',
-    id: ''
+    id: '',
   };
   savingTenant = false;
   tenantMsg = '';
 
-  // Engines
   engines: any[] = [];
   loadingEngines = false;
   scaling = false;
+  lastEngineRefresh: Date | null = null;
+  pendingStopEngine = '';
 
-  // Current user
   currentUser: any = {};
 
   constructor(
@@ -66,6 +96,42 @@ export class Admin implements OnInit {
     this.loadEngines();
   }
 
+  get tenantAdmins() {
+    return this.users.filter(user => user.role === 'tenant_admin');
+  }
+
+  get filteredTenantAdmins() {
+    const query = this.userSearch.trim().toLowerCase();
+    return this.tenantAdmins.filter(user => {
+      const matchesTenant = this.selectedTenant === 'all' || user.tenant_id === this.selectedTenant;
+      const matchesQuery =
+        !query ||
+        user.username?.toLowerCase().includes(query) ||
+        user.tenant_id?.toLowerCase().includes(query);
+      return matchesTenant && matchesQuery;
+    });
+  }
+
+  get filteredTenants() {
+    const query = this.tenantSearch.trim().toLowerCase();
+    return this.tenants.filter(tenant => {
+      if (!query) return true;
+      return tenant.name?.toLowerCase().includes(query) || tenant.id?.toLowerCase().includes(query);
+    });
+  }
+
+  get activeTenants() {
+    return this.tenants.filter(tenant => tenant.active).length;
+  }
+
+  get canCreateTenant() {
+    return (
+      !!this.newTenant.name.trim() &&
+      !!this.newTenant.id.trim() &&
+      !this.tenantIdExists(this.newTenant.id)
+    );
+  }
+
   loadUsers() {
     this.loadingUsers = true;
     this.api.getUsers().subscribe({
@@ -76,8 +142,9 @@ export class Admin implements OnInit {
       },
       error: () => {
         this.loadingUsers = false;
+        this.showMsg('Failed to load users', 'error');
         this.cdr.detectChanges();
-      }
+      },
     });
   }
 
@@ -91,8 +158,9 @@ export class Admin implements OnInit {
       },
       error: () => {
         this.loadingTenants = false;
+        this.showMsg('Failed to load tenants', 'error');
         this.cdr.detectChanges();
-      }
+      },
     });
   }
 
@@ -101,39 +169,74 @@ export class Admin implements OnInit {
       this.showMsg('Username and password required', 'error');
       return;
     }
+    if (!this.newUser.tenant_id || this.newUser.tenant_id === 'default') {
+      this.showMsg('Select a tenant for the tenant admin', 'error');
+      return;
+    }
+
     this.savingUser = true;
-    this.api.createUser(this.newUser).subscribe({
-      next: (data: any) => {
-        this.savingUser = false;
-        if (data.status === 'ok') {
-          this.showAddUser = false;
-          this.newUser = {
-            username: '', password: '',
-            role: 'analyst', tenant_id: 'default'
-          };
-          this.loadUsers();
-          this.showMsg('✅ User created!', 'success');
-        } else {
-          this.showMsg(data.message, 'error');
-        }
+    this.api
+      .createUser({
+        ...this.newUser,
+        role: 'tenant_admin',
+      })
+      .subscribe({
+        next: (data: any) => {
+          this.savingUser = false;
+          if (data.status === 'ok') {
+            this.showAddUser = false;
+            this.newUser = {
+              username: '',
+              password: '',
+              role: 'tenant_admin',
+              tenant_id: '',
+            };
+            this.loadUsers();
+            this.showMsg('Tenant admin created', 'success');
+          } else {
+            this.showMsg(data.message, 'error');
+          }
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          this.savingUser = false;
+          this.showMsg('Failed to create tenant admin', 'error');
+          this.cdr.detectChanges();
+        },
+      });
+  }
+
+  requestDeleteUser(user: any) {
+    this.pendingDeleteUser = user;
+  }
+
+  cancelDeleteUser() {
+    this.pendingDeleteUser = null;
+  }
+
+  confirmDeleteUser() {
+    if (!this.pendingDeleteUser) return;
+    const user = this.pendingDeleteUser;
+    this.api.deleteUser(user.id).subscribe({
+      next: () => {
+        this.pendingDeleteUser = null;
+        this.loadUsers();
+        this.showMsg('Tenant admin deleted', 'success');
         this.cdr.detectChanges();
       },
       error: () => {
-        this.savingUser = false;
-        this.showMsg('Failed to create user', 'error');
+        this.showMsg('Failed to delete tenant admin', 'error');
         this.cdr.detectChanges();
-      }
+      },
     });
   }
 
-  deleteUser(user: any) {
-    if (!confirm(`Delete user "${user.username}"?`)) return;
-    this.api.deleteUser(user.id).subscribe({
-      next: () => {
-        this.loadUsers();
-        this.showMsg('User deleted', 'success');
-      }
-    });
+  onTenantNameChange() {
+    this.newTenant.id = this.slugifyTenant(this.newTenant.name);
+  }
+
+  onTenantIdChange() {
+    this.newTenant.id = this.slugifyTenant(this.newTenant.id);
   }
 
   addTenant() {
@@ -141,9 +244,15 @@ export class Admin implements OnInit {
       this.tenantMsg = 'Tenant name required';
       return;
     }
-    this.newTenant.id = this.newTenant.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '-');
+    if (!this.newTenant.id) {
+      this.tenantMsg = 'Tenant ID required';
+      return;
+    }
+    if (this.tenantIdExists(this.newTenant.id)) {
+      this.tenantMsg = 'Tenant ID already exists';
+      return;
+    }
+
     this.savingTenant = true;
     this.api.createTenant(this.newTenant).subscribe({
       next: (data: any) => {
@@ -151,8 +260,9 @@ export class Admin implements OnInit {
         if (data.status === 'ok') {
           this.showAddTenant = false;
           this.newTenant = { name: '', id: '' };
+          this.tenantMsg = '';
           this.loadTenants();
-          this.tenantMsg = '✅ Tenant created!';
+          this.showMsg('Tenant created', 'success');
         } else {
           this.tenantMsg = data.message;
         }
@@ -162,7 +272,7 @@ export class Admin implements OnInit {
         this.savingTenant = false;
         this.tenantMsg = 'Failed to create tenant';
         this.cdr.detectChanges();
-      }
+      },
     });
   }
 
@@ -175,26 +285,20 @@ export class Admin implements OnInit {
     }, 5000);
   }
 
-  getRoleBadge(role: string): string {
-    switch(role) {
-      case 'admin': return 'bg-red-500/20 text-red-400';
-      case 'analyst': return 'bg-primary/20 text-primary';
-      default: return 'bg-surface-container text-on-surface-variant';
-    }
-  }
-
   loadEngines() {
     this.loadingEngines = true;
     this.api.getEngines().subscribe({
       next: (data: any) => {
         this.engines = data.engines || [];
         this.loadingEngines = false;
+        this.lastEngineRefresh = new Date();
         this.cdr.detectChanges();
       },
       error: () => {
         this.loadingEngines = false;
+        this.showMsg('Failed to load engines', 'error');
         this.cdr.detectChanges();
-      }
+      },
     });
   }
 
@@ -211,20 +315,54 @@ export class Admin implements OnInit {
         this.scaling = false;
         this.showMsg(err.error?.message || 'Failed to scale up', 'error');
         this.cdr.detectChanges();
-      }
+      },
     });
   }
 
-  scaleDown(engine: string) {
-    if (!confirm(`Stop ${engine}?`)) return;
+  requestStopEngine(engine: string) {
+    this.pendingStopEngine = engine;
+  }
+
+  cancelStopEngine() {
+    this.pendingStopEngine = '';
+  }
+
+  confirmStopEngine() {
+    if (!this.pendingStopEngine) return;
+    const engine = this.pendingStopEngine;
     this.api.scaleEngines('down', engine).subscribe({
       next: (data: any) => {
+        this.pendingStopEngine = '';
         this.showMsg(data.message, 'success');
         setTimeout(() => this.loadEngines(), 2000);
       },
       error: (err: any) => {
         this.showMsg(err.error?.message || 'Failed to scale down', 'error');
-      }
+      },
     });
+  }
+
+  tenantUserCount(tenantId: string) {
+    return this.users.filter(user => user.tenant_id === tenantId).length;
+  }
+
+  tenantAdminCount(tenantId: string) {
+    return this.tenantAdmins.filter(user => user.tenant_id === tenantId).length;
+  }
+
+  tenantName(tenantId: string) {
+    return this.tenants.find(tenant => tenant.id === tenantId)?.name || tenantId;
+  }
+
+  tenantIdExists(id: string) {
+    return this.tenants.some(tenant => tenant.id === id);
+  }
+
+  private slugifyTenant(value: string) {
+    return value
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
   }
 }

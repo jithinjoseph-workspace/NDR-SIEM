@@ -1,1 +1,117 @@
-<p>network-map works!</p>
+<section class="network-shell">
+  <div class="network-header">
+    <div>
+      <div class="eyebrow">Topology</div>
+      <h2>Network Map</h2>
+      <p>Live host communication graph from the last hour.</p>
+    </div>
+
+    <div class="network-actions">
+      <div class="metric-pill">
+        <lucide-icon [name]="NetworkIcon" class="w-4 h-4"></lucide-icon>
+        <span>Nodes</span>
+        <strong>{{ nodeCount }}</strong>
+      </div>
+
+      <div class="metric-pill accent-blue">
+        <lucide-icon [name]="GitBranchIcon" class="w-4 h-4"></lucide-icon>
+        <span>Connections</span>
+        <strong>{{ edgeCount }}</strong>
+      </div>
+
+      <button class="primary-action" type="button" (click)="loadMap()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4" [class.spin]="loading"></lucide-icon>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <div class="status-strip">
+    <div>
+      <span class="status-dot"></span>
+      Topology renderer active
+    </div>
+    <div>Window: last 1 hour</div>
+    <div>Last updated: {{ lastUpdated }}</div>
+  </div>
+
+  <div class="map-workspace" [class.has-selection]="selectedNode">
+    <section class="map-panel">
+      <div class="map-toolbar">
+        <div class="legend">
+          <span class="legend-item internal">
+            <lucide-icon [name]="RouterIcon" class="w-3.5 h-3.5"></lucide-icon>
+            Internal
+          </span>
+          <span class="legend-item external">
+            <lucide-icon [name]="GlobeIcon" class="w-3.5 h-3.5"></lucide-icon>
+            External
+          </span>
+          <span class="legend-item threat">
+            <lucide-icon [name]="ThreatIcon" class="w-3.5 h-3.5"></lucide-icon>
+            Threat
+          </span>
+          <span class="legend-item traffic">
+            <lucide-icon [name]="GitBranchIcon" class="w-3.5 h-3.5"></lucide-icon>
+            Heavy traffic
+          </span>
+        </div>
+
+        <div class="map-hint">Drag nodes. Scroll to zoom.</div>
+      </div>
+
+      <div *ngIf="loading" class="state-overlay">
+        <div class="state-icon">
+          <lucide-icon [name]="CircleDotIcon" class="w-6 h-6"></lucide-icon>
+        </div>
+        <strong>Mapping network topology</strong>
+        <span>Collecting hosts and communication paths.</span>
+      </div>
+
+      <div *ngIf="!loading && nodeCount === 0" class="state-overlay">
+        <div class="state-icon muted">
+          <lucide-icon [name]="ServerIcon" class="w-6 h-6"></lucide-icon>
+        </div>
+        <strong>No network data yet</strong>
+        <span>Start monitoring to see topology.</span>
+      </div>
+
+      <svg #mapSvg class="map-canvas"></svg>
+    </section>
+
+    <aside class="node-inspector" *ngIf="selectedNode">
+      <div class="inspector-header">
+        <div class="node-avatar" [ngClass]="getNodeTypeClass(selectedNode)">
+          {{ getNodeIcon(selectedNode) }}
+        </div>
+        <div>
+          <span>Selected Node</span>
+          <h3>{{ selectedNode.id }}</h3>
+        </div>
+        <button class="icon-button" type="button" (click)="clearSelection()" title="Close">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <div class="node-badge" [ngClass]="getNodeTypeClass(selectedNode)">
+        {{ getNodeKindLabel(selectedNode) }}
+      </div>
+
+      <div class="inspector-grid">
+        <div>
+          <span>Connections</span>
+          <strong>{{ selectedNode.connections || 0 }}</strong>
+        </div>
+        <div>
+          <span>Type</span>
+          <strong>{{ selectedNode.type }}</strong>
+        </div>
+      </div>
+
+      <div class="inspector-detail">
+        <span>Identifier</span>
+        <code>{{ selectedNode.id }}</code>
+      </div>
+    </aside>
+  </div>
+</section>

@@ -1,6 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
+import { HttpClient } from '@angular/common/http';
 import { 
   LayoutDashboard, 
   Bell, 
@@ -26,6 +27,8 @@ import { AuthService } from '../../services/auth/auth';
   styleUrl: './sidebar.css',
 })
 export class Sidebar implements OnInit {
+  orgName = 'NDR';
+  systemName = 'Network Detection & Response';
   navItems: any[] = [];
   bottomItems: any[] = [];
 
@@ -35,9 +38,11 @@ export class Sidebar implements OnInit {
     const user = this.auth.getUser();
     const isDefaultTenant = user?.tenant_id === 'default';
 
-    if (this.auth.isAdmin()) {
+    if (this.auth.isAdmin() || user?.role === 'tenant_admin') {
       this.navItems = [
-        { label: 'Admin Panel', route: '/admin', icon: Users },
+        isDefaultTenant
+          ? { label: 'Admin Panel', route: '/admin', icon: Users }
+          : { label: 'Tenant Users', route: '/tenant-admin', icon: Users },
       ];
     } else {
       this.navItems = [
@@ -64,4 +69,3 @@ export class Sidebar implements OnInit {
     ];
   }
 }
-

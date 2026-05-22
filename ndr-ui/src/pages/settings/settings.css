@@ -1,0 +1,289 @@
+/* ── Settings Page Styles ─────────────────────────────────────────────── */
+
+/* Section Cards */
+.section-card {
+  background: var(--color-surface-container-highest);
+  border: 1px solid rgba(110, 117, 136, 0.1);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #f7f9ff;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(110, 117, 136, 0.08);
+}
+
+/* Tab Navigation */
+.settings-tabs {
+  position: sticky;
+  top: 24px;
+}
+
+.tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #9aa5ba;
+  cursor: pointer;
+  transition: all 180ms ease;
+  text-align: left;
+}
+
+.tab-btn:hover {
+  background: rgba(216, 222, 236, 0.05);
+  border-color: rgba(110, 117, 136, 0.16);
+  color: #f7f9ff;
+}
+
+.tab-btn.active {
+  background: rgba(105, 246, 184, 0.08);
+  border-color: rgba(105, 246, 184, 0.2);
+  color: #69f6b8;
+}
+
+.tab-btn.active .opacity-40 {
+  opacity: 1;
+  color: #69f6b8;
+}
+
+/* Form Fields */
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-on-surface-variant);
+}
+
+.field-input {
+  width: 100%;
+  background: var(--color-surface-container-low);
+  border: 1px solid rgba(110, 117, 136, 0.2);
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: #f7f9ff;
+  font-size: 13px;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: rgba(105, 246, 184, 0.5);
+  box-shadow: 0 0 0 3px rgba(105, 246, 184, 0.08);
+}
+
+.field-input::placeholder {
+  color: rgba(164, 171, 191, 0.4);
+}
+
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: rgba(110, 117, 136, 0.3);
+  border: 1px solid rgba(110, 117, 136, 0.2);
+  cursor: pointer;
+  transition: all 250ms ease;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.toggle-switch.active {
+  background: rgba(105, 246, 184, 0.25);
+  border-color: rgba(105, 246, 184, 0.4);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #9aa5ba;
+  transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.toggle-switch.active .toggle-knob {
+  left: 20px;
+  background: #69f6b8;
+  box-shadow: 0 0 8px rgba(105, 246, 184, 0.4);
+}
+
+/* Range Slider */
+.range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    #69f6b8 0%,
+    #ffcc00 50%,
+    #ff8800 75%,
+    #ff4444 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+
+.range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #f7f9ff;
+  border: 2px solid #69f6b8;
+  box-shadow: 0 0 10px rgba(105, 246, 184, 0.3), 0 2px 6px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+  transition: box-shadow 200ms ease;
+}
+
+.range-slider::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 16px rgba(105, 246, 184, 0.5), 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.range-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #f7f9ff;
+  border: 2px solid #69f6b8;
+  box-shadow: 0 0 10px rgba(105, 246, 184, 0.3);
+  cursor: grab;
+}
+
+/* Severity Cards */
+.severity-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  background: var(--color-surface-container-low);
+  border: 1px solid rgba(110, 117, 136, 0.1);
+  border-radius: 8px;
+  transition: border-color 200ms ease;
+}
+
+.severity-card:hover {
+  border-color: var(--sev-color, rgba(110, 117, 136, 0.2));
+}
+
+.sev-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.sev-input {
+  width: 56px;
+  padding: 6px 8px;
+  background: var(--color-surface);
+  border: 1px solid rgba(110, 117, 136, 0.2);
+  border-radius: 4px;
+  color: #f7f9ff;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  margin-left: auto;
+  transition: border-color 200ms ease;
+}
+
+.sev-input:focus {
+  border-color: rgba(105, 246, 184, 0.5);
+  box-shadow: 0 0 0 3px rgba(105, 246, 184, 0.08);
+}
+
+/* Feed Row */
+.feed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--color-surface-container-low);
+  border: 1px solid rgba(110, 117, 136, 0.1);
+  border-radius: 8px;
+  transition: all 200ms ease;
+}
+
+.feed-row:hover {
+  border-color: rgba(110, 117, 136, 0.25);
+  background: rgba(216, 222, 236, 0.03);
+}
+
+.feed-icon {
+  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+}
+
+/* Upload Zone */
+.upload-zone {
+  border: 2px dashed rgba(110, 117, 136, 0.2);
+  border-radius: 12px;
+  padding: 32px 24px;
+  transition: all 250ms ease;
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.upload-zone:hover {
+  border-color: rgba(105, 246, 184, 0.25);
+  background: rgba(105, 246, 184, 0.02);
+}
+
+.upload-zone.drag-over {
+  border-color: rgba(105, 246, 184, 0.5);
+  background: rgba(105, 246, 184, 0.05);
+  box-shadow: 0 0 30px rgba(105, 246, 184, 0.1);
+}
+
+/* Hide number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Select arrow styling */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239aa5ba' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+}

@@ -1,64 +1,93 @@
-<div class="p-8 h-full flex flex-col animate-in fade-in duration-500">
-  <div class="flex items-center justify-between mb-6">
+<div class="logs-shell animate-in fade-in duration-500">
+  <div class="logs-header">
     <div>
-      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">Network Logs</h2>
-      <p class="text-on-surface-variant text-sm mt-1">Deep packet inspection log stream (Zeek/Suricata)</p>
+      <div class="eyebrow">Network telemetry</div>
+      <h2>Network Logs</h2>
+      <p>Deep packet inspection log stream from Zeek and Suricata</p>
     </div>
-    <div class="flex gap-3">
-      <div class="relative group">
-        <lucide-icon [name]="SearchIcon" class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant"></lucide-icon>
-        <input type="text"
-               [(ngModel)]="searchText"
-               (ngModelChange)="onSearch()"
-               placeholder="Filter by IP, proto..."
-               class="bg-surface-container-low border border-outline/10 rounded-md py-1.5 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-primary/50 transition-all">
-      </div>
-      <button (click)="loadLogs()"
-              class="bg-surface-container-low text-on-surface-variant hover:text-white p-2 rounded-md border border-outline/10 transition-colors">
-        <lucide-icon [name]="DownloadIcon" class="w-4 h-4"></lucide-icon>
+
+    <div class="logs-actions">
+      <label class="logs-search">
+        <lucide-icon [name]="SearchIcon" class="search-icon"></lucide-icon>
+        <input
+          type="text"
+          [(ngModel)]="searchText"
+          (ngModelChange)="onSearch()"
+          placeholder="Filter IP, protocol, source"
+        />
+      </label>
+
+      <button (click)="loadLogs()" class="refresh-button" title="Refresh logs" aria-label="Refresh logs">
+        <lucide-icon [name]="RefreshIcon" class="action-icon"></lucide-icon>
       </button>
     </div>
   </div>
 
-  <div class="flex-1 bg-black rounded-lg overflow-hidden border border-outline/20 font-mono flex flex-col">
-    <div class="bg-surface-container-low px-4 py-2 border-b border-outline/10 flex items-center gap-2">
-      <lucide-icon [name]="TerminalIcon" class="w-3 h-3 text-primary"></lucide-icon>
-      <span class="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold">
-        ndr_events — live stream
-      </span>
-      <span class="ml-auto text-[10px] text-primary animate-pulse">● LIVE</span>
+  <div class="logs-status-strip">
+    <div>
+      <span class="status-dot"></span>
+      <span>Live event intake</span>
     </div>
-
-    <!-- Loading -->
-    <div *ngIf="loading" class="flex-1 flex items-center justify-center text-on-surface-variant">
-      <p class="text-sm animate-pulse">Loading logs...</p>
+    <div>
+      <span class="status-label">Visible</span>
+      <strong>{{ filteredLogs.length }}</strong>
     </div>
-
-    <!-- Log rows -->
-    <div *ngIf="!loading" class="flex-1 overflow-auto p-4 space-y-1 text-[12px]">
-      <div *ngFor="let log of filteredLogs"
-           class="grid grid-cols-6 gap-4 py-1 hover:bg-white/5 transition-colors border-l-2 border-transparent hover:border-primary px-2">
-        <span class="text-on-surface-variant">{{ log.ts }}</span>
-        <span [class]="'font-bold ' + (log.source === 'suricata' ? 'text-secondary' : 'text-primary/70')">
-          {{ log.source?.toUpperCase() }}
-        </span>
-        <span [class]="'font-bold text-xs ' + (log.proto === 'TCP' ? 'text-blue-400' : log.proto === 'UDP' ? 'text-yellow-400' : 'text-green-400')">
-          {{ log.proto }}
-        </span>
-        <span class="text-white">{{ log.src }}</span>
-        <span class="text-white">{{ log.dst }}</span>
-        <span class="text-right font-bold text-primary">{{ log.event_type || 'CONN' }}</span>
-      </div>
-
-      <div *ngIf="filteredLogs.length === 0"
-           class="py-10 text-center text-on-surface-variant text-sm">
-        No logs found
-      </div>
-    </div>
-
-    <div class="bg-surface-container-low px-4 py-1.5 text-[10px] text-on-surface-variant border-t border-outline/10 flex justify-between">
-      <span>Showing {{ filteredLogs.length }} of {{ logs.length }} entries</span>
-      <span class="text-primary">WebSocket: Connected</span>
+    <div>
+      <span class="status-label">Buffer</span>
+      <strong>{{ logs.length }}</strong>
     </div>
   </div>
+
+  <section class="logs-terminal">
+    <div class="terminal-topbar">
+      <div class="terminal-title">
+        <lucide-icon [name]="TerminalIcon" class="terminal-icon"></lucide-icon>
+        <span>ndr_events - live stream</span>
+      </div>
+      <span class="live-pill"><i></i>LIVE</span>
+    </div>
+
+    <div *ngIf="loading" class="logs-state">
+      <lucide-icon [name]="TerminalIcon" class="state-icon pulse"></lucide-icon>
+      <strong>Loading network events</strong>
+      <span>Refreshing the latest captured traffic.</span>
+    </div>
+
+    <div *ngIf="!loading" class="logs-table-wrap">
+      <div class="log-grid log-heading">
+        <span>Time</span>
+        <span>Source</span>
+        <span>Proto</span>
+        <span>Source IP</span>
+        <span>Destination IP</span>
+        <span>Event</span>
+      </div>
+
+      <div class="log-list">
+        <div *ngFor="let log of filteredLogs" class="log-grid log-row">
+          <span class="log-time">{{ log.ts }}</span>
+          <span [class]="'source-badge ' + (log.source === 'suricata' ? 'source-suricata' : 'source-zeek')">
+            {{ log.source?.toUpperCase() }}
+          </span>
+          <span [class]="'proto-badge proto-' + (log.proto || '').toLowerCase()">
+            {{ log.proto }}
+          </span>
+          <span class="ip-value">{{ log.src }}</span>
+          <span class="ip-value">{{ log.dst }}</span>
+          <span class="event-badge">{{ log.event_type || 'CONN' }}</span>
+        </div>
+
+        <div *ngIf="filteredLogs.length === 0" class="logs-state compact">
+          <lucide-icon [name]="SearchIcon" class="state-icon"></lucide-icon>
+          <strong>No matching logs</strong>
+          <span>Try a different IP, protocol, or event source.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-footer">
+      <span>Showing {{ filteredLogs.length }} of {{ logs.length }} entries</span>
+      <span>WebSocket: Connected</span>
+    </div>
+  </section>
 </div>

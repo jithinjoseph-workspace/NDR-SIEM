@@ -52,6 +52,10 @@ export class Login {
             this.router.navigate(['/admin']).then(() => {
               this.ws.connect();
             });
+          } else if (role === 'tenant_admin') {
+            this.router.navigate(['/tenant-admin']).then(() => {
+              this.ws.connect();
+            });
           } else {
             this.router.navigate(['/dashboard']).then(() => {
               this.ws.connect();
