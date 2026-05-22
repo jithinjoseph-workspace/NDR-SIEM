@@ -220,7 +220,6 @@ log "Creating directories..."
 mkdir -p /opt/ndr-sensor
 mkdir -p /var/log/ndr/zeek
 mkdir -p /var/log/ndr/suricata
-mkdir -p /var/log/ndr/zeek/current
 mkdir -p /etc/ndr
 mkdir -p /etc/vector/data
 
@@ -256,10 +255,10 @@ data_dir = "/etc/vector/data"
 [sources.zeek_logs]
 type = "file"
 include = [
-    "/var/log/ndr/zeek/current/conn.log",
-    "/var/log/ndr/zeek/current/dns.log",
-    "/var/log/ndr/zeek/current/http.log",
-    "/var/log/ndr/zeek/current/ssl.log"
+    "/var/log/ndr/zeek/conn.log",
+    "/var/log/ndr/zeek/dns.log",
+    "/var/log/ndr/zeek/http.log",
+    "/var/log/ndr/zeek/ssl.log"
 ]
 read_from = "end"
 
@@ -541,6 +540,10 @@ def execute_command(cmd):
 if __name__ == '__main__':
     print(f"[NDR] Agent starting for tenant: {TENANT_ID}")
     print(f"[NDR] Cloud: {CLOUD_URL}")
+
+    # Auto-create log directories
+    os.makedirs("/var/log/ndr/suricata", exist_ok=True)
+    os.makedirs("/var/log/ndr/zeek", exist_ok=True)
 
     # Initial start of all services
     print("[NDR] Starting sensor services...")
