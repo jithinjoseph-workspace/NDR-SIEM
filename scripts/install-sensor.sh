@@ -408,7 +408,9 @@ def start_zeek():
     try:
         # Kill any stale zeek processes
         subprocess.run(['pkill', '-9', '-f', 'zeek'], capture_output=True)
-        time.sleep(1)
+        time.sleep(2)
+        # Clear Vector checkpoints so it reads from current position
+        subprocess.run(["rm", "-rf", "/etc/vector/data/suricata", "/etc/vector/data/zeek"], capture_output=True)
         # Start Zeek directly exactly like ndr-agent.py
         subprocess.Popen(
             ["/opt/zeek/bin/zeek", "-i", IFACE, "local", "Log::default_logdir=/var/log/ndr/zeek"],
@@ -425,9 +427,9 @@ def start_suricata():
     try:
         # Kill any stale suricata processes
         subprocess.run(['pkill', '-9', '-f', 'suricata'], capture_output=True)
-        time.sleep(1)
-        # Clean stale PID files
-        subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/tmp/suricata.pid'], capture_output=True)
+        time.sleep(2)
+        # Clean ALL stale PID files
+        subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/var/run/suricata/suricata.pid'], capture_output=True)
         # Start Suricata directly exactly like ndr-agent.py
         subprocess.Popen(
             [
