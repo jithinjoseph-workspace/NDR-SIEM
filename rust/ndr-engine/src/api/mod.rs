@@ -247,7 +247,10 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
         _ => return,
     };
 
-    let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
+    let tenant_id = event.raw.get("tenant_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
     if let Some(obj) = msg.as_object_mut() {
         obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
