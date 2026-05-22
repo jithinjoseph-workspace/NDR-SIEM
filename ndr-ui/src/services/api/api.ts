@@ -11,7 +11,7 @@ export class Api {
   constructor(private http: HttpClient) { }
 
   getDashboardStats(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/health`);
+    return this.http.get(`${this.baseUrl}/health`); 
   }
 
   getAlerts(): Observable<any[]> {
@@ -127,64 +127,64 @@ export class Api {
 
   getSettings(): Observable<any> {
     return this.http.get(`${this.baseUrl}/settings`);
-}
+  }
 
-updateSettings(data: any): Observable<any> {
+  updateSettings(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/settings`, data);
-}
+  }
 
-getSoarExecutions(): Observable<any> {
+  getSoarExecutions(): Observable<any> {
     return this.http.get(`${this.baseUrl}/soar/executions`);
-}
+  }
 
-configureSoarSlack(data: any): Observable<any> {
+  configureSoarSlack(data: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/action/slack`, data);
-}
+      `${this.baseUrl}/soar/action/slack`, data);
+  }
 
-configureSoarEmail(data: any): Observable<any> {
+  configureSoarEmail(data: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/action/email`, data);
-}
+      `${this.baseUrl}/soar/action/email`, data);
+  }
 
-togglePlaybook(data: any): Observable<any> {
+  togglePlaybook(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/soar/playbook/toggle`, data);
-}
-createPlaybook(data: any): Observable<any> {
+  }
+  createPlaybook(data: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/playbook/create`, data);
-}
+      `${this.baseUrl}/soar/playbook/create`, data);
+  }
 
-getIntegrations(): Observable<any> {
+  getIntegrations(): Observable<any> {
     return this.http.get(
-        `${this.baseUrl}/soar/integrations`);
-}
+      `${this.baseUrl}/soar/integrations`);
+  }
 
-saveIntegration(data: any): Observable<any> {
+  saveIntegration(data: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/integrations`, data);
-}
+      `${this.baseUrl}/soar/integrations`, data);
+  }
 
-testIntegration(data: any): Observable<any> {
+  testIntegration(data: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/integrations/test`, data);
-}
+      `${this.baseUrl}/soar/integrations/test`, data);
+  }
 
-toggleIntegration(data: any): Observable<any> {
+  toggleIntegration(data: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/integrations/toggle`, data);
-}
+      `${this.baseUrl}/soar/integrations/toggle`, data);
+  }
 
-deleteIntegration(data: any): Observable<any> {
+  deleteIntegration(data: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/integrations/delete`, data);
-}
+      `${this.baseUrl}/soar/integrations/delete`, data);
+  }
 
-getJiraTickets(config: any): Observable<any> {
+  getJiraTickets(config: any): Observable<any> {
     return this.http.post(
-        `${this.baseUrl}/soar/jira/tickets`, config);
-}
- // User management
+      `${this.baseUrl}/soar/jira/tickets`, config);
+  }
+  // User management
   getUsers(): Observable<any> {
     return this.http.get(`${this.baseUrl}/auth/users`);
   }

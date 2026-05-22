@@ -1,393 +1,424 @@
-<div class="p-8 animate-in fade-in duration-500">
-  <!-- Header -->
-  <div class="flex items-center justify-between mb-8">
+<section class="admin-shell">
+  <div class="admin-header">
     <div>
-      <h2 class="text-2xl font-display font-bold
-        text-white uppercase tracking-tight">
-        Admin Panel
-      </h2>
-      <p class="text-on-surface-variant text-sm mt-1">
-        Manage tenants, tenant admins and system settings
-      </p>
+      <div class="eyebrow">Super Admin Console</div>
+      <h2>Tenants and System Control</h2>
+      <p>Create companies, assign tenant admins, and monitor engine capacity.</p>
     </div>
-    <div class="flex items-center gap-2 px-4 py-2
-      bg-red-500/10 rounded-lg border border-red-500/20">
-      <span class="text-red-400 text-xs font-bold">
-        🔐 SUPER ADMIN
-      </span>
+
+    <div class="admin-badge">
+      <lucide-icon [name]="ShieldIcon" class="w-4 h-4"></lucide-icon>
+      Super Admin
     </div>
   </div>
 
-  <!-- Message -->
-  <div *ngIf="userMsg"
-    [class]="'mb-4 px-4 py-3 rounded text-xs font-bold ' +
-    (userMsgType === 'success' ?
-      'bg-primary/10 text-primary border border-primary/20' :
-      'bg-red-500/10 text-red-400 border border-red-500/20')">
+  <div
+    *ngIf="userMsg"
+    [class]="'admin-message ' + (userMsgType === 'success' ? 'success' : 'error')"
+  >
     {{ userMsg }}
   </div>
 
-  <!-- Tabs -->
-  <div class="flex gap-2 mb-6">
-    <button (click)="activeTab='users'"
-      [class]="'px-4 py-2 rounded-lg text-xs font-bold transition-all ' +
-      (activeTab === 'users' ?
-        'bg-primary text-black' :
-        'bg-surface-container text-on-surface-variant hover:text-white')">
-      👥 Users
+  <section class="admin-stats">
+    <article>
+      <lucide-icon [name]="BuildingIcon" class="w-5 h-5"></lucide-icon>
+      <span>Total Tenants</span>
+      <strong>{{ tenants.length }}</strong>
+    </article>
+    <article>
+      <lucide-icon [name]="CheckIcon" class="w-5 h-5"></lucide-icon>
+      <span>Active Tenants</span>
+      <strong>{{ activeTenants }}</strong>
+    </article>
+    <article>
+      <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
+      <span>Tenant Admins</span>
+      <strong>{{ tenantAdmins.length }}</strong>
+    </article>
+    <article>
+      <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+      <span>Running Engines</span>
+      <strong>{{ engines.length }}</strong>
+    </article>
+  </section>
+
+  <div class="admin-tabs" role="tablist" aria-label="Super admin sections">
+    <button
+      type="button"
+      (click)="activeTab='tenants'"
+      [class.active]="activeTab === 'tenants'"
+    >
+      <lucide-icon [name]="BuildingIcon" class="w-4 h-4"></lucide-icon>
+      Tenants
     </button>
-    <button (click)="activeTab='tenants'"
-      [class]="'px-4 py-2 rounded-lg text-xs font-bold transition-all ' +
-      (activeTab === 'tenants' ?
-        'bg-primary text-black' :
-        'bg-surface-container text-on-surface-variant hover:text-white')">
-      🏢 Tenants
+    <button
+      type="button"
+      (click)="activeTab='users'"
+      [class.active]="activeTab === 'users'"
+    >
+      <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
+      Tenant Admins
     </button>
-    <button (click)="activeTab='engines'"
-      [class]="'px-4 py-2 rounded-lg text-xs font-bold transition-all ' +
-      (activeTab === 'engines' ?
-        'bg-primary text-black' :
-        'bg-surface-container text-on-surface-variant hover:text-white')">
-      ⚙️ Engines
+    <button
+      type="button"
+      (click)="activeTab='engines'"
+      [class.active]="activeTab === 'engines'"
+    >
+      <lucide-icon [name]="GaugeIcon" class="w-4 h-4"></lucide-icon>
+      Engines
     </button>
   </div>
 
-  <!-- Users Tab -->
-  <div *ngIf="activeTab === 'users'">
-    <div class="bg-surface-container-highest rounded-xl
-      border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
-        <h3 class="text-white font-bold text-sm uppercase">
-          Tenant Admins
-        </h3>
-        <button (click)="showAddUser=true"
-          class="flex items-center gap-2 bg-primary/10
-          text-primary text-xs font-bold px-4 py-2
-          rounded-lg hover:bg-primary/20">
-          ➕ Add User
-        </button>
+  <section *ngIf="activeTab === 'tenants'" class="admin-panel">
+    <div class="panel-head">
+      <div>
+        <h3>Tenants</h3>
+        <p>Create the company first, then add a tenant admin for it.</p>
       </div>
-
-      <!-- Users table -->
-      <div *ngIf="loadingUsers"
-        class="px-6 py-8 text-center
-        text-on-surface-variant animate-pulse">
-        Loading users...
-      </div>
-
-      <table *ngIf="!loadingUsers"
-        class="w-full">
-        <thead>
-          <tr class="border-b border-outline/10">
-            <th class="px-6 py-3 text-left text-[10px]
-              text-on-surface-variant uppercase">
-              Username
-            </th>
-            <th class="px-6 py-3 text-left text-[10px]
-              text-on-surface-variant uppercase">
-              Role
-            </th>
-            <th class="px-6 py-3 text-left text-[10px]
-              text-on-surface-variant uppercase">
-              Tenant
-            </th>
-            <th class="px-6 py-3 text-left text-[10px]
-              text-on-surface-variant uppercase">
-              Created
-            </th>
-            <th class="px-6 py-3 text-right text-[10px]
-              text-on-surface-variant uppercase">
-              Actions
-            </th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-outline/5">
-          <tr *ngFor="let user of users"
-            class="hover:bg-surface-container/50">
-            <td class="px-6 py-4">
-              <div class="flex items-center gap-3">
-                <div class="w-8 h-8 rounded-full
-                  bg-primary/20 flex items-center
-                  justify-center text-primary font-bold text-xs">
-                  {{ user.username[0].toUpperCase() }}
-                </div>
-                <span class="text-white text-sm">
-                  {{ user.username }}
-                </span>
-              </div>
-            </td>
-            <td class="px-6 py-4">
-              <span [class]="'text-[10px] font-bold px-2 py-1 rounded ' + getRoleBadge(user.role)">
-                {{ user.role | uppercase }}
-              </span>
-            </td>
-            <td class="px-6 py-4 text-on-surface-variant text-sm">
-              {{ user.tenant_id }}
-            </td>
-            <td class="px-6 py-4 text-on-surface-variant text-xs">
-              {{ user.created_at | date:'short' }}
-            </td>
-            <td class="px-6 py-4 text-right">
-              <button
-                *ngIf="user.username !== currentUser?.username"
-                (click)="deleteUser(user)"
-                class="text-xs px-3 py-1.5 rounded-lg
-                bg-red-500/10 text-red-400
-                hover:bg-red-500/20">
-                Delete
-              </button>
-            </td>
-          </tr>
-          <tr *ngIf="users.length === 0">
-            <td colspan="5" class="px-6 py-8
-              text-center text-on-surface-variant text-sm">
-              No users found
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <button class="primary-action" type="button" (click)="showAddTenant=true">
+        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+        Add Tenant
+      </button>
     </div>
-  </div>
 
-  <!-- Tenants Tab -->
-  <div *ngIf="activeTab === 'tenants'">
-    <div class="bg-surface-container-highest rounded-xl
-      border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
-        <h3 class="text-white font-bold text-sm uppercase">
-          Tenants / Companies
-        </h3>
-        <button (click)="showAddTenant=true"
-          class="flex items-center gap-2 bg-primary/10
-          text-primary text-xs font-bold px-4 py-2
-          rounded-lg hover:bg-primary/20">
-          ➕ Add Tenant
-        </button>
-      </div>
+    <div class="toolbar">
+      <label class="search-field">
+        <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
+        <input
+          [(ngModel)]="tenantSearch"
+          type="search"
+          placeholder="Search tenants"
+        />
+      </label>
+      <button class="secondary-action" type="button" (click)="loadTenants()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
+      </button>
+    </div>
 
-      <div class="divide-y divide-outline/5">
-        <div *ngFor="let tenant of tenants"
-          class="px-6 py-4 flex items-center justify-between">
-          <div class="flex items-center gap-4">
-            <div class="w-10 h-10 rounded-lg
-              bg-primary/20 flex items-center
-              justify-center text-lg">
-              🏢
-            </div>
-            <div>
-              <div class="text-white font-bold">
-                {{ tenant.name }}
-              </div>
-              <div class="text-on-surface-variant text-xs font-mono">
-                ID: {{ tenant.id }}
-              </div>
-            </div>
+    <div *ngIf="loadingTenants" class="loading-state">Loading tenants...</div>
+
+    <div *ngIf="!loadingTenants && filteredTenants.length === 0" class="empty-state">
+      <strong>No tenants found</strong>
+      <span>Create a tenant or adjust your search.</span>
+    </div>
+
+    <div *ngIf="!loadingTenants && filteredTenants.length > 0" class="tenant-list">
+      <div *ngFor="let tenant of filteredTenants" class="tenant-row">
+        <div class="tenant-main">
+          <div class="tenant-mark">
+            {{ tenant.name.charAt(0).toUpperCase() }}
           </div>
-          <div class="flex items-center gap-4">
-            <span class="text-xs text-on-surface-variant">
-              {{ tenant.user_count || 0 }} users
-            </span>
-            <span [class]="'text-[10px] font-bold px-2 py-1 rounded ' +
-              (tenant.active ?
-                'bg-primary/20 text-primary' :
-                'bg-surface-container text-on-surface-variant')">
-              {{ tenant.active ? 'ACTIVE' : 'INACTIVE' }}
-            </span>
+          <div>
+            <strong>{{ tenant.name }}</strong>
+            <code>{{ tenant.id }}</code>
           </div>
         </div>
-        <div *ngIf="tenants.length === 0"
-          class="px-6 py-8 text-center
-          text-on-surface-variant text-sm">
-          No tenants yet — add your first company!
+
+        <div class="tenant-meta">
+          <span>{{ tenantUserCount(tenant.id) }} users</span>
+          <span>{{ tenantAdminCount(tenant.id) }} admins</span>
+          <span [class]="'status-pill ' + (tenant.active ? 'active' : 'inactive')">
+            {{ tenant.active ? 'Active' : 'Inactive' }}
+          </span>
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- Engines Tab -->
-  <div *ngIf="activeTab === 'engines'">
-    <div class="bg-surface-container-highest rounded-xl
-      border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
-        <div>
-          <h3 class="text-white font-bold text-sm uppercase">
-            NDR Engine Cluster
-          </h3>
-          <p class="text-on-surface-variant text-xs mt-1">
-            {{ engines.length }} engines running
-          </p>
-        </div>
-        <button (click)="scaleUp()"
-          [disabled]="scaling"
-          class="px-4 py-2 bg-primary/10 text-primary
-          text-xs font-bold rounded-lg
-          hover:bg-primary/20 disabled:opacity-50">
-          {{ scaling ? '⏳ Starting...' : '➕ Add Engine' }}
-        </button>
+  <section *ngIf="activeTab === 'users'" class="admin-panel">
+    <div class="panel-head">
+      <div>
+        <h3>Tenant Admins</h3>
+        <p>Assign one admin per company to manage analysts inside that tenant.</p>
       </div>
-      <div class="divide-y divide-outline/5">
-        <div *ngFor="let engine of engines"
-          class="px-6 py-4 flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div class="w-2 h-2 rounded-full
-              bg-primary animate-pulse"></div>
-            <div>
-              <div class="text-white font-bold text-sm">
-                {{ engine.name }}
-              </div>
-              <div class="text-on-surface-variant text-xs">
-                {{ engine.status }}
-              </div>
-            </div>
+      <button class="primary-action" type="button" (click)="showAddUser=true">
+        <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
+        Add Tenant Admin
+      </button>
+    </div>
+
+    <div class="toolbar">
+      <label class="search-field">
+        <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
+        <input
+          [(ngModel)]="userSearch"
+          type="search"
+          placeholder="Search admins or tenants"
+        />
+      </label>
+      <select [(ngModel)]="selectedTenant" class="tenant-filter">
+        <option value="all">All tenants</option>
+        <option *ngFor="let tenant of tenants" [value]="tenant.id">
+          {{ tenant.name }}
+        </option>
+      </select>
+      <button class="secondary-action" type="button" (click)="loadUsers()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
+      </button>
+    </div>
+
+    <div *ngIf="loadingUsers" class="loading-state">Loading tenant admins...</div>
+
+    <div *ngIf="!loadingUsers && filteredTenantAdmins.length === 0" class="empty-state">
+      <strong>No tenant admins found</strong>
+      <span>Create a tenant admin after adding the tenant company.</span>
+    </div>
+
+    <div *ngIf="!loadingUsers && filteredTenantAdmins.length > 0" class="admin-table">
+      <div class="table-row table-head">
+        <span>User</span>
+        <span>Tenant</span>
+        <span>Role</span>
+        <span>Created</span>
+        <span>Actions</span>
+      </div>
+
+      <div *ngFor="let user of filteredTenantAdmins" class="table-row">
+        <div class="user-cell">
+          <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
+          <div>
+            <strong>{{ user.username }}</strong>
+            <span>Tenant administrator</span>
           </div>
+        </div>
+        <span>{{ tenantName(user.tenant_id) }}</span>
+        <span class="role-pill">Tenant Admin</span>
+        <span>{{ user.created_at | date:'short' }}</span>
+        <div class="row-actions">
           <button
-            *ngIf="engines.length > 1"
-            (click)="scaleDown(engine.name)"
-            class="text-xs px-3 py-1.5 rounded-lg
-            bg-red-500/10 text-red-400
-            hover:bg-red-500/20">
-            Stop
+            *ngIf="user.username !== currentUser?.username"
+            class="danger-icon"
+            type="button"
+            title="Delete tenant admin"
+            (click)="requestDeleteUser(user)"
+          >
+            <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
           </button>
-        </div>
-        <div *ngIf="engines.length === 0 && !loadingEngines"
-          class="px-6 py-8 text-center text-on-surface-variant text-sm">
-          No engines running in cluster.
-        </div>
-        <div *ngIf="loadingEngines"
-          class="px-6 py-8 text-center text-on-surface-variant text-sm animate-pulse">
-          Loading engines...
+          <span *ngIf="user.username === currentUser?.username" class="muted-note">
+            Current user
+          </span>
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- Add User Modal -->
-  <div *ngIf="showAddUser"
-    class="fixed inset-0 bg-black/60 z-50
-    flex items-center justify-center p-4">
-    <div class="bg-surface-container-highest rounded-2xl
-      border border-outline/20 p-6 w-full max-w-md">
-      <h3 class="text-white font-bold text-lg mb-4">
-        ➕ Add New User
-      </h3>
-      <div class="space-y-4">
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Username
-          </label>
-          <input [(ngModel)]="newUser.username"
-            placeholder="username"
-            class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-3 py-2.5
-            text-white text-sm outline-none focus:border-primary"/>
-        </div>
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Password
-          </label>
-          <input [(ngModel)]="newUser.password"
-            type="password"
-            placeholder="password"
-            class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-3 py-2.5
-            text-white text-sm outline-none focus:border-primary"/>
-        </div>
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Role
-          </label>
-          <input value="Tenant Admin"
-            disabled
-            class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-3 py-2.5
-            text-on-surface-variant text-sm outline-none"/>
-        </div>
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Tenant
-          </label>
-          <select [(ngModel)]="newUser.tenant_id"
-            class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-3 py-2.5
-            text-white text-sm outline-none">
-            <option value="">Select tenant</option>
-            <option *ngFor="let t of tenants"
-              [value]="t.id"
-              [hidden]="t.id === 'default'"
-              [disabled]="t.id === 'default'">
-              {{ t.name }}
-            </option>
-          </select>
-        </div>
+  <section *ngIf="activeTab === 'engines'" class="admin-panel">
+    <div class="panel-head">
+      <div>
+        <h3>NDR Engine Cluster</h3>
+        <p>
+          {{ engines.length }} engines running
+          <span *ngIf="lastEngineRefresh">- refreshed {{ lastEngineRefresh | date:'shortTime' }}</span>
+        </p>
       </div>
-      <div class="flex gap-3 mt-6">
-        <button (click)="addUser()"
-          [disabled]="savingUser"
-          class="flex-1 bg-primary text-black font-bold
-          py-2.5 rounded-lg text-sm disabled:opacity-50">
-          {{ savingUser ? '⏳ Creating...' : '✅ Create User' }}
+      <div class="panel-actions">
+        <button class="secondary-action" type="button" (click)="loadEngines()">
+          <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+          Refresh
         </button>
-        <button (click)="showAddUser=false"
-          class="px-4 bg-surface-container text-white
-          py-2.5 rounded-lg text-sm">
-          Cancel
+        <button
+          class="primary-action"
+          type="button"
+          [disabled]="scaling"
+          (click)="scaleUp()"
+        >
+          <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+          {{ scaling ? 'Starting...' : 'Add Engine' }}
         </button>
       </div>
     </div>
-  </div>
 
-  <!-- Add Tenant Modal -->
-  <div *ngIf="showAddTenant"
-    class="fixed inset-0 bg-black/60 z-50
-    flex items-center justify-center p-4">
-    <div class="bg-surface-container-highest rounded-2xl
-      border border-outline/20 p-6 w-full max-w-md">
-      <h3 class="text-white font-bold text-lg mb-4">
-        🏢 Add New Tenant
-      </h3>
-      <div *ngIf="tenantMsg"
-        class="mb-4 text-xs font-bold p-2 rounded
-        bg-primary/10 text-primary">
-        {{ tenantMsg }}
-      </div>
-      <div class="space-y-4">
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Company Name
-          </label>
-          <input [(ngModel)]="newTenant.name"
-            placeholder="Acme Corporation"
-            class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-3 py-2.5
-            text-white text-sm outline-none focus:border-primary"/>
-        </div>
-        <div *ngIf="newTenant.name">
-          <label class="text-xs text-on-surface-variant uppercase">
-            Tenant ID (auto-generated)
-          </label>
-          <div class="mt-1 px-3 py-2.5 bg-surface-container
-            border border-outline/10 rounded-lg
-            text-primary text-sm font-mono">
-            {{ newTenant.name.toLowerCase().replace(/[^a-z0-9]/g, '-') }}
+    <div *ngIf="loadingEngines" class="loading-state">Loading engines...</div>
+
+    <div *ngIf="!loadingEngines && engines.length === 0" class="empty-state">
+      <strong>No engines running</strong>
+      <span>Start an engine to restore cluster capacity.</span>
+    </div>
+
+    <div *ngIf="!loadingEngines && engines.length > 0" class="engine-list">
+      <div *ngFor="let engine of engines" class="engine-row">
+        <div class="engine-main">
+          <span class="live-dot"></span>
+          <div>
+            <strong>{{ engine.name }}</strong>
+            <span>{{ engine.status }}</span>
           </div>
         </div>
-      </div>
-      <div class="flex gap-3 mt-6">
-        <button (click)="addTenant()"
-          [disabled]="savingTenant"
-          class="flex-1 bg-primary text-black font-bold
-          py-2.5 rounded-lg text-sm disabled:opacity-50">
-          {{ savingTenant ? '⏳ Creating...' : '✅ Create Tenant' }}
+        <button
+          class="danger-action"
+          type="button"
+          [disabled]="engines.length <= 1"
+          [title]="engines.length <= 1 ? 'Keep at least one engine running' : 'Stop engine'"
+          (click)="requestStopEngine(engine.name)"
+        >
+          Stop
         </button>
-        <button (click)="showAddTenant=false"
-          class="px-4 bg-surface-container text-white
-          py-2.5 rounded-lg text-sm">
+      </div>
+    </div>
+  </section>
+
+  <div *ngIf="showAddTenant" class="modal-backdrop">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <h3>Add Tenant</h3>
+          <p>Create a company namespace before assigning an admin.</p>
+        </div>
+        <button type="button" class="icon-button" (click)="showAddTenant=false">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <div *ngIf="tenantMsg" class="admin-message error">{{ tenantMsg }}</div>
+
+      <label class="form-field">
+        <span>Company Name</span>
+        <input
+          [(ngModel)]="newTenant.name"
+          (ngModelChange)="onTenantNameChange()"
+          placeholder="Acme Corporation"
+        />
+      </label>
+
+      <label class="form-field">
+        <span>Tenant ID</span>
+        <input
+          [(ngModel)]="newTenant.id"
+          (ngModelChange)="onTenantIdChange()"
+          placeholder="acme-corporation"
+        />
+        <small *ngIf="newTenant.id && tenantIdExists(newTenant.id)">
+          This tenant ID already exists.
+        </small>
+      </label>
+
+      <div class="modal-actions">
+        <button
+          class="primary-action"
+          type="button"
+          [disabled]="savingTenant || !canCreateTenant"
+          (click)="addTenant()"
+        >
+          {{ savingTenant ? 'Creating...' : 'Create Tenant' }}
+        </button>
+        <button class="secondary-action" type="button" (click)="showAddTenant=false">
           Cancel
         </button>
       </div>
     </div>
   </div>
-</div>
+
+  <div *ngIf="showAddUser" class="modal-backdrop">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <h3>Add Tenant Admin</h3>
+          <p>Give a company its first administrative user.</p>
+        </div>
+        <button type="button" class="icon-button" (click)="showAddUser=false">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <label class="form-field">
+        <span>Username</span>
+        <input [(ngModel)]="newUser.username" placeholder="admin username" />
+      </label>
+
+      <label class="form-field">
+        <span>Password</span>
+        <input [(ngModel)]="newUser.password" type="password" placeholder="temporary password" />
+      </label>
+
+      <label class="form-field">
+        <span>Role</span>
+        <input value="Tenant Admin" disabled />
+      </label>
+
+      <label class="form-field">
+        <span>Tenant</span>
+        <select [(ngModel)]="newUser.tenant_id">
+          <option value="">Select tenant</option>
+          <option
+            *ngFor="let tenant of tenants"
+            [value]="tenant.id"
+            [hidden]="tenant.id === 'default'"
+            [disabled]="tenant.id === 'default'"
+          >
+            {{ tenant.name }}
+          </option>
+        </select>
+      </label>
+
+      <div class="modal-actions">
+        <button
+          class="primary-action"
+          type="button"
+          [disabled]="savingUser"
+          (click)="addUser()"
+        >
+          {{ savingUser ? 'Creating...' : 'Create Tenant Admin' }}
+        </button>
+        <button class="secondary-action" type="button" (click)="showAddUser=false">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="pendingDeleteUser" class="modal-backdrop">
+    <div class="modal-panel compact">
+      <div class="modal-head">
+        <div>
+          <h3>Delete Tenant Admin</h3>
+          <p>This removes {{ pendingDeleteUser.username }} from admin access.</p>
+        </div>
+        <button type="button" class="icon-button" (click)="cancelDeleteUser()">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <div class="warning-box">
+        The tenant and its data will remain. Only this user account is deleted.
+      </div>
+
+      <div class="modal-actions">
+        <button class="danger-action solid" type="button" (click)="confirmDeleteUser()">
+          Delete Admin
+        </button>
+        <button class="secondary-action" type="button" (click)="cancelDeleteUser()">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="pendingStopEngine" class="modal-backdrop">
+    <div class="modal-panel compact">
+      <div class="modal-head">
+        <div>
+          <h3>Stop Engine</h3>
+          <p>This will stop {{ pendingStopEngine }}.</p>
+        </div>
+        <button type="button" class="icon-button" (click)="cancelStopEngine()">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <div class="warning-box">
+        Keep at least one engine running so event processing stays available.
+      </div>
+
+      <div class="modal-actions">
+        <button class="danger-action solid" type="button" (click)="confirmStopEngine()">
+          Stop Engine
+        </button>
+        <button class="secondary-action" type="button" (click)="cancelStopEngine()">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
