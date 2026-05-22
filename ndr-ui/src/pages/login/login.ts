@@ -48,7 +48,7 @@ export class Login {
         if (res.token) {
           const role = res.user?.role;
           console.log(role)
-          if (role === 'admin') {
+          if (role === 'admin' || role === 'super_admin') {
             this.router.navigate(['/admin']).then(() => {
               this.ws.connect();
             });

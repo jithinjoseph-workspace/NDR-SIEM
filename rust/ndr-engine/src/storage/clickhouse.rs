@@ -138,29 +138,6 @@ pub async fn verify_user(
     Ok(None)
 }
 
-pub async fn create_default_admin(&self) -> anyhow::Result<()> {
-    // Check if admin exists
-    let count: u64 = self.client
-        .query("SELECT count() FROM ndr.users WHERE username = 'admin'")
-        .fetch_one::<u64>()
-        .await
-        .unwrap_or(0);
-
-    if count == 0 {
-        let hash = bcrypt::hash("ndr@admin123", 12)
-            .unwrap_or_default();
-        let perms = default_permissions("super_admin");
-        let query = format!(
-            "INSERT INTO ndr.users \
-             (username, password_hash, role, tenant_id, permissions) \
-             VALUES ('admin', '{}', 'super_admin', 'default', '{}')",
-            hash, perms
-        );
-        self.client.query(&query).execute().await?;
-        tracing::info!("✅ Default super_admin user created");
-    }
-    Ok(())
-}
 
 
 pub async fn get_users(

@@ -75,7 +75,6 @@ async fn main() {
         ch_storage: {
             let ch = Arc::new(storage::ClickhouseStorage::new());
             ch.init_tables().await;
-            let _ = ch.create_default_admin().await;
             ch
         },
         storage:    Arc::new(storage),
@@ -279,6 +278,8 @@ tokio::spawn(async move {
         .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
         .route("/api/admin/engines", get(api::get_engines))
         .route("/api/admin/engines/scale", post(api::scale_engines))
+        .route("/api/sensor/register",  post(api::sensor_register))
+        .route("/api/sensor/heartbeat", post(api::sensor_heartbeat))
         .with_state(state)
         .layer(axum::middleware::from_fn(api::auth_middleware))
         .layer(cors);
