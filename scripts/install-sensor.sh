@@ -108,10 +108,13 @@ pkill -f agent.py 2>/dev/null || true
 systemctl stop ndr-vector 2>/dev/null || true
 systemctl stop ndr-agent 2>/dev/null || true
 systemctl stop suricata 2>/dev/null || true
-pkill -f zeek 2>/dev/null || true
-pkill -f vector 2>/dev/null || true
-
-sleep 3
+pkill -9 -f suricata 2>/dev/null || true
+pkill -9 -f zeek 2>/dev/null || true
+pkill -9 -f vector 2>/dev/null || true
+rm -f /tmp/suricata.pid
+rm -f /var/run/suricata.pid
+rm -f /run/suricata.pid
+sleep 2
 
 # Verify all stopped
 log "Verifying services stopped..."
