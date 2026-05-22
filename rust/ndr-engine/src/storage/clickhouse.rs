@@ -1230,4 +1230,57 @@ pub async fn revoke_sensor_key(
     Ok(())
 }
 
+pub async fn set_sensor_command(
+    &self,
+    tenant_id: &str,
+    command: &str,
+) -> anyhow::Result<()> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let query = format!(
+        "INSERT INTO ndr.sensor_commands \
+         (id, tenant_id, command, status) \
+         VALUES ('{}', '{}', '{}', 'pending')",
+        id, tenant_id, command
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn get_sensor_command(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<String> {
+    let result = self.client
+        .query(&format!(
+            "SELECT command, status FROM ndr.sensor_commands FINAL \
+             WHERE tenant_id = '{}' \
+             AND status = 'pending' \
+             ORDER BY created_at DESC \
+             LIMIT 1",
+            tenant_id
+        ))
+        .fetch_all::<(String, String)>()
+        .await?;
+    
+    Ok(result.first()
+        .map(|r| r.0.clone())
+        .unwrap_or_default())
+}
+
+pub async fn clear_sensor_command(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "ALTER TABLE ndr.sensor_commands \
+             UPDATE status = 'done' \
+             WHERE tenant_id = '{}' \
+             AND status = 'pending'",
+            tenant_id
+        ))
+        .execute().await?;
+    Ok(())
+}
+
 }

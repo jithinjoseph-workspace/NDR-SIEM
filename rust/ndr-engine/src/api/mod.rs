@@ -184,7 +184,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor", "/api/ingest"];
+    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -3711,4 +3711,119 @@ pub async fn ingest_events(
         "tenant_id": tenant_id
     }))
 }
+
+pub async fn get_sensor_command_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    // Validate sensor key
+    let sensor_key = headers
+        .get("X-Sensor-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if sensor_key.is_empty() {
+        return Json(json!({
+            "command": ""
+        }));
+    }
+
+    // Validate key and get tenant_id
+    let tenant_id = match state.ch_storage
+        .validate_sensor_key(sensor_key).await {
+        Ok(Some(tid)) => tid,
+        _ => return Json(json!({ "command": "" }))
+    };
+
+    // Get pending command
+    let command = state.ch_storage
+        .get_sensor_command(&tenant_id).await
+        .unwrap_or_default();
+
+    // Clear command after sending
+    if !command.is_empty() {
+        let _ = state.ch_storage
+            .clear_sensor_command(&tenant_id).await;
+        tracing::info!(
+            "Command '{}' sent to sensor tenant={}",
+            command, tenant_id
+        );
+    }
+
+    Json(json!({ "command": command }))
+}
+
+pub async fn sensor_control_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    // JWT auth - admin or tenant_admin only
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        }))
+    };
+
+    // Only admin or tenant_admin can control sensors
+    if claims.role != "admin" 
+        && claims.role != "super_admin"
+        && claims.role != "tenant_admin" {
+        return Json(json!({
+            "status": "error",
+            "message": "Insufficient permissions"
+        }));
+    }
+
+    let command = payload["command"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // Validate command
+    if !["start", "stop", "restart"].contains(&command.as_str()) {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid command. Use: start, stop, restart"
+        }));
+    }
+
+    // Get tenant_id - admin can specify, tenant_admin uses own
+    let tenant_id = if claims.role == "super_admin" 
+        || claims.role == "admin" {
+        payload["tenant_id"]
+            .as_str()
+            .unwrap_or(&claims.tenant_id)
+            .to_string()
+    } else {
+        claims.tenant_id.clone()
+    };
+
+    // Store command for sensor to pick up
+    match state.ch_storage
+        .set_sensor_command(&tenant_id, &command).await {
+        Ok(_) => {
+            tracing::info!(
+                "Sensor command '{}' set for tenant={}",
+                command, tenant_id
+            );
+            Json(json!({
+                "status": "ok",
+                "message": format!(
+                    "Command '{}' queued for tenant {}",
+                    command, tenant_id
+                ),
+                "tenant_id": tenant_id,
+                "command": command
+            }))
+        },
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": format!("Failed to set command: {}", e)
+        }))
+    }
+}
+
 

@@ -286,6 +286,8 @@ tokio::spawn(async move {
         .route("/api/sensor/register",  post(api::sensor_register))
         .route("/api/sensor/heartbeat", post(api::sensor_heartbeat))
         .route("/api/ingest",           post(api::ingest_events))
+        .route("/api/sensor/command",   get(api::get_sensor_command_api))
+        .route("/api/sensor/control",   post(api::sensor_control_api))
         .with_state(state)
         .layer(axum::middleware::from_fn(api::auth_middleware))
         .layer(cors);

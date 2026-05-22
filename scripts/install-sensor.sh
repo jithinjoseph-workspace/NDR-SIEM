@@ -202,8 +202,22 @@ log "Creating directories..."
 mkdir -p /opt/ndr-sensor
 mkdir -p /var/log/ndr/zeek
 mkdir -p /var/log/ndr/suricata
+mkdir -p /var/log/ndr/zeek/current
 mkdir -p /etc/ndr
 mkdir -p /etc/vector/data
+
+# Fix permissions for all log dirs
+chmod -R 777 /var/log/ndr/
+chmod 777 /etc/vector/data
+chown -R root:root /var/log/ndr/
+chmod 777 /opt/ndr-sensor
+
+# Fix Suricata log permissions
+mkdir -p /var/run/suricata
+chmod 777 /var/run/suricata
+chown -R root:root /var/run/suricata
+
+log "✅ Directories and permissions set"
 
 # ── Save config ───────────────────────────────────
 log "Saving sensor config..."
