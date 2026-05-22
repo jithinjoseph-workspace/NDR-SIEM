@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # NDR Sensor Installation Script
 set -e
