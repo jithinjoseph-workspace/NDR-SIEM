@@ -1129,4 +1129,105 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         }))
     }
 
+pub async fn create_sensor_key(
+    &self,
+    tenant_id: &str,
+    name: &str,
+    key_hash: &str,
+    key_prefix: &str,
+) -> anyhow::Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let query = format!(
+        "INSERT INTO ndr.sensor_keys \
+         (id, key_hash, key_prefix, tenant_id, name) \
+         VALUES ('{}','{}','{}','{}','{}')",
+        id, key_hash, key_prefix, tenant_id, name
+    );
+    self.client.query(&query).execute().await?;
+    Ok(id)
+}
+
+pub async fn validate_sensor_key(
+    &self,
+    key: &str,
+) -> anyhow::Result<Option<String>> {
+    // Extract prefix (first 16 chars)
+    if key.len() < 16 { return Ok(None); }
+    let prefix = &key[..16];
+    
+    let result = self.client
+        .query(&format!(
+            "SELECT key_hash, tenant_id, active \
+             FROM ndr.sensor_keys FINAL \
+             WHERE key_prefix = '{}' \
+             AND active = 1 \
+             LIMIT 1", prefix
+        ))
+        .fetch_all::<(String, String, u8)>()
+        .await?;
+    
+    if let Some((hash, tenant_id, _)) = result.first() {
+        if bcrypt::verify(key, hash).unwrap_or(false) {
+            // Update last_seen
+            let _ = self.client
+                .query(&format!(
+                    "ALTER TABLE ndr.sensor_keys \
+                     UPDATE last_seen = now() \
+                     WHERE key_prefix = '{}'",
+                    prefix
+                ))
+                .execute().await;
+            return Ok(Some(tenant_id.clone()));
+        }
+    }
+    Ok(None)
+}
+
+pub async fn get_sensor_keys(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let filter = if tenant_id == "default" {
+        "1=1".to_string()
+    } else {
+        format!("tenant_id='{}'", tenant_id)
+    };
+    
+    let result = self.client
+        .query(&format!(
+            "SELECT id, key_prefix, tenant_id, \
+                    name, active, toString(created_at), \
+                    toString(last_seen) \
+             FROM ndr.sensor_keys FINAL \
+             WHERE {} \
+             ORDER BY created_at DESC", filter
+        ))
+        .fetch_all::<(String,String,String,String,u8,String,String)>()
+        .await?;
+    
+    Ok(result.iter().map(|r| serde_json::json!({
+        "id": r.0,
+        "key_prefix": r.1,
+        "tenant_id": r.2,
+        "name": r.3,
+        "active": r.4 == 1,
+        "created_at": r.5,
+        "last_seen": r.6
+    })).collect())
+}
+
+pub async fn revoke_sensor_key(
+    &self,
+    id: &str,
+) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "ALTER TABLE ndr.sensor_keys \
+             UPDATE active = 0 \
+             WHERE id = '{}'", id
+        ))
+        .execute().await?;
+    Ok(())
+}
+
 }

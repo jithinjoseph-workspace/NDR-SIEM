@@ -6,12 +6,12 @@ import { Observable, of } from 'rxjs';
   providedIn: 'root'
 })
 export class Api {
-  private baseUrl = 'https://fc5e-103-165-167-117.ngrok-free.app/api';
+  private baseUrl = 'https://5a7f-103-160-233-165.ngrok-free.app/api';
 
   constructor(private http: HttpClient) { }
 
   getDashboardStats(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/health`); 
+    return this.http.get(`${this.baseUrl}/health`);
   }
 
   getAlerts(): Observable<any[]> {

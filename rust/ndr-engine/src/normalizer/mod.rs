@@ -139,3 +139,7 @@ impl NormalizedEvent {
     }
 }
 }
+
+pub fn normalize(raw: &Value) -> Option<NormalizedEvent> {
+    NormalizedEvent::from_raw(raw.clone())
+}

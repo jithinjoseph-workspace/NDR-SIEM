@@ -184,7 +184,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor"];
+    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor", "/api/ingest"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -3432,17 +3432,130 @@ pub async fn get_jira_tickets(
 }
 
 
-// ── Sensor Registration & Heartbeat ──────────────────────────────────────
+// ── Sensor Key Management, Registration & Heartbeat ────────────────────────
+fn generate_sensor_key(tenant_id: &str) -> (String, String, String) {
+    use rand::Rng;
+    let random: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    let plain = format!("NDR-{}-{}", tenant_id, random);
+    let prefix = plain[..16.min(plain.len())].to_string();
+    let hash = bcrypt::hash(&plain, 10).unwrap_or_default();
+    (plain, prefix, hash)
+}
 
-pub async fn sensor_register(
-    State(_state): State<AppState>,
+pub async fn validate_sensor_key(
+    headers: &axum::http::HeaderMap,
+    ch: &Arc<ClickhouseStorage>,
+) -> Option<String> {
+    let key = headers
+        .get("X-Sensor-Key")
+        .or_else(|| headers.get("x-sensor-key"))?
+        .to_str().ok()?;
+    
+    ch.validate_sensor_key(key).await.ok()?
+}
+
+pub async fn create_sensor_key_api(
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let claims = extract_claims(&headers);
-    let tenant_id = claims
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" {
+        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can create sensor keys"}));
+    }
+    
+    let tenant_id = payload["tenant_id"].as_str().unwrap_or("").to_string();
+    let name = payload["name"].as_str().unwrap_or("").to_string();
+    
+    if tenant_id.is_empty() || name.is_empty() {
+        return Json(json!({"status": "error", "message": "tenant_id and name are required"}));
+    }
+    
+    let (plain, prefix, hash) = generate_sensor_key(&tenant_id);
+    
+    match state.ch_storage.create_sensor_key(&tenant_id, &name, &hash, &prefix).await {
+        Ok(id) => Json(json!({
+            "status": "ok",
+            "key": plain,
+            "id": id,
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+pub async fn get_sensor_keys(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    
+    let target_tenant = if claims.role == "super_admin" {
+        "default".to_string()
+    } else if claims.role == "tenant_admin" {
+        claims.tenant_id.clone()
+    } else {
+        return Json(json!({"status": "error", "message": "Forbidden"}));
+    };
+    
+    match state.ch_storage.get_sensor_keys(&target_tenant).await {
+        Ok(keys) => Json(json!({
+            "status": "ok",
+            "keys": keys
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+pub async fn revoke_sensor_key_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" {
+        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can revoke sensor keys"}));
+    }
+    
+    match state.ch_storage.revoke_sensor_key(&id).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Sensor key revoked"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+pub async fn sensor_register(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+        Some(tid) => tid,
+        None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
+    };
 
     let hostname  = payload["hostname"].as_str().unwrap_or("unknown");
     let interface = payload["interface"].as_str().unwrap_or("unknown");
@@ -3461,14 +3574,14 @@ pub async fn sensor_register(
 }
 
 pub async fn sensor_heartbeat(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let claims = extract_claims(&headers);
-    let tenant_id = claims
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
+    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+        Some(tid) => tid,
+        None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
+    };
 
     tracing::info!(
         "Heartbeat from tenant={} zeek={} suricata={}",
@@ -3479,3 +3592,123 @@ pub async fn sensor_heartbeat(
 
     Json(json!({"status": "ok"}))
 }
+
+pub async fn ingest_events(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    // Validate sensor key
+    let sensor_key = headers
+        .get("X-Sensor-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    
+    if sensor_key.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Missing X-Sensor-Key header"
+        }));
+    }
+
+    // Validate key and get tenant_id
+    let tenant_id = match state.ch_storage
+        .validate_sensor_key(sensor_key).await {
+        Ok(Some(tid)) => tid,
+        _ => return Json(json!({
+            "status": "error", 
+            "message": "Invalid sensor key"
+        }))
+    };
+
+    // Get events from payload
+    let events = match payload.get("events") {
+        Some(e) => e.clone(),
+        None => return Json(json!({
+            "status": "error",
+            "message": "No events in payload"
+        }))
+    };
+
+    // Process each event directly
+    let events_arr = match events.as_array() {
+        Some(a) => a.clone(),
+        None => return Json(json!({
+            "status": "error",
+            "message": "Events must be array"
+        }))
+    };
+
+    let mut processed = 0u64;
+    
+    for event in &events_arr {
+        // Add tenant_id to event
+        let mut evt = event.clone();
+        if let Some(obj) = evt.as_object_mut() {
+            obj.insert(
+                "tenant_id".to_string(),
+                serde_json::Value::String(tenant_id.clone())
+            );
+        }
+
+        // Normalize and process
+        if let Some(normalized) = 
+            crate::normalizer::normalize(&evt) {
+            // Broadcast to WebSocket
+            crate::api::broadcast_raw_event(&state, &normalized);
+            
+            // Insert to ClickHouse
+            let source_str = match normalized.event_source {
+                crate::normalizer::EventSource::Zeek => "zeek",
+                crate::normalizer::EventSource::Suricata => "suricata",
+                _ => "unknown",
+            }.to_string();
+
+            let ch_event = crate::storage::clickhouse::NdrEvent {
+                timestamp: chrono::Utc::now().timestamp() as u32,
+                source: source_str,
+                src_ip: normalized.source_ip
+                    .clone().unwrap_or_default(),
+                dst_ip: normalized.dest_ip
+                    .clone().unwrap_or_default(),
+                src_port: normalized.source_port.unwrap_or(0),
+                dst_port: normalized.dest_port.unwrap_or(0),
+                proto: normalized.proto
+                    .clone().unwrap_or_default(),
+                event_type: normalized.event_type
+                    .clone().or(normalized.log_source.clone()).unwrap_or_default(),
+                community_id: normalized.community_id
+                    .clone().unwrap_or_default(),
+                raw: evt.to_string(),
+                tenant_id: tenant_id.clone(),
+            };
+
+            let ch = state.ch_storage.clone();
+            tokio::spawn(async move {
+                if let Err(e) = ch.insert_event(ch_event).await {
+                    tracing::warn!(
+                        "Ingest insert error: {}", e);
+                }
+            });
+
+            // Correlate
+            if let Some(hit) = state.correlator
+                .process(normalized.clone()) {
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    crate::api::process_correlation_hit(
+                        &state_clone, hit).await;
+                });
+            }
+
+            processed += 1;
+        }
+    }
+
+    Json(json!({
+        "status": "ok",
+        "processed": processed,
+        "tenant_id": tenant_id
+    }))
+}
+
