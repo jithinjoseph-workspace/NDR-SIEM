@@ -140,6 +140,7 @@ impl NormalizedEvent {
 }
 }
 
+#[allow(dead_code)]
 pub fn normalize(raw: &Value) -> Option<NormalizedEvent> {
     NormalizedEvent::from_raw(raw.clone())
 }

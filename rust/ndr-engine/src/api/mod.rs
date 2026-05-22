@@ -111,6 +111,7 @@ pub struct AppState {
     pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
     pub redis:      Arc<redis::Client>,
+    pub kafka_producer: Arc<rdkafka::producer::FutureProducer>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -3596,14 +3597,14 @@ pub async fn sensor_heartbeat(
 pub async fn ingest_events(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(payload): Json<Value>,
+    body: String,
 ) -> Json<Value> {
     // Validate sensor key
     let sensor_key = headers
         .get("X-Sensor-Key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    
+
     if sensor_key.is_empty() {
         return Json(json!({
             "status": "error",
@@ -3616,31 +3617,54 @@ pub async fn ingest_events(
         .validate_sensor_key(sensor_key).await {
         Ok(Some(tid)) => tid,
         _ => return Json(json!({
-            "status": "error", 
+            "status": "error",
             "message": "Invalid sensor key"
         }))
     };
 
-    // Get events from payload
-    let events = match payload.get("events") {
-        Some(e) => e.clone(),
-        None => return Json(json!({
-            "status": "error",
-            "message": "No events in payload"
-        }))
+    // Parse body which can be standard JSON (Format 1/2) or newline-delimited JSON (ndjson)
+    let events_arr: Vec<Value> = if let Ok(payload) = serde_json::from_str::<Value>(&body) {
+        if let Some(arr) = payload.get("events").and_then(|e| e.as_array()) {
+            arr.clone()
+        } else if payload.is_object() {
+            vec![payload]
+        } else if let Some(arr) = payload.as_array() {
+            arr.clone()
+        } else {
+            return Json(json!({
+                "status": "error",
+                "message": "Invalid payload format"
+            }));
+        }
+    } else {
+        let mut parsed_events = Vec::new();
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                if let Some(arr) = val.get("events").and_then(|e| e.as_array()) {
+                    parsed_events.extend(arr.clone());
+                } else {
+                    parsed_events.push(val);
+                }
+            } else {
+                tracing::warn!("Failed to parse ndjson line: {}", trimmed);
+            }
+        }
+        if parsed_events.is_empty() {
+            return Json(json!({
+                "status": "error",
+                "message": "Invalid JSON or ndjson payload"
+            }));
+        }
+        parsed_events
     };
 
-    // Process each event directly
-    let events_arr = match events.as_array() {
-        Some(a) => a.clone(),
-        None => return Json(json!({
-            "status": "error",
-            "message": "Events must be array"
-        }))
-    };
+    let mut published = 0u64;
+    let mut failed = 0u64;
 
-    let mut processed = 0u64;
-    
     for event in &events_arr {
         // Add tenant_id to event
         let mut evt = event.clone();
@@ -3651,63 +3675,46 @@ pub async fn ingest_events(
             );
         }
 
-        // Normalize and process
-        if let Some(normalized) = 
-            crate::normalizer::normalize(&evt) {
-            // Broadcast to WebSocket
-            crate::api::broadcast_raw_event(&state, &normalized);
-            
-            // Insert to ClickHouse
-            let source_str = match normalized.event_source {
-                crate::normalizer::EventSource::Zeek => "zeek",
-                crate::normalizer::EventSource::Suricata => "suricata",
-                _ => "unknown",
-            }.to_string();
-
-            let ch_event = crate::storage::clickhouse::NdrEvent {
-                timestamp: chrono::Utc::now().timestamp() as u32,
-                source: source_str,
-                src_ip: normalized.source_ip
-                    .clone().unwrap_or_default(),
-                dst_ip: normalized.dest_ip
-                    .clone().unwrap_or_default(),
-                src_port: normalized.source_port.unwrap_or(0),
-                dst_port: normalized.dest_port.unwrap_or(0),
-                proto: normalized.proto
-                    .clone().unwrap_or_default(),
-                event_type: normalized.event_type
-                    .clone().or(normalized.log_source.clone()).unwrap_or_default(),
-                community_id: normalized.community_id
-                    .clone().unwrap_or_default(),
-                raw: evt.to_string(),
-                tenant_id: tenant_id.clone(),
-            };
-
-            let ch = state.ch_storage.clone();
-            tokio::spawn(async move {
-                if let Err(e) = ch.insert_event(ch_event).await {
-                    tracing::warn!(
-                        "Ingest insert error: {}", e);
-                }
-            });
-
-            // Correlate
-            if let Some(hit) = state.correlator
-                .process(normalized.clone()) {
-                let state_clone = state.clone();
-                tokio::spawn(async move {
-                    crate::api::process_correlation_hit(
-                        &state_clone, hit).await;
-                });
+        // Serialize event to JSON string
+        let payload_str = match serde_json::to_string(&evt) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to serialize event: {}", e);
+                failed += 1;
+                continue;
             }
+        };
 
-            processed += 1;
+        // Publish to Kafka
+        use rdkafka::producer::FutureRecord;
+        let record = FutureRecord::to("ndr-events")
+            .payload(&payload_str)
+            .key(tenant_id.as_str());
+
+        match state.kafka_producer
+            .send(record, 
+                std::time::Duration::from_secs(5))
+            .await {
+            Ok(_) => {
+                published += 1;
+            },
+            Err((e, _)) => {
+                tracing::warn!(
+                    "Failed to publish to Kafka: {}", e);
+                failed += 1;
+            }
         }
     }
 
+    tracing::info!(
+        "Ingest: published={} failed={} tenant={}",
+        published, failed, tenant_id
+    );
+
     Json(json!({
         "status": "ok",
-        "processed": processed,
+        "published": published,
+        "failed": failed,
         "tenant_id": tenant_id
     }))
 }

@@ -63,6 +63,22 @@ async fn main() {
     let storage = storage::SqliteStorage::new("ndr.db")
         .expect("Failed to open SQLite database");
 
+    use rdkafka::producer::FutureProducer;
+    use rdkafka::ClientConfig;
+
+    let kafka_producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", 
+             std::env::var("KAFKA_BROKERS")
+             .unwrap_or_else(|_| "kafka:9092".to_string()))
+        .set("message.timeout.ms", "5000")
+        .set("queue.buffering.max.messages", "100000")
+        .set("batch.num.messages", "1000")
+        .set("linger.ms", "5")
+        .create()
+        .expect("Kafka producer creation failed");
+
+    let kafka_producer = Arc::new(kafka_producer);
+
     let state = AppState {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
         enrichment: Arc::new(EnrichmentPipeline {
@@ -80,6 +96,7 @@ async fn main() {
         storage:    Arc::new(storage),
         tx:         tx.clone(),
         redis:      Arc::new(redis_client.clone()),
+        kafka_producer: kafka_producer.clone(),
     };
 
     // ── Background: session reaper (every 30s) ────────────────────────────

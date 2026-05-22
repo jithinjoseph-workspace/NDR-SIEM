@@ -304,6 +304,7 @@ inputs = ["parse_suricata", "parse_zeek"]
 uri = "${CLOUD_URL}/api/ingest"
 method = "post"
 encoding.codec = "json"
+framing.method = "newline_delimited"
 compression = "gzip"
 
 [sinks.ndr_http.batch]
@@ -318,7 +319,7 @@ timeout_secs = 30
 
 [sinks.ndr_http.request.headers]
 X-Sensor-Key = "${API_KEY}"
-Content-Type = "application/json"
+Content-Type = "application/x-ndjson"
 
 [sinks.ndr_http.buffer]
 type = "disk"
