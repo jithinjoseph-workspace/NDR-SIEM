@@ -15,6 +15,7 @@ use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
 use axum::{routing::{get, post, delete, put}, Router};
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::decompression::RequestDecompressionLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
 use enrichment::{AsnLookup, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
@@ -307,6 +308,7 @@ tokio::spawn(async move {
         .route("/api/sensor/control",   post(api::sensor_control_api))
         .with_state(state)
         .layer(axum::middleware::from_fn(api::auth_middleware))
+        .layer(RequestDecompressionLayer::new())
         .layer(cors);
 
     info!("🌐 API active");

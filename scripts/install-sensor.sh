@@ -50,14 +50,14 @@ if [ -z "$IFACE" ]; then
         warn "Strict filter returned no interfaces, trying broader detection..."
         IFACES=$(ip -o -4 addr show 2>/dev/null | \
             awk '$4 !~ /^127\./ {print $2}' | \
-            grep -v "^lo$") || true
+            grep -v "^lo$\|^docker\|^br-\|^veth") || true
     fi
 
     if [ -z "$IFACES" ]; then
         IFACES=$(ip -o link show 2>/dev/null | \
             awk -F': ' '{print $2}' | \
             awk '{print $1}' | \
-            grep -v "^lo$") || true
+            grep -v "^lo$\|^docker\|^br-\|^veth") || true
     fi
 
     IFACE_COUNT=$(echo "$IFACES" | grep -c . 2>/dev/null || echo 0)
@@ -394,6 +394,7 @@ with open('/etc/ndr/sensor.conf') as f:
 CLOUD_URL = config.get('CLOUD_URL', '')
 TENANT_ID = config.get('TENANT_ID', '')
 API_KEY   = config.get('API_KEY', '')
+IFACE     = config.get('IFACE', 'eth0')
 
 def is_running(name):
     try:
@@ -406,30 +407,45 @@ def is_running(name):
 
 def start_zeek():
     try:
-        for zeekctl in ['/opt/zeek/bin/zeekctl', 'zeekctl']:
-            if os.path.exists(zeekctl) or \
-               subprocess.run(['which', zeekctl],
-                   capture_output=True).returncode == 0:
-                result = subprocess.run(
-                    [zeekctl, 'deploy'],
-                    capture_output=True, timeout=60
-                )
-                if result.returncode == 0:
-                    print("[NDR] ✅ Zeek started!")
-                    return True
+        # Kill any stale zeek processes
+        subprocess.run(['pkill', '-9', '-f', 'zeek'], capture_output=True)
+        time.sleep(1)
+        # Start Zeek directly exactly like ndr-agent.py
+        subprocess.Popen(
+            ["/opt/zeek/bin/zeek", "-i", IFACE, "local", "Log::default_logdir=/var/log/ndr/zeek"],
+            stdout=open("/tmp/zeek.log", "w"),
+            stderr=subprocess.STDOUT
+        )
+        print("[NDR] ✅ Zeek started directly!")
+        return True
     except Exception as e:
         print(f"[NDR] Zeek start failed: {e}")
     return False
 
 def start_suricata():
     try:
-        result = subprocess.run(
-            ['systemctl', 'start', 'suricata'],
-            capture_output=True, timeout=30
+        # Kill any stale suricata processes
+        subprocess.run(['pkill', '-9', '-f', 'suricata'], capture_output=True)
+        time.sleep(1)
+        # Clean stale PID files
+        subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/tmp/suricata.pid'], capture_output=True)
+        # Start Suricata directly exactly like ndr-agent.py
+        subprocess.Popen(
+            [
+                "suricata",
+                "-c", "/etc/suricata/suricata.yaml",
+                "-i", IFACE,
+                "-l", "/var/log/ndr/suricata",
+                "-D",
+                "--pidfile", "/tmp/suricata.pid",
+                "--set", "detect.profile=low",
+                "--set", "max-pending-packets=128"
+            ],
+            stdout=open("/tmp/suricata.log", "w"),
+            stderr=subprocess.STDOUT
         )
-        if result.returncode == 0:
-            print("[NDR] ✅ Suricata started!")
-            return True
+        print("[NDR] ✅ Suricata started directly!")
+        return True
     except Exception as e:
         print(f"[NDR] Suricata start failed: {e}")
     return False
@@ -449,7 +465,7 @@ def start_vector():
 
 def check_and_restart():
     zeek_ok     = is_running('zeek')
-    suricata_ok = is_running('Suricata')
+    suricata_ok = is_running('suricata')
     vector_ok   = is_running('vector')
 
     if not zeek_ok:
@@ -509,10 +525,11 @@ def execute_command(cmd):
     elif cmd == 'stop':
         subprocess.run(['systemctl', 'stop', 'ndr-vector'],
             capture_output=True)
-        for zeekctl in ['/opt/zeek/bin/zeekctl', 'zeekctl']:
-            subprocess.run([zeekctl, 'stop'],
-                capture_output=True)
-        subprocess.run(['systemctl', 'stop', 'suricata'],
+        subprocess.run(['pkill', '-9', '-f', 'zeek'],
+            capture_output=True)
+        subprocess.run(['pkill', '-9', '-f', 'suricata'],
+            capture_output=True)
+        subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/tmp/suricata.pid'],
             capture_output=True)
         print("[NDR] All services stopped!")
     elif cmd == 'restart':
