@@ -350,7 +350,6 @@ EOF
 @load policy/protocols/conn/community-id-logging
 @load protocols/ssh/detect-bruteforcing
 @load protocols/ssl/validate-certs
-@load protocols/http/detect-sql-injection
 @load misc/detect-traceroute
 @load frameworks/files/hash-all-files
 @load policy/protocols/conn/known-hosts

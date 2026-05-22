@@ -266,9 +266,15 @@ pub async fn get_network_map(State(state): State<AppState>, headers: axum::http:
 }
 
 pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
+    let tenant_id = hit.zeek.raw.get("tenant_id")
+        .or_else(|| hit.suricata.raw.get("tenant_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+
   // ── Get thresholds from ClickHouse ────────
     let settings = state.ch_storage
-        .get_settings().await
+        .get_settings_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
 let store_threshold = settings["store_threshold"]
     .as_f64().unwrap_or(10.0) as f32;
@@ -335,9 +341,9 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     }
 
     // Persist to ClickHouse
- 
-    // Persist to ClickHouse
+
     let ch = state.ch_storage.clone();
+    let tenant_id_clone = tenant_id.clone();
     let ch_hit = crate::storage::clickhouse::NdrHit {
     timestamp:    chrono::Utc::now().timestamp() as u32,
     community_id: hit.community_id.clone(),
@@ -354,11 +360,10 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     dst_country:  enrichment.dst_geo.as_ref()
                     .map(|g| g.country_code.clone())
                     .unwrap_or_default(),
-    tenant_id:    std::env::var("TENANT_ID")
-                    .unwrap_or_else(|_| "default".to_string()),
+    tenant_id:    tenant_id.clone(),
     };
     tokio::spawn(async move {
-        if let Err(e) = ch.insert_hit(ch_hit).await {
+        if let Err(e) = ch.insert_hit_for_tenant(ch_hit, &tenant_id_clone).await {
             tracing::warn!("ClickHouse hit insert error: {}", e);
         }
     });
@@ -2260,9 +2265,11 @@ pub async fn configure_slack(
 
 // Get settings
 pub async fn get_settings(
-    State(state): State<AppState>
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Json<Value> {
-    match state.ch_storage.get_settings().await {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_settings_by_tenant(&tenant_id).await {
         Ok(settings) => Json(json!({
             "status": "ok",
             "settings": settings
@@ -2282,8 +2289,10 @@ pub async fn get_settings(
 // Update settings
 pub async fn update_settings(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let settings = vec![
         "store_threshold",
         "alert_threshold", 
@@ -2294,7 +2303,7 @@ pub async fn update_settings(
     for key in &settings {
         if let Some(val) = payload[key].as_f64() {
             let _ = state.ch_storage
-                .save_setting(key, &val.to_string())
+                .save_setting_by_tenant(key, &val.to_string(), &tenant_id)
                 .await;
         }
     }
@@ -3687,9 +3696,8 @@ pub async fn ingest_events(
 
         // Publish to Kafka
         use rdkafka::producer::FutureRecord;
-        let record = FutureRecord::to("ndr-events")
-            .payload(&payload_str)
-            .key(tenant_id.as_str());
+        let record = FutureRecord::<str, str>::to("ndr-events")
+            .payload(&payload_str);
 
         match state.kafka_producer
             .send(record, 

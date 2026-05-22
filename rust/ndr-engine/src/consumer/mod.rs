@@ -82,8 +82,9 @@ pub async fn start_consumer(state: Arc<AppState>) {
 
                 let ch_clone = ch.clone();
                 let event_clone = ch_event;
+                let tenant_id_clone = tenant_id.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = ch_clone.insert_event(event_clone).await {
+                    if let Err(e) = ch_clone.insert_event_for_tenant(event_clone, &tenant_id_clone).await {
                         warn!("ClickHouse event insert error: {}", e);
                     }
                 });
