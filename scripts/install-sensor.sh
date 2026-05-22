@@ -322,7 +322,7 @@ Content-Type = "application/json"
 
 [sinks.ndr_http.buffer]
 type = "disk"
-max_size = 268435488
+max_size = 536870912
 when_full = "block"
 EOF
 
