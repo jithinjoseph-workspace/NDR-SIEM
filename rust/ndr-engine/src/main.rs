@@ -273,9 +273,12 @@ tokio::spawn(async move {
         .route("/api/auth/logout", post(api::logout))
         .route("/api/auth/me", get(api::get_me))
         .route("/api/auth/users",get(api::get_users).post(api::create_user))
-        .route("/api/auth/users/:id",delete(api::delete_user))
+        .route("/api/auth/users/:id",put(api::update_user_api).delete(api::delete_user))
+        .route("/api/auth/users/:id/status", post(api::set_user_status_api))
         .route("/api/auth/users/:id/permissions", put(api::update_user_permissions_api))
         .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
+        .route("/api/auth/tenants/:id", put(api::update_tenant_api))
+        .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))
         .route("/api/admin/engines", get(api::get_engines))
         .route("/api/admin/engines/scale", post(api::scale_engines))
         .route("/api/sensor/register",  post(api::sensor_register))
@@ -320,7 +323,6 @@ tokio::spawn(async move {
     axum::serve(listener, app).await.unwrap();
 
 }
-
 
 
 

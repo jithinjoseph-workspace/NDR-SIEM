@@ -32,8 +32,8 @@
     </article>
     <article>
       <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
-      <span>Tenant Admins</span>
-      <strong>{{ tenantAdmins.length }}</strong>
+      <span>Managed Users</span>
+      <strong>{{ managedUsers.length }}</strong>
     </article>
     <article>
       <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
@@ -57,7 +57,7 @@
       [class.active]="activeTab === 'users'"
     >
       <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
-      Tenant Admins
+      Users
     </button>
     <button
       type="button"
@@ -121,6 +121,17 @@
           <span [class]="'status-pill ' + (tenant.active ? 'active' : 'inactive')">
             {{ tenant.active ? 'Active' : 'Inactive' }}
           </span>
+          <button class="icon-button" type="button" title="Edit tenant" (click)="openEditTenant(tenant)">
+            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+          <button
+            class="secondary-action compact-action"
+            type="button"
+            [disabled]="tenant.id === 'default'"
+            (click)="setTenantActive(tenant, !tenant.active)"
+          >
+            {{ tenant.active ? 'Deactivate' : 'Reactivate' }}
+          </button>
         </div>
       </div>
     </div>
@@ -129,12 +140,12 @@
   <section *ngIf="activeTab === 'users'" class="admin-panel">
     <div class="panel-head">
       <div>
-        <h3>Tenant Admins</h3>
-        <p>Assign one admin per company to manage analysts inside that tenant.</p>
+        <h3>Users</h3>
+        <p>Create, edit, deactivate, and delete platform or tenant users.</p>
       </div>
       <button class="primary-action" type="button" (click)="showAddUser=true">
         <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
-        Add Tenant Admin
+        Add User
       </button>
     </div>
 
@@ -144,7 +155,7 @@
         <input
           [(ngModel)]="userSearch"
           type="search"
-          placeholder="Search admins or tenants"
+          placeholder="Search users, roles, or tenants"
         />
       </label>
       <select [(ngModel)]="selectedTenant" class="tenant-filter">
@@ -159,11 +170,11 @@
       </button>
     </div>
 
-    <div *ngIf="loadingUsers" class="loading-state">Loading tenant admins...</div>
+    <div *ngIf="loadingUsers" class="loading-state">Loading users...</div>
 
     <div *ngIf="!loadingUsers && filteredTenantAdmins.length === 0" class="empty-state">
-      <strong>No tenant admins found</strong>
-      <span>Create a tenant admin after adding the tenant company.</span>
+      <strong>No users found</strong>
+      <span>Create a user or adjust your search.</span>
     </div>
 
     <div *ngIf="!loadingUsers && filteredTenantAdmins.length > 0" class="admin-table">
@@ -171,7 +182,7 @@
         <span>User</span>
         <span>Tenant</span>
         <span>Role</span>
-        <span>Created</span>
+        <span>Status</span>
         <span>Actions</span>
       </div>
 
@@ -180,18 +191,36 @@
           <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
           <div>
             <strong>{{ user.username }}</strong>
-            <span>Tenant administrator</span>
+            <span>{{ user.created_at | date:'short' }}</span>
           </div>
         </div>
         <span>{{ tenantName(user.tenant_id) }}</span>
-        <span class="role-pill">Tenant Admin</span>
-        <span>{{ user.created_at | date:'short' }}</span>
-        <div class="row-actions">
+        <span class="role-pill">{{ roleLabel(user.role) }}</span>
+        <span [class]="'status-pill ' + (user.active === false ? 'inactive' : 'active')">
+          {{ user.active === false ? 'Disabled' : 'Active' }}
+        </span>
+        <div class="row-actions action-row">
+          <button
+            class="icon-button"
+            type="button"
+            title="Edit user"
+            (click)="openEditUser(user)"
+          >
+            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+          <button
+            *ngIf="user.username !== currentUser?.username"
+            class="secondary-action compact-action"
+            type="button"
+            (click)="setUserActive(user, user.active === false)"
+          >
+            {{ user.active === false ? 'Reactivate' : 'Deactivate' }}
+          </button>
           <button
             *ngIf="user.username !== currentUser?.username"
             class="danger-icon"
             type="button"
-            title="Delete tenant admin"
+            title="Delete user"
             (click)="requestDeleteUser(user)"
           >
             <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
@@ -314,8 +343,8 @@
     <div class="modal-panel">
       <div class="modal-head">
         <div>
-          <h3>Add Tenant Admin</h3>
-          <p>Give a company its first administrative user.</p>
+          <h3>Add User</h3>
+          <p>Create a platform user or a tenant admin.</p>
         </div>
         <button type="button" class="icon-button" (click)="showAddUser=false">
           <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
@@ -334,7 +363,11 @@
 
       <label class="form-field">
         <span>Role</span>
-        <input value="Tenant Admin" disabled />
+        <select [(ngModel)]="newUser.role" (ngModelChange)="onNewUserRoleChange()">
+          <option *ngFor="let option of roleOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
       </label>
 
       <label class="form-field">
@@ -344,8 +377,8 @@
           <option
             *ngFor="let tenant of tenants"
             [value]="tenant.id"
-            [hidden]="tenant.id === 'default'"
-            [disabled]="tenant.id === 'default'"
+            [hidden]="newUser.role === 'tenant_admin' && tenant.id === 'default'"
+            [disabled]="newUser.role === 'tenant_admin' && tenant.id === 'default'"
           >
             {{ tenant.name }}
           </option>
@@ -359,7 +392,7 @@
           [disabled]="savingUser"
           (click)="addUser()"
         >
-          {{ savingUser ? 'Creating...' : 'Create Tenant Admin' }}
+          {{ savingUser ? 'Creating...' : 'Create User' }}
         </button>
         <button class="secondary-action" type="button" (click)="showAddUser=false">
           Cancel
@@ -372,8 +405,8 @@
     <div class="modal-panel compact">
       <div class="modal-head">
         <div>
-          <h3>Delete Tenant Admin</h3>
-          <p>This removes {{ pendingDeleteUser.username }} from admin access.</p>
+          <h3>Delete User</h3>
+          <p>This removes {{ pendingDeleteUser.username }} from the system.</p>
         </div>
         <button type="button" class="icon-button" (click)="cancelDeleteUser()">
           <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
@@ -381,12 +414,12 @@
       </div>
 
       <div class="warning-box">
-        The tenant and its data will remain. Only this user account is deleted.
+        Deactivation is safer for audit history. Delete only when this account should be removed permanently.
       </div>
 
       <div class="modal-actions">
         <button class="danger-action solid" type="button" (click)="confirmDeleteUser()">
-          Delete Admin
+          Delete User
         </button>
         <button class="secondary-action" type="button" (click)="cancelDeleteUser()">
           Cancel
@@ -416,6 +449,94 @@
           Stop Engine
         </button>
         <button class="secondary-action" type="button" (click)="cancelStopEngine()">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="editingUser" class="modal-backdrop">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <h3>Edit User</h3>
+          <p>{{ editingUser.username }}</p>
+        </div>
+        <button type="button" class="icon-button" (click)="closeEditUser()">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <label class="form-field">
+        <span>Role</span>
+        <select [(ngModel)]="userForm.role" (ngModelChange)="onEditUserRoleChange()">
+          <option *ngFor="let option of roleOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+
+      <label class="form-field">
+        <span>Tenant</span>
+        <select [(ngModel)]="userForm.tenant_id">
+          <option *ngFor="let tenant of tenants" [value]="tenant.id">
+            {{ tenant.name }}
+          </option>
+        </select>
+      </label>
+
+      <label class="form-field">
+        <span>New Password</span>
+        <input [(ngModel)]="userForm.password" type="password" placeholder="Leave blank to keep current password" />
+      </label>
+
+      <label class="toggle-field">
+        <input [(ngModel)]="userForm.active" type="checkbox" />
+        <span>User is active</span>
+      </label>
+
+      <div class="modal-actions">
+        <button class="primary-action" type="button" (click)="saveUserEdit()">
+          Save User
+        </button>
+        <button class="secondary-action" type="button" (click)="closeEditUser()">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="editingTenant" class="modal-backdrop">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <h3>Edit Tenant</h3>
+          <p>{{ editingTenant.id }}</p>
+        </div>
+        <button type="button" class="icon-button" (click)="closeEditTenant()">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <label class="form-field">
+        <span>Tenant Name</span>
+        <input [(ngModel)]="tenantForm.name" />
+      </label>
+
+      <label class="toggle-field">
+        <input
+          [(ngModel)]="tenantForm.active"
+          type="checkbox"
+          [disabled]="editingTenant.id === 'default'"
+        />
+        <span>Tenant is active</span>
+      </label>
+
+      <div class="modal-actions">
+        <button class="primary-action" type="button" (click)="saveTenantEdit()">
+          Save Tenant
+        </button>
+        <button class="secondary-action" type="button" (click)="closeEditTenant()">
           Cancel
         </button>
       </div>

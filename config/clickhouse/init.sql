@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS ndr.users
     role          String DEFAULT 'analyst',
     tenant_id     String DEFAULT 'default',
     permissions   String DEFAULT 'dashboard,alerts',
+    active        UInt8 DEFAULT 1,
     created_at    DateTime DEFAULT now(),
     last_login    DateTime DEFAULT now()
 )
@@ -138,9 +139,10 @@ CREATE TABLE IF NOT EXISTS ndr.tenants
     id         String,
     name       String,
     active     UInt8 DEFAULT 1,
+    updated_at DateTime DEFAULT now(),
     created_at DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(created_at)
+ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY id;
 
 INSERT INTO ndr.tenants (id, name, active)

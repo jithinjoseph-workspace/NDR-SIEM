@@ -5,6 +5,7 @@ import {
   LucideAngularModule,
   Building2,
   CircleCheck,
+  Edit,
   Gauge,
   Plus,
   RefreshCw,
@@ -30,6 +31,7 @@ import { Router } from '@angular/router';
 export class Admin implements OnInit {
   BuildingIcon = Building2;
   CheckIcon = CircleCheck;
+  EditIcon = Edit;
   GaugeIcon = Gauge;
   PlusIcon = Plus;
   RefreshIcon = RefreshCw;
@@ -49,12 +51,27 @@ export class Admin implements OnInit {
   userSearch = '';
   selectedTenant = 'all';
   pendingDeleteUser: any = null;
+  editingUser: any = null;
   newUser = {
     username: '',
     password: '',
     role: 'tenant_admin',
     tenant_id: '',
   };
+  userForm = {
+    role: 'tenant_admin',
+    tenant_id: '',
+    active: true,
+    password: '',
+    permissions: '',
+  };
+  roleOptions = [
+    { value: 'tenant_admin', label: 'Tenant Admin' },
+    { value: 'admin', label: 'Platform Admin' },
+    { value: 'senior_analyst', label: 'Senior Analyst' },
+    { value: 'analyst', label: 'Analyst' },
+    { value: 'viewer', label: 'Viewer' },
+  ];
   savingUser = false;
   userMsg = '';
   userMsgType = '';
@@ -69,6 +86,11 @@ export class Admin implements OnInit {
   };
   savingTenant = false;
   tenantMsg = '';
+  editingTenant: any = null;
+  tenantForm = {
+    name: '',
+    active: true,
+  };
 
   engines: any[] = [];
   loadingEngines = false;
@@ -100,13 +122,18 @@ export class Admin implements OnInit {
     return this.users.filter(user => user.role === 'tenant_admin');
   }
 
+  get managedUsers() {
+    return this.users.filter(user => user.role !== 'super_admin');
+  }
+
   get filteredTenantAdmins() {
     const query = this.userSearch.trim().toLowerCase();
-    return this.tenantAdmins.filter(user => {
+    return this.managedUsers.filter(user => {
       const matchesTenant = this.selectedTenant === 'all' || user.tenant_id === this.selectedTenant;
       const matchesQuery =
         !query ||
         user.username?.toLowerCase().includes(query) ||
+        user.role?.toLowerCase().includes(query) ||
         user.tenant_id?.toLowerCase().includes(query);
       return matchesTenant && matchesQuery;
     });
@@ -169,7 +196,7 @@ export class Admin implements OnInit {
       this.showMsg('Username and password required', 'error');
       return;
     }
-    if (!this.newUser.tenant_id || this.newUser.tenant_id === 'default') {
+    if (this.newUser.role === 'tenant_admin' && (!this.newUser.tenant_id || this.newUser.tenant_id === 'default')) {
       this.showMsg('Select a tenant for the tenant admin', 'error');
       return;
     }
@@ -178,7 +205,7 @@ export class Admin implements OnInit {
     this.api
       .createUser({
         ...this.newUser,
-        role: 'tenant_admin',
+        tenant_id: this.newUser.tenant_id || 'default',
       })
       .subscribe({
         next: (data: any) => {
@@ -231,6 +258,70 @@ export class Admin implements OnInit {
     });
   }
 
+  openEditUser(user: any) {
+    this.editingUser = user;
+    this.userForm = {
+      role: user.role,
+      tenant_id: user.tenant_id,
+      active: user.active !== false,
+      password: '',
+      permissions: user.permissions || this.defaultPermissionsFor(user.role),
+    };
+  }
+
+  closeEditUser() {
+    this.editingUser = null;
+  }
+
+  saveUserEdit() {
+    if (!this.editingUser) return;
+    if (this.userForm.role === 'tenant_admin' && this.userForm.tenant_id === 'default') {
+      this.showMsg('Tenant admin must be assigned to a tenant', 'error');
+      return;
+    }
+
+    this.api.updateUser(this.editingUser.id, {
+      role: this.userForm.role,
+      tenant_id: this.userForm.tenant_id || 'default',
+      active: this.userForm.active,
+      password: this.userForm.password,
+      permissions: this.userForm.permissions,
+    }).subscribe({
+      next: (data: any) => {
+        if (data.status === 'ok') {
+          this.editingUser = null;
+          this.loadUsers();
+          this.showMsg('User updated', 'success');
+        } else {
+          this.showMsg(data.message || 'Failed to update user', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.showMsg('Failed to update user', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  setUserActive(user: any, active: boolean) {
+    this.api.setUserStatus(user.id, active).subscribe({
+      next: (data: any) => {
+        if (data.status === 'ok') {
+          this.loadUsers();
+          this.showMsg(active ? 'User activated' : 'User deactivated', 'success');
+        } else {
+          this.showMsg(data.message || 'Failed to update user status', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.showMsg('Failed to update user status', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
   onTenantNameChange() {
     this.newTenant.id = this.slugifyTenant(this.newTenant.name);
   }
@@ -271,6 +362,61 @@ export class Admin implements OnInit {
       error: () => {
         this.savingTenant = false;
         this.tenantMsg = 'Failed to create tenant';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  openEditTenant(tenant: any) {
+    this.editingTenant = tenant;
+    this.tenantForm = {
+      name: tenant.name,
+      active: tenant.active,
+    };
+  }
+
+  closeEditTenant() {
+    this.editingTenant = null;
+  }
+
+  saveTenantEdit() {
+    if (!this.editingTenant) return;
+    if (!this.tenantForm.name.trim()) {
+      this.showMsg('Tenant name required', 'error');
+      return;
+    }
+
+    this.api.updateTenant(this.editingTenant.id, this.tenantForm).subscribe({
+      next: (data: any) => {
+        if (data.status === 'ok') {
+          this.editingTenant = null;
+          this.loadTenants();
+          this.showMsg('Tenant updated', 'success');
+        } else {
+          this.showMsg(data.message || 'Failed to update tenant', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.showMsg('Failed to update tenant', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  setTenantActive(tenant: any, active: boolean) {
+    this.api.setTenantStatus(tenant.id, active).subscribe({
+      next: (data: any) => {
+        if (data.status === 'ok') {
+          this.loadTenants();
+          this.showMsg(active ? 'Tenant activated' : 'Tenant deactivated', 'success');
+        } else {
+          this.showMsg(data.message || 'Failed to update tenant status', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.showMsg('Failed to update tenant status', 'error');
         this.cdr.detectChanges();
       },
     });
@@ -356,6 +502,38 @@ export class Admin implements OnInit {
 
   tenantIdExists(id: string) {
     return this.tenants.some(tenant => tenant.id === id);
+  }
+
+  roleLabel(role: string) {
+    return this.roleOptions.find(option => option.value === role)?.label || role;
+  }
+
+  onNewUserRoleChange() {
+    if (this.newUser.role !== 'tenant_admin' && !this.newUser.tenant_id) {
+      this.newUser.tenant_id = 'default';
+    }
+  }
+
+  onEditUserRoleChange() {
+    if (this.userForm.role !== 'tenant_admin' && !this.userForm.tenant_id) {
+      this.userForm.tenant_id = 'default';
+    }
+    this.userForm.permissions = this.defaultPermissionsFor(this.userForm.role);
+  }
+
+  private defaultPermissionsFor(role: string) {
+    switch (role) {
+      case 'tenant_admin':
+        return 'dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users';
+      case 'admin':
+        return 'dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup';
+      case 'senior_analyst':
+        return 'dashboard,alerts,logs,live,rules,soar,network-map,intel,health';
+      case 'analyst':
+        return 'dashboard,alerts,logs,live,network-map,intel,health';
+      default:
+        return 'dashboard,alerts,health';
+    }
   }
 
   private slugifyTenant(value: string) {

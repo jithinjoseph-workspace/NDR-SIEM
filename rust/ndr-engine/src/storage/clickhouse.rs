@@ -88,6 +88,10 @@ pub struct ClickhouseStorage {
     client: Client,
 }
 
+fn sql_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 pub fn default_permissions(role: &str) -> String {
   match role {
     "super_admin" =>
@@ -114,16 +118,17 @@ pub async fn verify_user(
     username: &str,
     password: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
+    let username = sql_escape(username);
     let query = format!(
-        "SELECT id, username, password_hash, role, tenant_id, permissions
+        "SELECT id, username, password_hash, role, tenant_id, permissions, active
          FROM ndr.users FINAL
-         WHERE username = '{}'
+         WHERE username = '{}' AND active = 1
          LIMIT 1",
         username
     );
     let result = self.client
         .query(&query)
-        .fetch_all::<(String, String, String, String, String, String)>()
+        .fetch_all::<(String, String, String, String, String, String, u8)>()
         .await?;
 
     if let Some(user) = result.first() {
@@ -148,8 +153,8 @@ pub async fn get_users(
     &self
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let result = self.client
-        .query("SELECT id, username, role, tenant_id, permissions, toString(created_at) FROM ndr.users FINAL ORDER BY created_at")
-        .fetch_all::<(String,String,String,String,String,String)>()
+        .query("SELECT id, username, role, tenant_id, permissions, active, toString(created_at) FROM ndr.users FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,String,String,String,u8,String)>()
         .await?;
     Ok(result.iter().map(|r| json!({
         "id": r.0,
@@ -157,8 +162,55 @@ pub async fn get_users(
         "role": r.2,
         "tenant_id": r.3,
         "permissions": r.4,
-        "created_at": r.5
+        "active": r.5 == 1,
+        "created_at": r.6
     })).collect())
+}
+
+pub async fn get_users_by_tenant(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let tenant_id = sql_escape(tenant_id);
+    let query = format!(
+        "SELECT id, username, role, tenant_id, permissions, active, toString(created_at)
+         FROM ndr.users FINAL
+         WHERE tenant_id = '{}'
+         ORDER BY created_at",
+        tenant_id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String,String,String,String,String,u8,String)>()
+        .await?;
+    Ok(result.iter().map(|r| json!({
+        "id": r.0,
+        "username": r.1,
+        "role": r.2,
+        "tenant_id": r.3,
+        "permissions": r.4,
+        "active": r.5 == 1,
+        "created_at": r.6
+    })).collect())
+}
+
+pub async fn get_user_identity(
+    &self,
+    id: &str,
+) -> anyhow::Result<Option<(String, String, String)>> {
+    let id = sql_escape(id);
+    let query = format!(
+        "SELECT username, role, tenant_id
+         FROM ndr.users FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String, String, String)>()
+        .await?;
+    Ok(result.first().cloned())
 }
 
 pub async fn create_user(
@@ -169,10 +221,15 @@ pub async fn create_user(
     tenant_id: &str,
     permissions: &str,
 ) -> anyhow::Result<()> {
+    let username = sql_escape(username);
+    let password_hash = sql_escape(password_hash);
+    let role = sql_escape(role);
+    let tenant_id = sql_escape(tenant_id);
+    let permissions = sql_escape(permissions);
     let query = format!(
         "INSERT INTO ndr.users \
-         (username, password_hash, role, tenant_id, permissions) \
-         VALUES ('{}','{}','{}','{}','{}')",
+         (username, password_hash, role, tenant_id, permissions, active) \
+         VALUES ('{}','{}','{}','{}','{}',1)",
         username, password_hash, role, tenant_id, permissions
     );
     self.client.query(&query).execute().await?;
@@ -184,8 +241,10 @@ pub async fn update_user_permissions(
     id: &str,
     permissions: &str,
 ) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let permissions = sql_escape(permissions);
     let query = format!(
-        "SELECT id, username, password_hash, role, tenant_id
+        "SELECT id, username, password_hash, role, tenant_id, active
          FROM ndr.users FINAL
          WHERE id = '{}'
          LIMIT 1",
@@ -193,15 +252,98 @@ pub async fn update_user_permissions(
     );
     let result = self.client
         .query(&query)
-        .fetch_all::<(String, String, String, String, String)>()
+        .fetch_all::<(String, String, String, String, String, u8)>()
         .await?;
 
     if let Some(user) = result.first() {
         let insert_query = format!(
             "INSERT INTO ndr.users \
-             (id, username, password_hash, role, tenant_id, permissions, created_at) \
-             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', now() + 1)",
-            user.0, user.1, user.2, user.3, user.4, permissions
+             (id, username, password_hash, role, tenant_id, permissions, active, created_at) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, now() + 1)",
+            sql_escape(&user.0),
+            sql_escape(&user.1),
+            sql_escape(&user.2),
+            sql_escape(&user.3),
+            sql_escape(&user.4),
+            permissions,
+            user.5
+        );
+        self.client.query(&insert_query).execute().await?;
+    }
+    Ok(())
+}
+
+pub async fn update_user(
+    &self,
+    id: &str,
+    role: &str,
+    tenant_id: &str,
+    permissions: &str,
+    active: bool,
+    password_hash: Option<&str>,
+) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let query = format!(
+        "SELECT id, username, password_hash
+         FROM ndr.users FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String, String, String)>()
+        .await?;
+
+    if let Some(user) = result.first() {
+        let hash = password_hash.unwrap_or(&user.2);
+        let insert_query = format!(
+            "INSERT INTO ndr.users \
+             (id, username, password_hash, role, tenant_id, permissions, active, created_at) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, now() + 1)",
+            sql_escape(&user.0),
+            sql_escape(&user.1),
+            sql_escape(hash),
+            sql_escape(role),
+            sql_escape(tenant_id),
+            sql_escape(permissions),
+            if active { 1 } else { 0 }
+        );
+        self.client.query(&insert_query).execute().await?;
+    }
+    Ok(())
+}
+
+pub async fn set_user_active(
+    &self,
+    id: &str,
+    active: bool,
+) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let query = format!(
+        "SELECT id, username, password_hash, role, tenant_id, permissions
+         FROM ndr.users FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String, String, String, String, String, String)>()
+        .await?;
+
+    if let Some(user) = result.first() {
+        let insert_query = format!(
+            "INSERT INTO ndr.users \
+             (id, username, password_hash, role, tenant_id, permissions, active, created_at) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, now() + 1)",
+            sql_escape(&user.0),
+            sql_escape(&user.1),
+            sql_escape(&user.2),
+            sql_escape(&user.3),
+            sql_escape(&user.4),
+            sql_escape(&user.5),
+            if active { 1 } else { 0 }
         );
         self.client.query(&insert_query).execute().await?;
     }
@@ -211,6 +353,7 @@ pub async fn update_user_permissions(
 pub async fn delete_user(
     &self, id: &str
 ) -> anyhow::Result<()> {
+    let id = sql_escape(id);
     let query = format!(
         "ALTER TABLE ndr.users DELETE WHERE id = '{}'",
         id
@@ -238,10 +381,12 @@ pub async fn create_tenant(
     id: &str,
     name: &str,
 ) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let name = sql_escape(name);
     // 1. Insert into main tenants table
     let query = format!(
-        "INSERT INTO ndr.tenants (id, name, active) \
-         VALUES ('{}','{}',1)",
+        "INSERT INTO ndr.tenants (id, name, active, updated_at) \
+         VALUES ('{}','{}',1,now())",
         id, name
     );
     self.client.query(&query).execute().await?;
@@ -314,6 +459,47 @@ pub async fn create_tenant(
 
     Ok(())
 }
+
+pub async fn update_tenant(
+    &self,
+    id: &str,
+    name: &str,
+    active: bool,
+) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let name = sql_escape(name);
+    let query = format!(
+        "INSERT INTO ndr.tenants (id, name, active, updated_at, created_at)
+         SELECT id, '{}', {}, now(), now() + 1
+         FROM ndr.tenants FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        name,
+        if active { 1 } else { 0 },
+        id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn set_tenant_active(
+    &self,
+    id: &str,
+    active: bool,
+) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let query = format!(
+        "INSERT INTO ndr.tenants (id, name, active, updated_at, created_at)
+         SELECT id, name, {}, now(), now() + 1
+         FROM ndr.tenants FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        if active { 1 } else { 0 },
+        id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
     pub fn new() -> Self {
         let url = std::env::var("CLICKHOUSE_URL")
             .unwrap_or_else(|_| "http://localhost:8123".to_string());
@@ -377,6 +563,8 @@ pub async fn create_tenant(
                 "ALTER TABLE ndr.rules_state ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.sigma_rules ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS permissions String DEFAULT 'dashboard,alerts'",
+                "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS active UInt8 DEFAULT 1",
+                "ALTER TABLE ndr.tenants ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
