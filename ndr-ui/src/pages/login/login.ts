@@ -25,11 +25,7 @@ export class Login {
     private ws: Websocket
   ) {
     if (this.auth.isLoggedIn()) {
-      if (this.auth.isAdmin()) {
-        this.router.navigate(['/admin']);
-      } else {
-        this.router.navigate(['/dashboard']);
-      }
+      this.router.navigate([this.auth.getDefaultRoute()]);
     }
   }
 
@@ -47,7 +43,6 @@ export class Login {
         this.loading = false;
         if (res.token) {
           const role = res.user?.role;
-          console.log(role)
           if (role === 'admin' || role === 'super_admin') {
             this.router.navigate(['/admin']).then(() => {
               this.ws.connect();
@@ -57,19 +52,28 @@ export class Login {
               this.ws.connect();
             });
           } else {
-            this.router.navigate(['/dashboard']).then(() => {
+            this.router.navigate([this.auth.getDefaultRoute()]).then(() => {
               this.ws.connect();
             });
           }
         } else {
+          // status: "error" returned with 200 OK (should not happen now, but fallback)
           this.error = res.message || 'Login failed';
         }
         this.cdr.detectChanges();
       },
       error: (err) => {
         this.loading = false;
-        this.error = err.error?.message ||
-          'Invalid username or password';
+        // HTTP 403 = account disabled by administrator
+        if (err.status === 403) {
+          this.error = err.error?.message ||
+            'Your account has been disabled. Please contact your administrator.';
+        } else if (err.status === 401) {
+          this.error = 'Invalid username or password';
+        } else {
+          this.error = err.error?.message ||
+            'Login failed. Please try again.';
+        }
         this.cdr.detectChanges();
       }
     });

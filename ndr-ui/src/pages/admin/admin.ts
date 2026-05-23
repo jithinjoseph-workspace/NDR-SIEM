@@ -1,4 +1,4 @@
-import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
@@ -28,7 +28,7 @@ import { Router } from '@angular/router';
   templateUrl: './admin.html',
   styleUrl: './admin.css',
 })
-export class Admin implements OnInit {
+export class Admin implements OnInit, OnDestroy {
   BuildingIcon = Building2;
   CheckIcon = CircleCheck;
   EditIcon = Edit;
@@ -99,6 +99,9 @@ export class Admin implements OnInit {
   pendingStopEngine = '';
 
   currentUser: any = {};
+  /** Non-empty when the session is about to expire or has expired. */
+  sessionExpiryWarning = '';
+  private sessionCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private api: Api,
@@ -116,6 +119,15 @@ export class Admin implements OnInit {
     this.loadUsers();
     this.loadTenants();
     this.loadEngines();
+    this.startSessionExpiryCheck();
+  }
+
+  ngOnDestroy(): void {
+    // Always clear the interval when the component is torn down
+    // to avoid a dangling callback and potential memory leak.
+    if (this.sessionCheckInterval !== null) {
+      clearInterval(this.sessionCheckInterval);
+    }
   }
 
   get tenantAdmins() {
@@ -305,17 +317,28 @@ export class Admin implements OnInit {
   }
 
   setUserActive(user: any, active: boolean) {
+    // Optimistically flip the toggle immediately — the UI feels instant.
+    const previous = user.active;
+    user.active = active;
+    this.cdr.detectChanges();
+
     this.api.setUserStatus(user.id, active).subscribe({
       next: (data: any) => {
         if (data.status === 'ok') {
-          this.loadUsers();
           this.showMsg(active ? 'User activated' : 'User deactivated', 'success');
+          // Poll with exponential backoff until the ClickHouse mutation
+          // is visible in a fresh read, then sync the list.
+          this.reloadUsersWithRetry(user.id, active);
         } else {
+          // Server rejected the action — revert the optimistic change.
+          user.active = previous;
           this.showMsg(data.message || 'Failed to update user status', 'error');
+          this.cdr.detectChanges();
         }
-        this.cdr.detectChanges();
       },
       error: () => {
+        // Network error — revert so the UI stays consistent with server state.
+        user.active = previous;
         this.showMsg('Failed to update user status', 'error');
         this.cdr.detectChanges();
       },
@@ -405,17 +428,28 @@ export class Admin implements OnInit {
   }
 
   setTenantActive(tenant: any, active: boolean) {
+    // Optimistically flip the toggle immediately — the UI feels instant.
+    const previous = tenant.active;
+    tenant.active = active;
+    this.cdr.detectChanges();
+
     this.api.setTenantStatus(tenant.id, active).subscribe({
       next: (data: any) => {
         if (data.status === 'ok') {
-          this.loadTenants();
           this.showMsg(active ? 'Tenant activated' : 'Tenant deactivated', 'success');
+          // Poll with exponential backoff until the ClickHouse mutation
+          // is visible in a fresh read, then sync the list.
+          this.reloadTenantsWithRetry(tenant.id, active);
         } else {
+          // Server rejected the action — revert the optimistic change.
+          tenant.active = previous;
           this.showMsg(data.message || 'Failed to update tenant status', 'error');
+          this.cdr.detectChanges();
         }
-        this.cdr.detectChanges();
       },
       error: () => {
+        // Network error — revert so the UI stays consistent with server state.
+        tenant.active = previous;
         this.showMsg('Failed to update tenant status', 'error');
         this.cdr.detectChanges();
       },
@@ -542,5 +576,96 @@ export class Admin implements OnInit {
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
+  }
+
+  // ── Session expiry ──────────────────────────────────────────────────────────
+
+  /**
+   * Polls once per minute to warn the user before their JWT expires.
+   * Shows a persistent banner at 5 minutes, auto-logs out at 0.
+   */
+  private startSessionExpiryCheck(): void {
+    const check = () => {
+      const msLeft = this.auth.getTokenExpiresInMs();
+      if (msLeft <= 0) {
+        // Token has expired — force re-login immediately.
+        this.auth.logout();
+        return;
+      }
+      if (msLeft <= 5 * 60 * 1000) {
+        const minsLeft = Math.ceil(msLeft / 60_000);
+        this.sessionExpiryWarning =
+          `Your session expires in ${minsLeft} minute${minsLeft !== 1 ? 's' : ''}. ` +
+          `Please re-login to avoid interruption.`;
+      } else {
+        this.sessionExpiryWarning = '';
+      }
+      this.cdr.detectChanges();
+    };
+
+    check(); // Run immediately on init
+    this.sessionCheckInterval = setInterval(check, 60_000);
+  }
+
+  // ── ClickHouse mutation polling ─────────────────────────────────────────────
+
+  /**
+   * After a user active-status mutation, polls the server with exponential
+   * backoff until the new value is confirmed, then updates the local list.
+   * This prevents stale FINAL reads from overwriting the optimistic UI state.
+   *
+   * Delays: 1 s → 2 s → 4 s (max 3 attempts = 7 s total window).
+   */
+  private reloadUsersWithRetry(userId: string, expectedActive: boolean, attempt = 0): void {
+    const delays = [1000, 2000, 4000];
+    const delay  = delays[attempt] ?? delays[delays.length - 1];
+
+    setTimeout(() => {
+      this.api.getUsers().subscribe({
+        next: (data: any) => {
+          const fresh: any[] = data.users || [];
+          const target = fresh.find((u: any) => u.id === userId);
+
+          if (target && target.active !== expectedActive && attempt < delays.length - 1) {
+            // Mutation not yet visible — retry with next backoff tier.
+            this.reloadUsersWithRetry(userId, expectedActive, attempt + 1);
+          } else {
+            // Either matched or we've exhausted retries — sync the list.
+            this.users = fresh;
+            this.cdr.detectChanges();
+          }
+        },
+        error: () => {
+          // Silent — the optimistic value stays; the user sees a consistent UI.
+        },
+      });
+    }, delay);
+  }
+
+  /**
+   * Same pattern as reloadUsersWithRetry but for the tenant list.
+   */
+  private reloadTenantsWithRetry(tenantId: string, expectedActive: boolean, attempt = 0): void {
+    const delays = [1000, 2000, 4000];
+    const delay  = delays[attempt] ?? delays[delays.length - 1];
+
+    setTimeout(() => {
+      this.api.getTenants().subscribe({
+        next: (data: any) => {
+          const fresh: any[] = data.tenants || [];
+          const target = fresh.find((t: any) => t.id === tenantId);
+
+          if (target && target.active !== expectedActive && attempt < delays.length - 1) {
+            this.reloadTenantsWithRetry(tenantId, expectedActive, attempt + 1);
+          } else {
+            this.tenants = fresh;
+            this.cdr.detectChanges();
+          }
+        },
+        error: () => {
+          // Silent — the optimistic value stays.
+        },
+      });
+    }, delay);
   }
 }

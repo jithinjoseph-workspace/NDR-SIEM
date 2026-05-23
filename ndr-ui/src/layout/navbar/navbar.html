@@ -22,7 +22,7 @@
       <div class="quick-links">
         <span>Quick Navigate</span>
         <div>
-          <button *ngFor="let s of suggestions.slice(0, 4)" (mousedown)="selectSuggestion(s)">
+          <button *ngFor="let s of permittedSuggestions.slice(0, 4)" (mousedown)="selectSuggestion(s)">
             {{ s.label }}
           </button>
         </div>
@@ -39,7 +39,7 @@
       </strong>
     </div>
 
-    <div class="notification-wrap" (focusout)="closeNotifications()">
+    <div *ngIf="canViewAlerts" class="notification-wrap" (focusout)="closeNotifications()">
       <button class="icon-button" aria-label="Notifications" (click)="openNotifications()">
         <lucide-icon [name]="BellIcon" class="w-5 h-5"></lucide-icon>
         <span *ngIf="alertCount > 0">{{ alertCount > 9 ? '9+' : alertCount }}</span>

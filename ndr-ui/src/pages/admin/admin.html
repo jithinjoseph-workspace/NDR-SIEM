@@ -19,6 +19,10 @@
     {{ userMsg }}
   </div>
 
+  <div *ngIf="sessionExpiryWarning" class="admin-message warning">
+    ⚠ {{ sessionExpiryWarning }}
+  </div>
+
   <section class="admin-stats">
     <article>
       <lucide-icon [name]="BuildingIcon" class="w-5 h-5"></lucide-icon>

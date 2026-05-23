@@ -60,8 +60,17 @@
     <div *ngIf="loading" class="loading-state">Loading tenant users...</div>
 
     <div *ngIf="!loading && users.length === 0" class="empty-state">
-      <strong>No analysts created yet</strong>
-      <span>Create the first analyst for this organization.</span>
+      <div class="empty-visual">
+        <lucide-icon [name]="UserPlusIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div>
+        <strong>No analysts created yet</strong>
+        <span>Create analyst accounts and assign page access for this organization.</span>
+      </div>
+      <button class="primary-action" type="button" (click)="openCreateForm()">
+        <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
+        Add Analyst
+      </button>
     </div>
 
     <div *ngIf="!loading && users.length > 0" class="user-table">
@@ -136,14 +145,17 @@
           <input
             [(ngModel)]="userForm.password"
             type="password"
-            [placeholder]="editingUser ? 'Password reset needs backend support' : 'Temporary password'"
-            [disabled]="!!editingUser"
+            [placeholder]="editingUser ? 'Leave blank to keep current password' : 'Temporary password'"
           />
         </label>
 
         <label>
           <span>Role</span>
-          <select [(ngModel)]="userForm.role" (ngModelChange)="onRoleChange()">
+          <select
+            [(ngModel)]="userForm.role"
+            (ngModelChange)="onRoleChange()"
+            [disabled]="!!editingUser"
+          >
             <option *ngFor="let role of roleOptions" [value]="role.value">
               {{ role.label }}
             </option>
@@ -152,11 +164,12 @@
 
         <label>
           <span>Status</span>
-          <select [(ngModel)]="userForm.status">
-            <option value="active">Active</option>
-            <option value="disabled">Disabled</option>
+          <select [(ngModel)]="userForm.active">
+            <option [ngValue]="true">Active</option>
+            <option [ngValue]="false">Disabled</option>
           </select>
         </label>
+
       </div>
 
       <div class="permission-section">

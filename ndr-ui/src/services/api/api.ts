@@ -6,7 +6,11 @@ import { Observable, of } from 'rxjs';
   providedIn: 'root'
 })
 export class Api {
-  private baseUrl = 'http://localhost:3000/api';
+  // Relative base so requests route correctly in every environment:
+  // - Dev: Angular CLI proxy forwards /api → localhost:3000
+  // - Production: nginx proxies /api → ndr_engines upstream
+  // Never use an absolute URL here — it breaks remote browser access.
+  private readonly baseUrl = '/api';
 
   constructor(private http: HttpClient) { }
 
@@ -201,6 +205,14 @@ export class Api {
     return this.http.post(`${this.baseUrl}/auth/users/${id}/status`, { active });
   }
 
+  updateUserPermissions(id: string, permissions: string[]): Observable<any> {
+    return this.http.put(`${this.baseUrl}/auth/users/${id}/permissions`, { permissions });
+  }
+
+  resetUserPassword(id: string, password: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/users/${id}/password`, { password });
+  }
+
   deleteUser(id: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/auth/users/${id}`);
   }
@@ -233,4 +245,3 @@ export class Api {
     );
   }
 }
-

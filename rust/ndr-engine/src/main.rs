@@ -13,7 +13,7 @@ mod storage;
 
 use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
-use axum::{routing::{get, post, delete, put}, Router};
+use axum::{routing::{get, post, put, delete}, Router};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
@@ -294,6 +294,7 @@ tokio::spawn(async move {
         .route("/api/auth/users/:id",put(api::update_user_api).delete(api::delete_user))
         .route("/api/auth/users/:id/status", post(api::set_user_status_api))
         .route("/api/auth/users/:id/permissions", put(api::update_user_permissions_api))
+        .route("/api/auth/users/:id/password", post(api::reset_user_password_api))
         .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
         .route("/api/auth/tenants/:id", put(api::update_tenant_api))
         .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))

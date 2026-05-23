@@ -127,6 +127,36 @@ h2 {
   margin-bottom: 20px;
 }
 
+.tenant-tabs {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  margin-bottom: 20px;
+}
+
+.tenant-tabs button {
+  border: 0;
+  border-radius: 0.5rem;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease, opacity 160ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+  background: rgba(22, 26, 38, 0.92);
+  color: #a4abbf;
+  white-space: nowrap;
+}
+
+.tenant-tabs button.active {
+  background: #69f6b8;
+  color: #04110c;
+}
+
 .tenant-stats article,
 .tenant-panel,
 .tenant-modal {
@@ -175,14 +205,49 @@ h2 {
   text-align: center;
 }
 
+.empty-state {
+  min-height: 240px;
+  align-content: center;
+  gap: 16px;
+  margin: 18px;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+    rgba(255, 255, 255, 0.02);
+  padding: 30px 20px;
+}
+
+.empty-visual {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid rgba(105, 246, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(105, 246, 184, 0.1);
+  color: #69f6b8;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.18);
+}
+
 .empty-state strong {
+  display: block;
   color: #ffffff;
+  font-size: 16px;
+  font-weight: 800;
 }
 
 .empty-state span {
   display: block;
-  margin-top: 6px;
-  font-size: 12px;
+  max-width: 360px;
+  margin-top: 8px;
+  color: #a4abbf;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.empty-state .primary-action {
+  margin-top: 2px;
 }
 
 .user-table {
