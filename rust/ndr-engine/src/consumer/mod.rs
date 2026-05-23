@@ -51,8 +51,10 @@ pub async fn start_consumer(state: Arc<AppState>) {
 
                 if event.should_drop() { continue; }
 
-                let tenant_id = std::env::var("TENANT_ID")
-                    .unwrap_or_else(|_| "default".to_string());
+                let tenant_id = raw.get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default")
+                    .to_string();
 
                 // Insert to ClickHouse
                 let source_str = match event.event_source {
@@ -80,8 +82,9 @@ pub async fn start_consumer(state: Arc<AppState>) {
 
                 let ch_clone = ch.clone();
                 let event_clone = ch_event;
+                let tenant_id_clone = tenant_id.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = ch_clone.insert_event(event_clone).await {
+                    if let Err(e) = ch_clone.insert_event_for_tenant(event_clone, &tenant_id_clone).await {
                         warn!("ClickHouse event insert error: {}", e);
                     }
                 });

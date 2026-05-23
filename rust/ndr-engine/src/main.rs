@@ -15,6 +15,7 @@ use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
 use axum::{routing::{get, post, delete, put}, Router};
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::decompression::RequestDecompressionLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
 use enrichment::{AsnLookup, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
@@ -63,6 +64,22 @@ async fn main() {
     let storage = storage::SqliteStorage::new("ndr.db")
         .expect("Failed to open SQLite database");
 
+    use rdkafka::producer::FutureProducer;
+    use rdkafka::ClientConfig;
+
+    let kafka_producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", 
+             std::env::var("KAFKA_BROKERS")
+             .unwrap_or_else(|_| "kafka:9092".to_string()))
+        .set("message.timeout.ms", "5000")
+        .set("queue.buffering.max.messages", "100000")
+        .set("batch.num.messages", "1000")
+        .set("linger.ms", "5")
+        .create()
+        .expect("Kafka producer creation failed");
+
+    let kafka_producer = Arc::new(kafka_producer);
+
     let state = AppState {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
         enrichment: Arc::new(EnrichmentPipeline {
@@ -80,6 +97,7 @@ async fn main() {
         storage:    Arc::new(storage),
         tx:         tx.clone(),
         redis:      Arc::new(redis_client.clone()),
+        kafka_producer: kafka_producer.clone(),
     };
 
     // ── Background: session reaper (every 30s) ────────────────────────────
@@ -281,10 +299,19 @@ tokio::spawn(async move {
         .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))
         .route("/api/admin/engines", get(api::get_engines))
         .route("/api/admin/engines/scale", post(api::scale_engines))
+        .route("/api/sensor-keys", 
+            get(api::get_sensor_keys)
+            .post(api::create_sensor_key_api))
+        .route("/api/sensor-keys/:id",
+            delete(api::revoke_sensor_key_api))
         .route("/api/sensor/register",  post(api::sensor_register))
         .route("/api/sensor/heartbeat", post(api::sensor_heartbeat))
+        .route("/api/ingest",           post(api::ingest_events))
+        .route("/api/sensor/command",   get(api::get_sensor_command_api))
+        .route("/api/sensor/control",   post(api::sensor_control_api))
         .with_state(state)
         .layer(axum::middleware::from_fn(api::auth_middleware))
+        .layer(RequestDecompressionLayer::new())
         .layer(cors);
 
     info!("🌐 API active");
@@ -323,6 +350,8 @@ tokio::spawn(async move {
     axum::serve(listener, app).await.unwrap();
 
 }
+
+
 
 
 

@@ -108,6 +108,14 @@ pub fn default_permissions(role: &str) -> String {
   }.to_string()
 }
 
+fn tenant_db(tenant_id: &str) -> String {
+    if tenant_id == "default" {
+        "ndr".to_string()
+    } else {
+        format!("ndr_{}", tenant_id.replace("-", "_"))
+    }
+}
+
 #[allow(dead_code)]
 impl ClickhouseStorage {
 
@@ -583,21 +591,20 @@ pub async fn set_tenant_active(
 
 
 
-//threat intel hits
     pub async fn get_threat_intel_hits_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
-    let filter = format!("tenant_id='{}'", tenant_id);
+    let db_name = tenant_db(tenant_id);
     let query = format!("
         SELECT
             src_ip,
             dst_ip,
             count() as hits,
             max(timestamp) as last_seen
-        FROM ndr_hits
-        WHERE threat_intel = 1 AND {}
+        FROM {}.ndr_hits
+        WHERE threat_intel = 1
         GROUP BY src_ip, dst_ip
         ORDER BY hits DESC
         LIMIT 50
-    ", filter);
+    ", db_name);
     let hits = self.client.query(&query)
         .fetch_all::<ThreatIntelHit>()
         .await
@@ -624,8 +631,26 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(())
     }
 
+    pub async fn insert_event_for_tenant(&self, event: NdrEvent, tenant_id: &str) -> anyhow::Result<()> {
+        let db_name = tenant_db(tenant_id);
+        let table_name = format!("{}.ndr_events", db_name);
+        let mut insert = self.client.insert(&table_name)?;
+        insert.write(&event).await?;
+        insert.end().await?;
+        Ok(())
+    }
+
     pub async fn insert_hit(&self, hit: NdrHit) -> anyhow::Result<()> {
         let mut insert = self.client.insert("ndr_hits")?;
+        insert.write(&hit).await?;
+        insert.end().await?;
+        Ok(())
+    }
+
+    pub async fn insert_hit_for_tenant(&self, hit: NdrHit, tenant_id: &str) -> anyhow::Result<()> {
+        let db_name = tenant_db(tenant_id);
+        let table_name = format!("{}.ndr_hits", db_name);
+        let mut insert = self.client.insert(&table_name)?;
         insert.write(&hit).await?;
         insert.end().await?;
         Ok(())
@@ -713,9 +738,9 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(())
     }
     pub async fn get_sigma_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, String)>> {
+        let db = tenant_db(tenant_id);
         let result = self.client
-            .query("SELECT id, content FROM ndr.sigma_rules FINAL WHERE enabled = 1 AND (tenant_id = ? OR tenant_id = 'default')")
-            .bind(tenant_id)
+            .query(&format!("SELECT id, content FROM {}.sigma_rules FINAL WHERE enabled = 1", db))
             .fetch_all::<(String, String)>()
             .await?;
         Ok(result)
@@ -730,8 +755,9 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     pub async fn save_sigma_rule(&self, id: &str, name: &str, content: &str, tenant_id: &str) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
         self.client
-            .query("INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, now(), now())")
+            .query(&format!("INSERT INTO {}.sigma_rules (id, name, content, tenant_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, now(), now())", db))
             .bind(id)
             .bind(name)
             .bind(content)
@@ -742,43 +768,36 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     pub async fn delete_sigma_rule(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
         self.client
-            .query("ALTER TABLE ndr.sigma_rules DELETE WHERE id = ? AND tenant_id = ?")
+            .query(&format!("ALTER TABLE {}.sigma_rules DELETE WHERE id = ?", db))
             .bind(id)
-            .bind(tenant_id)
             .execute()
             .await?;
         Ok(())
     }
 
     pub async fn toggle_sigma_rule(&self, id: &str, enabled: bool, tenant_id: &str) -> anyhow::Result<()> {
-        let query = if tenant_id == "default" {
-            "INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, enabled, updated_at) SELECT id, name, content, tenant_id, ?, now() FROM ndr.sigma_rules FINAL WHERE id = ?"
-        } else {
-            "INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, enabled, updated_at) SELECT id, name, content, tenant_id, ?, now() FROM ndr.sigma_rules FINAL WHERE id = ? AND tenant_id = ?"
-        };
-        let mut q = self.client.query(query).bind(enabled as u8).bind(id);
-        if tenant_id != "default" {
-            q = q.bind(tenant_id);
-        }
-        q.execute().await?;
+        let db = tenant_db(tenant_id);
+        let query = format!("INSERT INTO {}.sigma_rules (id, name, content, tenant_id, enabled, updated_at) SELECT id, name, content, tenant_id, ?, now() FROM {}.sigma_rules FINAL WHERE id = ?", db, db);
+        self.client.query(&query).bind(enabled as u8).bind(id).execute().await?;
         Ok(())
     }
 
     pub async fn get_sigma_rule_by_id(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<(String, String, String, String, u8)>> {
+        let db = tenant_db(tenant_id);
         let result = self.client
-            .query("SELECT id, name, content, tenant_id, enabled FROM ndr.sigma_rules FINAL WHERE id = ? AND (tenant_id = ? OR tenant_id = 'default') LIMIT 1")
+            .query(&format!("SELECT id, name, content, tenant_id, enabled FROM {}.sigma_rules FINAL WHERE id = ? LIMIT 1", db))
             .bind(id)
-            .bind(tenant_id)
             .fetch_all::<(String, String, String, String, u8)>()
             .await?;
         Ok(result.first().cloned())
     }
 
     pub async fn get_all_sigma_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, String, String, String, u8)>> {
+        let db = tenant_db(tenant_id);
         let result = self.client
-            .query("SELECT id, name, content, tenant_id, enabled FROM ndr.sigma_rules FINAL WHERE tenant_id = ? OR tenant_id = 'default'")
-            .bind(tenant_id)
+            .query(&format!("SELECT id, name, content, tenant_id, enabled FROM {}.sigma_rules FINAL", db))
             .fetch_all::<(String, String, String, String, u8)>()
             .await?;
         Ok(result)
@@ -789,14 +808,13 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
 pub async fn get_integrations_by_tenant(
     &self, tenant_id: &str
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let filter = format!("tenant_id='{}'", tenant_id);
+    let db = tenant_db(tenant_id);
     let query = format!("
         SELECT id, name, type, config, enabled
-        FROM ndr.soar_integrations
+        FROM {}.soar_integrations
         FINAL
-        WHERE {}
         ORDER BY created_at
-    ", filter);
+    ", db);
     let result = self.client
         .query(&query)
         .fetch_all::<(String,String,String,String,u8)>()
@@ -827,11 +845,12 @@ pub async fn save_integration(
     config: &str,
     tenant_id: &str,
 ) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
     let query = format!(
-        "INSERT INTO ndr.soar_integrations \
+        "INSERT INTO {}.soar_integrations \
          (id, name, type, config, enabled, tenant_id) \
          VALUES ('{}','{}','{}','{}',1,'{}')",
-        id, name, int_type,
+        db, id, name, int_type,
         config.replace("'", "\\'"), tenant_id
     );
     self.client.query(&query).execute().await?;
@@ -841,14 +860,14 @@ pub async fn save_integration(
 pub async fn toggle_integration(
     &self, id: &str, enabled: bool, tenant_id: &str
 ) -> anyhow::Result<()> {
-    let filter = format!("tenant_id='{}'", tenant_id);
+    let db = tenant_db(tenant_id);
     let query = format!(
-        "INSERT INTO ndr.soar_integrations \
+        "INSERT INTO {}.soar_integrations \
          (id, name, type, config, enabled, tenant_id) \
          SELECT id, name, type, config, {}, tenant_id \
-         FROM ndr.soar_integrations \
-         WHERE id = '{}' AND {}",
-        if enabled { 1 } else { 0 }, id, filter
+         FROM {}.soar_integrations \
+         WHERE id = '{}'",
+        db, if enabled { 1 } else { 0 }, db, id
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -857,11 +876,11 @@ pub async fn toggle_integration(
 pub async fn delete_integration(
     &self, id: &str, tenant_id: &str
 ) -> anyhow::Result<()> {
-    let filter = format!("tenant_id='{}'", tenant_id);
+    let db = tenant_db(tenant_id);
     let query = format!(
-        "ALTER TABLE ndr.soar_integrations \
-         DELETE WHERE id = '{}' AND {}",
-        id, filter
+        "ALTER TABLE {}.soar_integrations \
+         DELETE WHERE id = '{}'",
+        db, id
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -872,10 +891,11 @@ pub async fn delete_integration(
 pub async fn save_soar_config_by_tenant(
     &self, key: &str, value: &str, tenant_id: &str
 ) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
     let query = format!(
-        "INSERT INTO ndr.soar_config (key, value, tenant_id) \
+        "INSERT INTO {}.soar_config (key, value, tenant_id) \
          VALUES ('{}', '{}', '{}')",
-        key, value, tenant_id
+        db, key, value, tenant_id
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -890,14 +910,13 @@ pub async fn save_soar_config(&self, key: &str, value: &str) -> anyhow::Result<(
 pub async fn get_soar_config_by_tenant(
     &self, tenant_id: &str
 ) -> anyhow::Result<serde_json::Value> {
-    let filter = format!("tenant_id='{}'", tenant_id);
+    let db = tenant_db(tenant_id);
     let query = format!("
         SELECT key, value
-        FROM ndr.soar_config
+        FROM {}.soar_config
         FINAL
-        WHERE {}
         ORDER BY key
-    ", filter);
+    ", db);
     let result = self.client
         .query(&query)
         .fetch_all::<(String, String)>()
@@ -918,16 +937,15 @@ pub async fn get_soar_config(&self) -> anyhow::Result<serde_json::Value> {
 pub async fn get_soar_playbooks_by_tenant(
     &self, tenant_id: &str
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let filter = format!("tenant_id='{}'", tenant_id);
+    let db = tenant_db(tenant_id);
     let query = format!("
         SELECT id, name, description,
                trigger, action_type,
                config, enabled, runs
-        FROM ndr.soar_playbooks
+        FROM {}.soar_playbooks
         FINAL
-        WHERE {}
         ORDER BY created_at
-    ", filter);
+    ", db);
     let result = self.client
         .query(&query)
         .fetch_all::<(
@@ -956,16 +974,16 @@ pub async fn get_soar_playbooks(&self) -> anyhow::Result<Vec<serde_json::Value>>
 pub async fn update_playbook_enabled(
     &self, id: &str, enabled: bool, tenant_id: &str
 ) -> anyhow::Result<()> {
-    let filter = format!("tenant_id='{}'", tenant_id);
+    let db = tenant_db(tenant_id);
     let query = format!(
-        "INSERT INTO ndr.soar_playbooks \
+        "INSERT INTO {}.soar_playbooks \
          (id, name, description, trigger, \
           action_type, enabled, tenant_id) \
          SELECT id, name, description, trigger, \
                 action_type, {}, tenant_id \
-         FROM ndr.soar_playbooks \
-         WHERE id = '{}' AND {}",
-        if enabled { 1 } else { 0 }, id, filter
+         FROM {}.soar_playbooks \
+         WHERE id = '{}'",
+        db, if enabled { 1 } else { 0 }, db, id
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -981,12 +999,13 @@ pub async fn create_playbook(
     config: &str,
     tenant_id: &str,
 ) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
     let query = format!(
-        "INSERT INTO ndr.soar_playbooks \
+        "INSERT INTO {}.soar_playbooks \
          (id, name, description, trigger, \
           action_type, config, enabled, tenant_id) \
          VALUES ('{}','{}','{}','{}','{}','{}',1,'{}')",
-        id, name, description,
+        db, id, name, description,
         trigger, action_type, config, tenant_id
     );
     self.client.query(&query).execute().await?;
@@ -996,15 +1015,16 @@ pub async fn create_playbook(
 
 //get settings
 
-pub async fn get_settings(&self) -> anyhow::Result<serde_json::Value> {
-    let query = "
+pub async fn get_settings_by_tenant(&self, tenant_id: &str) -> anyhow::Result<serde_json::Value> {
+    let db = tenant_db(tenant_id);
+    let query = format!("
         SELECT key, value
-        FROM ndr.settings
+        FROM {}.settings
         FINAL
         ORDER BY key
-    ";
+    ", db);
     let result = self.client
-        .query(query)
+        .query(&query)
         .fetch_all::<(String, String)>()
         .await?;
     let mut map = serde_json::Map::new();
@@ -1016,16 +1036,27 @@ pub async fn get_settings(&self) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::Value::Object(map))
 }
 
-pub async fn save_setting(
-    &self, key: &str, value: &str
+pub async fn get_settings(&self) -> anyhow::Result<serde_json::Value> {
+    self.get_settings_by_tenant("default").await
+}
+
+pub async fn save_setting_by_tenant(
+    &self, key: &str, value: &str, tenant_id: &str
 ) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
     let query = format!(
-        "INSERT INTO ndr.settings (key, value) \
+        "INSERT INTO {}.settings (key, value) \
          VALUES ('{}', '{}')",
-        key, value
+        db, key, value
     );
     self.client.query(&query).execute().await?;
     Ok(())
+}
+
+pub async fn save_setting(
+    &self, key: &str, value: &str
+) -> anyhow::Result<()> {
+    self.save_setting_by_tenant(key, value, "default").await
 }
 
 
@@ -1165,24 +1196,24 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_stats_by_tenant(
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
-        let f = format!("tenant_id='{}'", tenant_id);
+        let db_name = tenant_db(tenant_id);
         let et: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_events WHERE {}", f))
+            "SELECT count() FROM {}.ndr_events", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let ht: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_hits WHERE {}", f))
+            "SELECT count() FROM {}.ndr_hits", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let e1h: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_events WHERE {} AND timestamp > now() - INTERVAL 1 HOUR", f))
+            "SELECT count() FROM {}.ndr_events WHERE timestamp > now() - INTERVAL 1 HOUR", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let h1h: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_hits WHERE {} AND timestamp > now() - INTERVAL 1 HOUR", f))
+            "SELECT count() FROM {}.ndr_hits WHERE timestamp > now() - INTERVAL 1 HOUR", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let zeek: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_events WHERE {} AND source='zeek'", f))
+            "SELECT count() FROM {}.ndr_events WHERE source='zeek'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let suri: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_events WHERE {} AND source='suricata'", f))
+            "SELECT count() FROM {}.ndr_events WHERE source='suricata'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         Ok(serde_json::json!({
             "events_total": et, "hits_total": ht,
@@ -1194,27 +1225,31 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_recent_events_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = format!("tenant_id='{}'", tenant_id);
+        let db_name = tenant_db(tenant_id);
         let rows = self.client.query(&format!(
-            "SELECT src_ip,dst_ip,proto,source,severity,toString(timestamp) \
-             FROM ndr.ndr_events WHERE {} \
-             ORDER BY timestamp DESC LIMIT {}", f, limit))
-            .fetch_all::<(String,String,String,String,String,String)>()
+            "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp) \
+             FROM {}.ndr_events \
+             ORDER BY timestamp DESC LIMIT {}", db_name, limit))
+            .fetch_all::<(String, String, String, String, String, u32)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
-            "src_ip":r.0,"dst_ip":r.1,"proto":r.2,
-            "source":r.3,"severity":r.4,"timestamp":r.5
+            "src_ip":     r.0,
+            "dst_ip":     r.1,
+            "proto":      r.2,
+            "source":     r.3,
+            "event_type": r.4,
+            "timestamp":  r.5
         })).collect())
     }
 
     pub async fn get_top_src_ips_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = format!("tenant_id='{}'", tenant_id);
+        let db_name = tenant_db(tenant_id);
         let rows = self.client.query(&format!(
             "SELECT src_ip, count() as cnt \
-             FROM ndr.ndr_events WHERE {} \
-             GROUP BY src_ip ORDER BY cnt DESC LIMIT {}", f, limit))
+             FROM {}.ndr_events \
+             GROUP BY src_ip ORDER BY cnt DESC LIMIT {}", db_name, limit))
             .fetch_all::<(String,u64)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
@@ -1225,11 +1260,11 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_top_dst_ips_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = format!("tenant_id='{}'", tenant_id);
+        let db_name = tenant_db(tenant_id);
         let rows = self.client.query(&format!(
             "SELECT dst_ip, count() as cnt \
-             FROM ndr.ndr_events WHERE {} \
-             GROUP BY dst_ip ORDER BY cnt DESC LIMIT {}", f, limit))
+             FROM {}.ndr_events \
+             GROUP BY dst_ip ORDER BY cnt DESC LIMIT {}", db_name, limit))
             .fetch_all::<(String,u64)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
@@ -1240,11 +1275,11 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_recent_hits_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let f = format!("tenant_id='{}'", tenant_id);
+        let db_name = tenant_db(tenant_id);
         let rows = self.client.query(&format!(
             "SELECT src_ip,dst_ip,score,severity,toString(timestamp) \
-             FROM ndr.ndr_hits WHERE {} \
-             ORDER BY timestamp DESC LIMIT {}", f, limit))
+             FROM {}.ndr_hits \
+             ORDER BY timestamp DESC LIMIT {}", db_name, limit))
             .fetch_all::<(String,String,f32,String,String)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
@@ -1256,18 +1291,18 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_severity_by_tenant(
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
-        let f = format!("tenant_id='{}'", tenant_id);
+        let db_name = tenant_db(tenant_id);
         let critical: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='CRITICAL'", f))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='CRITICAL' OR severity='critical'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let high: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='HIGH'", f))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='HIGH' OR severity='high'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let medium: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='MEDIUM'", f))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='MEDIUM' OR severity='medium'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let low: u64 = self.client.query(&format!(
-            "SELECT count() FROM ndr.ndr_hits WHERE {} AND severity='LOW'", f))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='LOW' OR severity='low'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         Ok(serde_json::json!({
             "critical":critical,"high":high,
@@ -1278,17 +1313,17 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     pub async fn get_network_map_by_tenant(
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
-        let f = format!("tenant_id='{}'", tenant_id);
+        let db_name = tenant_db(tenant_id);
         let pairs = self.client.query(&format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
                 groupArray(DISTINCT proto) as protocols
-            FROM ndr.ndr_events 
-            WHERE {} AND src_ip != '' AND dst_ip != ''
+            FROM {}.ndr_events 
+            WHERE src_ip != '' AND dst_ip != ''
               AND timestamp > now() - INTERVAL 1 HOUR
             GROUP BY src_ip, dst_ip
             ORDER BY connections DESC
-            LIMIT 100", f))
+            LIMIT 100", db_name))
             .fetch_all::<NetworkPair>()
             .await.unwrap_or_default();
         let mut nodes: std::collections::HashMap<String, serde_json::Value> = 
@@ -1320,5 +1355,159 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             "edges": edges
         }))
     }
+
+pub async fn create_sensor_key(
+    &self,
+    tenant_id: &str,
+    name: &str,
+    key_hash: &str,
+    key_prefix: &str,
+) -> anyhow::Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let query = format!(
+        "INSERT INTO ndr.sensor_keys \
+         (id, key_hash, key_prefix, tenant_id, name) \
+         VALUES ('{}','{}','{}','{}','{}')",
+        id, key_hash, key_prefix, tenant_id, name
+    );
+    self.client.query(&query).execute().await?;
+    Ok(id)
+}
+
+pub async fn validate_sensor_key(
+    &self,
+    key: &str,
+) -> anyhow::Result<Option<String>> {
+    // Extract prefix (first 16 chars)
+    if key.len() < 16 { return Ok(None); }
+    let prefix = &key[..16];
+    
+    let result = self.client
+        .query(&format!(
+            "SELECT key_hash, tenant_id, active \
+             FROM ndr.sensor_keys FINAL \
+             WHERE key_prefix = '{}' \
+             AND active = 1 \
+             LIMIT 1", prefix
+        ))
+        .fetch_all::<(String, String, u8)>()
+        .await?;
+    
+    if let Some((hash, tenant_id, _)) = result.first() {
+        if bcrypt::verify(key, hash).unwrap_or(false) {
+            // Update last_seen
+            let _ = self.client
+                .query(&format!(
+                    "ALTER TABLE ndr.sensor_keys \
+                     UPDATE last_seen = now() \
+                     WHERE key_prefix = '{}'",
+                    prefix
+                ))
+                .execute().await;
+            return Ok(Some(tenant_id.clone()));
+        }
+    }
+    Ok(None)
+}
+
+pub async fn get_sensor_keys(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let filter = if tenant_id == "default" {
+        "1=1".to_string()
+    } else {
+        format!("tenant_id='{}'", tenant_id)
+    };
+    
+    let result = self.client
+        .query(&format!(
+            "SELECT id, key_prefix, tenant_id, \
+                    name, active, toString(created_at), \
+                    toString(last_seen) \
+             FROM ndr.sensor_keys FINAL \
+             WHERE {} \
+             ORDER BY created_at DESC", filter
+        ))
+        .fetch_all::<(String,String,String,String,u8,String,String)>()
+        .await?;
+    
+    Ok(result.iter().map(|r| serde_json::json!({
+        "id": r.0,
+        "key_prefix": r.1,
+        "tenant_id": r.2,
+        "name": r.3,
+        "active": r.4 == 1,
+        "created_at": r.5,
+        "last_seen": r.6
+    })).collect())
+}
+
+pub async fn revoke_sensor_key(
+    &self,
+    id: &str,
+) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "ALTER TABLE ndr.sensor_keys \
+             UPDATE active = 0 \
+             WHERE id = '{}'", id
+        ))
+        .execute().await?;
+    Ok(())
+}
+
+pub async fn set_sensor_command(
+    &self,
+    tenant_id: &str,
+    command: &str,
+) -> anyhow::Result<()> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let query = format!(
+        "INSERT INTO ndr.sensor_commands \
+         (id, tenant_id, command, status) \
+         VALUES ('{}', '{}', '{}', 'pending')",
+        id, tenant_id, command
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn get_sensor_command(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<String> {
+    let result = self.client
+        .query(&format!(
+            "SELECT command, status FROM ndr.sensor_commands FINAL \
+             WHERE tenant_id = '{}' \
+             AND status = 'pending' \
+             ORDER BY created_at DESC \
+             LIMIT 1",
+            tenant_id
+        ))
+        .fetch_all::<(String, String)>()
+        .await?;
+    
+    Ok(result.first()
+        .map(|r| r.0.clone())
+        .unwrap_or_default())
+}
+
+pub async fn clear_sensor_command(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "ALTER TABLE ndr.sensor_commands \
+             UPDATE status = 'done' \
+             WHERE tenant_id = '{}' \
+             AND status = 'pending'",
+            tenant_id
+        ))
+        .execute().await?;
+    Ok(())
+}
 
 }

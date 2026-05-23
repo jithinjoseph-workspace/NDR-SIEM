@@ -11,7 +11,7 @@ export class Api {
   constructor(private http: HttpClient) { }
 
   getDashboardStats(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/health`); 
+    return this.http.get(`${this.baseUrl}/health`);
   }
 
   getAlerts(): Observable<any[]> {
