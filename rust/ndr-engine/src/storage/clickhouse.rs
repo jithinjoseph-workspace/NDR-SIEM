@@ -430,6 +430,22 @@ pub async fn get_tenants(
     })).collect())
 }
 
+pub async fn is_tenant_active(
+    &self,
+    id: &str,
+) -> anyhow::Result<bool> {
+    let id = sql_escape(id);
+    let rows = self.client
+        .query(&format!(
+            "SELECT active FROM ndr.tenants FINAL WHERE id = '{}' LIMIT 1",
+            id
+        ))
+        .fetch_all::<u8>()
+        .await?;
+
+    Ok(rows.first().map(|active| *active == 1).unwrap_or(true))
+}
+
 pub async fn create_tenant(
     &self,
     id: &str,

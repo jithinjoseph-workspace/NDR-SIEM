@@ -200,8 +200,8 @@
         </div>
         <span>{{ tenantName(user.tenant_id) }}</span>
         <span class="role-pill">{{ roleLabel(user.role) }}</span>
-        <span [class]="'status-pill ' + (user.active === false ? 'inactive' : 'active')">
-          {{ user.active === false ? 'Disabled' : 'Active' }}
+        <span [class]="'status-pill ' + userStatusClass(user)">
+          {{ userStatusLabel(user) }}
         </span>
         <div class="row-actions action-row">
           <button

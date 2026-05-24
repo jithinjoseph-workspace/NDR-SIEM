@@ -211,6 +211,7 @@ fn permissions_from_payload(payload: &Value, role: &str) -> String {
 
 // Auth middleware
 pub async fn auth_middleware(
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -226,6 +227,34 @@ pub async fn auth_middleware(
     // Extract JWT
     match extract_claims(&headers) {
         Some(claims) => {
+            if claims.role != "super_admin" {
+                match state.ch_storage.is_tenant_active(&claims.tenant_id).await {
+                    Ok(false) => {
+                        return axum::response::Response::builder()
+                            .status(403)
+                            .header("Content-Type", "application/json")
+                            .body(axum::body::Body::from(
+                                r#"{"status":"error","message":"Tenant has been deactivated"}"#
+                            ))
+                            .unwrap();
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Tenant active check failed for {}: {}",
+                            claims.tenant_id,
+                            e
+                        );
+                        return axum::response::Response::builder()
+                            .status(503)
+                            .header("Content-Type", "application/json")
+                            .body(axum::body::Body::from(
+                                r#"{"status":"error","message":"Unable to verify tenant status"}"#
+                            ))
+                            .unwrap();
+                    }
+                    Ok(true) => {}
+                }
+            }
             request.extensions_mut().insert(claims);
             next.run(request).await
         }
@@ -2955,6 +2984,39 @@ pub async fn login(
 
             let role = user["role"].as_str().unwrap_or("analyst");
             let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
+            if role != "super_admin" {
+                match state.ch_storage.is_tenant_active(tenant_id).await {
+                    Ok(false) => {
+                        tracing::warn!(
+                            "Login BLOCKED for inactive tenant: username='{}' tenant='{}'",
+                            username,
+                            tenant_id
+                        );
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(json!({
+                                "status": "error",
+                                "message": "Your tenant has been deactivated. Please contact your administrator."
+                            }))
+                        ).into_response();
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Tenant active check failed during login for {}: {}",
+                            tenant_id,
+                            e
+                        );
+                        return (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({
+                                "status": "error",
+                                "message": "Unable to verify tenant status"
+                            }))
+                        ).into_response();
+                    }
+                    Ok(true) => {}
+                }
+            }
             let permissions_str = if role == "super_admin"
                 || role == "tenant_admin"
                 || role == "default_user"

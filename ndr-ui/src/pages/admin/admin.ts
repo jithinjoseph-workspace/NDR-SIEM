@@ -541,6 +541,22 @@ export class Admin implements OnInit, OnDestroy {
     return this.tenants.find(tenant => tenant.id === tenantId)?.name || tenantId;
   }
 
+  isTenantInactive(tenantId: string) {
+    return this.tenants.find(tenant => tenant.id === tenantId)?.active === false;
+  }
+
+  userStatusLabel(user: any) {
+    if (user.active === false) return 'Disabled';
+    if (this.isTenantInactive(user.tenant_id)) return 'Blocked by tenant';
+    return 'Active';
+  }
+
+  userStatusClass(user: any) {
+    return user.active === false || this.isTenantInactive(user.tenant_id)
+      ? 'inactive'
+      : 'active';
+  }
+
   tenantIdExists(id: string) {
     return this.tenants.some(tenant => tenant.id === id);
   }
