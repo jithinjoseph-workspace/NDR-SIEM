@@ -43,7 +43,7 @@ export class Setup implements OnInit, OnDestroy {
 
   ngOnInit() {
     const user = this.auth.getUser();
-    if (user?.tenant_id !== 'default') {
+    if (user?.tenant_id !== 'default' && user?.role !== 'tenant_admin') {
       this.router.navigate(['/dashboard']);
       return;
     }
@@ -99,16 +99,55 @@ export class Setup implements OnInit, OnDestroy {
   startMonitoring() {
     this.status = 'Starting...';
     this.api.startServices().subscribe({
-      next: () => {},
-      error: () => { this.status = 'Stopped'; }
+      next: () => {
+        this.pollStatus('Running');
+      },
+      error: () => { 
+        this.status = 'Stopped'; 
+        this.cdr.detectChanges(); 
+      }
     });
   }
 
   stopMonitoring() {
     this.status = 'Stopping...';
     this.api.stopServices().subscribe({
-      next: () => {},
-      error: () => { this.status = 'Running'; }
+      next: () => {
+        this.pollStatus('Stopped');
+      },
+      error: () => { 
+        this.status = 'Running'; 
+        this.cdr.detectChanges(); 
+      }
     });
+  }
+
+  private pollStatus(expected: string, attempts = 0) {
+    setTimeout(() => {
+      this.api.getAgentStatus().subscribe({
+        next: (data: any) => {
+          if (data) {
+            const isRunning = data.zeek === 'running' || data.suricata === 'running' || data.vector === 'running';
+            const matched = (expected === 'Running' && isRunning) || (expected === 'Stopped' && !isRunning);
+
+            if (matched || attempts >= 5) {
+              this.status = 'Ready'; // Reset to force re-evaluation in updateStatus
+              this.updateStatus(data);
+              this.cdr.detectChanges();
+            } else {
+              this.pollStatus(expected, attempts + 1);
+            }
+          }
+        },
+        error: () => {
+          if (attempts < 5) {
+            this.pollStatus(expected, attempts + 1);
+          } else {
+            this.status = 'Stopped';
+            this.cdr.detectChanges();
+          }
+        }
+      });
+    }, 2000);
   }
 }

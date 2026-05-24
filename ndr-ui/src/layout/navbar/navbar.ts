@@ -28,18 +28,25 @@ export class Navbar implements OnInit {
   alertCount = 0;
   recentAlerts: ThreatNotification[] = [];
 
-  // Search suggestions
   suggestions = [
-    { label: 'Network Logs', hint: 'View all events', route: '/logs', icon: '📋' },
-    { label: 'Alerts', hint: 'View correlation hits', route: '/alerts', icon: '🚨' },
-    { label: 'Rules', hint: 'Manage SIGMA rules', route: '/rules', icon: '⚙️' },
-    { label: 'Threat Intel', hint: 'IOC lookup', route: '/intel', icon: '🛡️' },
-    { label: 'Network Map', hint: 'Topology view', route: '/network-map', icon: '🗺️' },
-    { label: 'System Health', hint: 'Service status', route: '/health', icon: '💚' },
-    { label: 'Live Stream', hint: 'Real-time events', route: '/live', icon: '📡' },
+    { label: 'Network Logs', hint: 'View all events', route: '/logs', permission: 'logs' },
+    { label: 'Alerts', hint: 'View correlation hits', route: '/alerts', permission: 'alerts' },
+    { label: 'Rules', hint: 'Manage SIGMA rules', route: '/rules', permission: 'rules' },
+    { label: 'Threat Intel', hint: 'IOC lookup', route: '/intel', permission: 'intel' },
+    { label: 'Network Map', hint: 'Topology view', route: '/network-map', permission: 'network-map' },
+    { label: 'System Health', hint: 'Service status', route: '/health', permission: 'health' },
+    { label: 'Live Stream', hint: 'Real-time events', route: '/live', permission: 'live' },
   ];
 
   filteredSuggestions: any[] = [];
+
+  get permittedSuggestions() {
+    return this.suggestions.filter(s => this.canOpenPermission(s.permission));
+  }
+
+  get canViewAlerts() {
+    return this.canOpenPermission('alerts');
+  }
 
   constructor(
     private auth: AuthService,
@@ -47,14 +54,12 @@ export class Navbar implements OnInit {
     private ws: Websocket,
     private notifications: Notifications,
     private cdr: ChangeDetectorRef
-  ) { }
+  ) {}
 
   ngOnInit() {
-    // Update system status from WebSocket
     this.ws.lastAgentStatus$.subscribe(data => {
       if (!data) return;
-      const allRunning = data.zeek === 'running' &&
-        data.suricata === 'running';
+      const allRunning = data.zeek === 'running' && data.suricata === 'running';
       this.systemStatus = allRunning ? 'OPERATIONAL' : 'DEGRADED';
       this.cdr.detectChanges();
     });
@@ -77,30 +82,27 @@ export class Navbar implements OnInit {
       return;
     }
 
-    // Filter suggestions by search term
     this.filteredSuggestions = this.suggestions.filter(s =>
-      s.label.toLowerCase().includes(term) ||
-      s.hint.toLowerCase().includes(term)
+      this.canOpenPermission(s.permission) &&
+      (s.label.toLowerCase().includes(term) || s.hint.toLowerCase().includes(term))
     );
 
-    // Add IP search suggestion
     const ipPattern = /^[\d\.:a-f]+$/i;
-    if (ipPattern.test(term)) {
+    if (ipPattern.test(term) && this.canOpenPermission('logs')) {
       this.filteredSuggestions.unshift({
         label: `Search IP: ${this.searchText}`,
         hint: 'Search in Network Logs',
         route: `/logs?search=${this.searchText}`,
-        icon: '🔍'
+        permission: 'logs',
       });
     }
 
-    // Add rule search
-    if (term.length > 2) {
+    if (term.length > 2 && this.canOpenPermission('rules')) {
       this.filteredSuggestions.push({
         label: `Search rules: "${this.searchText}"`,
         hint: 'Find SIGMA rules',
         route: `/rules?search=${this.searchText}`,
-        icon: '⚙️'
+        permission: 'rules',
       });
     }
 
@@ -121,29 +123,22 @@ export class Navbar implements OnInit {
     const term = this.searchText.toLowerCase().trim();
     if (!term) return;
 
-    // Smart routing based on search term
     if (term.match(/^\d+\.\d+\.\d+\.\d+/) || term.includes(':')) {
-      // IP address → Network Logs
-      this.router.navigate(['/logs'], {
-        queryParams: { search: this.searchText }
-      });
+      this.navigateIfAllowed('/logs', 'logs', { search: this.searchText });
     } else if (term.includes('alert') || term.includes('hit')) {
-      this.router.navigate(['/alerts']);
+      this.navigateIfAllowed('/alerts', 'alerts');
     } else if (term.includes('rule') || term.includes('sigma')) {
-      this.router.navigate(['/rules']);
+      this.navigateIfAllowed('/rules', 'rules');
     } else if (term.includes('threat') || term.includes('intel') || term.includes('ioc')) {
-      this.router.navigate(['/intel']);
+      this.navigateIfAllowed('/intel', 'intel');
     } else if (term.includes('health') || term.includes('status')) {
-      this.router.navigate(['/health']);
+      this.navigateIfAllowed('/health', 'health');
     } else if (term.includes('live') || term.includes('stream')) {
-      this.router.navigate(['/live']);
+      this.navigateIfAllowed('/live', 'live');
     } else if (term.includes('map') || term.includes('topology')) {
-      this.router.navigate(['/network-map']);
+      this.navigateIfAllowed('/network-map', 'network-map');
     } else {
-      // Default → Network Logs with search
-      this.router.navigate(['/logs'], {
-        queryParams: { search: this.searchText }
-      });
+      this.navigateIfAllowed('/logs', 'logs', { search: this.searchText });
     }
 
     this.showSuggestions = false;
@@ -151,7 +146,11 @@ export class Navbar implements OnInit {
   }
 
   selectSuggestion(suggestion: any) {
-    this.router.navigateByUrl(suggestion.route);
+    if (this.canOpenPermission(suggestion.permission)) {
+      this.router.navigateByUrl(suggestion.route);
+    } else {
+      this.router.navigate([this.auth.getDefaultRoute()]);
+    }
     this.showSuggestions = false;
     this.searchText = '';
   }
@@ -174,7 +173,7 @@ export class Navbar implements OnInit {
 
   viewThreatIntel() {
     this.showNotifications = false;
-    this.router.navigate(['/intel']);
+    this.navigateIfAllowed('/intel', 'intel');
   }
 
   closeSearch() {
@@ -190,5 +189,18 @@ export class Navbar implements OnInit {
 
   logout() {
     this.auth.logout();
+  }
+
+  private canOpenPermission(permission: string) {
+    return this.auth.hasPermission(permission);
+  }
+
+  private navigateIfAllowed(route: string, permission: string, queryParams?: Record<string, string>) {
+    if (!this.canOpenPermission(permission)) {
+      this.router.navigate([this.auth.getDefaultRoute()]);
+      return;
+    }
+
+    this.router.navigate([route], queryParams ? { queryParams } : undefined);
   }
 }

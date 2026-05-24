@@ -22,8 +22,8 @@ interface TenantUser {
   role: string;
   tenant_id: string;
   created_at?: string;
-  status?: 'active' | 'disabled';
-  permissions?: string[];
+  active?: boolean;
+  permissions?: string[] | string;
 }
 
 interface PermissionOption {
@@ -61,15 +61,15 @@ export class TenantAdmin implements OnInit {
   messageType: 'success' | 'error' = 'success';
 
   permissionOptions: PermissionOption[] = [
-    { key: 'dashboard:view', label: 'Dashboard', description: 'Operational overview and metrics' },
-    { key: 'alerts:view', label: 'Alerts', description: 'Correlation hits and alert triage' },
-    { key: 'logs:view', label: 'Network Logs', description: 'Zeek and Suricata event records' },
-    { key: 'live:view', label: 'Live Stream', description: 'Real-time network activity' },
-    { key: 'network:view', label: 'Network Map', description: 'Source and destination topology' },
-    { key: 'intel:view', label: 'Threat Intel', description: 'IOC lookup and enrichment' },
-    { key: 'health:view', label: 'System Health', description: 'Service and sensor status' },
-    { key: 'rules:view', label: 'Rules View', description: 'Read-only detection rule access' },
-    { key: 'soar:view', label: 'SOAR View', description: 'Read-only automation visibility' },
+    { key: 'dashboard', label: 'Dashboard', description: 'Operational overview and metrics' },
+    { key: 'alerts', label: 'Alerts', description: 'Correlation hits and alert triage' },
+    { key: 'logs', label: 'Network Logs', description: 'Zeek and Suricata event records' },
+    { key: 'live', label: 'Live Stream', description: 'Real-time network activity' },
+    { key: 'network-map', label: 'Network Map', description: 'Source and destination topology' },
+    { key: 'intel', label: 'Threat Intel', description: 'IOC lookup and enrichment' },
+    { key: 'health', label: 'System Health', description: 'Service and sensor status' },
+    { key: 'rules', label: 'Rules View', description: 'Read-only detection rule access' },
+    { key: 'soar', label: 'SOAR View', description: 'Read-only automation visibility' },
   ];
 
   roleOptions = [
@@ -82,15 +82,15 @@ export class TenantAdmin implements OnInit {
     username: '',
     password: '',
     role: 'analyst',
-    status: 'active' as 'active' | 'disabled',
+    active: true,
     permissions: [
-      'dashboard:view',
-      'alerts:view',
-      'logs:view',
-      'live:view',
-      'network:view',
-      'intel:view',
-      'health:view',
+      'dashboard',
+      'alerts',
+      'logs',
+      'live',
+      'network-map',
+      'intel',
+      'health',
     ] as string[],
   };
 
@@ -116,7 +116,7 @@ export class TenantAdmin implements OnInit {
   }
 
   get activeUsers() {
-    return this.users.filter(user => this.getUserStatus(user) === 'active').length;
+    return this.users.filter(user => user.active !== false).length;
   }
 
   get analystUsers() {
@@ -131,17 +131,14 @@ export class TenantAdmin implements OnInit {
     this.loading = true;
     this.api.getUsers().subscribe({
       next: (data: any) => {
-        const permissionMap = this.getPermissionMap();
         this.users = (data.users || [])
           .filter((user: TenantUser) => user.tenant_id === this.tenantId)
-          .filter((user: TenantUser) => user.role !== 'admin' && user.role !== 'super_admin')
+          .filter((user: TenantUser) => this.isManageableTenantUser(user))
           .map((user: TenantUser) => ({
             ...user,
-            role: permissionMap[user.id]?.role || user.role,
-            status: permissionMap[user.id]?.status || 'active',
-            permissions: permissionMap[user.id]?.permissions || this.defaultPermissionsFor(
-              permissionMap[user.id]?.role || user.role
-            ),
+            // active comes directly from the database — no localStorage override
+            active: user.active !== false,
+            permissions: this.normalizePermissions(user.permissions, user.role),
           }));
         this.loading = false;
         this.cdr.detectChanges();
@@ -160,7 +157,7 @@ export class TenantAdmin implements OnInit {
       username: '',
       password: '',
       role: 'analyst',
-      status: 'active',
+      active: true,
       permissions: this.defaultPermissionsFor('analyst'),
     };
     this.showForm = true;
@@ -172,8 +169,8 @@ export class TenantAdmin implements OnInit {
       username: user.username,
       password: '',
       role: user.role,
-      status: this.getUserStatus(user),
-      permissions: [...(user.permissions || this.defaultPermissionsFor(user.role))],
+      active: user.active !== false,
+      permissions: this.normalizePermissions(user.permissions, user.role),
     };
     this.showForm = true;
   }
@@ -190,18 +187,87 @@ export class TenantAdmin implements OnInit {
     }
 
     if (this.editingUser) {
-      this.applyLocalUserSettings(this.editingUser.id);
-      this.showForm = false;
-      this.showMessage('User access updated', 'success');
+      this.saving = true;
+      const permissions = this.normalizePermissions(this.userForm.permissions, this.userForm.role);
+      const userId = this.editingUser.id;
+      const wasActive = this.editingUser.active !== false;
+      const nowActive = this.userForm.active;
+      const statusChanged = wasActive !== nowActive;
+
+      // Step 1: Update permissions
+      this.api.updateUserPermissions(userId, permissions).subscribe({
+        next: (data: any) => {
+          if (data.status !== 'ok') {
+            this.saving = false;
+            this.showMessage(data.message || 'Failed to update user access', 'error');
+            this.cdr.detectChanges();
+            return;
+          }
+
+          // Step 2: Update active status in the database if it changed
+          const afterPermissions = () => {
+            if (statusChanged) {
+              this.api.setUserStatus(userId, nowActive).subscribe({
+                next: (statusData: any) => {
+                  if (statusData.status === 'ok') {
+                    this.afterSaveComplete(userId, permissions, nowActive);
+                  } else {
+                    this.saving = false;
+                    this.showMessage(statusData.message || 'Permissions saved but failed to update status', 'error');
+                    this.cdr.detectChanges();
+                  }
+                },
+                error: () => {
+                  this.saving = false;
+                  this.showMessage('Permissions saved but failed to update status', 'error');
+                  this.cdr.detectChanges();
+                }
+              });
+            } else {
+              this.afterSaveComplete(userId, permissions, nowActive);
+            }
+          };
+
+          // Step 3: Reset password if provided
+          if (this.userForm.password.trim()) {
+            this.api.resetUserPassword(userId, this.userForm.password).subscribe({
+              next: (pwdData: any) => {
+                if (pwdData.status === 'ok') {
+                  afterPermissions();
+                } else {
+                  this.saving = false;
+                  this.showMessage(pwdData.message || 'Access updated, but failed to reset password', 'error');
+                  this.cdr.detectChanges();
+                }
+              },
+              error: () => {
+                this.saving = false;
+                this.showMessage('Access updated, but failed to reset password', 'error');
+                this.cdr.detectChanges();
+              }
+            });
+          } else {
+            afterPermissions();
+          }
+        },
+        error: () => {
+          this.saving = false;
+          this.showMessage('Failed to update user access', 'error');
+          this.cdr.detectChanges();
+        },
+      });
       return;
     }
 
+    // Create new user
     this.saving = true;
+    const permissions = this.normalizePermissions(this.userForm.permissions, this.userForm.role);
     this.api.createUser({
       username: this.userForm.username.trim(),
       password: this.userForm.password,
       role: this.userForm.role,
       tenant_id: this.tenantId,
+      permissions,
     }).subscribe({
       next: (data: any) => {
         this.saving = false;
@@ -222,11 +288,26 @@ export class TenantAdmin implements OnInit {
     });
   }
 
+  private afterSaveComplete(userId: string, permissions: string[], active: boolean) {
+    this.saving = false;
+    // Update local user list to reflect changes immediately
+    this.users = this.users.map(user =>
+      user.id === userId
+        ? { ...user, permissions, active }
+        : user
+    );
+    this.showForm = false;
+    this.showMessage(
+      active ? 'User updated successfully' : 'User disabled successfully',
+      'success'
+    );
+    this.cdr.detectChanges();
+  }
+
   deleteUser(user: TenantUser) {
     if (!confirm(`Delete user "${user.username}" from this tenant?`)) return;
     this.api.deleteUser(user.id).subscribe({
       next: () => {
-        this.removeLocalUserSettings(user.id);
         this.users = this.users.filter(item => item.id !== user.id);
         this.showMessage('User deleted', 'success');
         this.cdr.detectChanges();
@@ -256,7 +337,7 @@ export class TenantAdmin implements OnInit {
   }
 
   getUserStatus(user: TenantUser): 'active' | 'disabled' {
-    return user.status || 'active';
+    return user.active !== false ? 'active' : 'disabled';
   }
 
   getRoleLabel(role: string) {
@@ -264,7 +345,7 @@ export class TenantAdmin implements OnInit {
   }
 
   getPermissionLabels(user: TenantUser) {
-    const permissions = user.permissions || [];
+    const permissions = this.normalizePermissions(user.permissions, user.role);
     return this.permissionOptions
       .filter(option => permissions.includes(option.key))
       .map(option => option.label);
@@ -272,58 +353,44 @@ export class TenantAdmin implements OnInit {
 
   private defaultPermissionsFor(role: string): string[] {
     if (role === 'viewer') {
-      return ['dashboard:view', 'alerts:view', 'health:view'];
+      return ['dashboard', 'alerts', 'health'];
     }
     if (role === 'senior_analyst') {
       return this.permissionOptions.map(option => option.key);
     }
     return [
-      'dashboard:view',
-      'alerts:view',
-      'logs:view',
-      'live:view',
-      'network:view',
-      'intel:view',
-      'health:view',
+      'dashboard',
+      'alerts',
+      'logs',
+      'live',
+      'network-map',
+      'intel',
+      'health',
     ];
   }
 
-  private applyLocalUserSettings(userId: string) {
-    const permissionMap = this.getPermissionMap();
-    permissionMap[userId] = {
-      role: this.userForm.role,
-      status: this.userForm.status,
-      permissions: [...this.userForm.permissions],
-    };
-    localStorage.setItem(this.permissionStorageKey(), JSON.stringify(permissionMap));
-    this.users = this.users.map(user =>
-      user.id === userId
-        ? {
-            ...user,
-            role: this.userForm.role,
-            status: this.userForm.status,
-            permissions: [...this.userForm.permissions],
-          }
-        : user
-    );
+  private normalizePermissions(value: unknown, role: string): string[] {
+    const permissions = Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value.split(',')
+        : this.defaultPermissionsFor(role);
+
+    return Array.from(new Set(permissions
+      .map(permission => String(permission).trim())
+      .filter(Boolean)
+      .map(permission => permission.endsWith(':view')
+        ? permission.replace(':view', '')
+        : permission
+      )
+      .map(permission => permission === 'network' ? 'network-map' : permission)));
   }
 
-  private removeLocalUserSettings(userId: string) {
-    const permissionMap = this.getPermissionMap();
-    delete permissionMap[userId];
-    localStorage.setItem(this.permissionStorageKey(), JSON.stringify(permissionMap));
-  }
+  private isManageableTenantUser(user: TenantUser) {
+    const adminRoles = ['admin', 'super_admin', 'tenant_admin'];
+    if (adminRoles.includes(user.role)) return false;
 
-  private getPermissionMap(): Record<string, { role?: string; status: 'active' | 'disabled'; permissions: string[] }> {
-    try {
-      return JSON.parse(localStorage.getItem(this.permissionStorageKey()) || '{}');
-    } catch {
-      return {};
-    }
-  }
-
-  private permissionStorageKey() {
-    return `ndr_tenant_permissions_${this.tenantId}`;
+    return user.id !== this.currentUser?.id && user.username !== this.currentUser?.username;
   }
 
   private showMessage(message: string, type: 'success' | 'error') {

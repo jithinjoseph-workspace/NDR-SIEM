@@ -1,7 +1,7 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterModule } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { NavigationEnd, Router, RouterModule } from '@angular/router';
+import { filter, Subscription } from 'rxjs';
 import { 
   LayoutDashboard, 
   Bell, 
@@ -26,15 +26,30 @@ import { AuthService } from '../../services/auth/auth';
   templateUrl: './sidebar.html',
   styleUrl: './sidebar.css',
 })
-export class Sidebar implements OnInit {
+export class Sidebar implements OnInit, OnDestroy {
   orgName = 'NDR';
   systemName = 'Network Detection & Response';
   navItems: any[] = [];
   bottomItems: any[] = [];
+  private navigationSub?: Subscription;
 
-  constructor(private auth: AuthService) {}
+  constructor(
+    private auth: AuthService,
+    private router: Router
+  ) {}
 
   ngOnInit() {
+    this.buildNavigation();
+    this.navigationSub = this.router.events
+      .pipe(filter(event => event instanceof NavigationEnd))
+      .subscribe(() => this.buildNavigation());
+  }
+
+  ngOnDestroy() {
+    this.navigationSub?.unsubscribe();
+  }
+
+  private buildNavigation() {
     const user = this.auth.getUser();
     const isDefaultTenant = user?.tenant_id === 'default';
 
@@ -44,23 +59,29 @@ export class Sidebar implements OnInit {
           ? { label: 'Admin Panel', route: '/admin', icon: Users }
           : { label: 'Tenant Users', route: '/tenant-admin', icon: Users },
       ];
-    } else {
-      this.navItems = [
-        { label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard },
-        { label: 'Alerts', route: '/alerts', icon: Bell },
-        { label: 'Network Logs', route: '/logs', icon: FileText },
-        { label: 'Live Stream', route: '/live', icon: Activity },
-        { label: 'Network Map', route: '/network-map', icon: Network },
-        { label: 'Rules', route: '/rules', icon: ShieldAlert },
-        { label: 'Threat Intel', route: '/intel', icon: Search },
-        { label: 'System Health', route: '/health', icon: Database },
-      ];
 
-      if (isDefaultTenant) {
+      if (user?.role === 'tenant_admin') {
         this.navItems.push({ label: 'Sensor Setup', route: '/setup', icon: Settings });
       }
+    } else {
+      this.navItems = [
+        { label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, permission: 'dashboard' },
+        { label: 'Alerts', route: '/alerts', icon: Bell, permission: 'alerts' },
+        { label: 'Network Logs', route: '/logs', icon: FileText, permission: 'logs' },
+        { label: 'Live Stream', route: '/live', icon: Activity, permission: 'live' },
+        { label: 'Network Map', route: '/network-map', icon: Network, permission: 'network-map' },
+        { label: 'Rules', route: '/rules', icon: ShieldAlert, permission: 'rules' },
+        { label: 'Threat Intel', route: '/intel', icon: Search, permission: 'intel' },
+        { label: 'System Health', route: '/health', icon: Database, permission: 'health' },
+      ].filter(item => this.auth.hasPermission(item.permission));
 
-      this.navItems.push({ label: 'SOAR', route: '/soar', icon: Zap });
+      if (isDefaultTenant && this.auth.hasPermission('setup')) {
+        this.navItems.push({ label: 'Sensor Setup', route: '/setup', icon: Settings, permission: 'setup' });
+      }
+
+      if (this.auth.hasPermission('soar')) {
+        this.navItems.push({ label: 'SOAR', route: '/soar', icon: Zap, permission: 'soar' });
+      }
     }
 
     this.bottomItems = [

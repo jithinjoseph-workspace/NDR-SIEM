@@ -88,6 +88,10 @@ pub struct ClickhouseStorage {
     client: Client,
 }
 
+fn sql_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 pub fn default_permissions(role: &str) -> String {
   match role {
     "super_admin" =>
@@ -116,14 +120,149 @@ fn tenant_db(tenant_id: &str) -> String {
 impl ClickhouseStorage {
 
 
-// ── User auth ─────────────────────────────────
+// ── User auth ──────────────────────────────────────────────────────────────
+// All writes to ndr.users use `SETTINGS mutations_sync=1` so ALTER TABLE UPDATE
+// is synchronous. A FINAL read here always reflects the actual current state.
 pub async fn verify_user(
     &self,
     username: &str,
     password: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
+    let esc = sql_escape(username);
+
+    let rows = self.client
+        .query(&format!(
+            "SELECT id, username, password_hash, role, tenant_id, permissions, active \
+             FROM ndr.users FINAL \
+             WHERE username = '{}' \
+             LIMIT 1",
+            esc
+        ))
+        .fetch_all::<(String, String, String, String, String, String, u8)>()
+        .await?;
+
+    let Some(row) = rows.first() else {
+        return Ok(None); // user not found
+    };
+
+    // Disabled accounts are blocked before password check.
+    // Returns a typed sentinel so the caller shows a specific error message.
+    if row.6 != 1 {
+        return Ok(Some(json!({ "__disabled__": true })));
+    }
+
+    if !bcrypt::verify(password, &row.2).unwrap_or(false) {
+        return Ok(None); // wrong password — same response as user-not-found to prevent enumeration
+    }
+
+    Ok(Some(json!({
+        "id":          row.0,
+        "username":    row.1,
+        "role":        row.3,
+        "tenant_id":   row.4,
+        "permissions": row.5,
+    })))
+}
+
+
+pub async fn get_users(
+    &self
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let result = self.client
+        .query("SELECT id, username, role, tenant_id, permissions, active, toString(created_at) FROM ndr.users FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,String,String,String,u8,String)>()
+        .await?;
+    Ok(result.iter().map(|r| json!({
+        "id": r.0,
+        "username": r.1,
+        "role": r.2,
+        "tenant_id": r.3,
+        "permissions": r.4,
+        "active": r.5 == 1,
+        "created_at": r.6
+    })).collect())
+}
+
+pub async fn get_users_by_tenant(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let tenant_id = sql_escape(tenant_id);
     let query = format!(
-        "SELECT id, username, password_hash, role, tenant_id, permissions
+        "SELECT id, username, role, tenant_id, permissions, active, toString(created_at)
+         FROM ndr.users FINAL
+         WHERE tenant_id = '{}'
+         ORDER BY created_at",
+        tenant_id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String,String,String,String,String,u8,String)>()
+        .await?;
+    Ok(result.iter().map(|r| json!({
+        "id": r.0,
+        "username": r.1,
+        "role": r.2,
+        "tenant_id": r.3,
+        "permissions": r.4,
+        "active": r.5 == 1,
+        "created_at": r.6
+    })).collect())
+}
+
+pub async fn get_user_identity(
+    &self,
+    id: &str,
+) -> anyhow::Result<Option<(String, String, String)>> {
+    let id = sql_escape(id);
+    let query = format!(
+        "SELECT username, role, tenant_id
+         FROM ndr.users FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String, String, String)>()
+        .await?;
+    Ok(result.first().cloned())
+}
+
+pub async fn get_user_by_id(
+    &self,
+    id: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let id = sql_escape(id);
+    let query = format!(
+        "SELECT id, username, role, tenant_id, permissions, toString(created_at)
+         FROM ndr.users FINAL
+         WHERE id = '{}'
+         LIMIT 1",
+        id
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String, String, String, String, String, String)>()
+        .await?;
+
+    Ok(result.first().map(|r| json!({
+        "id": r.0,
+        "username": r.1,
+        "role": r.2,
+        "tenant_id": r.3,
+        "permissions": r.4,
+        "created_at": r.5
+    })))
+}
+
+pub async fn get_user_by_username(
+    &self,
+    username: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let username = sql_escape(username);
+    let query = format!(
+        "SELECT id, username, role, tenant_id, permissions, toString(created_at)
          FROM ndr.users FINAL
          WHERE username = '{}'
          LIMIT 1",
@@ -134,39 +273,14 @@ pub async fn verify_user(
         .fetch_all::<(String, String, String, String, String, String)>()
         .await?;
 
-    if let Some(user) = result.first() {
-        let hash = &user.2;
-        if bcrypt::verify(password, hash)
-            .unwrap_or(false) {
-            return Ok(Some(serde_json::json!({
-                "id":          user.0,
-                "username":    user.1,
-                "role":        user.3,
-                "tenant_id":   user.4,
-                "permissions": user.5
-            })));
-        }
-    }
-    Ok(None)
-}
-
-
-
-pub async fn get_users(
-    &self
-) -> anyhow::Result<Vec<serde_json::Value>> {
-    let result = self.client
-        .query("SELECT id, username, role, tenant_id, permissions, toString(created_at) FROM ndr.users FINAL ORDER BY created_at")
-        .fetch_all::<(String,String,String,String,String,String)>()
-        .await?;
-    Ok(result.iter().map(|r| json!({
+    Ok(result.first().map(|r| json!({
         "id": r.0,
         "username": r.1,
         "role": r.2,
         "tenant_id": r.3,
         "permissions": r.4,
         "created_at": r.5
-    })).collect())
+    })))
 }
 
 pub async fn create_user(
@@ -177,10 +291,15 @@ pub async fn create_user(
     tenant_id: &str,
     permissions: &str,
 ) -> anyhow::Result<()> {
+    let username = sql_escape(username);
+    let password_hash = sql_escape(password_hash);
+    let role = sql_escape(role);
+    let tenant_id = sql_escape(tenant_id);
+    let permissions = sql_escape(permissions);
     let query = format!(
         "INSERT INTO ndr.users \
-         (username, password_hash, role, tenant_id, permissions) \
-         VALUES ('{}','{}','{}','{}','{}')",
+         (username, password_hash, role, tenant_id, permissions, active) \
+         VALUES ('{}','{}','{}','{}','{}',1)",
         username, password_hash, role, tenant_id, permissions
     );
     self.client.query(&query).execute().await?;
@@ -192,33 +311,101 @@ pub async fn update_user_permissions(
     id: &str,
     permissions: &str,
 ) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let permissions = sql_escape(permissions);
+    // mutations_sync=1: wait until mutation is applied on disk before returning.
     let query = format!(
-        "SELECT id, username, password_hash, role, tenant_id
-         FROM ndr.users FINAL
-         WHERE id = '{}'
-         LIMIT 1",
+        "ALTER TABLE ndr.users UPDATE permissions = '{}' WHERE id = '{}' SETTINGS mutations_sync=1",
+        permissions, id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn update_user(
+    &self,
+    id: &str,
+    role: &str,
+    tenant_id: &str,
+    permissions: &str,
+    active: bool,
+    password_hash: Option<&str>,
+) -> anyhow::Result<()> {
+    let esc_id          = sql_escape(id);
+    let esc_role        = sql_escape(role);
+    let esc_tenant_id   = sql_escape(tenant_id);
+    let esc_permissions = sql_escape(permissions);
+    let active_flag     = if active { 1 } else { 0 };
+
+    // mutations_sync=1: block until the mutation is applied on disk.
+    // Without this, ALTER TABLE UPDATE is async — a disabled user could still
+    // log in for seconds/minutes until ClickHouse applies the background mutation.
+    let query = match password_hash {
+        Some(hash) => {
+            let esc_hash = sql_escape(hash);
+            format!(
+                "ALTER TABLE ndr.users \
+                 UPDATE role = '{}', tenant_id = '{}', permissions = '{}', \
+                 active = {}, password_hash = '{}' \
+                 WHERE id = '{}' \
+                 SETTINGS mutations_sync=1",
+                esc_role, esc_tenant_id, esc_permissions,
+                active_flag, esc_hash, esc_id
+            )
+        }
+        None => {
+            format!(
+                "ALTER TABLE ndr.users \
+                 UPDATE role = '{}', tenant_id = '{}', permissions = '{}', active = {} \
+                 WHERE id = '{}' \
+                 SETTINGS mutations_sync=1",
+                esc_role, esc_tenant_id, esc_permissions, active_flag, esc_id
+            )
+        }
+    };
+
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn set_user_active(
+    &self,
+    id: &str,
+    active: bool,
+) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    // mutations_sync=1: force synchronous mutation so the active flag is
+    // immediately enforced on the next query. Without this, ALTER TABLE UPDATE
+    // is a background operation — disabled users could still log in for
+    // seconds or minutes after being disabled.
+    let query = format!(
+        "ALTER TABLE ndr.users UPDATE active = {} WHERE id = '{}' SETTINGS mutations_sync=1",
+        if active { 1 } else { 0 },
         id
     );
-    let result = self.client
-        .query(&query)
-        .fetch_all::<(String, String, String, String, String)>()
-        .await?;
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
 
-    if let Some(user) = result.first() {
-        let insert_query = format!(
-            "INSERT INTO ndr.users \
-             (id, username, password_hash, role, tenant_id, permissions, created_at) \
-             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', now() + 1)",
-            user.0, user.1, user.2, user.3, user.4, permissions
-        );
-        self.client.query(&insert_query).execute().await?;
-    }
+pub async fn set_user_password(
+    &self,
+    id: &str,
+    password_hash: &str,
+) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let hash = sql_escape(password_hash);
+    let query = format!(
+        "ALTER TABLE ndr.users UPDATE password_hash = '{}' WHERE id = '{}'",
+        hash, id
+    );
+    self.client.query(&query).execute().await?;
     Ok(())
 }
 
 pub async fn delete_user(
     &self, id: &str
 ) -> anyhow::Result<()> {
+    let id = sql_escape(id);
     let query = format!(
         "ALTER TABLE ndr.users DELETE WHERE id = '{}'",
         id
@@ -246,10 +433,12 @@ pub async fn create_tenant(
     id: &str,
     name: &str,
 ) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    let name = sql_escape(name);
     // 1. Insert into main tenants table
     let query = format!(
-        "INSERT INTO ndr.tenants (id, name, active) \
-         VALUES ('{}','{}',1)",
+        "INSERT INTO ndr.tenants (id, name, active, updated_at) \
+         VALUES ('{}','{}',1,now())",
         id, name
     );
     self.client.query(&query).execute().await?;
@@ -322,6 +511,48 @@ pub async fn create_tenant(
 
     Ok(())
 }
+
+pub async fn update_tenant(
+    &self,
+    id: &str,
+    name: &str,
+    active: bool,
+) -> anyhow::Result<()> {
+    let esc_id   = sql_escape(id);
+    let esc_name = sql_escape(name);
+    // Direct in-place mutation — consistent with set_tenant_active.
+    // No read-then-rewrite; eliminates the ReplacingMergeTree FINAL race.
+    // updated_at is refreshed so the version column stays current.
+    let query = format!(
+        "ALTER TABLE ndr.tenants \
+         UPDATE name = '{}', active = {}, updated_at = now() \
+         WHERE id = '{}'",
+        esc_name,
+        if active { 1 } else { 0 },
+        esc_id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn set_tenant_active(
+    &self,
+    id: &str,
+    active: bool,
+) -> anyhow::Result<()> {
+    let id = sql_escape(id);
+    // ALTER TABLE UPDATE is an atomic, in-place mutation.
+    // It does NOT require reading the row first, eliminating the
+    // ReplacingMergeTree async-merge race condition entirely.
+    // updated_at is also refreshed so the version column stays current.
+    let query = format!(
+        "ALTER TABLE ndr.tenants UPDATE active = {}, updated_at = now() WHERE id = '{}'",
+        if active { 1 } else { 0 },
+        id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
     pub fn new() -> Self {
         let url = std::env::var("CLICKHOUSE_URL")
             .unwrap_or_else(|_| "http://localhost:8123".to_string());
@@ -385,6 +616,8 @@ pub async fn create_tenant(
                 "ALTER TABLE ndr.rules_state ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.sigma_rules ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS permissions String DEFAULT 'dashboard,alerts'",
+                "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS active UInt8 DEFAULT 1",
+                "ALTER TABLE ndr.tenants ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
             ] {
                 if let Err(e) = self.client
                     .query(alter)

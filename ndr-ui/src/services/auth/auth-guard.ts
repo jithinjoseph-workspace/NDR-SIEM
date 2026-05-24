@@ -2,6 +2,7 @@ import { CanActivateFn, ActivatedRouteSnapshot, RouterStateSnapshot } from '@ang
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { AuthService } from './auth';
+import { catchError, map, of } from 'rxjs';
 
 export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: RouterStateSnapshot) => {
   const auth = inject(AuthService);
@@ -12,24 +13,40 @@ export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: R
     return false;
   }
 
-  const requiredRole = route.data?.['role'];
-  if (!requiredRole) {
-    // No specific role required (e.g. settings page), just being logged in is enough
-    return true;
-  }
+  return auth.refreshUser().pipe(
+    map((res: any) => {
+      if (res.status !== 'ok') {
+        auth.logout();
+        return false;
+      }
 
-  const isAdmin = auth.isAdmin();
-  if (requiredRole === 'admin' && !isAdmin) {
-    // Standard user tries to access admin -> redirect to dashboard
-    router.navigate(['/dashboard']);
-    return false;
-  }
+      const requiredRole = route.data?.['role'];
+      const requiredPermission = route.data?.['permission'];
+      if (!requiredRole) {
+        return true;
+      }
 
-  if (requiredRole === 'analyst' && isAdmin) {
-    // Admin tries to access analyst pages -> redirect to admin panel
-    router.navigate(['/admin']);
-    return false;
-  }
+      const isAdmin = auth.isAdmin();
+      if (requiredRole === 'admin' && !isAdmin) {
+        router.navigate([auth.getDefaultRoute()]);
+        return false;
+      }
 
-  return true;
+      if (requiredRole === 'analyst' && isAdmin) {
+        router.navigate([auth.getDefaultRoute()]);
+        return false;
+      }
+
+      if (requiredPermission && !auth.hasPermission(requiredPermission)) {
+        router.navigate([auth.getDefaultRoute()]);
+        return false;
+      }
+
+      return true;
+    }),
+    catchError(() => {
+      auth.logout();
+      return of(false);
+    })
+  );
 };

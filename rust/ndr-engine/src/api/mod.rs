@@ -175,6 +175,39 @@ pub fn extract_claims(
     ).ok().map(|d| d.claims)
 }
 
+fn require_super_admin(
+    headers: &axum::http::HeaderMap,
+) -> Result<AuthClaims, Json<Value>> {
+    match extract_claims(headers) {
+        Some(claims) if claims.role == "super_admin" => Ok(claims),
+        Some(_) => Err(Json(json!({
+            "status": "error",
+            "message": "Forbidden: super admin required"
+        }))),
+        None => Err(Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        }))),
+    }
+}
+
+fn permissions_from_payload(payload: &Value, role: &str) -> String {
+    match payload.get("permissions") {
+        Some(val) => {
+            if let Some(arr) = val.as_array() {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            } else if let Some(s) = val.as_str() {
+                s.to_string()
+            } else {
+                crate::storage::clickhouse::default_permissions(role)
+            }
+        }
+        None => crate::storage::clickhouse::default_permissions(role),
+    }
+}
 
 // Auth middleware
 pub async fn auth_middleware(
@@ -247,7 +280,10 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
         _ => return,
     };
 
-    let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
+    let tenant_id = event.raw.get("tenant_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
     if let Some(obj) = msg.as_object_mut() {
         obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
@@ -2882,22 +2918,41 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
 pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<Value>,
-) -> Json<Value> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
     let username = payload["username"]
         .as_str().unwrap_or("").to_string();
     let password = payload["password"]
         .as_str().unwrap_or("").to_string();
 
     if username.is_empty() || password.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "Username and password required"
-        }));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "error",
+                "message": "Username and password required"
+            }))
+        ).into_response();
     }
 
-    match state.ch_storage
-        .verify_user(&username, &password).await {
+    tracing::info!("🔐 Login attempt: username='{}'", username);
+
+    match state.ch_storage.verify_user(&username, &password).await {
         Ok(Some(user)) => {
+            // Disabled account sentinel — returned by verify_user when
+            // active=0 (or a pending disable mutation exists).
+            if user.get("__disabled__").and_then(|v| v.as_bool()).unwrap_or(false) {
+                tracing::warn!("🚫 Login BLOCKED for disabled account: '{}'", username);
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "status": "error",
+                        "message": "Your account has been disabled. Please contact your administrator."
+                    }))
+                ).into_response();
+            }
+
             let role = user["role"].as_str().unwrap_or("analyst");
             let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
             let permissions_str = if role == "super_admin" || role == "tenant_admin" {
@@ -2916,30 +2971,49 @@ pub async fn login(
                 tenant_id,
                 permissions_vec.clone(),
             );
-            Json(json!({
-                "status": "ok",
-                "token": token,
-                "user": {
-                    "username": username,
-                    "role": role,
-                    "tenant_id": tenant_id,
-                    "permissions": permissions_vec
-                }
-            }))
+            tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "ok",
+                    "token": token,
+                    "user": {
+                        "id": user["id"].as_str().unwrap_or(""),
+                        "username": username,
+                        "role": role,
+                        "tenant_id": tenant_id,
+                        "permissions": permissions_vec
+                    }
+                }))
+            ).into_response()
         }
-        Ok(None) => Json(json!({
-            "status": "error",
-            "message": "Invalid username or password"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
+        Ok(None) => {
+            tracing::warn!("❌ Login FAILED (wrong credentials): username='{}'", username);
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "status": "error",
+                    "message": "Invalid username or password"
+                }))
+            ).into_response()
+        }
+        Err(e) => {
+            tracing::error!("💥 Login DB error for '{}': {}", username, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "status": "error",
+                    "message": "Authentication service error. Please try again."
+                }))
+            ).into_response()
+        }
     }
 }
 
+
 // GET /api/auth/me
 pub async fn get_me(
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Json<Value> {
     let token = headers
@@ -2957,15 +3031,43 @@ pub async fn get_me(
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::default()
     ) {
-        Ok(data) => Json(json!({
-            "status": "ok",
-            "user": {
-                "username": data.claims.sub,
-                "role": data.claims.role,
-                "tenant_id": data.claims.tenant_id,
-                "permissions": data.claims.permissions
+        Ok(data) => {
+            let username = data.claims.sub;
+            match state.ch_storage.get_user_by_username(&username).await {
+                Ok(Some(user)) => {
+                    let role = user["role"].as_str().unwrap_or("analyst");
+                    let permissions_str = if role == "super_admin" || role == "tenant_admin" {
+                        crate::storage::clickhouse::default_permissions(role)
+                    } else {
+                        user["permissions"].as_str().unwrap_or("dashboard,alerts").to_string()
+                    };
+                    let permissions: Vec<String> = permissions_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+
+                    Json(json!({
+                        "status": "ok",
+                        "user": {
+                            "id": user["id"].as_str().unwrap_or(""),
+                            "username": username,
+                            "role": role,
+                            "tenant_id": user["tenant_id"].as_str().unwrap_or("default"),
+                            "permissions": permissions
+                        }
+                    }))
+                }
+                Ok(None) => Json(json!({
+                    "status": "error",
+                    "message": "User not found"
+                })),
+                Err(e) => Json(json!({
+                    "status": "error",
+                    "message": e.to_string()
+                })),
             }
-        })),
+        },
         Err(_) => Json(json!({
             "status": "error",
             "message": "Invalid token"
@@ -2985,8 +3087,30 @@ pub async fn logout() -> Json<Value> {
 // GET /api/auth/users
 pub async fn get_users(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Json<Value> {
-    match state.ch_storage.get_users().await {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized",
+            "users": []
+        })),
+    };
+
+    let result = if claims.role == "super_admin" {
+        state.ch_storage.get_users().await
+    } else if claims.role == "tenant_admin" {
+        state.ch_storage.get_users_by_tenant(&claims.tenant_id).await
+    } else {
+        return Json(json!({
+            "status": "error",
+            "message": "Forbidden",
+            "users": []
+        }));
+    };
+
+    match result {
         Ok(users) => Json(json!({
             "status": "ok",
             "users": users
@@ -3022,17 +3146,29 @@ pub async fn create_user(
         })),
     };
 
-    let is_super_admin = claims.role == "super_admin"
-        || (claims.role == "admin" && claims.tenant_id == "default");
+    let is_super_admin = claims.role == "super_admin";
 
     let (role, tenant_id) = if is_super_admin {
-        if requested_tenant_id.is_empty() || requested_tenant_id == "default" {
+        let allowed_roles = ["tenant_admin", "admin", "senior_analyst", "analyst", "viewer"];
+        if !allowed_roles.contains(&requested_role.as_str()) {
             return Json(json!({
                 "status": "error",
-                "message": "Tenant Admin must be assigned to a tenant"
+                "message": "Invalid role"
             }));
         }
-        ("tenant_admin".to_string(), requested_tenant_id)
+        if requested_role == "tenant_admin" {
+            if requested_tenant_id.is_empty() || requested_tenant_id == "default" {
+                return Json(json!({
+                    "status": "error",
+                    "message": "Tenant Admin must be assigned to a tenant"
+                }));
+            }
+            ("tenant_admin".to_string(), requested_tenant_id)
+        } else if requested_tenant_id.is_empty() {
+            (requested_role, "default".to_string())
+        } else {
+            (requested_role, requested_tenant_id)
+        }
     } else if claims.role == "tenant_admin" {
         let allowed_roles = ["analyst", "senior_analyst", "viewer"];
         if !allowed_roles.contains(&requested_role.as_str()) {
@@ -3049,21 +3185,7 @@ pub async fn create_user(
         }));
     };
 
-    let permissions = match payload.get("permissions") {
-        Some(val) => {
-            if let Some(arr) = val.as_array() {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            } else if let Some(s) = val.as_str() {
-                s.to_string()
-            } else {
-                crate::storage::clickhouse::default_permissions(&role)
-            }
-        }
-        None => crate::storage::clickhouse::default_permissions(&role),
-    };
+    let permissions = permissions_from_payload(&payload, &role);
 
     if username.is_empty() || password.is_empty() {
         return Json(json!({
@@ -3089,13 +3211,188 @@ pub async fn create_user(
     }
 }
 
-// PUT /api/auth/users/:id/permissions
-pub async fn update_user_permissions_api(
+// PUT /api/auth/users/:id
+pub async fn update_user_api(
     State(state): State<AppState>,
-    _headers: axum::http::HeaderMap,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let claims = match require_super_admin(&headers) {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+
+    if let Ok(Some((username, role, _tenant_id))) = state.ch_storage.get_user_identity(&id).await {
+        if username == claims.sub || role == "super_admin" {
+            return Json(json!({
+                "status": "error",
+                "message": "This user cannot be edited here"
+            }));
+        }
+    }
+
+    let role = payload["role"]
+        .as_str().unwrap_or("analyst").to_string();
+    let tenant_id = payload["tenant_id"]
+        .as_str().unwrap_or("default").to_string();
+    let active = payload["active"].as_bool().unwrap_or(true);
+    let password = payload["password"].as_str().unwrap_or("").to_string();
+    let allowed_roles = ["tenant_admin", "admin", "senior_analyst", "analyst", "viewer"];
+
+    if !allowed_roles.contains(&role.as_str()) {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid role"
+        }));
+    }
+    if role == "tenant_admin" && (tenant_id.is_empty() || tenant_id == "default") {
+        return Json(json!({
+            "status": "error",
+            "message": "Tenant Admin must be assigned to a tenant"
+        }));
+    }
+
+    let permissions = permissions_from_payload(&payload, &role);
+    let hash = if password.is_empty() {
+        None
+    } else {
+        Some(bcrypt::hash(&password, 12).unwrap_or_default())
+    };
+
+    match state.ch_storage.update_user(
+        &id, &role, &tenant_id, &permissions, active, hash.as_deref()
+    ).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "User updated"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/auth/users/:id/status
+pub async fn set_user_status_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    // Allow super_admin and tenant_admin
+    let claims = match extract_claims(&headers) {
+        Some(claims) if claims.role == "super_admin" || claims.role == "tenant_admin" => claims,
+        Some(_) => return Json(json!({
+            "status": "error",
+            "message": "Forbidden: admin role required"
+        })),
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        })),
+    };
+
+    // Look up the target user to validate permissions
+    if let Ok(Some((username, role, target_tenant))) = state.ch_storage.get_user_identity(&id).await {
+        // Cannot deactivate yourself or other super_admins
+        if username == claims.sub || role == "super_admin" {
+            return Json(json!({
+                "status": "error",
+                "message": "This user cannot be deactivated here"
+            }));
+        }
+        // Tenant admins can only manage users in their own tenant
+        if claims.role == "tenant_admin" && target_tenant != claims.tenant_id {
+            return Json(json!({
+                "status": "error",
+                "message": "Cannot modify users outside your tenant"
+            }));
+        }
+        // Tenant admins cannot deactivate other admins
+        if claims.role == "tenant_admin" && (role == "tenant_admin" || role == "admin") {
+            return Json(json!({
+                "status": "error",
+                "message": "Cannot modify admin users"
+            }));
+        }
+    }
+
+    let active = payload["active"].as_bool().unwrap_or(true);
+
+    match state.ch_storage.set_user_active(&id, active).await {
+        Ok(_) => {
+            info!("{} {} user {} (id={})",
+                claims.sub,
+                if active { "activated" } else { "deactivated" },
+                id, claims.tenant_id
+            );
+            Json(json!({
+                "status": "ok",
+                "message": if active { "User activated" } else { "User deactivated" }
+            }))
+        }
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+
+// PUT /api/auth/users/:id/permissions
+pub async fn update_user_permissions_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        })),
+    };
+
+    let target_user = match state.ch_storage.get_user_by_id(&id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return Json(json!({
+            "status": "error",
+            "message": "User not found"
+        })),
+        Err(e) => return Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    };
+
+    let target_role = target_user["role"].as_str().unwrap_or("");
+    let target_tenant_id = target_user["tenant_id"].as_str().unwrap_or("");
+    let is_super_admin = claims.role == "super_admin"
+        || (claims.role == "admin" && claims.tenant_id == "default");
+
+    if target_role == "super_admin" {
+        return Json(json!({
+            "status": "error",
+            "message": "Super admin permissions cannot be changed here"
+        }));
+    } else if claims.role == "tenant_admin" {
+        let manageable_roles = ["analyst", "senior_analyst", "viewer"];
+        if claims.tenant_id != target_tenant_id || !manageable_roles.contains(&target_role) {
+            return Json(json!({
+                "status": "error",
+                "message": "Forbidden"
+            }));
+        }
+    } else if !is_super_admin {
+        return Json(json!({
+            "status": "error",
+            "message": "Forbidden"
+        }));
+    }
+
     let permissions = match payload.get("permissions") {
         Some(val) => {
             if let Some(arr) = val.as_array() {
@@ -3123,11 +3420,130 @@ pub async fn update_user_permissions_api(
     }
 }
 
+// POST /api/auth/users/:id/password
+pub async fn reset_user_password_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        })),
+    };
+
+    let target_user = match state.ch_storage.get_user_by_id(&id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return Json(json!({
+            "status": "error",
+            "message": "User not found"
+        })),
+        Err(e) => return Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    };
+
+    let target_role = target_user["role"].as_str().unwrap_or("");
+    let target_tenant_id = target_user["tenant_id"].as_str().unwrap_or("");
+    let is_super_admin = claims.role == "super_admin"
+        || (claims.role == "admin" && claims.tenant_id == "default");
+
+    if target_role == "super_admin" {
+        return Json(json!({
+            "status": "error",
+            "message": "Super admin password cannot be changed here"
+        }));
+    } else if claims.role == "tenant_admin" {
+        let manageable_roles = ["analyst", "senior_analyst", "viewer"];
+        if claims.tenant_id != target_tenant_id || !manageable_roles.contains(&target_role) {
+            return Json(json!({
+                "status": "error",
+                "message": "Forbidden"
+            }));
+        }
+    } else if !is_super_admin {
+        return Json(json!({
+            "status": "error",
+            "message": "Forbidden"
+        }));
+    }
+
+    let password = match payload.get("password").and_then(|v| v.as_str()) {
+        Some(p) if !p.is_empty() => p,
+        _ => return Json(json!({
+            "status": "error",
+            "message": "Password is required"
+        })),
+    };
+
+    // Hash the new password using bcrypt
+    let password_hash = bcrypt::hash(password, 12).unwrap_or_default();
+
+    match state.ch_storage.set_user_password(&id, &password_hash).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Password updated successfully"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
 // DELETE /api/auth/users/:id
 pub async fn delete_user(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        })),
+    };
+
+    let target = match state.ch_storage.get_user_identity(&id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => return Json(json!({
+            "status": "error",
+            "message": "User not found"
+        })),
+        Err(e) => return Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    };
+    let (username, role, tenant_id) = target;
+
+    if claims.role == "super_admin" {
+        if username == claims.sub || role == "super_admin" {
+            return Json(json!({
+                "status": "error",
+                "message": "This user cannot be deleted here"
+            }));
+        }
+    } else if claims.role == "tenant_admin" {
+        let protected_roles = ["super_admin", "admin", "tenant_admin"];
+        if tenant_id != claims.tenant_id || protected_roles.contains(&role.as_str()) {
+            return Json(json!({
+                "status": "error",
+                "message": "Tenant admins can only delete tenant users"
+            }));
+        }
+    } else {
+        return Json(json!({
+            "status": "error",
+            "message": "Forbidden"
+        }));
+    }
+
     match state.ch_storage.delete_user(&id).await {
         Ok(_) => Json(json!({
             "status": "ok",
@@ -3143,7 +3559,12 @@ pub async fn delete_user(
 // GET /api/auth/tenants
 pub async fn get_tenants(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
     match state.ch_storage.get_tenants().await {
         Ok(tenants) => Json(json!({
             "status": "ok",
@@ -3160,8 +3581,13 @@ pub async fn get_tenants(
 // POST /api/auth/tenants
 pub async fn create_tenant(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
     let name = payload["name"]
         .as_str().unwrap_or("").to_string();
     let id = payload["id"]
@@ -3187,7 +3613,82 @@ pub async fn create_tenant(
     }
 }
 
-pub async fn get_engines() -> Json<Value> {
+// PUT /api/auth/tenants/:id
+pub async fn update_tenant_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let name = payload["name"].as_str().unwrap_or("").to_string();
+    let active = payload["active"].as_bool().unwrap_or(true);
+
+    if id == "default" && !active {
+        return Json(json!({
+            "status": "error",
+            "message": "Default tenant cannot be deactivated"
+        }));
+    }
+    if name.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Tenant name required"
+        }));
+    }
+
+    match state.ch_storage.update_tenant(&id, &name, active).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Tenant updated"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/auth/tenants/:id/status
+pub async fn set_tenant_status_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let active = payload["active"].as_bool().unwrap_or(true);
+
+    if id == "default" && !active {
+        return Json(json!({
+            "status": "error",
+            "message": "Default tenant cannot be deactivated"
+        }));
+    }
+
+    match state.ch_storage.set_tenant_active(&id, active).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": if active { "Tenant activated" } else { "Tenant deactivated" }
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+pub async fn get_engines(
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
     let output = std::process::Command::new("docker")
         .args(["ps",
             "--filter", "name=ndr-engine",
@@ -3219,8 +3720,13 @@ pub async fn get_engines() -> Json<Value> {
 }
 
 pub async fn scale_engines(
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
     let action = payload["action"].as_str().unwrap_or("up");
     let engine_name = payload["engine"].as_str().unwrap_or("");
 

@@ -108,10 +108,13 @@ pkill -f agent.py 2>/dev/null || true
 systemctl stop ndr-vector 2>/dev/null || true
 systemctl stop ndr-agent 2>/dev/null || true
 systemctl stop suricata 2>/dev/null || true
-pkill -f zeek 2>/dev/null || true
-pkill -f vector 2>/dev/null || true
-
-sleep 3
+pkill -9 -f suricata 2>/dev/null || true
+pkill -9 -f zeek 2>/dev/null || true
+pkill -9 -f vector 2>/dev/null || true
+rm -f /tmp/suricata.pid
+rm -f /var/run/suricata.pid
+rm -f /run/suricata.pid
+sleep 2
 
 # Verify all stopped
 log "Verifying services stopped..."
@@ -220,7 +223,6 @@ log "Creating directories..."
 mkdir -p /opt/ndr-sensor
 mkdir -p /var/log/ndr/zeek
 mkdir -p /var/log/ndr/suricata
-mkdir -p /var/log/ndr/zeek/current
 mkdir -p /etc/ndr
 mkdir -p /etc/vector/data
 
@@ -256,10 +258,10 @@ data_dir = "/etc/vector/data"
 [sources.zeek_logs]
 type = "file"
 include = [
-    "/var/log/ndr/zeek/current/conn.log",
-    "/var/log/ndr/zeek/current/dns.log",
-    "/var/log/ndr/zeek/current/http.log",
-    "/var/log/ndr/zeek/current/ssl.log"
+    "/var/log/ndr/zeek/conn.log",
+    "/var/log/ndr/zeek/dns.log",
+    "/var/log/ndr/zeek/http.log",
+    "/var/log/ndr/zeek/ssl.log"
 ]
 read_from = "end"
 
@@ -408,7 +410,9 @@ def start_zeek():
     try:
         # Kill any stale zeek processes
         subprocess.run(['pkill', '-9', '-f', 'zeek'], capture_output=True)
-        time.sleep(1)
+        time.sleep(2)
+        # Clear Vector checkpoints so it reads from current position
+        subprocess.run(["rm", "-rf", "/etc/vector/data/suricata", "/etc/vector/data/zeek"], capture_output=True)
         # Start Zeek directly exactly like ndr-agent.py
         subprocess.Popen(
             ["/opt/zeek/bin/zeek", "-i", IFACE, "local", "Log::default_logdir=/var/log/ndr/zeek"],
@@ -425,9 +429,9 @@ def start_suricata():
     try:
         # Kill any stale suricata processes
         subprocess.run(['pkill', '-9', '-f', 'suricata'], capture_output=True)
-        time.sleep(1)
-        # Clean stale PID files
-        subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/tmp/suricata.pid'], capture_output=True)
+        time.sleep(2)
+        # Clean ALL stale PID files
+        subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/var/run/suricata/suricata.pid'], capture_output=True)
         # Start Suricata directly exactly like ndr-agent.py
         subprocess.Popen(
             [
@@ -539,6 +543,10 @@ def execute_command(cmd):
 if __name__ == '__main__':
     print(f"[NDR] Agent starting for tenant: {TENANT_ID}")
     print(f"[NDR] Cloud: {CLOUD_URL}")
+
+    # Auto-create log directories
+    os.makedirs("/var/log/ndr/suricata", exist_ok=True)
+    os.makedirs("/var/log/ndr/zeek", exist_ok=True)
 
     # Initial start of all services
     print("[NDR] Starting sensor services...")
