@@ -156,6 +156,16 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  get selectedTenantName() {
+    return this.selectedTenant === 'all'
+      ? 'All tenants'
+      : this.tenantName(this.selectedTenant);
+  }
+
+  get selectedTenantIsInactive() {
+    return this.selectedTenant !== 'all' && this.isTenantInactive(this.selectedTenant);
+  }
+
   get filteredTenants() {
     const query = this.tenantSearch.trim().toLowerCase();
     return this.tenants.filter(tenant => {
@@ -535,6 +545,12 @@ export class Admin implements OnInit, OnDestroy {
 
   tenantAdminCount(tenantId: string) {
     return this.tenantAdmins.filter(user => user.tenant_id === tenantId).length;
+  }
+
+  blockedUserCount(tenantId: string) {
+    return this.isTenantInactive(tenantId)
+      ? this.users.filter(user => user.tenant_id === tenantId && user.active !== false).length
+      : 0;
   }
 
   tenantName(tenantId: string) {

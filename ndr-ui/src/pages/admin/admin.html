@@ -153,25 +153,45 @@
       </button>
     </div>
 
-    <div class="toolbar">
+    <div class="toolbar user-toolbar">
       <label class="search-field">
         <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
         <input
           [(ngModel)]="userSearch"
           type="search"
-          placeholder="Search users, roles, or tenants"
+          placeholder="Search users or roles"
         />
       </label>
       <select [(ngModel)]="selectedTenant" class="tenant-filter">
         <option value="all">All tenants</option>
         <option *ngFor="let tenant of tenants" [value]="tenant.id">
-          {{ tenant.name }}
+          {{ tenant.name }} - {{ tenant.active ? 'Active' : 'Inactive' }}
         </option>
       </select>
       <button class="secondary-action" type="button" (click)="loadUsers()">
         <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
         Refresh
       </button>
+    </div>
+
+    <div class="user-summary">
+      <div>
+        <strong>{{ selectedTenantName }}</strong>
+        <span *ngIf="selectedTenant === 'all'">{{ filteredTenantAdmins.length }} users shown</span>
+        <span *ngIf="selectedTenant !== 'all'">
+          {{ tenantUserCount(selectedTenant) }} users
+          <span *ngIf="blockedUserCount(selectedTenant)">
+            - {{ blockedUserCount(selectedTenant) }} blocked by tenant
+          </span>
+        </span>
+      </div>
+      <span *ngIf="selectedTenantIsInactive" class="status-pill inactive">
+        Tenant inactive
+      </span>
+    </div>
+
+    <div *ngIf="selectedTenantIsInactive" class="tenant-blocked-banner">
+      This tenant is inactive. Active users in this tenant are blocked from access.
     </div>
 
     <div *ngIf="loadingUsers" class="loading-state">Loading users...</div>
