@@ -111,6 +111,7 @@ pub struct AppState {
     pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
     pub redis:      Arc<redis::Client>,
+    pub kafka_producer: Arc<rdkafka::producer::FutureProducer>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -184,7 +185,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor"];
+    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -265,9 +266,15 @@ pub async fn get_network_map(State(state): State<AppState>, headers: axum::http:
 }
 
 pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
+    let tenant_id = hit.zeek.raw.get("tenant_id")
+        .or_else(|| hit.suricata.raw.get("tenant_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+
   // ── Get thresholds from ClickHouse ────────
     let settings = state.ch_storage
-        .get_settings().await
+        .get_settings_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
 let store_threshold = settings["store_threshold"]
     .as_f64().unwrap_or(10.0) as f32;
@@ -334,9 +341,9 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     }
 
     // Persist to ClickHouse
- 
-    // Persist to ClickHouse
+
     let ch = state.ch_storage.clone();
+    let tenant_id_clone = tenant_id.clone();
     let ch_hit = crate::storage::clickhouse::NdrHit {
     timestamp:    chrono::Utc::now().timestamp() as u32,
     community_id: hit.community_id.clone(),
@@ -353,11 +360,10 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     dst_country:  enrichment.dst_geo.as_ref()
                     .map(|g| g.country_code.clone())
                     .unwrap_or_default(),
-    tenant_id:    std::env::var("TENANT_ID")
-                    .unwrap_or_else(|_| "default".to_string()),
+    tenant_id:    tenant_id.clone(),
     };
     tokio::spawn(async move {
-        if let Err(e) = ch.insert_hit(ch_hit).await {
+        if let Err(e) = ch.insert_hit_for_tenant(ch_hit, &tenant_id_clone).await {
             tracing::warn!("ClickHouse hit insert error: {}", e);
         }
     });
@@ -2259,9 +2265,11 @@ pub async fn configure_slack(
 
 // Get settings
 pub async fn get_settings(
-    State(state): State<AppState>
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Json<Value> {
-    match state.ch_storage.get_settings().await {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_settings_by_tenant(&tenant_id).await {
         Ok(settings) => Json(json!({
             "status": "ok",
             "settings": settings
@@ -2281,8 +2289,10 @@ pub async fn get_settings(
 // Update settings
 pub async fn update_settings(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let settings = vec![
         "store_threshold",
         "alert_threshold", 
@@ -2293,7 +2303,7 @@ pub async fn update_settings(
     for key in &settings {
         if let Some(val) = payload[key].as_f64() {
             let _ = state.ch_storage
-                .save_setting(key, &val.to_string())
+                .save_setting_by_tenant(key, &val.to_string(), &tenant_id)
                 .await;
         }
     }
@@ -3468,17 +3478,130 @@ pub async fn get_jira_tickets(
 }
 
 
-// ── Sensor Registration & Heartbeat ──────────────────────────────────────
+// ── Sensor Key Management, Registration & Heartbeat ────────────────────────
+fn generate_sensor_key(tenant_id: &str) -> (String, String, String) {
+    use rand::Rng;
+    let random: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    let plain = format!("NDR-{}-{}", tenant_id, random);
+    let prefix = plain[..16.min(plain.len())].to_string();
+    let hash = bcrypt::hash(&plain, 10).unwrap_or_default();
+    (plain, prefix, hash)
+}
 
-pub async fn sensor_register(
-    State(_state): State<AppState>,
+pub async fn validate_sensor_key(
+    headers: &axum::http::HeaderMap,
+    ch: &Arc<ClickhouseStorage>,
+) -> Option<String> {
+    let key = headers
+        .get("X-Sensor-Key")
+        .or_else(|| headers.get("x-sensor-key"))?
+        .to_str().ok()?;
+    
+    ch.validate_sensor_key(key).await.ok()?
+}
+
+pub async fn create_sensor_key_api(
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let claims = extract_claims(&headers);
-    let tenant_id = claims
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" {
+        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can create sensor keys"}));
+    }
+    
+    let tenant_id = payload["tenant_id"].as_str().unwrap_or("").to_string();
+    let name = payload["name"].as_str().unwrap_or("").to_string();
+    
+    if tenant_id.is_empty() || name.is_empty() {
+        return Json(json!({"status": "error", "message": "tenant_id and name are required"}));
+    }
+    
+    let (plain, prefix, hash) = generate_sensor_key(&tenant_id);
+    
+    match state.ch_storage.create_sensor_key(&tenant_id, &name, &hash, &prefix).await {
+        Ok(id) => Json(json!({
+            "status": "ok",
+            "key": plain,
+            "id": id,
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+pub async fn get_sensor_keys(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    
+    let target_tenant = if claims.role == "super_admin" {
+        "default".to_string()
+    } else if claims.role == "tenant_admin" {
+        claims.tenant_id.clone()
+    } else {
+        return Json(json!({"status": "error", "message": "Forbidden"}));
+    };
+    
+    match state.ch_storage.get_sensor_keys(&target_tenant).await {
+        Ok(keys) => Json(json!({
+            "status": "ok",
+            "keys": keys
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+pub async fn revoke_sensor_key_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" {
+        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can revoke sensor keys"}));
+    }
+    
+    match state.ch_storage.revoke_sensor_key(&id).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Sensor key revoked"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
+pub async fn sensor_register(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+        Some(tid) => tid,
+        None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
+    };
 
     let hostname  = payload["hostname"].as_str().unwrap_or("unknown");
     let interface = payload["interface"].as_str().unwrap_or("unknown");
@@ -3497,14 +3620,14 @@ pub async fn sensor_register(
 }
 
 pub async fn sensor_heartbeat(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let claims = extract_claims(&headers);
-    let tenant_id = claims
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
+    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+        Some(tid) => tid,
+        None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
+    };
 
     tracing::info!(
         "Heartbeat from tenant={} zeek={} suricata={}",
@@ -3515,3 +3638,243 @@ pub async fn sensor_heartbeat(
 
     Json(json!({"status": "ok"}))
 }
+
+pub async fn ingest_events(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Json<Value> {
+    // Validate sensor key
+    let sensor_key = headers
+        .get("X-Sensor-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if sensor_key.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Missing X-Sensor-Key header"
+        }));
+    }
+
+    // Validate key and get tenant_id
+    let tenant_id = match state.ch_storage
+        .validate_sensor_key(sensor_key).await {
+        Ok(Some(tid)) => tid,
+        _ => return Json(json!({
+            "status": "error",
+            "message": "Invalid sensor key"
+        }))
+    };
+
+    // Parse body which can be standard JSON (Format 1/2) or newline-delimited JSON (ndjson)
+    let events_arr: Vec<Value> = if let Ok(payload) = serde_json::from_str::<Value>(&body) {
+        if let Some(arr) = payload.get("events").and_then(|e| e.as_array()) {
+            arr.clone()
+        } else if payload.is_object() {
+            vec![payload]
+        } else if let Some(arr) = payload.as_array() {
+            arr.clone()
+        } else {
+            return Json(json!({
+                "status": "error",
+                "message": "Invalid payload format"
+            }));
+        }
+    } else {
+        let mut parsed_events = Vec::new();
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                if let Some(arr) = val.get("events").and_then(|e| e.as_array()) {
+                    parsed_events.extend(arr.clone());
+                } else {
+                    parsed_events.push(val);
+                }
+            } else {
+                tracing::warn!("Failed to parse ndjson line: {}", trimmed);
+            }
+        }
+        if parsed_events.is_empty() {
+            return Json(json!({
+                "status": "error",
+                "message": "Invalid JSON or ndjson payload"
+            }));
+        }
+        parsed_events
+    };
+
+    let mut published = 0u64;
+    let mut failed = 0u64;
+
+    for event in &events_arr {
+        // Add tenant_id to event
+        let mut evt = event.clone();
+        if let Some(obj) = evt.as_object_mut() {
+            obj.insert(
+                "tenant_id".to_string(),
+                serde_json::Value::String(tenant_id.clone())
+            );
+        }
+
+        // Serialize event to JSON string
+        let payload_str = match serde_json::to_string(&evt) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to serialize event: {}", e);
+                failed += 1;
+                continue;
+            }
+        };
+
+        // Publish to Kafka
+        use rdkafka::producer::FutureRecord;
+        let record = FutureRecord::<str, str>::to("ndr-events")
+            .payload(&payload_str);
+
+        match state.kafka_producer
+            .send(record, 
+                std::time::Duration::from_secs(5))
+            .await {
+            Ok(_) => {
+                published += 1;
+            },
+            Err((e, _)) => {
+                tracing::warn!(
+                    "Failed to publish to Kafka: {}", e);
+                failed += 1;
+            }
+        }
+    }
+
+    tracing::info!(
+        "Ingest: published={} failed={} tenant={}",
+        published, failed, tenant_id
+    );
+
+    Json(json!({
+        "status": "ok",
+        "published": published,
+        "failed": failed,
+        "tenant_id": tenant_id
+    }))
+}
+
+pub async fn get_sensor_command_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    // Validate sensor key
+    let sensor_key = headers
+        .get("X-Sensor-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if sensor_key.is_empty() {
+        return Json(json!({
+            "command": ""
+        }));
+    }
+
+    // Validate key and get tenant_id
+    let tenant_id = match state.ch_storage
+        .validate_sensor_key(sensor_key).await {
+        Ok(Some(tid)) => tid,
+        _ => return Json(json!({ "command": "" }))
+    };
+
+    // Get pending command
+    let command = state.ch_storage
+        .get_sensor_command(&tenant_id).await
+        .unwrap_or_default();
+
+    // Clear command after sending
+    if !command.is_empty() {
+        let _ = state.ch_storage
+            .clear_sensor_command(&tenant_id).await;
+        tracing::info!(
+            "Command '{}' sent to sensor tenant={}",
+            command, tenant_id
+        );
+    }
+
+    Json(json!({ "command": command }))
+}
+
+pub async fn sensor_control_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    // JWT auth - admin or tenant_admin only
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        }))
+    };
+
+    // Only admin or tenant_admin can control sensors
+    if claims.role != "admin" 
+        && claims.role != "super_admin"
+        && claims.role != "tenant_admin" {
+        return Json(json!({
+            "status": "error",
+            "message": "Insufficient permissions"
+        }));
+    }
+
+    let command = payload["command"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // Validate command
+    if !["start", "stop", "restart"].contains(&command.as_str()) {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid command. Use: start, stop, restart"
+        }));
+    }
+
+    // Get tenant_id - admin can specify, tenant_admin uses own
+    let tenant_id = if claims.role == "super_admin" 
+        || claims.role == "admin" {
+        payload["tenant_id"]
+            .as_str()
+            .unwrap_or(&claims.tenant_id)
+            .to_string()
+    } else {
+        claims.tenant_id.clone()
+    };
+
+    // Store command for sensor to pick up
+    match state.ch_storage
+        .set_sensor_command(&tenant_id, &command).await {
+        Ok(_) => {
+            tracing::info!(
+                "Sensor command '{}' set for tenant={}",
+                command, tenant_id
+            );
+            Json(json!({
+                "status": "ok",
+                "message": format!(
+                    "Command '{}' queued for tenant {}",
+                    command, tenant_id
+                ),
+                "tenant_id": tenant_id,
+                "command": command
+            }))
+        },
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": format!("Failed to set command: {}", e)
+        }))
+    }
+}
+
+

@@ -23,10 +23,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite        = { version = "0.31", features = ["bundled"] }
 anyhow          = "1"
 rdkafka         = { version = "0.36", features = ["cmake-build"] }
-tower-http      = { version = "0.5", features = ["cors"] }
+tower-http      = { version = "0.5", features = ["cors", "decompression-gzip"] }
 clickhouse      = { version = "0.11", features = ["watch"] }
 url = "2"
 jsonwebtoken = "9"
 bcrypt = "0.15"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
 redis = { version = "0.23", features = ["tokio-comp"] }
 futures-util = "0.3"
