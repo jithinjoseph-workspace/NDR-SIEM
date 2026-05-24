@@ -108,8 +108,24 @@ export class Api {
   }
 
   exportReport(format: string, hours: number = 24): void {
-    const url = `http://localhost:3000/api/export?format=${format}&hours=${hours}`;
-    window.open(url, '_blank');
+    const url = `${this.baseUrl}/export?format=${format}&hours=${hours}`;
+
+    this.http.get(url, { responseType: 'blob', observe: 'response' })
+      .subscribe(response => {
+        const blob = response.body;
+        if (!blob) return;
+
+        const contentDisposition = response.headers.get('content-disposition');
+        const filename = contentDisposition?.match(/filename="(.+)"/)?.[1]
+          ?? `ndr-report.${format === 'pdf' ? 'html' : format}`;
+
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(objectUrl);
+      });
   }
 
   getSoarStatus(): Observable<any> {
