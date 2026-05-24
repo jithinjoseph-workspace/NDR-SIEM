@@ -9,8 +9,10 @@
 }
 
 html, body {
+  /* Ensure full height for the application layout */
   height: 100%;
   margin: 0;
+  /* Apply global theme colors */
   background-color: var(--color-surface, #070e1d);
   color: var(--color-on-surface-variant, #dfe5fa);
   font-family: var(--font-sans);
