@@ -1,4 +1,4 @@
-import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -6,6 +6,7 @@ import { AuthService } from '../../services/auth/auth';
 import { LucideAngularModule, Search, Bell, User, ChevronDown } from 'lucide-angular';
 import { Websocket } from '../../services/websocket/websocket';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
+import { Api } from '../../services/api/api';
 
 @Component({
   selector: 'app-navbar',
@@ -14,7 +15,7 @@ import { Notifications, ThreatNotification } from '../../services/notifications/
   templateUrl: './navbar.html',
   styleUrl: './navbar.css',
 })
-export class Navbar implements OnInit {
+export class Navbar implements OnInit, OnDestroy {
   SearchIcon = Search;
   BellIcon = Bell;
   UserIcon = User;
@@ -39,6 +40,7 @@ export class Navbar implements OnInit {
   ];
 
   filteredSuggestions: any[] = [];
+  private statusInterval: ReturnType<typeof setInterval> | null = null;
 
   get permittedSuggestions() {
     return this.suggestions.filter(s => this.canOpenPermission(s.permission));
@@ -53,14 +55,17 @@ export class Navbar implements OnInit {
     private router: Router,
     private ws: Websocket,
     private notifications: Notifications,
+    private api: Api,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
+    this.refreshSystemStatus();
+    this.statusInterval = setInterval(() => this.refreshSystemStatus(), 10000);
+
     this.ws.lastAgentStatus$.subscribe(data => {
       if (!data) return;
-      const allRunning = data.zeek === 'running' && data.suricata === 'running';
-      this.systemStatus = allRunning ? 'OPERATIONAL' : 'DEGRADED';
+      this.applySystemStatus(data);
       this.cdr.detectChanges();
     });
 
@@ -191,8 +196,34 @@ export class Navbar implements OnInit {
     this.auth.logout();
   }
 
+  ngOnDestroy() {
+    if (this.statusInterval) clearInterval(this.statusInterval);
+  }
+
   private canOpenPermission(permission: string) {
     return this.auth.hasPermission(permission);
+  }
+
+  private refreshSystemStatus() {
+    this.api.getAgentStatus().subscribe({
+      next: data => {
+        this.applySystemStatus(data);
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  private applySystemStatus(data: any) {
+    const zeekRunning = this.isRunning(data?.zeek);
+    const suricataRunning = this.isRunning(data?.suricata);
+    const vectorRunning = this.isRunning(data?.vector);
+    this.systemStatus = zeekRunning || suricataRunning || vectorRunning ? 'OPERATIONAL' : 'DEGRADED';
+  }
+
+  private isRunning(status: unknown) {
+    const value = String(status || '').toLowerCase().trim();
+    if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return true;
+    return /^\d+$/.test(value);
   }
 
   private navigateIfAllowed(route: string, permission: string, queryParams?: Record<string, string>) {

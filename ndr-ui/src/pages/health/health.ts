@@ -52,10 +52,11 @@ export class Health implements OnInit, OnDestroy {
     this.subs.push(
       this.ws.lastAgentStatus$.subscribe(data => {
         if (!data) return;
-        this.updateStatus('zeek',     data.zeek     === 'running' ? 'running' : 'stopped');
-        this.updateStatus('suricata', data.suricata === 'running' ? 'running' : 'stopped');
-        this.updateStatus('vector',   data.vector   === 'running' ? 'running' : 'stopped');
-        this.updateStatus('kafka',    data.kafka     === 'running' ? 'running' : 'stopped');
+        this.updateStatus('zeek', this.normalizeStatus(data.zeek));
+        this.updateStatus('suricata', this.normalizeStatus(data.suricata));
+        this.updateStatus('vector', this.normalizeStatus(data.vector));
+        this.updateStatus('kafka', this.normalizeStatus(data.kafka));
+        this.updateStatus('clickhouse', this.normalizeStatus(data.clickhouse));
         this.cdr.detectChanges();
       })
     );
@@ -73,12 +74,12 @@ export class Health implements OnInit, OnDestroy {
 
         // Update all service statuses from services object
         const svc = data.services || {};
-        this.updateStatus('zeek',       svc.zeek       || 'unknown');
-        this.updateStatus('suricata',   svc.suricata   || 'unknown');
-        this.updateStatus('vector',     svc.vector     || 'unknown');
-        this.updateStatus('kafka',      svc.kafka      || 'unknown');
-        this.updateStatus('engine',     svc.engine     || 'running');
-        this.updateStatus('clickhouse', svc.clickhouse || 'unknown');
+        this.updateStatus('zeek', this.normalizeStatus(svc.zeek));
+        this.updateStatus('suricata', this.normalizeStatus(svc.suricata));
+        this.updateStatus('vector', this.normalizeStatus(svc.vector));
+        this.updateStatus('kafka', this.normalizeStatus(svc.kafka));
+        this.updateStatus('engine', this.normalizeStatus(svc.engine || 'running'));
+        this.updateStatus('clickhouse', this.normalizeStatus(svc.clickhouse));
         this.cdr.detectChanges();
       },
       error: () => {
@@ -92,6 +93,14 @@ export class Health implements OnInit, OnDestroy {
   updateStatus(type: string, status: string) {
     const svc = this.services.find(s => s.type === type);
     if (svc) svc.status = status;
+  }
+
+  private normalizeStatus(status: unknown): string {
+    const value = String(status || 'unknown').toLowerCase().trim();
+    if (!value || value === 'unknown') return 'unknown';
+    if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return 'running';
+    if (['stopped', 'down', 'error', 'failed', 'inactive'].includes(value)) return 'stopped';
+    return /^\d+$/.test(value) ? 'running' : value;
   }
 
   getStatusDotClass(status: string): string {

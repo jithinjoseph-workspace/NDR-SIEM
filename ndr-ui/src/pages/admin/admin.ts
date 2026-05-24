@@ -67,10 +67,15 @@ export class Admin implements OnInit, OnDestroy {
   };
   roleOptions = [
     { value: 'tenant_admin', label: 'Tenant Admin' },
+    { value: 'default_user', label: 'Default User' },
     { value: 'admin', label: 'Platform Admin' },
     { value: 'senior_analyst', label: 'Senior Analyst' },
     { value: 'analyst', label: 'Analyst' },
     { value: 'viewer', label: 'Viewer' },
+  ];
+  createUserRoleOptions = [
+    { value: 'tenant_admin', label: 'Tenant Admin' },
+    { value: 'default_user', label: 'Default User' },
   ];
   savingUser = false;
   userMsg = '';
@@ -208,6 +213,7 @@ export class Admin implements OnInit, OnDestroy {
       this.showMsg('Username and password required', 'error');
       return;
     }
+    this.applyRoleTenantRules(this.newUser);
     if (this.newUser.role === 'tenant_admin' && (!this.newUser.tenant_id || this.newUser.tenant_id === 'default')) {
       this.showMsg('Select a tenant for the tenant admin', 'error');
       return;
@@ -287,6 +293,7 @@ export class Admin implements OnInit, OnDestroy {
 
   saveUserEdit() {
     if (!this.editingUser) return;
+    this.applyRoleTenantRules(this.userForm);
     if (this.userForm.role === 'tenant_admin' && this.userForm.tenant_id === 'default') {
       this.showMsg('Tenant admin must be assigned to a tenant', 'error');
       return;
@@ -543,15 +550,11 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   onNewUserRoleChange() {
-    if (this.newUser.role !== 'tenant_admin' && !this.newUser.tenant_id) {
-      this.newUser.tenant_id = 'default';
-    }
+    this.applyRoleTenantRules(this.newUser);
   }
 
   onEditUserRoleChange() {
-    if (this.userForm.role !== 'tenant_admin' && !this.userForm.tenant_id) {
-      this.userForm.tenant_id = 'default';
-    }
+    this.applyRoleTenantRules(this.userForm);
     this.userForm.permissions = this.defaultPermissionsFor(this.userForm.role);
   }
 
@@ -561,12 +564,24 @@ export class Admin implements OnInit, OnDestroy {
         return 'dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users';
       case 'admin':
         return 'dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup';
+      case 'default_user':
+        return 'dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,setup';
       case 'senior_analyst':
         return 'dashboard,alerts,logs,live,rules,soar,network-map,intel,health';
       case 'analyst':
         return 'dashboard,alerts,logs,live,network-map,intel,health';
       default:
         return 'dashboard,alerts,health';
+    }
+  }
+
+  private applyRoleTenantRules(user: { role: string; tenant_id: string }) {
+    if (user.role === 'default_user') {
+      user.tenant_id = 'default';
+    } else if (user.role !== 'tenant_admin' && !user.tenant_id) {
+      user.tenant_id = 'default';
+    } else if (user.role === 'tenant_admin' && user.tenant_id === 'default') {
+      user.tenant_id = '';
     }
   }
 

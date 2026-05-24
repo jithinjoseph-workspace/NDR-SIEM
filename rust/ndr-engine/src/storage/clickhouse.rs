@@ -100,6 +100,8 @@ pub fn default_permissions(role: &str) -> String {
       "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup",
     "tenant_admin" =>
       "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users",
+    "default_user" =>
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,setup",
     "senior_analyst" =>
       "dashboard,alerts,logs,live,rules,soar,network-map,intel,health",
     "analyst" =>
@@ -1359,7 +1361,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
-        let pairs = self.client.query(&format!("
+        let recent_query = format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
                 groupArray(DISTINCT proto) as protocols
@@ -1368,9 +1370,25 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
               AND timestamp > now() - INTERVAL 1 HOUR
             GROUP BY src_ip, dst_ip
             ORDER BY connections DESC
-            LIMIT 100", db_name))
+            LIMIT 100", db_name);
+        let fallback_query = format!("
+            SELECT src_ip, dst_ip,
+                count() as connections,
+                groupArray(DISTINCT proto) as protocols
+            FROM {}.ndr_events
+            WHERE src_ip != '' AND dst_ip != ''
+            GROUP BY src_ip, dst_ip
+            ORDER BY connections DESC
+            LIMIT 100", db_name);
+
+        let mut pairs = self.client.query(&recent_query)
             .fetch_all::<NetworkPair>()
             .await.unwrap_or_default();
+        if pairs.is_empty() {
+            pairs = self.client.query(&fallback_query)
+                .fetch_all::<NetworkPair>()
+                .await.unwrap_or_default();
+        }
         let mut nodes: std::collections::HashMap<String, serde_json::Value> = 
             std::collections::HashMap::new();
         let mut edges: Vec<serde_json::Value> = Vec::new();
@@ -1395,9 +1413,13 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 "protocols": pair.protocols
             }));
         }
+        let total_nodes = nodes.len();
+        let total_edges = edges.len();
         Ok(serde_json::json!({
             "nodes": nodes.values().collect::<Vec<_>>(),
-            "edges": edges
+            "edges": edges,
+            "total_nodes": total_nodes,
+            "total_edges": total_edges
         }))
     }
 

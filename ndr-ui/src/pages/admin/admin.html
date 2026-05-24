@@ -368,7 +368,7 @@
       <label class="form-field">
         <span>Role</span>
         <select [(ngModel)]="newUser.role" (ngModelChange)="onNewUserRoleChange()">
-          <option *ngFor="let option of roleOptions" [value]="option.value">
+          <option *ngFor="let option of createUserRoleOptions" [value]="option.value">
             {{ option.label }}
           </option>
         </select>
@@ -376,13 +376,19 @@
 
       <label class="form-field">
         <span>Tenant</span>
-        <select [(ngModel)]="newUser.tenant_id">
-          <option value="">Select tenant</option>
+        <select [(ngModel)]="newUser.tenant_id" [disabled]="newUser.role === 'default_user'">
+          <option value="" [hidden]="newUser.role === 'default_user'">Select tenant</option>
           <option
             *ngFor="let tenant of tenants"
             [value]="tenant.id"
-            [hidden]="newUser.role === 'tenant_admin' && tenant.id === 'default'"
-            [disabled]="newUser.role === 'tenant_admin' && tenant.id === 'default'"
+            [hidden]="
+              (newUser.role === 'tenant_admin' && tenant.id === 'default') ||
+              (newUser.role === 'default_user' && tenant.id !== 'default')
+            "
+            [disabled]="
+              (newUser.role === 'tenant_admin' && tenant.id === 'default') ||
+              (newUser.role === 'default_user' && tenant.id !== 'default')
+            "
           >
             {{ tenant.name }}
           </option>
@@ -482,8 +488,19 @@
 
       <label class="form-field">
         <span>Tenant</span>
-        <select [(ngModel)]="userForm.tenant_id">
-          <option *ngFor="let tenant of tenants" [value]="tenant.id">
+        <select [(ngModel)]="userForm.tenant_id" [disabled]="userForm.role === 'default_user'">
+          <option
+            *ngFor="let tenant of tenants"
+            [value]="tenant.id"
+            [hidden]="
+              (userForm.role === 'tenant_admin' && tenant.id === 'default') ||
+              (userForm.role === 'default_user' && tenant.id !== 'default')
+            "
+            [disabled]="
+              (userForm.role === 'tenant_admin' && tenant.id === 'default') ||
+              (userForm.role === 'default_user' && tenant.id !== 'default')
+            "
+          >
             {{ tenant.name }}
           </option>
         </select>

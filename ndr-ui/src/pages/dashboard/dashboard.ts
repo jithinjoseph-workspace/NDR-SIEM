@@ -37,6 +37,7 @@ export class Dashboard implements OnInit, OnDestroy {
   private refreshInterval: any;
   private static chartInitialized: boolean = false;
   private static savedChartData: number[] = [];
+  private static savedChartLabels: string[] = [];
   private static savedTotalEvents: number = 0;
   private static savedTotalHits: number = 0;
   private static savedTenantId: string = '';
@@ -44,6 +45,7 @@ export class Dashboard implements OnInit, OnDestroy {
   static clearCache() {
     Dashboard.chartInitialized = false;
     Dashboard.savedChartData = [];
+    Dashboard.savedChartLabels = [];
     Dashboard.savedTotalEvents = 0;
     Dashboard.savedTotalHits = 0;
     Dashboard.savedTenantId = '';
@@ -99,14 +101,22 @@ export class Dashboard implements OnInit, OnDestroy {
     Dashboard.savedTenantId = currentTenant;
 
     this.chartService.start();
+    const snapshot = this.chartService.getSnapshot();
 
     // Restore saved state if exists
-    this.chartLabels = ['', '', '', '', '', ''];
     if (Dashboard.savedChartData.length > 0) {
+      this.chartLabels = [...Dashboard.savedChartLabels];
       this.chartData = [...Dashboard.savedChartData];
       this.totalEvents = Dashboard.savedTotalEvents;
       this.totalHits = Dashboard.savedTotalHits;
+      Dashboard.chartInitialized = true;
+    } else if (snapshot.data.some(value => value > 0) || snapshot.labels.some(label => !!label)) {
+      this.chartLabels = [...snapshot.labels];
+      this.chartData = [...snapshot.data];
+      this.eventsLastHour = this.chartService.getLatestEventsLastHour();
+      Dashboard.chartInitialized = true;
     } else {
+      this.chartLabels = ['', '', '', '', '', ''];
       this.chartData = [0, 0, 0, 0, 0, 0];
     }
     this.updateChartData();
@@ -178,6 +188,7 @@ export class Dashboard implements OnInit, OnDestroy {
 
       // Persist state for same-tenant navigation
       Dashboard.savedChartData = [...this.chartData];
+      Dashboard.savedChartLabels = [...this.chartLabels];
       Dashboard.savedTotalEvents = this.totalEvents;
       Dashboard.savedTotalHits = this.totalHits;
 
@@ -211,6 +222,7 @@ export class Dashboard implements OnInit, OnDestroy {
     this.chartData.push(this.eventsLastHour);
     this.updateChartData();
     Dashboard.savedChartData = [...this.chartData];
+    Dashboard.savedChartLabels = [...this.chartLabels];
   }
 
   syncChartFromService() {
@@ -220,6 +232,7 @@ export class Dashboard implements OnInit, OnDestroy {
     this.eventsLastHour = this.chartService.getLatestEventsLastHour();
     this.updateChartData();
     Dashboard.savedChartData = [...this.chartData];
+    Dashboard.savedChartLabels = [...this.chartLabels];
   }
 
   updateChartData() {
