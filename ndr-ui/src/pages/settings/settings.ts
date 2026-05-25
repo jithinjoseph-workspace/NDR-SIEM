@@ -2,11 +2,23 @@ import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
+import {
+    LucideAngularModule,
+    AlertTriangle,
+    Bell,
+    CheckCircle2,
+    Database,
+    LoaderCircle,
+    Save,
+    ShieldAlert,
+    SlidersHorizontal,
+    Workflow
+} from 'lucide-angular';
 
 @Component({
     selector: 'app-settings',
     standalone: true,
-    imports: [CommonModule, FormsModule],
+    imports: [CommonModule, FormsModule, LucideAngularModule],
     templateUrl: './settings.html',
     styleUrl: './settings.css'
 })
@@ -22,6 +34,16 @@ export class Settings implements OnInit {
         critical_threshold: 90,
         soar_threshold:     75
     };
+
+    SlidersIcon = SlidersHorizontal;
+    SaveIcon = Save;
+    CheckIcon = CheckCircle2;
+    ErrorIcon = AlertTriangle;
+    DatabaseIcon = Database;
+    BellIcon = Bell;
+    CriticalIcon = ShieldAlert;
+    WorkflowIcon = Workflow;
+    LoadingIcon = LoaderCircle;
 
     constructor(
         private api: Api,
@@ -59,7 +81,7 @@ export class Settings implements OnInit {
         this.api.updateSettings(this.thresholds).subscribe({
             next: (data: any) => {
                 this.saving = false;
-                this.message = '✅ Settings saved!';
+                this.message = 'Settings saved';
                 this.cdr.detectChanges();
                 setTimeout(() => {
                     this.message = '';
@@ -68,7 +90,7 @@ export class Settings implements OnInit {
             },
             error: () => {
                 this.saving = false;
-                this.error = '❌ Failed to save settings';
+                this.error = 'Failed to save settings';
                 this.cdr.detectChanges();
             }
         });
