@@ -278,6 +278,43 @@ button:disabled {
   width: 100%;
 }
 
+.sensor-form {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(14rem, 1.2fr) auto;
+  align-items: end;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.sensor-form .form-field {
+  margin-top: 0;
+}
+
+.command-strip,
+.secret-block {
+  margin: 1rem 1.5rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.5rem;
+  background: #0f172a;
+}
+
+.command-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.command-strip code,
+.secret-block code {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #e2e8f0;
+}
+
 .user-toolbar {
   align-items: center;
   gap: 1rem;
@@ -405,6 +442,23 @@ code,
 .table-row {
   display: grid;
   grid-template-columns: minmax(14rem, 2fr) minmax(11rem, 1.15fr) minmax(9rem, 0.9fr) minmax(9rem, 0.9fr) minmax(13rem, 1.2fr);
+  align-items: center;
+  gap: 1rem;
+  min-height: 4.6rem;
+  padding: 0.9rem 1.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.07);
+}
+
+.sensor-table-row {
+  display: grid;
+  grid-template-columns:
+    minmax(11rem, 1.3fr)
+    minmax(10rem, 1fr)
+    minmax(10rem, 1fr)
+    minmax(7rem, 0.7fr)
+    minmax(9rem, 0.8fr)
+    minmax(9rem, 0.8fr)
+    minmax(7rem, 0.7fr);
   align-items: center;
   gap: 1rem;
   min-height: 4.6rem;
@@ -560,6 +614,10 @@ code,
   .table-row {
     min-width: 48rem;
   }
+
+  .sensor-table-row {
+    min-width: 72rem;
+  }
 }
 
 @media (max-width: 700px) {
@@ -584,6 +642,16 @@ code,
   .secondary-action,
   .danger-action {
     width: 100%;
+  }
+
+  .sensor-form,
+  .command-strip {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .command-strip {
+    flex-direction: column;
   }
 
   .tenant-meta {
