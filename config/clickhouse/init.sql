@@ -169,6 +169,25 @@ WHERE NOT EXISTS (
     SELECT 1 FROM ndr.tenants FINAL WHERE id = 'default'
 );
 
+CREATE TABLE IF NOT EXISTS ndr.announcements
+(
+    id             String,
+    title          String,
+    message        String,
+    announcement_type String DEFAULT 'info',
+    audience       String DEFAULT 'all',
+    status         String DEFAULT 'draft',
+    target_roles   Array(String),
+    target_tenants Array(String),
+    start_at       DateTime DEFAULT now(),
+    end_at         Nullable(DateTime),
+    created_by     String,
+    created_at     DateTime DEFAULT now(),
+    updated_at     DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY id;
+
 CREATE TABLE IF NOT EXISTS ndr.sigma_rules
 (
     id          String,

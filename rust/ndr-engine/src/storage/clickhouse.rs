@@ -127,6 +127,19 @@ fn sql_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
+fn sql_array_literal(values: &[String]) -> String {
+    if values.is_empty() {
+        return "CAST([], 'Array(String)')".to_string();
+    }
+
+    let items = values
+        .iter()
+        .map(|value| format!("'{}'", sql_escape(value)))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", items)
+}
+
 pub fn default_permissions(role: &str) -> String {
   match role {
     "super_admin" =>
@@ -559,6 +572,7 @@ pub async fn create_tenant(
             if stmt.contains("CREATE DATABASE IF NOT EXISTS ndr") 
                 || stmt.contains("ndr.users") 
                 || stmt.contains("ndr.tenants") 
+                || stmt.contains("ndr.announcements")
                 || stmt.contains("ndr.rules_state")
             {
                 continue;
@@ -628,6 +642,181 @@ pub async fn set_tenant_active(
     self.client.query(&query).execute().await?;
     Ok(())
 }
+
+pub async fn create_announcement(
+    &self,
+    id: &str,
+    title: &str,
+    message: &str,
+    announcement_type: &str,
+    audience: &str,
+    status: &str,
+    target_roles: &[String],
+    target_tenants: &[String],
+    start_at: Option<&str>,
+    end_at: Option<&str>,
+    created_by: &str,
+) -> anyhow::Result<()> {
+    let start_expr = start_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "now()".to_string());
+    let end_expr = end_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "NULL".to_string());
+    let query = format!(
+        "INSERT INTO ndr.announcements \
+         (id, title, message, announcement_type, audience, status, target_roles, target_tenants, start_at, end_at, created_by, updated_at) \
+         VALUES ('{}','{}','{}','{}','{}','{}',{},{},{},{},'{}',now())",
+        sql_escape(id),
+        sql_escape(title),
+        sql_escape(message),
+        sql_escape(announcement_type),
+        sql_escape(audience),
+        sql_escape(status),
+        sql_array_literal(target_roles),
+        sql_array_literal(target_tenants),
+        start_expr,
+        end_expr,
+        sql_escape(created_by),
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn get_announcements(
+    &self,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let result = self.client
+        .query(
+            "SELECT id, title, message, announcement_type, audience, status, target_roles, target_tenants, \
+             toString(start_at), ifNull(toString(end_at), ''), created_by, \
+             toString(created_at), toString(updated_at) \
+             FROM ndr.announcements FINAL \
+             ORDER BY updated_at DESC"
+        )
+        .fetch_all::<(String,String,String,String,String,String,Vec<String>,Vec<String>,String,String,String,String,String)>()
+        .await?;
+
+    Ok(result.iter().map(|r| json!({
+        "id": r.0,
+        "title": r.1,
+        "message": r.2,
+        "type": r.3,
+        "audience": r.4,
+        "status": r.5,
+        "active": r.5 == "active",
+        "target_roles": r.6,
+        "target_tenants": r.7,
+        "start_at": r.8,
+        "starts_at": r.8,
+        "end_at": r.9,
+        "ends_at": r.9,
+        "created_by": r.10,
+        "created_at": r.11,
+        "updated_at": r.12
+    })).collect())
+}
+
+pub async fn get_active_announcements(
+    &self,
+    role: &str,
+    tenant_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let role = sql_escape(role);
+    let tenant_id = sql_escape(tenant_id);
+    let query = format!(
+        "SELECT id, title, message, announcement_type, audience, status, target_roles, target_tenants, \
+         toString(start_at), ifNull(toString(end_at), ''), created_by, \
+         toString(created_at), toString(updated_at) \
+         FROM ndr.announcements FINAL \
+         WHERE status = 'active' \
+           AND start_at <= now() \
+           AND (isNull(end_at) OR end_at >= now()) \
+           AND (length(target_roles) = 0 OR has(target_roles, 'all') OR has(target_roles, '{}')) \
+           AND (length(target_tenants) = 0 OR has(target_tenants, 'all') OR has(target_tenants, '{}')) \
+         ORDER BY start_at DESC, updated_at DESC",
+        role,
+        tenant_id,
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<(String,String,String,String,String,String,Vec<String>,Vec<String>,String,String,String,String,String)>()
+        .await?;
+
+    Ok(result.iter().map(|r| json!({
+        "id": r.0,
+        "title": r.1,
+        "message": r.2,
+        "type": r.3,
+        "audience": r.4,
+        "status": r.5,
+        "active": r.5 == "active",
+        "target_roles": r.6,
+        "target_tenants": r.7,
+        "start_at": r.8,
+        "starts_at": r.8,
+        "end_at": r.9,
+        "ends_at": r.9,
+        "created_by": r.10,
+        "created_at": r.11,
+        "updated_at": r.12
+    })).collect())
+}
+
+pub async fn update_announcement(
+    &self,
+    id: &str,
+    title: &str,
+    message: &str,
+    announcement_type: &str,
+    audience: &str,
+    status: &str,
+    target_roles: &[String],
+    target_tenants: &[String],
+    start_at: Option<&str>,
+    end_at: Option<&str>,
+) -> anyhow::Result<()> {
+    let start_expr = start_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "now()".to_string());
+    let end_expr = end_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "NULL".to_string());
+    let query = format!(
+        "ALTER TABLE ndr.announcements UPDATE \
+         title = '{}', message = '{}', announcement_type = '{}', audience = '{}', status = '{}', target_roles = {}, \
+         target_tenants = {}, start_at = {}, end_at = {}, updated_at = now() \
+         WHERE id = '{}' SETTINGS mutations_sync=1",
+        sql_escape(title),
+        sql_escape(message),
+        sql_escape(announcement_type),
+        sql_escape(audience),
+        sql_escape(status),
+        sql_array_literal(target_roles),
+        sql_array_literal(target_tenants),
+        start_expr,
+        end_expr,
+        sql_escape(id),
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn delete_announcement(
+    &self,
+    id: &str,
+) -> anyhow::Result<()> {
+    let query = format!(
+        "ALTER TABLE ndr.announcements DELETE WHERE id = '{}' SETTINGS mutations_sync=1",
+        sql_escape(id)
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
     pub fn new() -> Self {
         let url = std::env::var("CLICKHOUSE_URL")
             .unwrap_or_else(|_| "http://localhost:8123".to_string());
@@ -689,6 +878,33 @@ pub async fn set_tenant_active(
                 sql_path
             );
             
+            let announcements_table = "
+                CREATE TABLE IF NOT EXISTS ndr.announcements
+                (
+                    id             String,
+                    title          String,
+                    message        String,
+                    announcement_type String DEFAULT 'info',
+                    audience       String DEFAULT 'all',
+                    status         String DEFAULT 'draft',
+                    target_roles   Array(String),
+                    target_tenants Array(String),
+                    start_at       DateTime DEFAULT now(),
+                    end_at         Nullable(DateTime),
+                    created_by     String,
+                    created_at     DateTime DEFAULT now(),
+                    updated_at     DateTime DEFAULT now()
+                )
+                ENGINE = ReplacingMergeTree(updated_at)
+                ORDER BY id
+            ";
+            if let Err(e) = self.client
+                .query(announcements_table)
+                .execute()
+                .await {
+                tracing::debug!("Announcements table init skipped: {}", e);
+            }
+
             // Ensure tenant_id columns exist
             for alter in &[
                 "ALTER TABLE ndr.ndr_events ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
@@ -708,6 +924,9 @@ pub async fn set_tenant_active(
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS suricata_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS vector_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_commands ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
+                "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS announcement_type String DEFAULT 'info'",
+                "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS audience String DEFAULT 'all'",
+                "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS target_tenants Array(String) DEFAULT []",
             ] {
                 if let Err(e) = self.client
                     .query(alter)

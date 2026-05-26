@@ -226,6 +226,65 @@ fn permissions_from_payload(payload: &Value, role: &str) -> String {
     }
 }
 
+fn string_list_from_payload(payload: &Value, key: &str) -> Vec<String> {
+    match payload.get(key) {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        Some(Value::String(value)) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn announcement_status_from_payload(payload: &Value) -> String {
+    if let Some(status) = payload["status"].as_str() {
+        return status.trim().to_string();
+    }
+    match payload["active"].as_bool() {
+        Some(true) => "active".to_string(),
+        Some(false) => "inactive".to_string(),
+        None => "draft".to_string(),
+    }
+}
+
+fn announcement_targets_from_payload(payload: &Value) -> (String, Vec<String>, Vec<String>) {
+    let audience = payload["audience"].as_str().unwrap_or("all").trim().to_string();
+    let mut target_roles = string_list_from_payload(payload, "target_roles");
+    let mut target_tenants = string_list_from_payload(payload, "target_tenants");
+
+    match audience.as_str() {
+        "tenant_admins" if target_roles.is_empty() => {
+            target_roles.push("tenant_admin".to_string());
+        }
+        "tenant" => {
+            if target_tenants.is_empty() {
+                if let Some(tenant_id) = payload["tenant_id"].as_str() {
+                    let tenant_id = tenant_id.trim();
+                    if !tenant_id.is_empty() {
+                        target_tenants.push(tenant_id.to_string());
+                    }
+                }
+            }
+        }
+        "all" if target_roles.is_empty() && target_tenants.is_empty() => {
+            target_roles.push("all".to_string());
+            target_tenants.push("all".to_string());
+        }
+        _ => {}
+    }
+
+    (audience, target_roles, target_tenants)
+}
+
 // Auth middleware
 pub async fn auth_middleware(
     State(state): State<AppState>,
@@ -3828,6 +3887,206 @@ pub async fn set_tenant_status_api(
         Ok(_) => Json(json!({
             "status": "ok",
             "message": if active { "Tenant activated" } else { "Tenant deactivated" }
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// GET /api/announcements
+pub async fn get_announcements_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    match state.ch_storage.get_announcements().await {
+        Ok(announcements) => Json(json!({
+            "status": "ok",
+            "announcements": announcements
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "announcements": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+// GET /api/announcements/active
+pub async fn get_active_announcements_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "announcements": [],
+            "message": "Unauthorized"
+        })),
+    };
+
+    match state.ch_storage
+        .get_active_announcements(&claims.role, &claims.tenant_id)
+        .await {
+        Ok(announcements) => Json(json!({
+            "status": "ok",
+            "announcements": announcements
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "announcements": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/announcements
+pub async fn create_announcement_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match require_super_admin(&headers) {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+
+    let title = payload["title"].as_str().unwrap_or("").trim().to_string();
+    let message = payload["message"].as_str().unwrap_or("").trim().to_string();
+    let announcement_type = payload["announcement_type"]
+        .as_str()
+        .or_else(|| payload["type"].as_str())
+        .unwrap_or("info")
+        .trim()
+        .to_string();
+    let status = announcement_status_from_payload(&payload);
+    let (audience, target_roles, target_tenants) = announcement_targets_from_payload(&payload);
+    let start_at = payload["start_at"].as_str()
+        .or_else(|| payload["starts_at"].as_str());
+    let end_at = payload["end_at"].as_str()
+        .or_else(|| payload["ends_at"].as_str());
+
+    if title.is_empty() || message.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Title and message are required"
+        }));
+    }
+    if !["draft", "active", "inactive"].contains(&status.as_str()) {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid status"
+        }));
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    match state.ch_storage.create_announcement(
+        &id,
+        &title,
+        &message,
+        &announcement_type,
+        &audience,
+        &status,
+        &target_roles,
+        &target_tenants,
+        start_at,
+        end_at,
+        &claims.sub,
+    ).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "id": id,
+            "message": "Announcement created"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// PUT /api/announcements/:id
+pub async fn update_announcement_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    let title = payload["title"].as_str().unwrap_or("").trim().to_string();
+    let message = payload["message"].as_str().unwrap_or("").trim().to_string();
+    let announcement_type = payload["announcement_type"]
+        .as_str()
+        .or_else(|| payload["type"].as_str())
+        .unwrap_or("info")
+        .trim()
+        .to_string();
+    let status = announcement_status_from_payload(&payload);
+    let (audience, target_roles, target_tenants) = announcement_targets_from_payload(&payload);
+    let start_at = payload["start_at"].as_str()
+        .or_else(|| payload["starts_at"].as_str());
+    let end_at = payload["end_at"].as_str()
+        .or_else(|| payload["ends_at"].as_str());
+
+    if title.is_empty() || message.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Title and message are required"
+        }));
+    }
+    if !["draft", "active", "inactive"].contains(&status.as_str()) {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid status"
+        }));
+    }
+
+    match state.ch_storage.update_announcement(
+        &id,
+        &title,
+        &message,
+        &announcement_type,
+        &audience,
+        &status,
+        &target_roles,
+        &target_tenants,
+        start_at,
+        end_at,
+    ).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Announcement updated"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// DELETE /api/announcements/:id
+pub async fn delete_announcement_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    match state.ch_storage.delete_announcement(&id).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Announcement deleted"
         })),
         Err(e) => Json(json!({
             "status": "error",
