@@ -278,6 +278,54 @@ button:disabled {
   width: 100%;
 }
 
+.user-toolbar {
+  align-items: center;
+  gap: 1rem;
+}
+
+.user-toolbar .search-field {
+  flex: 1 1 28rem;
+}
+
+.user-toolbar .tenant-filter {
+  flex: 0 1 18rem;
+}
+
+.user-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.5rem;
+  padding: 0.85rem 1.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.user-summary strong,
+.user-summary span {
+  display: block;
+}
+
+.user-summary strong {
+  font-size: 0.9rem;
+}
+
+.user-summary span {
+  margin-top: 0.18rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.tenant-blocked-banner {
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid rgba(251, 191, 36, 0.16);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fde68a;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 .tenant-row,
 .engine-row {
   min-height: 4.75rem;
@@ -356,11 +404,11 @@ code,
 
 .table-row {
   display: grid;
-  grid-template-columns: minmax(13rem, 2fr) minmax(10rem, 1.2fr) minmax(8rem, 0.8fr) minmax(7rem, 0.8fr) minmax(12rem, 1.2fr);
+  grid-template-columns: minmax(14rem, 2fr) minmax(11rem, 1.15fr) minmax(9rem, 0.9fr) minmax(9rem, 0.9fr) minmax(13rem, 1.2fr);
   align-items: center;
   gap: 1rem;
-  min-height: 4.25rem;
-  padding: 0.75rem 1.5rem;
+  min-height: 4.6rem;
+  padding: 0.9rem 1.5rem;
   border-top: 1px solid rgba(148, 163, 184, 0.07);
 }
 

@@ -75,8 +75,10 @@ export class NetworkMap implements OnInit {
     this.selectedNode = null;
     this.api.getNetworkMap().subscribe({
       next: (data: any) => {
-        this.nodeCount = data.total_nodes || 0;
-        this.edgeCount = data.total_edges || 0;
+        const nodes = data.nodes || [];
+        const edges = data.edges || [];
+        this.nodeCount = data.total_nodes ?? nodes.length;
+        this.edgeCount = data.total_edges ?? edges.length;
         this.lastUpdated = new Date().toLocaleTimeString('en-US', {
           hour: '2-digit',
           minute: '2-digit',
@@ -84,7 +86,7 @@ export class NetworkMap implements OnInit {
         });
         this.loading = false;
         this.cdr.detectChanges();
-        setTimeout(() => this.renderGraph(data.nodes || [], data.edges || []), 100);
+        setTimeout(() => this.renderGraph(nodes, edges), 100);
       },
       error: () => {
         this.loading = false;

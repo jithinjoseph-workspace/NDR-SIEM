@@ -74,12 +74,16 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   updateStatus(data: any) {
-    this.zeekStatus = data.zeek || 'stopped';
-    this.suricataStatus = data.suricata || 'stopped';
-    this.vectorStatus = data.vector || 'stopped';
+    this.zeekStatus = this.normalizeStatus(data.zeek);
+    this.suricataStatus = this.normalizeStatus(data.suricata);
+    this.vectorStatus = this.normalizeStatus(data.vector);
     this.selectedInterface = data.interface || this.selectedInterface;
 
-    if (data.zeek === 'running' || data.suricata === 'running' || data.vector === 'running') {
+    if (
+      this.zeekStatus === 'running' ||
+      this.suricataStatus === 'running' ||
+      this.vectorStatus === 'running'
+    ) {
       this.status = 'Running';
     } else if (this.status !== 'Starting...' && this.status !== 'Stopping...') {
       this.status = 'Stopped';
@@ -127,8 +131,13 @@ export class Setup implements OnInit, OnDestroy {
       this.api.getAgentStatus().subscribe({
         next: (data: any) => {
           if (data) {
-            const isRunning = data.zeek === 'running' || data.suricata === 'running' || data.vector === 'running';
-            const matched = (expected === 'Running' && isRunning) || (expected === 'Stopped' && !isRunning);
+            const normalizedRunning =
+              this.normalizeStatus(data.zeek) === 'running' ||
+              this.normalizeStatus(data.suricata) === 'running' ||
+              this.normalizeStatus(data.vector) === 'running';
+            const matched =
+              (expected === 'Running' && normalizedRunning) ||
+              (expected === 'Stopped' && !normalizedRunning);
 
             if (matched || attempts >= 5) {
               this.status = 'Ready'; // Reset to force re-evaluation in updateStatus
@@ -149,5 +158,12 @@ export class Setup implements OnInit, OnDestroy {
         }
       });
     }, 2000);
+  }
+
+  private normalizeStatus(status: unknown): string {
+    const value = String(status || 'stopped').toLowerCase().trim();
+    if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return 'running';
+    if (['stopped', 'down', 'error', 'failed', 'inactive', 'unknown'].includes(value)) return 'stopped';
+    return /^\d+$/.test(value) ? 'running' : value;
   }
 }

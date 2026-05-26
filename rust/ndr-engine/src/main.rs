@@ -310,8 +310,8 @@ tokio::spawn(async move {
         .route("/api/ingest",           post(api::ingest_events))
         .route("/api/sensor/command",   get(api::get_sensor_command_api))
         .route("/api/sensor/control",   post(api::sensor_control_api))
-        .with_state(state)
-        .layer(axum::middleware::from_fn(api::auth_middleware))
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(state, api::auth_middleware))
         .layer(RequestDecompressionLayer::new())
         .layer(cors);
 
@@ -351,7 +351,6 @@ tokio::spawn(async move {
     axum::serve(listener, app).await.unwrap();
 
 }
-
 
 
 

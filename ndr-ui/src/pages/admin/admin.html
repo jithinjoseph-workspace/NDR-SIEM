@@ -153,25 +153,45 @@
       </button>
     </div>
 
-    <div class="toolbar">
+    <div class="toolbar user-toolbar">
       <label class="search-field">
         <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
         <input
           [(ngModel)]="userSearch"
           type="search"
-          placeholder="Search users, roles, or tenants"
+          placeholder="Search users or roles"
         />
       </label>
       <select [(ngModel)]="selectedTenant" class="tenant-filter">
         <option value="all">All tenants</option>
         <option *ngFor="let tenant of tenants" [value]="tenant.id">
-          {{ tenant.name }}
+          {{ tenant.name }} - {{ tenant.active ? 'Active' : 'Inactive' }}
         </option>
       </select>
       <button class="secondary-action" type="button" (click)="loadUsers()">
         <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
         Refresh
       </button>
+    </div>
+
+    <div class="user-summary">
+      <div>
+        <strong>{{ selectedTenantName }}</strong>
+        <span *ngIf="selectedTenant === 'all'">{{ filteredTenantAdmins.length }} users shown</span>
+        <span *ngIf="selectedTenant !== 'all'">
+          {{ tenantUserCount(selectedTenant) }} users
+          <span *ngIf="blockedUserCount(selectedTenant)">
+            - {{ blockedUserCount(selectedTenant) }} blocked by tenant
+          </span>
+        </span>
+      </div>
+      <span *ngIf="selectedTenantIsInactive" class="status-pill inactive">
+        Tenant inactive
+      </span>
+    </div>
+
+    <div *ngIf="selectedTenantIsInactive" class="tenant-blocked-banner">
+      This tenant is inactive. Active users in this tenant are blocked from access.
     </div>
 
     <div *ngIf="loadingUsers" class="loading-state">Loading users...</div>
@@ -200,8 +220,8 @@
         </div>
         <span>{{ tenantName(user.tenant_id) }}</span>
         <span class="role-pill">{{ roleLabel(user.role) }}</span>
-        <span [class]="'status-pill ' + (user.active === false ? 'inactive' : 'active')">
-          {{ user.active === false ? 'Disabled' : 'Active' }}
+        <span [class]="'status-pill ' + userStatusClass(user)">
+          {{ userStatusLabel(user) }}
         </span>
         <div class="row-actions action-row">
           <button
@@ -368,7 +388,7 @@
       <label class="form-field">
         <span>Role</span>
         <select [(ngModel)]="newUser.role" (ngModelChange)="onNewUserRoleChange()">
-          <option *ngFor="let option of roleOptions" [value]="option.value">
+          <option *ngFor="let option of createUserRoleOptions" [value]="option.value">
             {{ option.label }}
           </option>
         </select>
@@ -376,13 +396,19 @@
 
       <label class="form-field">
         <span>Tenant</span>
-        <select [(ngModel)]="newUser.tenant_id">
-          <option value="">Select tenant</option>
+        <select [(ngModel)]="newUser.tenant_id" [disabled]="newUser.role === 'default_user'">
+          <option value="" [hidden]="newUser.role === 'default_user'">Select tenant</option>
           <option
             *ngFor="let tenant of tenants"
             [value]="tenant.id"
-            [hidden]="newUser.role === 'tenant_admin' && tenant.id === 'default'"
-            [disabled]="newUser.role === 'tenant_admin' && tenant.id === 'default'"
+            [hidden]="
+              (newUser.role === 'tenant_admin' && tenant.id === 'default') ||
+              (newUser.role === 'default_user' && tenant.id !== 'default')
+            "
+            [disabled]="
+              (newUser.role === 'tenant_admin' && tenant.id === 'default') ||
+              (newUser.role === 'default_user' && tenant.id !== 'default')
+            "
           >
             {{ tenant.name }}
           </option>
@@ -482,8 +508,19 @@
 
       <label class="form-field">
         <span>Tenant</span>
-        <select [(ngModel)]="userForm.tenant_id">
-          <option *ngFor="let tenant of tenants" [value]="tenant.id">
+        <select [(ngModel)]="userForm.tenant_id" [disabled]="userForm.role === 'default_user'">
+          <option
+            *ngFor="let tenant of tenants"
+            [value]="tenant.id"
+            [hidden]="
+              (userForm.role === 'tenant_admin' && tenant.id === 'default') ||
+              (userForm.role === 'default_user' && tenant.id !== 'default')
+            "
+            [disabled]="
+              (userForm.role === 'tenant_admin' && tenant.id === 'default') ||
+              (userForm.role === 'default_user' && tenant.id !== 'default')
+            "
+          >
             {{ tenant.name }}
           </option>
         </select>

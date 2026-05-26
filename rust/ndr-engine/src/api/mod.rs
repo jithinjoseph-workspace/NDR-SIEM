@@ -211,6 +211,7 @@ fn permissions_from_payload(payload: &Value, role: &str) -> String {
 
 // Auth middleware
 pub async fn auth_middleware(
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -226,6 +227,34 @@ pub async fn auth_middleware(
     // Extract JWT
     match extract_claims(&headers) {
         Some(claims) => {
+            if claims.role != "super_admin" {
+                match state.ch_storage.is_tenant_active(&claims.tenant_id).await {
+                    Ok(false) => {
+                        return axum::response::Response::builder()
+                            .status(403)
+                            .header("Content-Type", "application/json")
+                            .body(axum::body::Body::from(
+                                r#"{"status":"error","message":"Tenant has been deactivated"}"#
+                            ))
+                            .unwrap();
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Tenant active check failed for {}: {}",
+                            claims.tenant_id,
+                            e
+                        );
+                        return axum::response::Response::builder()
+                            .status(503)
+                            .header("Content-Type", "application/json")
+                            .body(axum::body::Body::from(
+                                r#"{"status":"error","message":"Unable to verify tenant status"}"#
+                            ))
+                            .unwrap();
+                    }
+                    Ok(true) => {}
+                }
+            }
             request.extensions_mut().insert(claims);
             next.run(request).await
         }
@@ -2955,7 +2984,43 @@ pub async fn login(
 
             let role = user["role"].as_str().unwrap_or("analyst");
             let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
-            let permissions_str = if role == "super_admin" || role == "tenant_admin" {
+            if role != "super_admin" {
+                match state.ch_storage.is_tenant_active(tenant_id).await {
+                    Ok(false) => {
+                        tracing::warn!(
+                            "Login BLOCKED for inactive tenant: username='{}' tenant='{}'",
+                            username,
+                            tenant_id
+                        );
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(json!({
+                                "status": "error",
+                                "message": "Your tenant has been deactivated. Please contact your administrator."
+                            }))
+                        ).into_response();
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Tenant active check failed during login for {}: {}",
+                            tenant_id,
+                            e
+                        );
+                        return (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({
+                                "status": "error",
+                                "message": "Unable to verify tenant status"
+                            }))
+                        ).into_response();
+                    }
+                    Ok(true) => {}
+                }
+            }
+            let permissions_str = if role == "super_admin"
+                || role == "tenant_admin"
+                || role == "default_user"
+            {
                 crate::storage::clickhouse::default_permissions(role)
             } else {
                 user["permissions"].as_str().unwrap_or("dashboard,alerts").to_string()
@@ -3036,7 +3101,10 @@ pub async fn get_me(
             match state.ch_storage.get_user_by_username(&username).await {
                 Ok(Some(user)) => {
                     let role = user["role"].as_str().unwrap_or("analyst");
-                    let permissions_str = if role == "super_admin" || role == "tenant_admin" {
+                    let permissions_str = if role == "super_admin"
+                        || role == "tenant_admin"
+                        || role == "default_user"
+                    {
                         crate::storage::clickhouse::default_permissions(role)
                     } else {
                         user["permissions"].as_str().unwrap_or("dashboard,alerts").to_string()
@@ -3149,7 +3217,7 @@ pub async fn create_user(
     let is_super_admin = claims.role == "super_admin";
 
     let (role, tenant_id) = if is_super_admin {
-        let allowed_roles = ["tenant_admin", "admin", "senior_analyst", "analyst", "viewer"];
+        let allowed_roles = ["tenant_admin", "default_user"];
         if !allowed_roles.contains(&requested_role.as_str()) {
             return Json(json!({
                 "status": "error",
@@ -3164,6 +3232,8 @@ pub async fn create_user(
                 }));
             }
             ("tenant_admin".to_string(), requested_tenant_id)
+        } else if requested_role == "default_user" {
+            ("default_user".to_string(), "default".to_string())
         } else if requested_tenant_id.is_empty() {
             (requested_role, "default".to_string())
         } else {
@@ -3238,7 +3308,14 @@ pub async fn update_user_api(
         .as_str().unwrap_or("default").to_string();
     let active = payload["active"].as_bool().unwrap_or(true);
     let password = payload["password"].as_str().unwrap_or("").to_string();
-    let allowed_roles = ["tenant_admin", "admin", "senior_analyst", "analyst", "viewer"];
+    let allowed_roles = [
+        "tenant_admin",
+        "default_user",
+        "admin",
+        "senior_analyst",
+        "analyst",
+        "viewer",
+    ];
 
     if !allowed_roles.contains(&role.as_str()) {
         return Json(json!({
@@ -3252,6 +3329,11 @@ pub async fn update_user_api(
             "message": "Tenant Admin must be assigned to a tenant"
         }));
     }
+    let tenant_id = if role == "default_user" {
+        "default".to_string()
+    } else {
+        tenant_id
+    };
 
     let permissions = permissions_from_payload(&payload, &role);
     let hash = if password.is_empty() {
@@ -4382,5 +4464,3 @@ pub async fn sensor_control_api(
         }))
     }
 }
-
-
