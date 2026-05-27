@@ -1,6 +1,31 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
+import { Observable, map } from 'rxjs';
+
+export interface SensorKey {
+  id: string;
+  key_prefix: string;
+  key?: string;
+  tenant_id: string;
+  name: string;
+  hostname?: string;
+  interface?: string;
+  os?: string;
+  zeek?: string;
+  suricata?: string;
+  vector?: string;
+  active: boolean;
+  created_at: string;
+  last_seen: string;
+}
+
+export type SensorControlCommand = 'start' | 'stop' | 'restart';
+
+interface SensorKeyListResponse {
+  status?: string;
+  keys?: SensorKey[];
+  message?: string;
+}
 
 @Injectable({
   providedIn: 'root'
@@ -259,5 +284,29 @@ export class Api {
       `${this.baseUrl}/admin/engines/scale`,
       { action, engine }
     );
+  }
+
+  getSensorKeys(): Observable<SensorKey[]> {
+    return this.http
+      .get<SensorKeyListResponse>(`${this.baseUrl}/sensor-keys`)
+      .pipe(map(response => response.keys || []));
+  }
+
+  createSensorKey(tenantId: string, name: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/sensor-keys`, {
+      tenant_id: tenantId,
+      name,
+    });
+  }
+
+  revokeSensorKey(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/sensor-keys/${id}`);
+  }
+
+  controlSensor(command: SensorControlCommand, tenantId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/sensor/control`, {
+      command,
+      tenant_id: tenantId,
+    });
   }
 }

@@ -190,6 +190,11 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_keys
     tenant_id   String,
     name        String,
     hostname    String DEFAULT '',
+    interface_name String DEFAULT '',
+    os_name     String DEFAULT '',
+    zeek_status String DEFAULT 'unknown',
+    suricata_status String DEFAULT 'unknown',
+    vector_status String DEFAULT 'unknown',
     active      UInt8 DEFAULT 1,
     created_at  DateTime DEFAULT now(),
     last_seen   DateTime DEFAULT now()

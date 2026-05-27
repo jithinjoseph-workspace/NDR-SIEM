@@ -4092,6 +4092,21 @@ pub async fn validate_sensor_key(
     ch.validate_sensor_key(key).await.ok()?
 }
 
+fn extract_sensor_key_prefix(
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    let key = headers
+        .get("X-Sensor-Key")
+        .or_else(|| headers.get("x-sensor-key"))?
+        .to_str().ok()?;
+
+    if key.len() < 16 {
+        return None;
+    }
+
+    Some(key[..16].to_string())
+}
+
 pub async fn create_sensor_key_api(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4194,6 +4209,18 @@ pub async fn sensor_register(
     let hostname  = payload["hostname"].as_str().unwrap_or("unknown");
     let interface = payload["interface"].as_str().unwrap_or("unknown");
     let os        = payload["os"].as_str().unwrap_or("unknown");
+    let key_prefix = extract_sensor_key_prefix(&headers);
+
+    if let Some(prefix) = key_prefix.as_deref() {
+        if let Err(e) = state.ch_storage
+            .update_sensor_registration(prefix, hostname, interface, os)
+            .await {
+            tracing::warn!(
+                "Failed to persist sensor registration for tenant={}: {}",
+                tenant_id, e
+            );
+        }
+    }
 
     tracing::info!(
         "Sensor registered: {} tenant={} iface={} os={}",
@@ -4217,11 +4244,27 @@ pub async fn sensor_heartbeat(
         None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
     };
 
+    let zeek = payload["zeek"].as_str().unwrap_or("unknown");
+    let suricata = payload["suricata"].as_str().unwrap_or("unknown");
+    let vector = payload["vector"].as_str().unwrap_or("unknown");
+    let key_prefix = extract_sensor_key_prefix(&headers);
+
+    if let Some(prefix) = key_prefix.as_deref() {
+        if let Err(e) = state.ch_storage
+            .update_sensor_heartbeat(prefix, zeek, suricata, vector)
+            .await {
+            tracing::warn!(
+                "Failed to persist sensor heartbeat for tenant={}: {}",
+                tenant_id, e
+            );
+        }
+    }
+
     tracing::info!(
         "Heartbeat from tenant={} zeek={} suricata={}",
         tenant_id,
-        payload["zeek"].as_str().unwrap_or("unknown"),
-        payload["suricata"].as_str().unwrap_or("unknown")
+        zeek,
+        suricata
     );
 
     Json(json!({"status": "ok"}))

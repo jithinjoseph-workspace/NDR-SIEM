@@ -84,6 +84,24 @@ pub struct ThreatIntelHit {
     pub hits:      u64,
     pub last_seen: u32,
 }
+
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct SensorKeyRow {
+    pub id: String,
+    pub key_prefix: String,
+    pub tenant_id: String,
+    pub name: String,
+    pub hostname: String,
+    pub interface_name: String,
+    pub os_name: String,
+    pub zeek_status: String,
+    pub suricata_status: String,
+    pub vector_status: String,
+    pub active: u8,
+    pub created_at: String,
+    pub last_seen: String,
+}
+
 pub struct ClickhouseStorage {
     client: Client,
 }
@@ -636,6 +654,12 @@ pub async fn set_tenant_active(
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS permissions String DEFAULT 'dashboard,alerts'",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS active UInt8 DEFAULT 1",
                 "ALTER TABLE ndr.tenants ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS hostname String DEFAULT ''",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS interface_name String DEFAULT ''",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS os_name String DEFAULT ''",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS zeek_status String DEFAULT 'unknown'",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS suricata_status String DEFAULT 'unknown'",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS vector_status String DEFAULT 'unknown'",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -1506,24 +1530,76 @@ pub async fn get_sensor_keys(
     let result = self.client
         .query(&format!(
             "SELECT id, key_prefix, tenant_id, \
-                    name, active, toString(created_at), \
+                    name, hostname, interface_name, \
+                    os_name, zeek_status, suricata_status, \
+                    vector_status, active, toString(created_at), \
                     toString(last_seen) \
              FROM ndr.sensor_keys FINAL \
              WHERE {} \
              ORDER BY created_at DESC", filter
         ))
-        .fetch_all::<(String,String,String,String,u8,String,String)>()
+        .fetch_all::<SensorKeyRow>()
         .await?;
     
     Ok(result.iter().map(|r| serde_json::json!({
-        "id": r.0,
-        "key_prefix": r.1,
-        "tenant_id": r.2,
-        "name": r.3,
-        "active": r.4 == 1,
-        "created_at": r.5,
-        "last_seen": r.6
+        "id": r.id,
+        "key_prefix": r.key_prefix,
+        "tenant_id": r.tenant_id,
+        "name": r.name,
+        "hostname": r.hostname,
+        "interface": r.interface_name,
+        "os": r.os_name,
+        "zeek": r.zeek_status,
+        "suricata": r.suricata_status,
+        "vector": r.vector_status,
+        "active": r.active == 1,
+        "created_at": r.created_at,
+        "last_seen": r.last_seen
     })).collect())
+}
+
+pub async fn update_sensor_registration(
+    &self,
+    key_prefix: &str,
+    hostname: &str,
+    interface_name: &str,
+    os_name: &str,
+) -> anyhow::Result<()> {
+    let key_prefix = sql_escape(key_prefix);
+    let hostname = sql_escape(hostname);
+    let interface_name = sql_escape(interface_name);
+    let os_name = sql_escape(os_name);
+    let query = format!(
+        "ALTER TABLE ndr.sensor_keys \
+         UPDATE hostname = '{}', interface_name = '{}', os_name = '{}', last_seen = now() \
+         WHERE key_prefix = '{}' \
+         SETTINGS mutations_sync=1",
+        hostname, interface_name, os_name, key_prefix
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn update_sensor_heartbeat(
+    &self,
+    key_prefix: &str,
+    zeek_status: &str,
+    suricata_status: &str,
+    vector_status: &str,
+) -> anyhow::Result<()> {
+    let key_prefix = sql_escape(key_prefix);
+    let zeek_status = sql_escape(zeek_status);
+    let suricata_status = sql_escape(suricata_status);
+    let vector_status = sql_escape(vector_status);
+    let query = format!(
+        "ALTER TABLE ndr.sensor_keys \
+         UPDATE zeek_status = '{}', suricata_status = '{}', vector_status = '{}', last_seen = now() \
+         WHERE key_prefix = '{}' \
+         SETTINGS mutations_sync=1",
+        zeek_status, suricata_status, vector_status, key_prefix
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
 }
 
 pub async fn revoke_sensor_key(
