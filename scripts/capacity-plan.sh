@@ -4,6 +4,7 @@
 
 INSTALL_DIR=$(cd "$(dirname "$0")/.." && pwd)
 source $INSTALL_DIR/.env 2>/dev/null || true
+IFACE_FILE="$INSTALL_DIR/.runtime/ndr_interface"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -105,7 +106,7 @@ deploy_capture_layer() {
     log "  Zeek: $zeek | Suricata: $suri | Vector: $vector"
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    local iface=$(cat /tmp/ndr_interface 2>/dev/null || echo "enp0s3")
+    local iface=$(cat "$IFACE_FILE" 2>/dev/null || echo "enp0s3")
 
     # Stop existing
     sudo pkill -9 zeek 2>/dev/null || true
@@ -208,7 +209,7 @@ topic = "ndr-events"
 encoding.codec = "json"
 VEOF
 
-    sudo docker restart vector 2>/dev/null || true
+    sudo docker restart ndr-vector 2>/dev/null || true
     log "  ✅ Vector configured for $zeek Zeek + $suri Suricata"
 
     # Save capture config

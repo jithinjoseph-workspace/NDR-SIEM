@@ -62,11 +62,29 @@ ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY key;
 
 -- Default thresholds
-INSERT INTO ndr.settings (key, value) VALUES
-    ('store_threshold',    '10'),
-    ('alert_threshold',    '75'),
-    ('critical_threshold', '90'),
-    ('soar_threshold',     '75');
+INSERT INTO ndr.settings (key, value)
+SELECT 'store_threshold', '10'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'store_threshold'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'alert_threshold', '75'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'alert_threshold'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'critical_threshold', '90'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'critical_threshold'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'soar_threshold', '75'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'soar_threshold'
+);
 
 -- SOAR configuration table
 CREATE TABLE IF NOT EXISTS ndr.soar_config
@@ -146,7 +164,10 @@ ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY id;
 
 INSERT INTO ndr.tenants (id, name, active)
-VALUES ('default', 'Default Organization', 1);
+SELECT 'default', 'Default Organization', 1
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.tenants FINAL WHERE id = 'default'
+);
 
 CREATE TABLE IF NOT EXISTS ndr.sigma_rules
 (
@@ -169,6 +190,11 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_keys
     tenant_id   String,
     name        String,
     hostname    String DEFAULT '',
+    interface_name String DEFAULT '',
+    os_name     String DEFAULT '',
+    zeek_status String DEFAULT 'unknown',
+    suricata_status String DEFAULT 'unknown',
+    vector_status String DEFAULT 'unknown',
     active      UInt8 DEFAULT 1,
     created_at  DateTime DEFAULT now(),
     last_seen   DateTime DEFAULT now()

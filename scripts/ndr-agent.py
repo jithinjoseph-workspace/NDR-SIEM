@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json, subprocess, os, re, time
+from pathlib import Path
 
 HOME_DIR = os.path.expanduser("~")
 LOGDIR = os.path.join(HOME_DIR, "logs")
-IFACE_FILE = "/tmp/ndr_interface"
+INSTALL_DIR = Path(__file__).resolve().parent.parent
+RUNTIME_DIR = INSTALL_DIR / ".runtime"
+IFACE_FILE = RUNTIME_DIR / "ndr_interface"
 
 # Auto-create log directories on startup
 os.makedirs(f"{LOGDIR}/suricata", exist_ok=True)
 os.makedirs(f"{LOGDIR}/zeek", exist_ok=True)
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 class AgentHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         print(f"[Agent] {args[0]} {args[1]}")
@@ -33,7 +37,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             
             # Check Docker containers
             vector = subprocess.run(
-                "docker ps --filter name=vector --filter status=running --format '{{.Names}}' 2>/dev/null",
+                "docker ps --filter name=ndr-vector --filter status=running --format '{{.Names}}' 2>/dev/null",
                 shell=True, capture_output=True, text=True
             ).stdout.strip() != ""
     
@@ -48,7 +52,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 shell=True, capture_output=True, text=True
             ).stdout.strip() == "Ok."
 
-            iface = open(IFACE_FILE).read().strip() if os.path.exists(IFACE_FILE) else "eth0"
+            iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eth0"
 
             self.send_json({
                 "zeek":       "running" if zeek       else "stopped",
@@ -73,7 +77,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json(ifaces)
 
         elif self.path == "/agent/interface":
-            iface = open(IFACE_FILE).read().strip() if os.path.exists(IFACE_FILE) else "eth0"
+            iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eth0"
             self.send_json({"interface": iface})
 
         else:
@@ -81,7 +85,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/agent/start":
-            iface = open(IFACE_FILE).read().strip() if os.path.exists(IFACE_FILE) else "eth0"
+            iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eth0"
             # Auto-create log directories
             os.makedirs(f"{LOGDIR}/suricata", exist_ok=True)
             os.makedirs(f"{LOGDIR}/zeek", exist_ok=True)
@@ -144,7 +148,8 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif self.path == "/agent/interface":
             body = self.get_body()
             iface = body.get("interface", "eth0")
-            open(IFACE_FILE, "w").write(iface)
+            RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+            IFACE_FILE.write_text(iface)
             self.send_json({"status": "ok", "interface": iface})
 
         else:

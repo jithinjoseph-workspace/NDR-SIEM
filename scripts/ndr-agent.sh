@@ -4,7 +4,12 @@
 
 AGENT_PORT=3001
 LOGDIR=/home/jithin/logs
-IFACE_FILE=/tmp/ndr_interface
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+INSTALL_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+RUNTIME_DIR="$INSTALL_DIR/.runtime"
+IFACE_FILE="$RUNTIME_DIR/ndr_interface"
+
+mkdir -p "$RUNTIME_DIR"
 
 handle_request() {
     local request="$1"
@@ -15,7 +20,7 @@ handle_request() {
 
     case "$path" in
         "/agent/start")
-            IFACE=$(cat $IFACE_FILE 2>/dev/null || echo "eth0")
+            IFACE=$(cat "$IFACE_FILE" 2>/dev/null || echo "eth0")
             pkill suricata 2>/dev/null; pkill zeek 2>/dev/null
             sleep 1
             nohup suricata -c /etc/suricata/suricata.yaml \
@@ -32,13 +37,13 @@ handle_request() {
         "/agent/status")
             ZEEK_PID=$(pgrep zeek || echo "")
             SURI_PID=$(pgrep suricata || echo "")
-            IFACE=$(cat $IFACE_FILE 2>/dev/null || echo "eth0")
+            IFACE=$(cat "$IFACE_FILE" 2>/dev/null || echo "eth0")
             echo -e "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"zeek\":\"${ZEEK_PID:-stopped}\",\"suricata\":\"${SURI_PID:-stopped}\",\"interface\":\"$IFACE\"}"
             ;;
         "/agent/interface")
             # Extract interface from JSON body like {"interface":"eth0"}
             IFACE=$(echo "$body" | grep -oP '(?<="interface":")[^"]+')
-            echo "$IFACE" > $IFACE_FILE
+            echo "$IFACE" > "$IFACE_FILE"
             echo -e "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\",\"interface\":\"$IFACE\"}"
             ;;
         "/agent/interfaces")

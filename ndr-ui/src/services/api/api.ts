@@ -8,9 +8,23 @@ export interface SensorKey {
   key?: string;
   tenant_id: string;
   name: string;
+  hostname?: string;
+  interface?: string;
+  os?: string;
+  zeek?: string;
+  suricata?: string;
+  vector?: string;
   active: boolean;
   created_at: string;
   last_seen: string;
+}
+
+export type SensorControlCommand = 'start' | 'stop' | 'restart';
+
+interface SensorKeyListResponse {
+  status?: string;
+  keys?: SensorKey[];
+  message?: string;
 }
 
 @Injectable({
@@ -261,11 +275,22 @@ export class Api {
     return this.http.post(`${this.baseUrl}/auth/tenants/${id}/status`, { active });
   }
 
+  getEngines(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/engines`);
+  }
+
+  scaleEngines(action: string, engine?: string): Observable<any> {
+    return this.http.post(
+      `${this.baseUrl}/admin/engines/scale`,
+      { action, engine }
+    );
+  }
+
   getSensorKeys(): Observable<SensorKey[]> {
     return this.http
-      .get<{ status: string; keys?: SensorKey[]; message?: string }>(`${this.baseUrl}/sensor-keys`)
+      .get<SensorKeyListResponse>(`${this.baseUrl}/sensor-keys`)
       .pipe(map(response => {
-        if (response.status !== 'ok') {
+        if (response.status && response.status !== 'ok') {
           throw new Error(response.message || 'Failed to load sensor keys');
         }
         return response.keys || [];
@@ -283,14 +308,10 @@ export class Api {
     return this.http.delete(`${this.baseUrl}/sensor-keys/${id}`);
   }
 
-  getEngines(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/admin/engines`);
-  }
-
-  scaleEngines(action: string, engine?: string): Observable<any> {
-    return this.http.post(
-      `${this.baseUrl}/admin/engines/scale`,
-      { action, engine }
-    );
+  controlSensor(command: SensorControlCommand, tenantId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/sensor/control`, {
+      command,
+      tenant_id: tenantId,
+    });
   }
 }

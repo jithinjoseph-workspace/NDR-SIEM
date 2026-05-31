@@ -28,7 +28,7 @@ services:
 
   vector:
     image: timberio/vector:0.32.1-alpine
-    container_name: vector
+    container_name: ndr-vector
     volumes:
       - ${HOME_DIR}/.vector/vector.toml:/etc/vector/vector.toml:ro
       - ${HOME_DIR}/.vector/data:/etc/vector/data
@@ -233,4 +233,3 @@ volumes:
   shuffle-files:
   shuffle-opensearch:
   redis:
-

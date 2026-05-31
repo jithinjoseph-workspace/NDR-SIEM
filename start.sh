@@ -1,5 +1,8 @@
 #!/bin/bash
 INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+HOME_DIR=$HOME
+RUNTIME_DIR="$INSTALL_DIR/.runtime"
+IFACE_FILE="$RUNTIME_DIR/ndr_interface"
 
 log()  { echo -e "\033[0;32m[NDR]\033[0m $1"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
@@ -32,7 +35,8 @@ fi
 IFACE=${IFACE:-$(ip -o -4 addr show 2>/dev/null | \
     grep -v "127.0.0.1\|docker\|br-\|veth" | \
     awk '{print $2}' | head -1)}
-echo "$IFACE" > /tmp/ndr_interface
+mkdir -p "$RUNTIME_DIR"
+echo "$IFACE" > "$IFACE_FILE"
 echo "  → Interface: $IFACE"
 
 # Start ClickHouse
@@ -50,6 +54,7 @@ sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 # Start Docker stack
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
+sudo docker rm -f vector 2>/dev/null || true
 sudo docker compose up -d
 
 # ── Set Kafka retention ───────────────────────
@@ -182,8 +187,22 @@ sleep 10
 # Start Angular UI
 echo "  → Starting Angular UI..."
 cd $INSTALL_DIR/ndr-ui
-nohup npm start > /tmp/ndr-ui.log 2>&1 &
-echo $! > /tmp/ndr-ui.pid
+if curl -s http://localhost:4200 > /dev/null 2>&1; then
+    log "Angular UI already running at http://localhost:4200"
+else
+    if [ -f /tmp/ndr-ui.pid ]; then
+        OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
+        if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
+            warn "Existing Angular UI process found - restarting it"
+            kill "$OLD_UI_PID" 2>/dev/null || true
+            sleep 2
+        fi
+        rm -f /tmp/ndr-ui.pid
+    fi
+
+    nohup npm start > /tmp/ndr-ui.log 2>&1 &
+    echo $! > /tmp/ndr-ui.pid
+fi
 
 # Verify UI started
 log "Waiting for Angular UI to be ready..."
