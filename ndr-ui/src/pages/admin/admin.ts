@@ -5,8 +5,10 @@ import {
   LucideAngularModule,
   Building2,
   CircleCheck,
+  Copy,
   Edit,
   Gauge,
+  KeyRound,
   Plus,
   RefreshCw,
   Search,
@@ -17,7 +19,7 @@ import {
   Users,
   X,
 } from 'lucide-angular';
-import { Api } from '../../services/api/api';
+import { Api, SensorKey } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Router } from '@angular/router';
 
@@ -31,8 +33,10 @@ import { Router } from '@angular/router';
 export class Admin implements OnInit, OnDestroy {
   BuildingIcon = Building2;
   CheckIcon = CircleCheck;
+  CopyIcon = Copy;
   EditIcon = Edit;
   GaugeIcon = Gauge;
+  KeyIcon = KeyRound;
   PlusIcon = Plus;
   RefreshIcon = RefreshCw;
   SearchIcon = Search;
@@ -97,6 +101,17 @@ export class Admin implements OnInit, OnDestroy {
     active: true,
   };
 
+  sensorKeys: SensorKey[] = [];
+  loadingSensorKeys = false;
+  creatingSensorKey = false;
+  newSensorKey = {
+    tenant_id: '',
+    name: '',
+  };
+  createdSensorKey: SensorKey | null = null;
+  showSensorKeyModal = false;
+  installCommand = '';
+
   engines: any[] = [];
   loadingEngines = false;
   scaling = false;
@@ -123,6 +138,7 @@ export class Admin implements OnInit, OnDestroy {
     }
     this.loadUsers();
     this.loadTenants();
+    this.loadSensorKeys();
     this.loadEngines();
     this.startSessionExpiryCheck();
   }
@@ -473,6 +489,100 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  loadSensorKeys() {
+    this.loadingSensorKeys = true;
+    this.api.getSensorKeys().subscribe({
+      next: (keys: SensorKey[]) => {
+        this.sensorKeys = keys;
+        this.loadingSensorKeys = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.loadingSensorKeys = false;
+        this.showMsg('Failed to load sensor keys', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  createSensorKey() {
+    const tenantId = this.newSensorKey.tenant_id;
+    const name = this.newSensorKey.name.trim();
+    if (!tenantId || !name) {
+      this.showMsg('Tenant and sensor name are required', 'error');
+      return;
+    }
+
+    this.creatingSensorKey = true;
+    this.api.createSensorKey(tenantId, name).subscribe({
+      next: (data: any) => {
+        this.creatingSensorKey = false;
+        if (data.status === 'ok' && data.key) {
+          this.createdSensorKey = {
+            id: data.id,
+            key: data.key,
+            key_prefix: data.key.slice(0, 16),
+            tenant_id: tenantId,
+            name,
+            active: true,
+            created_at: new Date().toISOString(),
+            last_seen: '',
+          };
+          this.installCommand =
+            `sudo bash install-sensor.sh --cloud-url https://your-ndr.com ` +
+            `--tenant-id ${tenantId} --api-key ${data.key}`;
+          this.showSensorKeyModal = true;
+          this.newSensorKey = { tenant_id: '', name: '' };
+          this.loadSensorKeys();
+        } else {
+          this.showMsg(data.message || 'Failed to create sensor key', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.creatingSensorKey = false;
+        this.showMsg('Failed to create sensor key', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  revokeSensorKey(key: SensorKey) {
+    if (!key.active) return;
+    this.api.revokeSensorKey(key.id).subscribe({
+      next: (data: any) => {
+        if (!data.status || data.status === 'ok') {
+          key.active = false;
+          this.showMsg('Sensor key revoked', 'success');
+          this.loadSensorKeys();
+        } else {
+          this.showMsg(data.message || 'Failed to revoke sensor key', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.showMsg('Failed to revoke sensor key', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  closeSensorKeyModal() {
+    this.showSensorKeyModal = false;
+  }
+
+  copyCreatedSensorKey() {
+    if (this.createdSensorKey?.key) {
+      this.copyText(this.createdSensorKey.key, 'Sensor key copied');
+    }
+  }
+
+  copyInstallCommand() {
+    if (this.installCommand) {
+      this.copyText(this.installCommand, 'Install command copied');
+    }
+  }
+
   showMsg(msg: string, type: string) {
     this.userMsg = msg;
     this.userMsgType = type;
@@ -623,6 +733,19 @@ export class Admin implements OnInit, OnDestroy {
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
+  }
+
+  private copyText(value: string, successMessage: string) {
+    navigator.clipboard.writeText(value).then(
+      () => {
+        this.showMsg(successMessage, 'success');
+        this.cdr.detectChanges();
+      },
+      () => {
+        this.showMsg('Failed to copy to clipboard', 'error');
+        this.cdr.detectChanges();
+      }
+    );
   }
 
   // ── Session expiry ──────────────────────────────────────────────────────────

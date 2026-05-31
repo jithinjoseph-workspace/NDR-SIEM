@@ -1,6 +1,17 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
+import { map, Observable } from 'rxjs';
+
+export interface SensorKey {
+  id: string;
+  key_prefix: string;
+  key?: string;
+  tenant_id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+  last_seen: string;
+}
 
 @Injectable({
   providedIn: 'root'
@@ -248,6 +259,28 @@ export class Api {
 
   setTenantStatus(id: string, active: boolean): Observable<any> {
     return this.http.post(`${this.baseUrl}/auth/tenants/${id}/status`, { active });
+  }
+
+  getSensorKeys(): Observable<SensorKey[]> {
+    return this.http
+      .get<{ status: string; keys?: SensorKey[]; message?: string }>(`${this.baseUrl}/sensor-keys`)
+      .pipe(map(response => {
+        if (response.status !== 'ok') {
+          throw new Error(response.message || 'Failed to load sensor keys');
+        }
+        return response.keys || [];
+      }));
+  }
+
+  createSensorKey(tenantId: string, name: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/sensor-keys`, {
+      tenant_id: tenantId,
+      name,
+    });
+  }
+
+  revokeSensorKey(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/sensor-keys/${id}`);
   }
 
   getEngines(): Observable<any> {
