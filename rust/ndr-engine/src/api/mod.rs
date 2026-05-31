@@ -228,6 +228,7 @@ pub async fn auth_middleware(
     match extract_claims(&headers) {
         Some(claims) => {
             if claims.role != "super_admin" {
+                // ── Tenant-level gate ─────────────────────────────────────────
                 match state.ch_storage.is_tenant_active(&claims.tenant_id).await {
                     Ok(false) => {
                         return axum::response::Response::builder()
@@ -253,6 +254,40 @@ pub async fn auth_middleware(
                             .unwrap();
                     }
                     Ok(true) => {}
+                }
+
+                // ── Per-user active gate ──────────────────────────────────────
+                // Only enforce for roles that Tenant Admin can block.
+                // super_admin is skipped above; tenant_admin, admin are
+                // excluded here because they manage others and must not lock
+                // themselves out via a DB race.
+                let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
+                if blockable_roles.contains(&claims.role.as_str()) {
+                    match state.ch_storage.is_user_active(&claims.sub).await {
+                        Ok(false) => {
+                            tracing::info!(
+                                "🚫 Blocked user '{}' attempted API access — rejecting",
+                                claims.sub
+                            );
+                            return axum::response::Response::builder()
+                                .status(403)
+                                .header("Content-Type", "application/json")
+                                .body(axum::body::Body::from(
+                                    r#"{"status":"error","message":"Your account has been disabled by your administrator.","code":"USER_DISABLED"}"#
+                                ))
+                                .unwrap();
+                        }
+                        Err(e) => {
+                            // Log but don't block — fail-open to avoid disrupting
+                            // legitimate users if ClickHouse has a transient fault.
+                            tracing::warn!(
+                                "User active check failed for '{}': {}",
+                                claims.sub,
+                                e
+                            );
+                        }
+                        Ok(true) => {}
+                    }
                 }
             }
             request.extensions_mut().insert(claims);
@@ -3101,6 +3136,32 @@ pub async fn get_me(
             match state.ch_storage.get_user_by_username(&username).await {
                 Ok(Some(user)) => {
                     let role = user["role"].as_str().unwrap_or("analyst");
+
+                    // ── Per-user active check ─────────────────────────────────
+                    // Roles that Tenant Admin can block are re-validated here so
+                    // the 30-second session poll picks up a block even if the
+                    // auth_middleware fast-path was not hit yet.
+                    let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
+                    if blockable_roles.contains(&role) {
+                        match state.ch_storage.is_user_active(&username).await {
+                            Ok(false) => {
+                                tracing::info!(
+                                    "🚫 get_me: blocked user '{}' session check — returning USER_DISABLED",
+                                    username
+                                );
+                                return Json(json!({
+                                    "status": "error",
+                                    "message": "Your account has been disabled by your administrator.",
+                                    "code": "USER_DISABLED"
+                                }));
+                            }
+                            Err(e) => {
+                                tracing::warn!("User active check error in get_me for '{}': {}", username, e);
+                            }
+                            Ok(true) => {}
+                        }
+                    }
+
                     let permissions_str = if role == "super_admin"
                         || role == "tenant_admin"
                         || role == "default_user"

@@ -32,6 +32,12 @@ export class App implements OnInit {
         const url: string = e.urlAfterRedirects || e.url;
         const isLoginPage = url === '/login' || url.startsWith('/login?');
         this.showShell = !isLoginPage && this.auth.isLoggedIn();
+
+        // Stop polling when user reaches the login page (covers manual logout
+        // or any other redirect that lands on /login)
+        if (isLoginPage) {
+          this.auth.stopSessionPoll();
+        }
       });
 
     // Initial check (before first NavigationEnd fires)
@@ -42,6 +48,11 @@ export class App implements OnInit {
     // Connect WebSocket only when authenticated
     if (this.auth.isLoggedIn()) {
       this.wsService.connect();
+
+      // Start background session-validity poll so that blocked analyst/viewer
+      // accounts are evicted within SESSION_POLL_MS (30 s) even if they never
+      // navigate away from their current page.
+      this.auth.startSessionPoll();
     }
   }
 }

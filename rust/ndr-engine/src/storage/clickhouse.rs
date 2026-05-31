@@ -389,6 +389,28 @@ pub async fn set_user_active(
     Ok(())
 }
 
+/// Check whether a specific user account is enabled.
+/// Returns `true` (allow) if the user is not found (fail-open for unknown users;
+/// the JWT would already be invalid in that case).
+/// Returns `false` only when the row exists AND `active = 0`.
+pub async fn is_user_active(
+    &self,
+    username: &str,
+) -> anyhow::Result<bool> {
+    let esc = sql_escape(username);
+    let rows = self.client
+        .query(&format!(
+            "SELECT active FROM ndr.users FINAL \
+             WHERE username = '{}' LIMIT 1",
+            esc
+        ))
+        .fetch_all::<u8>()
+        .await?;
+
+    // No row → user not in DB; JWT verification already failed earlier, so allow
+    Ok(rows.first().map(|active| *active == 1).unwrap_or(true))
+}
+
 pub async fn set_user_password(
     &self,
     id: &str,

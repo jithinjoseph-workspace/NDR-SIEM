@@ -1,13 +1,23 @@
-import { Injectable } from '@angular/core';
+import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { Observable, tap } from 'rxjs';
+import { Observable, tap, Subscription } from 'rxjs';
 
 @Injectable({ providedIn: 'root' })
-export class AuthService {
+export class AuthService implements OnDestroy {
   private baseUrl = '/api';
   private TOKEN_KEY = 'ndr_token';
   private USER_KEY = 'ndr_user';
+
+  /**
+   * How often to poll /api/auth/me to detect account blocking.
+   * 30 seconds is a deliberate balance: quick enough to evict a blocked user
+   * promptly, low enough to not meaningfully increase server load.
+   */
+  private readonly SESSION_POLL_MS = 30_000;
+  private sessionPollInterval: ReturnType<typeof setInterval> | null = null;
+  private sessionPollSub: Subscription | null = null;
+
   private readonly defaultRouteByPermission: Record<string, string> = {
     dashboard: '/dashboard',
     alerts: '/alerts',
@@ -27,6 +37,10 @@ export class AuthService {
     private router: Router
   ) {}
 
+  ngOnDestroy(): void {
+    this.stopSessionPoll();
+  }
+
   login(username: string, password: string): Observable<any> {
     return this.http.post(`${this.baseUrl}/auth/login`, {
       username, password
@@ -44,6 +58,8 @@ export class AuthService {
   }
 
   logout() {
+    // Stop polling before clearing state so any in-flight poll doesn't restart it
+    this.stopSessionPoll();
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.USER_KEY);
     sessionStorage.clear();
@@ -63,6 +79,9 @@ export class AuthService {
             permissions: this.normalizePermissions(res.user.permissions),
           }));
         }
+        // If backend returns USER_DISABLED via get_me (HTTP 200 with error body),
+        // the authGuard already calls logout() when status !== 'ok'.
+        // The auth-interceptor handles the 403 path (from auth_middleware).
       })
     );
   }
@@ -140,5 +159,64 @@ export class AuthService {
         : permission
       )
       .map(permission => permission === 'network' ? 'network-map' : permission)));
+  }
+
+  // ── Session Poll ─────────────────────────────────────────────────────────
+
+  /**
+   * Start a recurring poll of /api/auth/me every SESSION_POLL_MS milliseconds.
+   *
+   * This is the primary mechanism for detecting a live-session block:
+   *   - If the user is blocked, the backend returns { code: "USER_DISABLED" }
+   *     which the authGuard's refreshUser() call treats as a non-ok status
+   *     and calls logout().
+   *   - Additionally auth_middleware returns HTTP 403 on any other API call,
+   *     which the auth-interceptor catches and calls logout() for.
+   *
+   * Only meaningful for analyst/viewer roles — admins are never blocked.
+   * Safe to call multiple times; only one interval is ever active.
+   */
+  startSessionPoll(): void {
+    if (this.sessionPollInterval !== null) return; // already running
+
+    this.sessionPollInterval = setInterval(() => {
+      if (!this.isLoggedIn()) {
+        // Token expired; clean up instead of spamming the backend
+        this.stopSessionPoll();
+        return;
+      }
+
+      // Reuse the same observable that authGuard uses.
+      // The tap() inside refreshUser() updates localStorage on success.
+      // On error: auth-interceptor handles 403 USER_DISABLED → logout().
+      // On non-ok status (USER_DISABLED via 200): authGuard logic applies
+      // on the next navigation; for immediate eviction we check here too.
+      this.sessionPollSub?.unsubscribe();
+      this.sessionPollSub = this.refreshUser().subscribe({
+        next: (res: any) => {
+          if (res.status !== 'ok') {
+            // Covers USER_DISABLED returned as HTTP 200 from get_me
+            this.logout();
+          }
+        },
+        error: () => {
+          // HTTP errors (401/403) are already handled by auth-interceptor.
+          // No additional action needed here.
+        }
+      });
+    }, this.SESSION_POLL_MS);
+  }
+
+  /**
+   * Stop the session poll and clean up subscriptions.
+   * Called automatically by logout() and ngOnDestroy().
+   */
+  stopSessionPoll(): void {
+    if (this.sessionPollInterval !== null) {
+      clearInterval(this.sessionPollInterval);
+      this.sessionPollInterval = null;
+    }
+    this.sessionPollSub?.unsubscribe();
+    this.sessionPollSub = null;
   }
 }
