@@ -205,9 +205,53 @@ export class Navbar implements OnInit, OnDestroy {
   }
 
   private refreshSystemStatus() {
+    const user = this.auth.getUser();
+    if (user?.tenant_id && user.tenant_id !== 'default') {
+      this.refreshTenantSystemStatus();
+      return;
+    }
+
     this.api.getAgentStatus().subscribe({
       next: data => {
         this.applySystemStatus(data);
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  private refreshTenantSystemStatus() {
+    this.api.getSensorKeys().subscribe({
+      next: sensors => {
+        const tenantId = this.auth.getUser()?.tenant_id || '';
+        const tenantSensors = sensors.filter(sensor =>
+          sensor.tenant_id === tenantId && sensor.active !== false
+        );
+        const healthyPipeline = tenantSensors.some(sensor =>
+          this.isRecentlySeen(sensor.last_seen) &&
+          this.isRunning(sensor.zeek) &&
+          this.isRunning(sensor.suricata) &&
+          this.isRunning(sensor.vector)
+        );
+
+        this.api.getDashboardStats().subscribe({
+          next: data => {
+            const services = data?.services || {};
+            const platformHealthy =
+              this.isRunning(services.kafka) &&
+              this.isRunning(services.clickhouse) &&
+              this.isRunning(services.engine || 'running');
+
+            this.systemStatus = healthyPipeline && platformHealthy ? 'OPERATIONAL' : 'DEGRADED';
+            this.cdr.detectChanges();
+          },
+          error: () => {
+            this.systemStatus = 'DEGRADED';
+            this.cdr.detectChanges();
+          },
+        });
+      },
+      error: () => {
+        this.systemStatus = 'DEGRADED';
         this.cdr.detectChanges();
       },
     });
@@ -224,6 +268,16 @@ export class Navbar implements OnInit, OnDestroy {
     const value = String(status || '').toLowerCase().trim();
     if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return true;
     return /^\d+$/.test(value);
+  }
+
+  private isRecentlySeen(value: string | undefined) {
+    if (!value) return false;
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+    const withTimezone = /Z$|[+-]\d{2}:\d{2}$/.test(normalized)
+      ? normalized
+      : `${normalized}Z`;
+    const timestamp = new Date(withTimezone).getTime();
+    return !Number.isNaN(timestamp) && Date.now() - timestamp <= 2 * 60 * 1000;
   }
 
   private navigateIfAllowed(route: string, permission: string, queryParams?: Record<string, string>) {

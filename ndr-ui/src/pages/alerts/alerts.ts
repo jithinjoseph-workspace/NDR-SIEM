@@ -64,6 +64,8 @@ export class Alerts implements OnInit, OnDestroy {
           time: new Date().toLocaleTimeString(),
           score: hit.score,
           community_id: hit.cid,
+          src_country: this.formatOrigin(hit.src || hit.suricata?.src || hit.zeek?.src, hit.src_country),
+          dst_country: hit.dst_country,
         };
         this.allAlerts.unshift(alert);
         // Keep max 100 alerts
@@ -82,10 +84,10 @@ export class Alerts implements OnInit, OnDestroy {
           severity: hit.severity?.toUpperCase() || 'LOW',
           source: `${hit.src_ip || '-'} -> ${hit.dst_ip || '-'}`,
           description: hit.sigma_hits?.join(', ') || 'Correlation hit',
-          time: new Date(hit.timestamp * 1000).toLocaleString(),
+          time: this.formatAlertTime(hit.timestamp || hit.time),
           score: hit.score,
           threat_intel: hit.threat_intel,
-          src_country: hit.src_country,
+          src_country: this.formatOrigin(hit.src_ip, hit.src_country),
           dst_country: hit.dst_country,
         }));
         this.applyFilters();
@@ -141,6 +143,60 @@ export class Alerts implements OnInit, OnDestroy {
       default:
         return 'bg-primary/10 text-primary border-primary/20';
     }
+  }
+
+  private formatAlertTime(value: unknown): string {
+    const date = this.parseAlertDate(value);
+    return date ? date.toLocaleString() : '--';
+  }
+
+  private parseAlertDate(value: unknown): Date | null {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    if (typeof value === 'number') {
+      const millis = value > 9999999999 ? value : value * 1000;
+      const date = new Date(millis);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    const raw = String(value).trim();
+    if (/^\d+$/.test(raw)) {
+      return this.parseAlertDate(Number(raw));
+    }
+
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    const withTimezone = /Z$|[+-]\d{2}:?\d{2}$/.test(normalized)
+      ? normalized
+      : `${normalized}Z`;
+    const date = new Date(withTimezone);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private formatOrigin(srcIp: string | undefined, country: string | undefined): string {
+    if (country) {
+      return country;
+    }
+
+    if (this.isPrivateIp(srcIp || '')) {
+      return 'Internal network';
+    }
+
+    return 'Origin unavailable';
+  }
+
+  private isPrivateIp(ip: string): boolean {
+    if (
+      ip.startsWith('10.') ||
+      ip.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+    ) {
+      return true;
+    }
+
+    const lower = ip.toLowerCase();
+    return lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80:');
   }
 
   ngOnDestroy() {

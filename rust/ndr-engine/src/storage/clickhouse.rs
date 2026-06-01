@@ -77,6 +77,23 @@ pub struct RecentHit {
     pub src_country:  String,
     pub dst_country:  String,
 }
+
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+#[allow(dead_code)]
+pub struct RecentHitDetail {
+    pub timestamp:    u32,
+    pub community_id: String,
+    pub src_ip:       String,
+    pub dst_ip:       String,
+    pub score:        f32,
+    pub severity:     String,
+    pub tags:         Vec<String>,
+    pub sigma_hits:   Vec<String>,
+    pub threat_intel: u8,
+    pub src_country:  String,
+    pub dst_country:  String,
+}
+
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct ThreatIntelHit {
     pub src_ip:    String,
@@ -625,6 +642,14 @@ pub async fn set_tenant_active(
                 .with_password(password)
                 .with_database("ndr"),
         }
+    }
+
+    pub async fn health_check(&self) -> bool {
+        self.client
+            .query("SELECT 1")
+            .fetch_one::<u8>()
+            .await
+            .is_ok()
     }
 
     pub async fn init_tables(&self) {
@@ -1386,14 +1411,26 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
         let rows = self.client.query(&format!(
-            "SELECT src_ip,dst_ip,score,severity,toString(timestamp) \
+            "SELECT \
+                toUInt32(timestamp) AS timestamp, \
+                community_id, src_ip, dst_ip, score, severity, \
+                tags, sigma_hits, threat_intel, src_country, dst_country \
              FROM {}.ndr_hits \
              ORDER BY timestamp DESC LIMIT {}", db_name, limit))
-            .fetch_all::<(String,String,f32,String,String)>()
+            .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
-            "src_ip":r.0,"dst_ip":r.1,"score":r.2,
-            "severity":r.3,"timestamp":r.4
+            "timestamp": r.timestamp,
+            "community_id": r.community_id,
+            "src_ip": r.src_ip,
+            "dst_ip": r.dst_ip,
+            "score": r.score,
+            "severity": r.severity,
+            "tags": r.tags,
+            "sigma_hits": r.sigma_hits,
+            "threat_intel": r.threat_intel != 0,
+            "src_country": r.src_country,
+            "dst_country": r.dst_country
         })).collect())
     }
 
@@ -1524,15 +1561,6 @@ pub async fn validate_sensor_key(
     
     if let Some((hash, tenant_id, _)) = result.first() {
         if bcrypt::verify(key, hash).unwrap_or(false) {
-            // Update last_seen
-            let _ = self.client
-                .query(&format!(
-                    "ALTER TABLE ndr.sensor_keys \
-                     UPDATE last_seen = now() \
-                     WHERE key_prefix = '{}'",
-                    prefix
-                ))
-                .execute().await;
             return Ok(Some(tenant_id.clone()));
         }
     }
@@ -1592,10 +1620,13 @@ pub async fn update_sensor_registration(
     let interface_name = sql_escape(interface_name);
     let os_name = sql_escape(os_name);
     let query = format!(
-        "ALTER TABLE ndr.sensor_keys \
-         UPDATE hostname = '{}', interface_name = '{}', os_name = '{}', last_seen = now() \
-         WHERE key_prefix = '{}' \
-         SETTINGS mutations_sync=1",
+        "INSERT INTO ndr.sensor_keys \
+         (id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
+          os_name, zeek_status, suricata_status, vector_status, active, created_at, last_seen) \
+         SELECT id, key_hash, key_prefix, tenant_id, name, '{}', '{}', '{}', \
+                zeek_status, suricata_status, vector_status, active, created_at, now() \
+         FROM ndr.sensor_keys FINAL \
+         WHERE key_prefix = '{}' AND active = 1",
         hostname, interface_name, os_name, key_prefix
     );
     self.client.query(&query).execute().await?;
@@ -1614,10 +1645,13 @@ pub async fn update_sensor_heartbeat(
     let suricata_status = sql_escape(suricata_status);
     let vector_status = sql_escape(vector_status);
     let query = format!(
-        "ALTER TABLE ndr.sensor_keys \
-         UPDATE zeek_status = '{}', suricata_status = '{}', vector_status = '{}', last_seen = now() \
-         WHERE key_prefix = '{}' \
-         SETTINGS mutations_sync=1",
+        "INSERT INTO ndr.sensor_keys \
+         (id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
+          os_name, zeek_status, suricata_status, vector_status, active, created_at, last_seen) \
+         SELECT id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
+                os_name, '{}', '{}', '{}', active, created_at, now() \
+         FROM ndr.sensor_keys FINAL \
+         WHERE key_prefix = '{}' AND active = 1",
         zeek_status, suricata_status, vector_status, key_prefix
     );
     self.client.query(&query).execute().await?;

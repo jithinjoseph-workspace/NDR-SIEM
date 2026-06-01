@@ -34,6 +34,8 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 use std::env;
 use std::time::Duration;
+use rdkafka::producer::Producer;
+use rdkafka::util::Timeout;
 
 use jsonwebtoken::{encode, decode, Header, 
     Validation, EncodingKey, DecodingKey};
@@ -80,6 +82,21 @@ static JIRA_DEDUP: std::sync::LazyLock<Mutex<HashMap<String, i64>>> =
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
         .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string())
+}
+
+fn kafka_health_status(state: &AppState) -> &'static str {
+    match state
+        .kafka_producer
+        .client()
+        .fetch_metadata(None, Timeout::After(Duration::from_secs(2)))
+    {
+        Ok(metadata) if metadata.brokers().iter().any(|broker| broker.id() >= 0) => "running",
+        Ok(_) => "stopped",
+        Err(error) => {
+            warn!("Kafka health check failed: {}", error);
+            "stopped"
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -219,7 +236,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command"];
+    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/install-sensor.sh"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -952,18 +969,12 @@ tokio::spawn(async move {
 pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let ch_stats = state.ch_storage.get_stats_by_tenant(&tenant_id).await.unwrap_or(json!({}));
-
-    // Get all service status from agent
-    let agent_url = std::env::var("NDR_AGENT_URL")
-        .unwrap_or_else(|_| "http://localhost:3001".to_string());
-    
-    let services = match reqwest::get(
-        format!("{}/agent/status", agent_url)
-    ).await {
-        Ok(resp) => resp.json::<serde_json::Value>().await
-            .unwrap_or(json!({})),
-        Err(_) => json!({})
+    let clickhouse_status = if state.ch_storage.health_check().await {
+        "running"
+    } else {
+        "stopped"
     };
+    let kafka_status = kafka_health_status(&state);
 
     Json(json!({
         "status":          "ok",
@@ -975,11 +986,11 @@ pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMa
         "zeek_events":     ch_stats.get("zeek_events").and_then(|v| v.as_u64()).unwrap_or(0),
         "suricata_events": ch_stats.get("suricata_events").and_then(|v| v.as_u64()).unwrap_or(0),
         "services": {
-            "zeek":       services.get("zeek").and_then(|v| v.as_str()).unwrap_or("unknown"),
-            "suricata":   services.get("suricata").and_then(|v| v.as_str()).unwrap_or("unknown"),
-            "vector":     services.get("vector").and_then(|v| v.as_str()).unwrap_or("unknown"),
-            "kafka":      services.get("kafka").and_then(|v| v.as_str()).unwrap_or("unknown"),
-            "clickhouse": services.get("clickhouse").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "zeek":       "unknown",
+            "suricata":   "unknown",
+            "vector":     "unknown",
+            "kafka":      kafka_status,
+            "clickhouse": clickhouse_status,
             "engine":     "running",
         }
     }))
@@ -4168,6 +4179,27 @@ fn extract_sensor_key_prefix(
     Some(key[..16].to_string())
 }
 
+pub async fn install_sensor_script() -> axum::response::Response {
+    let path = std::env::var("SENSOR_INSTALL_SCRIPT_PATH")
+        .unwrap_or_else(|_| "/scripts/install-sensor.sh".to_string());
+
+    match std::fs::read_to_string(&path) {
+        Ok(script) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/x-shellscript; charset=utf-8")
+            .body(axum::body::Body::from(script))
+            .unwrap(),
+        Err(e) => axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(json!({
+                "status": "error",
+                "message": format!("Installer script not found at {}: {}", path, e)
+            }).to_string()))
+            .unwrap(),
+    }
+}
+
 pub async fn create_sensor_key_api(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4177,15 +4209,19 @@ pub async fn create_sensor_key_api(
         Some(c) => c,
         None => return Json(json!({"status": "error", "message": "Unauthorized"})),
     };
-    if claims.role != "super_admin" {
-        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can create sensor keys"}));
-    }
-    
     let tenant_id = payload["tenant_id"].as_str().unwrap_or("").to_string();
     let name = payload["name"].as_str().unwrap_or("").to_string();
     
     if tenant_id.is_empty() || name.is_empty() {
         return Json(json!({"status": "error", "message": "tenant_id and name are required"}));
+    }
+
+    let is_platform_admin = claims.role == "super_admin" || claims.role == "admin";
+    if !is_platform_admin && claims.role != "tenant_admin" {
+        return Json(json!({"status": "error", "message": "Forbidden: admin or tenant_admin required"}));
+    }
+    if claims.role == "tenant_admin" && tenant_id != claims.tenant_id {
+        return Json(json!({"status": "error", "message": "Forbidden: tenant admins can only create sensor keys for their own tenant"}));
     }
     
     let (plain, prefix, hash) = generate_sensor_key(&tenant_id);
@@ -4212,9 +4248,9 @@ pub async fn get_sensor_keys(
         None => return Json(json!({"status": "error", "message": "Unauthorized"})),
     };
     
-    let target_tenant = if claims.role == "super_admin" {
+    let target_tenant = if claims.role == "super_admin" || claims.role == "admin" {
         "default".to_string()
-    } else if claims.role == "tenant_admin" {
+    } else if claims.tenant_id != "default" {
         claims.tenant_id.clone()
     } else {
         return Json(json!({"status": "error", "message": "Forbidden"}));
@@ -4280,7 +4316,16 @@ pub async fn sensor_register(
                 "Failed to persist sensor registration for tenant={}: {}",
                 tenant_id, e
             );
+            return Json(json!({
+                "status": "error",
+                "message": format!("Failed to persist sensor registration: {}", e)
+            }));
         }
+    } else {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid sensor key prefix"
+        }));
     }
 
     tracing::info!(
@@ -4318,7 +4363,16 @@ pub async fn sensor_heartbeat(
                 "Failed to persist sensor heartbeat for tenant={}: {}",
                 tenant_id, e
             );
+            return Json(json!({
+                "status": "error",
+                "message": format!("Failed to persist sensor heartbeat: {}", e)
+            }));
         }
+    } else {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid sensor key prefix"
+        }));
     }
 
     tracing::info!(

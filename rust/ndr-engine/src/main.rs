@@ -300,6 +300,7 @@ tokio::spawn(async move {
         .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))
         .route("/api/admin/engines", get(api::get_engines))
         .route("/api/admin/engines/scale", post(api::scale_engines))
+        .route("/api/install-sensor.sh", get(api::install_sensor_script))
         .route("/api/sensor-keys", 
             get(api::get_sensor_keys)
             .post(api::create_sensor_key_api))
@@ -351,7 +352,6 @@ tokio::spawn(async move {
     axum::serve(listener, app).await.unwrap();
 
 }
-
 
 
 

@@ -288,8 +288,11 @@ export class Api {
 
   getSensorKeys(): Observable<SensorKey[]> {
     return this.http
-      .get<SensorKeyListResponse>(`${this.baseUrl}/sensor-keys`)
+      .get<SensorKeyListResponse | SensorKey[]>(`${this.baseUrl}/sensor-keys`)
       .pipe(map(response => {
+        if (Array.isArray(response)) {
+          return response;
+        }
         if (response.status && response.status !== 'ok') {
           throw new Error(response.message || 'Failed to load sensor keys');
         }

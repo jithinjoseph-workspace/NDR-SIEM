@@ -1,21 +1,38 @@
 <section class="tenant-admin-shell">
   <div class="tenant-admin-header">
-    <div>
+    <div class="header-copy">
       <div class="eyebrow">Tenant Administration</div>
-      <h2>Tenant Users</h2>
-      <p>Manage analysts and page access for {{ tenantName }}.</p>
+      <h2>{{ pageTitle }}</h2>
+      <p>{{ pageSubtitle }}</p>
     </div>
 
-    <button class="primary-action" type="button" (click)="openCreateForm()">
-      <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
-      Add Analyst
-    </button>
+    <div class="header-actions">
+      <button class="secondary-action" type="button" (click)="loadUsers()">Refresh</button>
+      <button
+        *ngIf="activeTab === 'users'"
+        class="primary-action"
+        type="button"
+        (click)="openCreateForm()"
+      >
+        <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
+        Add Analyst
+      </button>
+    </div>
   </div>
 
   <div class="tenant-context">
-    <span>Organization</span>
-    <strong>{{ tenantName }}</strong>
-    <code>{{ tenantId }}</code>
+    <div>
+      <span>Organization</span>
+      <strong>{{ tenantName }}</strong>
+    </div>
+    <div>
+      <span>Tenant ID</span>
+      <code>{{ tenantId }}</code>
+    </div>
+    <div>
+      <span>Admin Scope</span>
+      <strong>Tenant Admin</strong>
+    </div>
   </div>
 
   <div
@@ -25,179 +42,194 @@
     {{ message }}
   </div>
 
-  <section class="tenant-stats">
-    <article>
-      <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
-      <span>Total Users</span>
-      <strong>{{ users.length }}</strong>
-    </article>
-    <article>
-      <lucide-icon [name]="ShieldIcon" class="w-5 h-5"></lucide-icon>
-      <span>Active Users</span>
-      <strong>{{ activeUsers }}</strong>
-    </article>
-    <article>
-      <lucide-icon [name]="LockIcon" class="w-5 h-5"></lucide-icon>
-      <span>Analysts</span>
-      <strong>{{ analystUsers }}</strong>
-    </article>
-    <article>
-      <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
-      <span>Viewers</span>
-      <strong>{{ viewerUsers }}</strong>
-    </article>
-  </section>
+  <ng-container *ngIf="activeTab === 'users'">
+    <section class="tenant-stats">
+      <article>
+        <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
+        <span>Total Users</span>
+        <strong>{{ users.length }}</strong>
+      </article>
+      <article>
+        <lucide-icon [name]="ShieldIcon" class="w-5 h-5"></lucide-icon>
+        <span>Active Accounts</span>
+        <strong>{{ activeUsers }}</strong>
+      </article>
+      <article>
+        <lucide-icon [name]="LockIcon" class="w-5 h-5"></lucide-icon>
+        <span>Analysts</span>
+        <strong>{{ analystUsers }}</strong>
+      </article>
+      <article>
+        <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
+        <span>Viewers</span>
+        <strong>{{ viewerUsers }}</strong>
+      </article>
+    </section>
 
-  <section class="tenant-panel">
-    <div class="panel-head">
-      <div>
-        <h3>Organization Users</h3>
-        <p>Only users from your tenant are shown here.</p>
-      </div>
-      <button class="secondary-action" type="button" (click)="loadUsers()">Refresh</button>
-    </div>
-
-    <div *ngIf="loading" class="loading-state">Loading tenant users...</div>
-
-    <div *ngIf="!loading && users.length === 0" class="empty-state">
-      <div class="empty-visual">
-        <lucide-icon [name]="UserPlusIcon" class="w-5 h-5"></lucide-icon>
-      </div>
-      <div>
-        <strong>No analysts created yet</strong>
-        <span>Create analyst accounts and assign page access for this organization.</span>
-      </div>
-      <button class="primary-action" type="button" (click)="openCreateForm()">
-        <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
-        Add Analyst
-      </button>
-    </div>
-
-    <div *ngIf="!loading && users.length > 0" class="user-table">
-      <div class="table-row table-head">
-        <span>User</span>
-        <span>Role</span>
-        <span>Page Access</span>
-        <span>Status</span>
-        <span>Actions</span>
+    <section class="tenant-panel">
+      <div class="panel-head">
+        <div>
+          <h3>User Access</h3>
+          <p>Tenant-scoped accounts and permissions.</p>
+        </div>
       </div>
 
-      <div *ngFor="let user of users" class="table-row">
-        <div class="user-cell">
-          <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
-          <div>
-            <strong>{{ user.username }}</strong>
-            <small>{{ user.created_at || 'Created in tenant' }}</small>
+      <div *ngIf="loading" class="loading-state">
+        <div class="skeleton-row" *ngFor="let row of [1,2,3,4]"></div>
+      </div>
+
+      <div *ngIf="!loading && users.length === 0" class="empty-state">
+        <div class="empty-visual">
+          <lucide-icon [name]="UserPlusIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <div>
+          <strong>No Tenant Users</strong>
+          <span>Create analyst accounts and assign page access for this organization.</span>
+        </div>
+        <button class="primary-action" type="button" (click)="openCreateForm()">
+          <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
+          Add Analyst
+        </button>
+      </div>
+
+      <div *ngIf="!loading && users.length > 0" class="user-table">
+        <div class="table-row table-head">
+          <span>User</span>
+          <span>Role</span>
+          <span>Page Access</span>
+          <span>Status</span>
+          <span>Created</span>
+          <span>Actions</span>
+        </div>
+
+        <div *ngFor="let user of users" class="table-row">
+          <div class="user-cell">
+            <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
+            <div>
+              <strong>{{ user.username }}</strong>
+              <small>{{ user.tenant_id }}</small>
+            </div>
+          </div>
+
+          <span class="role-pill">{{ getRoleLabel(user.role) }}</span>
+
+          <div class="permission-list">
+            <span *ngFor="let label of getPermissionLabels(user).slice(0, 4)">
+              {{ label }}
+            </span>
+            <span *ngIf="getPermissionLabels(user).length > 4">
+              +{{ getPermissionLabels(user).length - 4 }}
+            </span>
+          </div>
+
+          <span [class]="'status-pill ' + getUserStatus(user)">
+            {{ getUserStatus(user) }}
+          </span>
+
+          <span class="created-cell">{{ user.created_at || 'Created in tenant' }}</span>
+
+          <div class="row-actions">
+            <button type="button" title="Edit access" (click)="openEditForm(user)">
+              <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+            </button>
+            <button type="button" title="Delete user" class="danger" (click)="deleteUser(user)">
+              <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+            </button>
           </div>
         </div>
-
-        <span class="role-pill">{{ getRoleLabel(user.role) }}</span>
-
-        <div class="permission-list">
-          <span *ngFor="let label of getPermissionLabels(user).slice(0, 4)">
-            {{ label }}
-          </span>
-          <span *ngIf="getPermissionLabels(user).length > 4">
-            +{{ getPermissionLabels(user).length - 4 }}
-          </span>
-        </div>
-
-        <span [class]="'status-pill ' + getUserStatus(user)">
-          {{ getUserStatus(user) }}
-        </span>
-
-        <div class="row-actions">
-          <button type="button" title="Edit access" (click)="openEditForm(user)">
-            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
-          </button>
-          <button type="button" title="Delete user" class="danger" (click)="deleteUser(user)">
-            <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
-          </button>
-        </div>
       </div>
-    </div>
-  </section>
+    </section>
+  </ng-container>
 
   <div *ngIf="showForm" class="modal-backdrop">
     <div class="tenant-modal">
       <div class="modal-head">
         <div>
           <h3>{{ editingUser ? 'Edit User Access' : 'Add Analyst' }}</h3>
-          <p>{{ editingUser ? 'Update local page access for this user.' : 'Create a user inside this tenant.' }}</p>
+          <p>{{ editingUser ? 'Update role status and page access for this user.' : 'Create a tenant-scoped account and assign page access.' }}</p>
         </div>
         <button type="button" class="icon-button" (click)="showForm = false">
           <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
         </button>
       </div>
 
-      <div class="form-grid">
-        <label>
-          <span>Username</span>
-          <input
-            [(ngModel)]="userForm.username"
-            [disabled]="!!editingUser"
-            placeholder="analyst01"
-          />
-        </label>
+      <div class="modal-body">
+        <section class="modal-section account-section">
+          <div class="section-title">
+            <strong>Account Details</strong>
+            <span>{{ editingUser ? 'Existing user' : 'New analyst' }}</span>
+          </div>
 
-        <label>
-          <span>Password</span>
-          <input
-            [(ngModel)]="userForm.password"
-            type="password"
-            [placeholder]="editingUser ? 'Leave blank to keep current password' : 'Temporary password'"
-          />
-        </label>
+          <div class="form-grid">
+            <label>
+              <span>Username</span>
+              <input
+                [(ngModel)]="userForm.username"
+                [disabled]="!!editingUser"
+                placeholder="analyst01"
+              />
+            </label>
 
-        <label>
-          <span>Role</span>
-          <select
-            [(ngModel)]="userForm.role"
-            (ngModelChange)="onRoleChange()"
-            [disabled]="!!editingUser"
-          >
-            <option *ngFor="let role of roleOptions" [value]="role.value">
-              {{ role.label }}
-            </option>
-          </select>
-        </label>
+            <label>
+              <span>Password</span>
+              <input
+                [(ngModel)]="userForm.password"
+                type="password"
+                [placeholder]="editingUser ? 'Leave blank to keep current password' : 'Temporary password'"
+              />
+            </label>
 
-        <label>
-          <span>Status</span>
-          <select [(ngModel)]="userForm.active">
-            <option [ngValue]="true">Active</option>
-            <option [ngValue]="false">Disabled</option>
-          </select>
-        </label>
+            <label>
+              <span>Role</span>
+              <select
+                [(ngModel)]="userForm.role"
+                (ngModelChange)="onRoleChange()"
+                [disabled]="!!editingUser"
+              >
+                <option *ngFor="let role of roleOptions" [value]="role.value">
+                  {{ role.label }}
+                </option>
+              </select>
+            </label>
 
-      </div>
+            <label>
+              <span>Status</span>
+              <select [(ngModel)]="userForm.active">
+                <option [ngValue]="true">Active</option>
+                <option [ngValue]="false">Disabled</option>
+              </select>
+            </label>
+          </div>
+        </section>
 
-      <div class="permission-section">
-        <div class="section-title">
-          <strong>Page Access</strong>
-          <span>{{ userForm.permissions.length }} selected</span>
-        </div>
+        <section class="modal-section permission-section">
+          <div class="section-title">
+            <strong>Page Access</strong>
+            <span>{{ userForm.permissions.length }} selected</span>
+          </div>
 
-        <div class="permission-grid">
-          <button
-            *ngFor="let permission of permissionOptions"
-            type="button"
-            [class.selected]="hasPermission(permission.key)"
-            (click)="togglePermission(permission.key)"
-          >
-            <strong>{{ permission.label }}</strong>
-            <span>{{ permission.description }}</span>
-          </button>
-        </div>
+          <div class="permission-grid">
+            <button
+              *ngFor="let permission of permissionOptions"
+              type="button"
+              [class.selected]="hasPermission(permission.key)"
+              (click)="togglePermission(permission.key)"
+            >
+              <strong>{{ permission.label }}</strong>
+              <span>{{ permission.description }}</span>
+            </button>
+          </div>
+        </section>
       </div>
 
       <div class="modal-actions">
+        <button class="secondary-action" type="button" (click)="showForm = false">Cancel</button>
         <button class="primary-action" type="button" [disabled]="saving" (click)="saveUser()">
           <lucide-icon [name]="SaveIcon" class="w-4 h-4"></lucide-icon>
           {{ saving ? 'Saving...' : (editingUser ? 'Save Access' : 'Create User') }}
         </button>
-        <button class="secondary-action" type="button" (click)="showForm = false">Cancel</button>
       </div>
     </div>
   </div>
+
 </section>

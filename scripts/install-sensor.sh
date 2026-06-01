@@ -396,11 +396,12 @@ CLOUD_URL = config.get('CLOUD_URL', '')
 TENANT_ID = config.get('TENANT_ID', '')
 API_KEY   = config.get('API_KEY', '')
 IFACE     = config.get('IFACE', 'eth0')
+DESIRED_STATE = 'running'
 
 def is_running(name):
     try:
         return subprocess.run(
-            ['pgrep', '-x', name],
+            ['pgrep', '-f', name],
             capture_output=True
         ).returncode == 0
     except:
@@ -431,7 +432,7 @@ def start_suricata():
         subprocess.run(['pkill', '-9', '-f', 'suricata'], capture_output=True)
         time.sleep(2)
         # Clean ALL stale PID files
-        subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/var/run/suricata/suricata.pid'], capture_output=True)
+        subprocess.run(['rm', '-f', '/tmp/suricata.pid', '/var/run/suricata.pid', '/run/suricata.pid', '/var/run/suricata/suricata.pid'], capture_output=True)
         # Start Suricata directly exactly like ndr-agent.py
         subprocess.Popen(
             [
@@ -467,6 +468,13 @@ def start_vector():
     return False
 
 def check_and_restart():
+    if DESIRED_STATE == 'stopped':
+        return {
+            'zeek': 'stopped',
+            'suricata': 'stopped',
+            'vector': 'stopped'
+        }
+
     zeek_ok     = is_running('zeek')
     suricata_ok = is_running('suricata')
     vector_ok   = is_running('vector')
@@ -520,12 +528,15 @@ def get_command():
 
 def execute_command(cmd):
     """Execute command from tenant admin"""
+    global DESIRED_STATE
     print(f"[NDR] Command received: {cmd}")
     if cmd == 'start':
+        DESIRED_STATE = 'running'
         start_zeek()
         start_suricata()
         start_vector()
     elif cmd == 'stop':
+        DESIRED_STATE = 'stopped'
         subprocess.run(['systemctl', 'stop', 'ndr-vector'],
             capture_output=True)
         subprocess.run(['pkill', '-9', '-f', 'zeek'],
@@ -536,7 +547,9 @@ def execute_command(cmd):
             capture_output=True)
         print("[NDR] All services stopped!")
     elif cmd == 'restart':
+        DESIRED_STATE = 'running'
         execute_command('stop')
+        DESIRED_STATE = 'running'
         time.sleep(3)
         execute_command('start')
 

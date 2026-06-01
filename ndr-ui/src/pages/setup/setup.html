@@ -51,7 +51,7 @@
     </div>
   </ng-template>
 
-  <div class="setup-tabs" role="tablist" aria-label="Sensor setup views">
+  <div class="setup-tabs" role="tablist" aria-label="Sensor setup views" *ngIf="canViewLocalSensor">
     <button
       type="button"
       (click)="selectTab('local')"
@@ -70,7 +70,7 @@
     </button>
   </div>
 
-  <div *ngIf="activeTab === 'local'" class="setup-grid">
+  <div *ngIf="activeTab === 'local' && canViewLocalSensor" class="setup-grid">
     <section class="panel interface-panel">
       <div class="panel-heading">
         <div class="panel-icon secondary">
@@ -173,19 +173,30 @@
   </div>
 
   <section *ngIf="activeTab === 'external'" class="panel external-panel">
-    <div class="panel-heading">
-      <div class="panel-icon secondary">
-        <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+    <div class="panel-heading split-heading">
+      <div class="heading-group">
+        <div class="panel-icon secondary">
+          <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <div>
+          <h3>External Sensor Fleet</h3>
+          <p>Registered remote sensors with queued control actions per tenant.</p>
+        </div>
       </div>
-      <div>
-        <h3>External Sensor Fleet</h3>
-        <p>Registered remote sensors with queued control actions per tenant.</p>
-      </div>
+
+      <button
+        *ngIf="canViewExternalSensors"
+        type="button"
+        class="primary-action add-sensor-action"
+        (click)="openAddSensorModal()"
+      >
+        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+        Add Sensor
+      </button>
     </div>
 
     <div class="setup-note">
-      External sensor cards now read registration metadata plus the latest persisted heartbeat state
-      from the existing <code>/api/sensor-keys</code> response.
+      Generate a one-time key, install the sensor on the capture host, then manage command actions here.
     </div>
 
     <div *ngIf="externalActionMessage" class="inline-message success">
@@ -309,4 +320,80 @@
       </article>
     </div>
   </section>
+
+  <div *ngIf="showAddSensorModal" class="modal-backdrop">
+    <div class="sensor-modal">
+      <div class="modal-head">
+        <div>
+          <h3>Add Sensor</h3>
+          <p>Generate a one-time API key and run the install command on the sensor machine.</p>
+        </div>
+        <button type="button" class="icon-close" (click)="showAddSensorModal = false">
+          x
+        </button>
+      </div>
+
+      <div class="sensor-step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h4>Create API Key</h4>
+          <label>
+            <span>Sensor Name</span>
+            <input
+              [(ngModel)]="newSensorName"
+              [disabled]="!!createdSensorKey"
+              placeholder="Office gateway sensor"
+            />
+          </label>
+          <button
+            type="button"
+            class="primary-action"
+            [disabled]="creatingSensor || !newSensorName.trim() || !!createdSensorKey"
+            (click)="createExternalSensorKey()"
+          >
+            <lucide-icon [name]="KeyIcon" class="w-4 h-4"></lucide-icon>
+            {{ creatingSensor ? 'Generating...' : 'Generate Key' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="sensor-step" [class.disabled]="!createdSensorKey">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h4>Install Sensor</h4>
+          <div *ngIf="!createdSensorKey" class="muted-panel">
+            Generate a key first. The full key is shown only once.
+          </div>
+
+          <ng-container *ngIf="createdSensorKey">
+            <div class="warning-box">
+              Copy this key now. It will never be shown again.
+            </div>
+
+            <div class="secret-block">
+              <code>{{ createdSensorKey.key }}</code>
+              <button type="button" class="secondary-action compact" (click)="copyCreatedSensorKey()">
+                <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
+                Copy Key
+              </button>
+            </div>
+
+            <div class="command-block">
+              <code>{{ installCommand }}</code>
+              <button type="button" class="secondary-action compact" (click)="copyInstallCommand()">
+                <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
+                Copy Command
+              </button>
+            </div>
+          </ng-container>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="secondary-action compact" (click)="showAddSensorModal = false">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
 </section>

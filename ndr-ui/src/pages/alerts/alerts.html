@@ -67,7 +67,7 @@
               <div class="flow-cell">
                 <span>{{ alert.source }}</span>
                 <small>
-                  {{ alert.src_country || 'Unknown origin' }}
+                  {{ alert.src_country || 'Origin unavailable' }}
                   <span *ngIf="alert.threat_intel" class="intel-flag">
                     <lucide-icon [name]="AlertTriangleIcon" class="w-3 h-3"></lucide-icon>
                     Threat Intel

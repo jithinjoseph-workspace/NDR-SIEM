@@ -49,6 +49,7 @@ export class TenantAdmin implements OnInit {
   XIcon = X;
   SaveIcon = Save;
 
+  activeTab: 'users' = 'users';
   currentUser: any = {};
   tenantId = '';
   tenantName = 'Organization';
@@ -125,6 +126,14 @@ export class TenantAdmin implements OnInit {
 
   get viewerUsers() {
     return this.users.filter(user => user.role === 'viewer').length;
+  }
+
+  get pageTitle() {
+    return 'Tenant Users';
+  }
+
+  get pageSubtitle() {
+    return `Manage analysts and page access for ${this.tenantName}.`;
   }
 
   loadUsers() {

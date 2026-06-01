@@ -1,9 +1,8 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Api } from '../../services/api/api';
-import { Websocket } from '../../services/websocket/websocket';
-import { Subscription } from 'rxjs';
+import { Api, SensorKey } from '../../services/api/api';
 import { LucideAngularModule, Cpu, Server, Database, CheckCircle, Activity } from 'lucide-angular';
+import { AuthService } from '../../services/auth/auth';
 
 @Component({
   selector: 'app-health',
@@ -19,14 +18,17 @@ export class Health implements OnInit, OnDestroy {
   eventsPerHour: number = 0;
   sessions: number = 0;
   sigmaRules: number = 0;
+  activeSensors: number = 0;
+  onlineSensors: number = 0;
+  lastSensorSeen = '';
 
   services: any[] = [
-    { name: 'Zeek IDS',        status: 'unknown', type: 'zeek',       label: 'Host Process'      },
-    { name: 'Suricata EVE',    status: 'unknown', type: 'suricata',   label: 'Host Process'      },
-    { name: 'Vector Pipeline', status: 'unknown', type: 'vector',     label: 'Docker Container'  },
-    { name: 'Kafka Broker',    status: 'unknown', type: 'kafka',      label: 'Docker Container'  },
-    { name: 'NDR Engine',      status: 'unknown', type: 'engine',     label: 'Docker Container'  },
-    { name: 'ClickHouse DB',   status: 'unknown', type: 'clickhouse', label: 'Direct Install'    },
+    { name: 'Zeek IDS',        status: 'unknown', type: 'zeek',       label: 'Tenant Sensor'     },
+    { name: 'Suricata EVE',    status: 'unknown', type: 'suricata',   label: 'Tenant Sensor'     },
+    { name: 'Vector Pipeline', status: 'unknown', type: 'vector',     label: 'Tenant Sensor'     },
+    { name: 'Kafka Broker',    status: 'unknown', type: 'kafka',      label: 'Platform Service'  },
+    { name: 'NDR Engine',      status: 'unknown', type: 'engine',     label: 'Platform Service'  },
+    { name: 'ClickHouse DB',   status: 'unknown', type: 'clickhouse', label: 'Platform Service'  },
   ];
 
   CpuIcon = Cpu;
@@ -35,31 +37,17 @@ export class Health implements OnInit, OnDestroy {
   CheckIcon = CheckCircle;
   ActivityIcon = Activity;
 
-  private subs: Subscription[] = [];
   private refreshInterval: any;
 
   constructor(
     private api: Api,
-    private ws: Websocket,
+    private auth: AuthService,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
     this.loadHealth();
     this.refreshInterval = setInterval(() => this.loadHealth(), 10000);
-
-    // Real-time updates via WebSocket
-    this.subs.push(
-      this.ws.lastAgentStatus$.subscribe(data => {
-        if (!data) return;
-        this.updateStatus('zeek', this.normalizeStatus(data.zeek));
-        this.updateStatus('suricata', this.normalizeStatus(data.suricata));
-        this.updateStatus('vector', this.normalizeStatus(data.vector));
-        this.updateStatus('kafka', this.normalizeStatus(data.kafka));
-        this.updateStatus('clickhouse', this.normalizeStatus(data.clickhouse));
-        this.cdr.detectChanges();
-      })
-    );
   }
 
   loadHealth() {
@@ -74,9 +62,6 @@ export class Health implements OnInit, OnDestroy {
 
         // Update all service statuses from services object
         const svc = data.services || {};
-        this.updateStatus('zeek', this.normalizeStatus(svc.zeek));
-        this.updateStatus('suricata', this.normalizeStatus(svc.suricata));
-        this.updateStatus('vector', this.normalizeStatus(svc.vector));
         this.updateStatus('kafka', this.normalizeStatus(svc.kafka));
         this.updateStatus('engine', this.normalizeStatus(svc.engine || 'running'));
         this.updateStatus('clickhouse', this.normalizeStatus(svc.clickhouse));
@@ -85,6 +70,37 @@ export class Health implements OnInit, OnDestroy {
       error: () => {
         ['zeek', 'suricata', 'vector', 'kafka', 'engine', 'clickhouse']
           .forEach(s => this.updateStatus(s, 'stopped'));
+        this.cdr.detectChanges();
+      }
+    });
+
+    this.loadSensorHealth();
+  }
+
+  loadSensorHealth() {
+    const user = this.auth.getUser() || {};
+    const tenantId = user.tenant_id || 'default';
+
+    this.api.getSensorKeys().subscribe({
+      next: (keys: SensorKey[]) => {
+        const sensors = keys.filter(sensor =>
+          sensor.tenant_id === tenantId && sensor.active !== false
+        );
+
+        this.activeSensors = sensors.length;
+        this.onlineSensors = sensors.filter(sensor => this.isSensorOnline(sensor)).length;
+        this.lastSensorSeen = this.getLatestSeen(sensors);
+
+        this.updateStatus('zeek', this.rollupServiceStatus(sensors, 'zeek'));
+        this.updateStatus('suricata', this.rollupServiceStatus(sensors, 'suricata'));
+        this.updateStatus('vector', this.rollupServiceStatus(sensors, 'vector'));
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.activeSensors = 0;
+        this.onlineSensors = 0;
+        this.lastSensorSeen = '';
+        ['zeek', 'suricata', 'vector'].forEach(service => this.updateStatus(service, 'unknown'));
         this.cdr.detectChanges();
       }
     });
@@ -101,6 +117,34 @@ export class Health implements OnInit, OnDestroy {
     if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return 'running';
     if (['stopped', 'down', 'error', 'failed', 'inactive'].includes(value)) return 'stopped';
     return /^\d+$/.test(value) ? 'running' : value;
+  }
+
+  private isSensorOnline(sensor: SensorKey): boolean {
+    if (!sensor.last_seen) return false;
+    const lastSeenMs = new Date(sensor.last_seen).getTime();
+    return !Number.isNaN(lastSeenMs) && Date.now() - lastSeenMs <= 2 * 60 * 1000;
+  }
+
+  private rollupServiceStatus(
+    sensors: SensorKey[],
+    service: 'zeek' | 'suricata' | 'vector'
+  ): string {
+    const onlineSensors = sensors.filter(sensor => this.isSensorOnline(sensor));
+    if (onlineSensors.length === 0) return sensors.length ? 'stopped' : 'unknown';
+
+    const statuses = onlineSensors.map(sensor => this.normalizeStatus(sensor[service]));
+    if (statuses.some(status => status === 'running')) return 'running';
+    if (statuses.some(status => status === 'unknown')) return 'unknown';
+    return 'stopped';
+  }
+
+  private getLatestSeen(sensors: SensorKey[]): string {
+    const latest = sensors
+      .map(sensor => sensor.last_seen ? new Date(sensor.last_seen).getTime() : 0)
+      .filter(value => !Number.isNaN(value))
+      .sort((a, b) => b - a)[0];
+
+    return latest ? new Date(latest).toLocaleString() : 'No heartbeat yet';
   }
 
   getStatusDotClass(status: string): string {
@@ -132,7 +176,6 @@ export class Health implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
-    this.subs.forEach(s => s.unsubscribe());
     if (this.refreshInterval) clearInterval(this.refreshInterval);
   }
 }

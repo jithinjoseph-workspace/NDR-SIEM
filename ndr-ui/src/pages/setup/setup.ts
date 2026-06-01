@@ -5,6 +5,9 @@ import { Router } from '@angular/router';
 import {
   LucideAngularModule,
   Activity,
+  Copy,
+  KeyRound,
+  Plus,
   Play,
   RefreshCcw,
   Server,
@@ -51,12 +54,21 @@ export class Setup implements OnInit, OnDestroy {
   externalError = '';
   externalActionMessage = '';
   pendingExternalCommand: { tenantId: string; command: SensorControlCommand } | null = null;
+  showAddSensorModal = false;
+  newSensorName = '';
+  creatingSensor = false;
+  createdSensorKey: SensorKey | null = null;
+  installCommand = '';
+  cloudUrl = this.detectCloudUrl();
 
   private subs: Subscription[] = [];
   private currentRole = '';
   private currentTenantId = '';
 
   SettingsIcon = Settings;
+  CopyIcon = Copy;
+  KeyIcon = KeyRound;
+  PlusIcon = Plus;
   PlayIcon = Play;
   StopIcon = Square;
   RefreshIcon = RefreshCcw;
@@ -86,7 +98,9 @@ export class Setup implements OnInit, OnDestroy {
         ? 'external'
         : 'local';
 
-    this.loadLocalSensorSetup();
+    if (this.canViewLocalSensor) {
+      this.loadLocalSensorSetup();
+    }
 
     if (this.canViewExternalSensors) {
       this.loadExternalSensors();
@@ -102,6 +116,10 @@ export class Setup implements OnInit, OnDestroy {
 
   get canViewExternalSensors(): boolean {
     return this.currentRole === 'super_admin' || this.currentRole === 'tenant_admin';
+  }
+
+  get canViewLocalSensor(): boolean {
+    return this.currentTenantId === 'default';
   }
 
   get localRunningCount(): number {
@@ -171,6 +189,10 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   selectTab(tab: SetupTab) {
+    if (tab === 'local' && !this.canViewLocalSensor) {
+      return;
+    }
+
     this.activeTab = tab;
   }
 
@@ -229,6 +251,71 @@ export class Setup implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
     });
+  }
+
+  openAddSensorModal() {
+    this.newSensorName = '';
+    this.createdSensorKey = null;
+    this.installCommand = '';
+    this.externalError = '';
+    this.externalActionMessage = '';
+    this.showAddSensorModal = true;
+  }
+
+  createExternalSensorKey() {
+    const name = this.newSensorName.trim();
+    if (!name) {
+      this.externalError = 'Sensor name is required.';
+      return;
+    }
+
+    this.creatingSensor = true;
+    this.externalError = '';
+    this.externalActionMessage = '';
+
+    this.api.createSensorKey(this.currentTenantId, name).subscribe({
+      next: response => {
+        this.creatingSensor = false;
+
+        if (response?.status === 'ok' && response.key) {
+          this.createdSensorKey = {
+            id: response.id,
+            key: response.key,
+            key_prefix: response.key.slice(0, 16),
+            tenant_id: this.currentTenantId,
+            name,
+            active: true,
+            created_at: new Date().toISOString(),
+            last_seen: '',
+          };
+          this.installCommand = this.buildInstallCommand(response.key);
+          this.newSensorName = '';
+          this.externalActionMessage = 'Sensor key generated. Copy it before closing.';
+          this.loadExternalSensors(true);
+        } else {
+          this.externalError = response?.message || 'Failed to generate sensor key.';
+        }
+
+        this.cdr.detectChanges();
+      },
+      error: error => {
+        this.creatingSensor = false;
+        this.externalError = error?.error?.message || 'Failed to generate sensor key.';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  copyCreatedSensorKey() {
+    if (this.createdSensorKey?.key) {
+      this.copyText(this.createdSensorKey.key, 'Sensor key copied.');
+    }
+  }
+
+  copyInstallCommand() {
+    if (this.installCommand) {
+      this.copyText(this.installCommand, 'Install command copied.');
+    }
   }
 
   isCommandPending(sensor: ExternalSensorCard, command?: SensorControlCommand): boolean {
@@ -417,5 +504,35 @@ export class Setup implements OnInit, OnDestroy {
     if (value === 'stopped') return 'stopped';
     if (value === 'restarting') return 'restarting';
     return 'unknown';
+  }
+
+  private buildInstallCommand(key: string): string {
+    return `curl -fsSL ${this.cloudUrl}/api/install-sensor.sh | sudo bash -s -- --cloud-url ${this.cloudUrl} --tenant-id ${this.currentTenantId} --api-key ${key}`;
+  }
+
+  private detectCloudUrl(): string {
+    if (typeof window === 'undefined') {
+      return 'https://your-ndr.com';
+    }
+
+    const url = new URL(window.location.origin);
+    if (url.port === '4200') {
+      url.port = '3000';
+    }
+    return url.origin;
+  }
+
+  private copyText(value: string, successMessage: string) {
+    navigator.clipboard.writeText(value).then(
+      () => {
+        this.externalActionMessage = successMessage;
+        this.externalError = '';
+        this.cdr.detectChanges();
+      },
+      () => {
+        this.externalError = 'Failed to copy to clipboard.';
+        this.cdr.detectChanges();
+      }
+    );
   }
 }

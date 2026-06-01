@@ -192,6 +192,23 @@
   margin-bottom: 20px;
 }
 
+.split-heading {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.heading-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.add-sensor-action {
+  flex: 0 0 auto;
+  padding-inline: 16px;
+}
+
 .panel-icon {
   display: grid;
   width: 40px;
@@ -574,6 +591,170 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 6, 18, 0.72);
+  padding: 22px;
+}
+
+.sensor-modal {
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100vh - 44px));
+  overflow: auto;
+  border: 1px solid rgba(110, 117, 136, 0.2);
+  border-radius: 8px;
+  background: rgba(16, 25, 43, 0.98);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+  padding: 22px;
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.modal-head h3,
+.step-content h4 {
+  margin: 0;
+  color: #f7f9ff;
+  font-family: var(--font-display);
+}
+
+.modal-head p {
+  margin: 5px 0 0;
+  color: #98a3b8;
+  font-size: 12px;
+}
+
+.icon-close {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 1px solid rgba(110, 117, 136, 0.2);
+  border-radius: 7px;
+  background: rgba(11, 19, 35, 0.8);
+  color: #d7dfef;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.sensor-step {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 14px;
+  border: 1px solid rgba(110, 117, 136, 0.16);
+  border-radius: 8px;
+  background: rgba(11, 19, 35, 0.7);
+  padding: 16px;
+}
+
+.sensor-step + .sensor-step {
+  margin-top: 14px;
+}
+
+.sensor-step.disabled {
+  opacity: 0.72;
+}
+
+.step-number {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(105, 246, 184, 0.12);
+  color: #69f6b8;
+  font-weight: 800;
+}
+
+.step-content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.step-content label {
+  display: grid;
+  gap: 7px;
+}
+
+.step-content label span {
+  color: #8792a7;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.step-content input {
+  width: 100%;
+  height: 42px;
+  border: 1px solid rgba(110, 117, 136, 0.2);
+  border-radius: 7px;
+  background: rgba(7, 14, 29, 0.86);
+  color: #f7f9ff;
+  outline: none;
+  padding: 0 12px;
+}
+
+.step-content input:focus {
+  border-color: rgba(105, 246, 184, 0.42);
+  box-shadow: 0 0 0 3px rgba(105, 246, 184, 0.08);
+}
+
+.warning-box,
+.muted-panel {
+  border: 1px solid rgba(245, 215, 110, 0.22);
+  border-radius: 7px;
+  background: rgba(245, 215, 110, 0.08);
+  color: #f5d76e;
+  padding: 11px 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.muted-panel {
+  border-color: rgba(110, 117, 136, 0.16);
+  background: rgba(110, 117, 136, 0.08);
+  color: #aeb8cc;
+}
+
+.secret-block,
+.command-block {
+  display: grid;
+  gap: 10px;
+}
+
+.secret-block code,
+.command-block code {
+  display: block;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(110, 117, 136, 0.16);
+  border-radius: 7px;
+  background: rgba(2, 6, 18, 0.42);
+  color: #f7f9ff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 12px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 @media (max-width: 980px) {
   .setup-header {
     flex-direction: column;
@@ -604,6 +785,15 @@ button:disabled {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .split-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .add-sensor-action {
+    width: 100%;
+  }
 }
 
 :host-context(html[data-theme="light"]) .setup-shell {
@@ -618,6 +808,8 @@ button:disabled {
 :host-context(html[data-theme="light"]) .setup-note,
 :host-context(html[data-theme="light"]) .inline-message,
 :host-context(html[data-theme="light"]) .empty-state,
+:host-context(html[data-theme="light"]) .sensor-modal,
+:host-context(html[data-theme="light"]) .sensor-step,
 :host-context(html[data-theme="light"]) .sensor-card,
 :host-context(html[data-theme="light"]) .sensor-strip div,
 :host-context(html[data-theme="light"]) .engine-row,
@@ -662,6 +854,8 @@ button:disabled {
 :host-context(html[data-theme="light"]) .inline-message,
 :host-context(html[data-theme="light"]) .empty-state,
 :host-context(html[data-theme="light"]) .sensor-card,
+:host-context(html[data-theme="light"]) .sensor-modal,
+:host-context(html[data-theme="light"]) .sensor-step,
 :host-context(html[data-theme="light"]) .engine-row,
 :host-context(html[data-theme="light"]) .service-row {
   border-color: rgba(148, 163, 184, 0.18);
@@ -677,6 +871,27 @@ button:disabled {
 :host-context(html[data-theme="light"]) select option {
   background-color: #ffffff;
   color: #0f172a;
+}
+
+:host-context(html[data-theme="light"]) .modal-head h3,
+:host-context(html[data-theme="light"]) .step-content h4,
+:host-context(html[data-theme="light"]) .secret-block code,
+:host-context(html[data-theme="light"]) .command-block code {
+  color: #0f172a;
+}
+
+:host-context(html[data-theme="light"]) .modal-head p,
+:host-context(html[data-theme="light"]) .step-content label span,
+:host-context(html[data-theme="light"]) .muted-panel {
+  color: #475569;
+}
+
+:host-context(html[data-theme="light"]) .step-content input,
+:host-context(html[data-theme="light"]) .secret-block code,
+:host-context(html[data-theme="light"]) .command-block code,
+:host-context(html[data-theme="light"]) .icon-close {
+  background: #f8fafc;
+  border-color: rgba(148, 163, 184, 0.25);
 }
 
 :host-context(html[data-theme="light"]) .setup-tabs button {
