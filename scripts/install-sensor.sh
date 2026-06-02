@@ -213,6 +213,39 @@ if ! command -v vector &>/dev/null; then
             rm -f /tmp/vector.deb || true
         }
     fi
+
+    if ! command -v vector &>/dev/null; then
+        case "$ARCH" in
+            amd64)
+                VECTOR_DEB_ARCH="amd64"
+                ;;
+            arm64|aarch64)
+                VECTOR_DEB_ARCH="arm64"
+                ;;
+            *)
+                error "Unsupported architecture for Vector fallback package: $ARCH"
+                ;;
+        esac
+
+        VECTOR_URL="https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector_${VECTOR_VERSION}-1_${VECTOR_DEB_ARCH}.deb"
+        warn "Vector was not found after apt install; trying release package fallback"
+        if curl -fL --connect-timeout 15 --max-time 120 "$VECTOR_URL" -o /tmp/vector.deb; then
+            apt-get install -y -qq /tmp/vector.deb > /dev/null 2>&1 || {
+                rm -f /tmp/vector.deb
+                error "Vector release package install failed"
+            }
+            rm -f /tmp/vector.deb
+        else
+            rm -f /tmp/vector.deb
+            error "Vector download failed. Check DNS/network access to repositories.vector.dev or github.com"
+        fi
+    fi
+
+    VECTOR_BIN=$(command -v vector || true)
+    if [ -z "$VECTOR_BIN" ]; then
+        error "Vector installation failed: vector binary was not found after install"
+    fi
+    log "Vector verified: $($VECTOR_BIN --version 2>/dev/null || echo "$VECTOR_BIN")"
     log "✅ Vector installed"
 else
     log "✅ Vector already installed"

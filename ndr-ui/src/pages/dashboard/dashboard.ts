@@ -4,7 +4,10 @@ import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
 import { ChartDataService } from '../../services/chart-data/chart-data';
 import { Subscription } from 'rxjs';
-import { LucideAngularModule, TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight } from 'lucide-angular';
+import {
+  LucideAngularModule,
+  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw
+} from 'lucide-angular';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartOptions } from 'chart.js';
 import { Router } from '@angular/router';
@@ -17,55 +20,47 @@ import { Router } from '@angular/router';
   styleUrl: './dashboard.css',
 })
 export class Dashboard implements OnInit, OnDestroy {
-  totalEvents: number = 0;
-  totalHits: number = 0;
-  eventsLastHour: number = 0;
-  hitsLastHour: number = 0;
-  zeekEvents: number = 0;
-  suricataEvents: number = 0;
-  critical: number = 0;
-  high: number = 0;
-  medium: number = 0;
-  low: number = 0;
-  topSrcIps: any[] = [];
-  topDstIps: any[] = [];
+
+  // ── Stat card values ──────────────────────────────────────────────────────
+  totalEvents    = 0;
+  totalHits      = 0;
+  eventsLastHour = 0;
+  hitsLastHour   = 0;
+  zeekEvents     = 0;
+  suricataEvents = 0;
+  critical = 0;
+  high     = 0;
+  medium   = 0;
+  low      = 0;
+  topSrcIps:            any[] = [];
+  topDstIps:            any[] = [];
   recentCriticalAlerts: any[] = [];
-  chartLabels: string[] = [];
-  chartData: number[] = [];
 
-  private subs: Subscription[] = [];
-  private refreshInterval: any;
-  private static chartInitialized: boolean = false;
-  private static savedChartData: number[] = [];
-  private static savedChartLabels: string[] = [];
-  private static savedTotalEvents: number = 0;
-  private static savedTotalHits: number = 0;
-  private static savedTenantId: string = '';
+  // ── Chart state ───────────────────────────────────────────────────────────
+  chartLoading = true;   // shows skeleton shimmer
+  chartError   = false;  // shows error + retry UI
 
-  static clearCache() {
-    Dashboard.chartInitialized = false;
-    Dashboard.savedChartData = [];
-    Dashboard.savedChartLabels = [];
-    Dashboard.savedTotalEvents = 0;
-    Dashboard.savedTotalHits = 0;
-    Dashboard.savedTenantId = '';
-  }
+  /** Cosmetic bar heights for the skeleton shimmer. */
+  readonly skeletonBars = ['30%','55%','40%','70%','50%','85%','60%','45%','75%','35%'];
 
+  // ── Icons ─────────────────────────────────────────────────────────────────
   TrendingUpIcon = TrendingUp;
-  AlertIcon = TriangleAlert;
-  ShieldIcon = Shield;
-  ActivityIcon = Activity;
-  ArrowIcon = ArrowUpRight;
+  AlertIcon      = TriangleAlert;
+  ShieldIcon     = Shield;
+  ActivityIcon   = Activity;
+  ArrowIcon      = ArrowUpRight;
+  RefreshIcon    = RefreshCw;
 
+  // ── Chart.js config ───────────────────────────────────────────────────────
   public lineChartData: ChartConfiguration<'line'>['data'] = {
     labels: [],
     datasets: [{
-      data: [],
-      label: 'Events',
-      fill: true,
-      tension: 0.4,
-      borderColor: '#69f6b8',
-      backgroundColor: 'rgba(105, 246, 184, 0.1)',
+      data:                [],
+      label:               'Events',
+      fill:                true,
+      tension:             0.4,
+      borderColor:         '#69f6b8',
+      backgroundColor:     'rgba(105, 246, 184, 0.1)',
       pointBackgroundColor: '#69f6b8'
     }]
   };
@@ -77,58 +72,79 @@ export class Dashboard implements OnInit, OnDestroy {
     scales: {
       y: { display: false },
       x: {
-        grid: { display: false },
+        grid:  { display: false },
         ticks: { color: '#a4abbf', font: { size: 10 } }
       }
     }
   };
 
+  private subs:           Subscription[] = [];
+  private supportInterval: any;   // drives /api/severity + /api/top-ips only
+
   constructor(
-    private api: Api,
-    private ws: Websocket,
+    private api:          Api,
+    private ws:           Websocket,
     private chartService: ChartDataService,
-    private router: Router,
-    private cdr: ChangeDetectorRef
-  ) { }
+    private router:       Router,
+    private cdr:          ChangeDetectorRef
+  ) {}
 
   ngOnInit() {
-    // Clear cache if a different tenant has logged in
-    const currentUser = JSON.parse(localStorage.getItem('ndr_user') || '{}');
-    const currentTenant = currentUser?.tenant_id || '';
-    if (Dashboard.savedTenantId && Dashboard.savedTenantId !== currentTenant) {
-      Dashboard.clearCache();
-    }
-    Dashboard.savedTenantId = currentTenant;
-
+    // Kick off the single background fetch loop in the service.
+    // /api/stats is now called ONCE every 30s — result shared with stat cards.
     this.chartService.start();
-    const snapshot = this.chartService.getSnapshot();
 
-    // Restore saved state if exists
-    if (Dashboard.savedChartData.length > 0) {
-      this.chartLabels = [...Dashboard.savedChartLabels];
-      this.chartData = [...Dashboard.savedChartData];
-      this.totalEvents = Dashboard.savedTotalEvents;
-      this.totalHits = Dashboard.savedTotalHits;
-      Dashboard.chartInitialized = true;
-    } else if (snapshot.data.some(value => value > 0) || snapshot.labels.some(label => !!label)) {
-      this.chartLabels = [...snapshot.labels];
-      this.chartData = [...snapshot.data];
-      this.eventsLastHour = this.chartService.getLatestEventsLastHour();
-      Dashboard.chartInitialized = true;
-    } else {
-      this.chartLabels = ['', '', '', '', '', ''];
-      this.chartData = [0, 0, 0, 0, 0, 0];
-    }
-    this.updateChartData();
-    this.loadAllStats();
+    // ── Chart: loading state ─────────────────────────────────────────────
+    this.subs.push(
+      this.chartService.isLoading$.subscribe(loading => {
+        this.chartLoading = loading;
+        this.cdr.detectChanges();
+      })
+    );
 
-    // Refresh stats & re-sync chart every 30 seconds
-    this.refreshInterval = setInterval(() => {
-      this.loadAllStats();
-      this.syncChartFromService();
-    }, 30000);
+    // ── Chart: data (SWR pattern) ────────────────────────────────────────
+    // Warm start  → BehaviorSubject replays cached value synchronously here,
+    //               chart renders on first paint with zero delay.
+    // Cold start  → fires once API responds (~1 s), skeleton disappears.
+    this.subs.push(
+      this.chartService.chart$.subscribe(snapshot => {
+        this.chartLoading = false;
+        this.chartError   = false;
+        this.applyChartSnapshot(snapshot.labels, snapshot.data);
+      })
+    );
 
-    // WebSocket real-time updates
+    // ── Stat cards: driven by the same /api/stats fetch as the chart ─────
+    // No duplicate network call — service shares the payload via stats$.
+    this.subs.push(
+      this.chartService.stats$.subscribe(stats => {
+        this.totalEvents    = stats.events_total;
+        this.totalHits      = stats.hits_total;
+        this.eventsLastHour = stats.events_1h;
+        this.hitsLastHour   = stats.hits_1h;
+        this.zeekEvents     = stats.zeek_events;
+        this.suricataEvents = stats.suricata_events;
+        this.cdr.detectChanges();
+      })
+    );
+
+    // ── Chart: error state ───────────────────────────────────────────────
+    this.subs.push(
+      this.chartService.hasError$.subscribe(hasError => {
+        if (hasError) {
+          this.chartLoading = false;
+          this.chartError   = true;
+          this.cdr.detectChanges();
+        }
+      })
+    );
+
+    // ── Supporting data: severity + top IPs every 30 s ───────────────────
+    // These have their own endpoints and are not part of /api/stats.
+    this.loadSupportingStats();
+    this.supportInterval = setInterval(() => this.loadSupportingStats(), 30_000);
+
+    // ── WebSocket: real-time increments ──────────────────────────────────
     this.subs.push(
       this.ws.events$.subscribe(() => {
         this.eventsLastHour++;
@@ -147,8 +163,8 @@ export class Dashboard implements OnInit, OnDestroy {
             severity,
             src_ip: hit.src || hit.suricata?.src || '-',
             dst_ip: hit.dst || hit.suricata?.dst || '-',
-            score: hit.score || 0,
-            time: new Date().toLocaleTimeString(),
+            score:  hit.score || 0,
+            time:   new Date().toLocaleTimeString(),
           }, ...this.recentCriticalAlerts].slice(0, 5);
         }
         this.cdr.detectChanges();
@@ -156,50 +172,36 @@ export class Dashboard implements OnInit, OnDestroy {
     );
   }
 
-  exportReport(format: string) {
-    this.api.exportReport(format);
+  // ── Public actions ─────────────────────────────────────────────────────────
+
+  retryChart() {
+    this.chartError   = false;
+    this.chartLoading = true;
+    this.cdr.detectChanges();
+    this.chartService.retry();
   }
+
+  exportReport(format: string) { this.api.exportReport(format); }
 
   openAlerts(queryParams: Record<string, string> = {}) {
     this.router.navigate(['/alerts'], { queryParams });
   }
 
-  openNetworkMap() {
-    this.router.navigate(['/network-map']);
-  }
+  openNetworkMap() { this.router.navigate(['/network-map']); }
 
-  loadAllStats() {
-    this.api.getStats().subscribe(data => {
-      this.totalEvents = data.events_total || 0;
-      this.totalHits = data.hits_total || 0;
-      this.eventsLastHour = data.events_1h || 0;
-      this.hitsLastHour = data.hits_1h || 0;
-      this.zeekEvents = data.zeek_events || 0;
-      this.suricataEvents = data.suricata_events || 0;
+  // ── Private helpers ────────────────────────────────────────────────────────
 
-      if (!Dashboard.chartInitialized) {
-        this.chartData = [
-          this.eventsLastHour, this.eventsLastHour, this.eventsLastHour,
-          this.eventsLastHour, this.eventsLastHour, this.eventsLastHour
-        ];
-        Dashboard.chartInitialized = true;
-        this.updateChartData();
-      }
-
-      // Persist state for same-tenant navigation
-      Dashboard.savedChartData = [...this.chartData];
-      Dashboard.savedChartLabels = [...this.chartLabels];
-      Dashboard.savedTotalEvents = this.totalEvents;
-      Dashboard.savedTotalHits = this.totalHits;
-
-      this.cdr.detectChanges();
-    });
-
+  /**
+   * Fetches severity breakdown and top IPs — the only remaining periodic
+   * API calls in this component. /api/stats is handled entirely by
+   * ChartDataService to avoid duplicate requests.
+   */
+  private loadSupportingStats() {
     this.api.getSeverity().subscribe(data => {
       this.critical = data.critical || 0;
-      this.high = data.high || 0;
-      this.medium = data.medium || 0;
-      this.low = data.low || 0;
+      this.high     = data.high     || 0;
+      this.medium   = data.medium   || 0;
+      this.low      = data.low      || 0;
       this.cdr.detectChanges();
     });
 
@@ -210,41 +212,16 @@ export class Dashboard implements OnInit, OnDestroy {
     });
   }
 
-  addChartPoint() {
-    const now = new Date().toLocaleTimeString('en-US', {
-      hour: '2-digit', minute: '2-digit'
-    });
-    if (this.chartLabels.length >= 10) {
-      this.chartLabels.shift();
-      this.chartData.shift();
-    }
-    this.chartLabels.push(now);
-    this.chartData.push(this.eventsLastHour);
-    this.updateChartData();
-    Dashboard.savedChartData = [...this.chartData];
-    Dashboard.savedChartLabels = [...this.chartLabels];
-  }
-
-  syncChartFromService() {
-    const snapshot = this.chartService.getSnapshot();
-    this.chartLabels = [...snapshot.labels];
-    this.chartData = [...snapshot.data];
-    this.eventsLastHour = this.chartService.getLatestEventsLastHour();
-    this.updateChartData();
-    Dashboard.savedChartData = [...this.chartData];
-    Dashboard.savedChartLabels = [...this.chartLabels];
-  }
-
-  updateChartData() {
+  private applyChartSnapshot(labels: string[], data: number[]) {
     this.lineChartData = {
-      labels: [...this.chartLabels],
+      labels: [...labels],
       datasets: [{
-        data: [...this.chartData],
-        label: 'Events',
-        fill: true,
-        tension: 0.4,
-        borderColor: '#69f6b8',
-        backgroundColor: 'rgba(105, 246, 184, 0.1)',
+        data:                [...data],
+        label:               'Events',
+        fill:                true,
+        tension:             0.4,
+        borderColor:         '#69f6b8',
+        backgroundColor:     'rgba(105, 246, 184, 0.1)',
         pointBackgroundColor: '#69f6b8'
       }]
     };
@@ -253,6 +230,6 @@ export class Dashboard implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.subs.forEach(s => s.unsubscribe());
-    if (this.refreshInterval) clearInterval(this.refreshInterval);
+    if (this.supportInterval) clearInterval(this.supportInterval);
   }
 }
