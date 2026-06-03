@@ -9,6 +9,7 @@ import {
   Edit,
   Gauge,
   KeyRound,
+  Megaphone,
   Plus,
   RefreshCw,
   Search,
@@ -22,6 +23,25 @@ import {
 import { Api, SensorKey } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Router } from '@angular/router';
+
+type AnnouncementType = 'info' | 'maintenance' | 'update' | 'critical';
+type AnnouncementAudience = 'all' | 'tenant_admins' | 'tenant';
+
+interface AnnouncementDraft {
+  title: string;
+  message: string;
+  type: AnnouncementType;
+  audience: AnnouncementAudience;
+  tenant_id: string;
+  starts_at: string;
+  ends_at: string;
+  active: boolean;
+}
+
+interface Announcement extends AnnouncementDraft {
+  id: string;
+  created_at: string;
+}
 
 @Component({
   selector: 'app-admin',
@@ -37,6 +57,7 @@ export class Admin implements OnInit, OnDestroy {
   EditIcon = Edit;
   GaugeIcon = Gauge;
   KeyIcon = KeyRound;
+  AnnouncementIcon = Megaphone;
   PlusIcon = Plus;
   RefreshIcon = RefreshCw;
   SearchIcon = Search;
@@ -81,6 +102,7 @@ export class Admin implements OnInit, OnDestroy {
     { value: 'tenant_admin', label: 'Tenant Admin' },
     { value: 'default_user', label: 'Default User' },
   ];
+  readonly usernamePattern = /^[A-Za-z0-9._-]+$/;
   savingUser = false;
   userMsg = '';
   userMsgType = '';
@@ -117,6 +139,46 @@ export class Admin implements OnInit, OnDestroy {
   scaling = false;
   lastEngineRefresh: Date | null = null;
   pendingStopEngine = '';
+
+  showAddAnnouncement = false;
+  announcementSearch = '';
+  announcementAudience = 'all_audiences';
+  announcements: Announcement[] = [
+    {
+      id: 'ann-001',
+      title: 'Scheduled Maintenance Window',
+      message: 'NDR services will run in maintenance mode tonight between 10:00 PM and 11:00 PM.',
+      type: 'maintenance',
+      audience: 'all',
+      tenant_id: '',
+      starts_at: new Date().toISOString(),
+      ends_at: '',
+      active: true,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'ann-002',
+      title: 'Platform Update',
+      message: 'New tenant management controls are available in the Super Admin console.',
+      type: 'update',
+      audience: 'tenant_admins',
+      tenant_id: '',
+      starts_at: new Date().toISOString(),
+      ends_at: '',
+      active: true,
+      created_at: new Date().toISOString(),
+    },
+  ];
+  newAnnouncement: AnnouncementDraft = {
+    title: '',
+    message: '',
+    type: 'info',
+    audience: 'tenant_admins',
+    tenant_id: '',
+    starts_at: '',
+    ends_at: '',
+    active: true,
+  };
 
   currentUser: any = {};
   /** Non-empty when the session is about to expire or has expired. */
@@ -194,11 +256,87 @@ export class Admin implements OnInit, OnDestroy {
     return this.tenants.filter(tenant => tenant.active).length;
   }
 
+  get activeAnnouncements() {
+    return this.announcements.filter(announcement => announcement.active).length;
+  }
+
+  get filteredAnnouncements() {
+    const query = this.announcementSearch.trim().toLowerCase();
+    return this.announcements.filter(announcement => {
+      const matchesAudience =
+        this.announcementAudience === 'all_audiences' ||
+        announcement.audience === this.announcementAudience ||
+        announcement.tenant_id === this.announcementAudience;
+      const matchesQuery =
+        !query ||
+        announcement.title.toLowerCase().includes(query) ||
+        announcement.message.toLowerCase().includes(query) ||
+        this.announcementTypeLabel(announcement.type).toLowerCase().includes(query) ||
+        this.announcementAudienceLabel(announcement).toLowerCase().includes(query);
+      return matchesAudience && matchesQuery;
+    });
+  }
+
+  get canCreateAnnouncement() {
+    return (
+      !!this.newAnnouncement.title.trim() &&
+      !!this.newAnnouncement.message.trim() &&
+      (this.newAnnouncement.audience !== 'tenant' || !!this.newAnnouncement.tenant_id)
+    );
+  }
+
   get canCreateTenant() {
     return (
       !!this.newTenant.name.trim() &&
       !!this.newTenant.id.trim() &&
       !this.tenantIdExists(this.newTenant.id)
+    );
+  }
+
+  get newUserUsernameError() {
+    return this.validateUsername(this.newUser.username, true);
+  }
+
+  get newUserPasswordErrors() {
+    return this.validatePassword(this.newUser.password, this.newUser.username, true);
+  }
+
+  get newUserRoleError() {
+    return this.validateRole(this.newUser.role);
+  }
+
+  get newUserTenantError() {
+    return this.validateUserTenant(this.newUser.role, this.newUser.tenant_id);
+  }
+
+  get canCreateUser() {
+    return (
+      !this.newUserUsernameError &&
+      this.newUserPasswordErrors.length === 0 &&
+      !this.newUserRoleError &&
+      !this.newUserTenantError
+    );
+  }
+
+  get editUserPasswordErrors() {
+    return this.validatePassword(this.userForm.password, this.editingUser?.username || '', false);
+  }
+
+  get editUserRoleError() {
+    return this.validateRole(this.userForm.role);
+  }
+
+  get editUserTenantError() {
+    return this.validateUserTenant(this.userForm.role, this.userForm.tenant_id);
+  }
+
+  get canSaveUserEdit() {
+    return (
+      !!this.editingUser &&
+      !this.editUserRoleError &&
+      !this.editUserTenantError &&
+      this.editUserPasswordErrors.length === 0 &&
+      !this.isCurrentSuperAdmin(this.editingUser)
     );
   }
 
@@ -235,11 +373,15 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   addUser() {
+    this.applyRoleTenantRules(this.newUser);
+    if (!this.canCreateUser) {
+      this.showMsg(this.firstNewUserValidationError(), 'error');
+      return;
+    }
     if (!this.newUser.username || !this.newUser.password) {
       this.showMsg('Username and password required', 'error');
       return;
     }
-    this.applyRoleTenantRules(this.newUser);
     if (this.newUser.role === 'tenant_admin' && (!this.newUser.tenant_id || this.newUser.tenant_id === 'default')) {
       this.showMsg('Select a tenant for the tenant admin', 'error');
       return;
@@ -278,6 +420,10 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   requestDeleteUser(user: any) {
+    if (this.isCurrentSuperAdmin(user)) {
+      this.showMsg('Current super admin cannot be deleted', 'error');
+      return;
+    }
     this.pendingDeleteUser = user;
   }
 
@@ -303,6 +449,10 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   openEditUser(user: any) {
+    if (this.isCurrentSuperAdmin(user)) {
+      this.showMsg('Current super admin cannot be edited', 'error');
+      return;
+    }
     this.editingUser = user;
     this.userForm = {
       role: user.role,
@@ -319,7 +469,15 @@ export class Admin implements OnInit, OnDestroy {
 
   saveUserEdit() {
     if (!this.editingUser) return;
+    if (this.isCurrentSuperAdmin(this.editingUser)) {
+      this.showMsg('Current super admin cannot be edited', 'error');
+      return;
+    }
     this.applyRoleTenantRules(this.userForm);
+    if (!this.canSaveUserEdit) {
+      this.showMsg(this.firstEditUserValidationError(), 'error');
+      return;
+    }
     if (this.userForm.role === 'tenant_admin' && this.userForm.tenant_id === 'default') {
       this.showMsg('Tenant admin must be assigned to a tenant', 'error');
       return;
@@ -350,6 +508,10 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   setUserActive(user: any, active: boolean) {
+    if (this.isCurrentSuperAdmin(user)) {
+      this.showMsg('Current super admin cannot be deactivated', 'error');
+      return;
+    }
     // Optimistically flip the toggle immediately — the UI feels instant.
     const previous = user.active;
     user.active = active;
@@ -649,6 +811,68 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  addAnnouncement() {
+    if (!this.canCreateAnnouncement) {
+      this.showMsg('Title, message, and audience are required', 'error');
+      return;
+    }
+
+    this.announcements = [
+      {
+        ...this.newAnnouncement,
+        id: `ann-${Date.now()}`,
+        title: this.newAnnouncement.title.trim(),
+        message: this.newAnnouncement.message.trim(),
+        tenant_id: this.newAnnouncement.audience === 'tenant' ? this.newAnnouncement.tenant_id : '',
+        created_at: new Date().toISOString(),
+      },
+      ...this.announcements,
+    ];
+    this.showAddAnnouncement = false;
+    this.resetAnnouncementForm();
+    this.showMsg('Announcement added to this frontend preview', 'success');
+  }
+
+  toggleAnnouncement(announcement: Announcement) {
+    announcement.active = !announcement.active;
+  }
+
+  closeAddAnnouncement() {
+    this.showAddAnnouncement = false;
+    this.resetAnnouncementForm();
+  }
+
+  onAnnouncementAudienceChange() {
+    if (this.newAnnouncement.audience !== 'tenant') {
+      this.newAnnouncement.tenant_id = '';
+    }
+  }
+
+  announcementTypeLabel(type: AnnouncementType) {
+    switch (type) {
+      case 'maintenance':
+        return 'Maintenance';
+      case 'update':
+        return 'Platform Update';
+      case 'critical':
+        return 'Critical';
+      default:
+        return 'Information';
+    }
+  }
+
+  announcementAudienceLabel(announcement: AnnouncementDraft) {
+    if (announcement.audience === 'tenant') {
+      return `Tenant: ${this.tenantName(announcement.tenant_id)}`;
+    }
+    if (announcement.audience === 'tenant_admins') return 'Tenant admins';
+    return 'All users';
+  }
+
+  announcementTypeClass(type: AnnouncementType) {
+    return `announcement-${type}`;
+  }
+
   tenantUserCount(tenantId: string) {
     return this.users.filter(user => user.tenant_id === tenantId).length;
   }
@@ -685,6 +909,15 @@ export class Admin implements OnInit, OnDestroy {
 
   tenantIdExists(id: string) {
     return this.tenants.some(tenant => tenant.id === id);
+  }
+
+  usernameExists(username: string) {
+    const normalized = username.trim().toLowerCase();
+    return this.users.some(user => user.username?.trim().toLowerCase() === normalized);
+  }
+
+  isCurrentSuperAdmin(user: any) {
+    return user?.role === 'super_admin' && user?.username === this.currentUser?.username;
   }
 
   roleLabel(role: string) {
@@ -733,6 +966,84 @@ export class Admin implements OnInit, OnDestroy {
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
+  }
+
+  private validateUsername(username: string, checkUnique: boolean) {
+    const value = username.trim();
+    if (!value) return 'Username is required';
+    if (value.length < 3) return 'Username must be at least 3 characters';
+    if (value.length > 50) return 'Username must be 50 characters or less';
+    if (!this.usernamePattern.test(value)) {
+      return 'Username can use letters, numbers, dot, underscore, and hyphen only';
+    }
+    if (checkUnique && this.usernameExists(value)) return 'Username already exists';
+    return '';
+  }
+
+  private validatePassword(password: string, username: string, required: boolean) {
+    const value = password || '';
+    const errors: string[] = [];
+    if (!value) {
+      if (required) errors.push('Password is required');
+      return errors;
+    }
+    if (value.length < 8) errors.push('Password must be at least 8 characters');
+    if (!/[A-Z]/.test(value)) errors.push('Password needs an uppercase letter');
+    if (!/[a-z]/.test(value)) errors.push('Password needs a lowercase letter');
+    if (!/[0-9]/.test(value)) errors.push('Password needs a number');
+    if (!/[^A-Za-z0-9]/.test(value)) errors.push('Password needs a special character');
+    if (username.trim() && value.toLowerCase() === username.trim().toLowerCase()) {
+      errors.push('Password cannot be the same as username');
+    }
+    return errors;
+  }
+
+  private validateRole(role: string) {
+    if (!role) return 'Role is required';
+    return this.roleOptions.some(option => option.value === role) ? '' : 'Select a valid role';
+  }
+
+  private validateUserTenant(role: string, tenantId: string) {
+    if (role === 'tenant_admin' && !tenantId) return 'Tenant is required for tenant admin';
+    if (role === 'tenant_admin' && tenantId === 'default') {
+      return 'Tenant admin cannot be assigned to default';
+    }
+    if (role === 'default_user' && tenantId !== 'default') {
+      return 'Default user must use the default tenant';
+    }
+    return '';
+  }
+
+  private firstNewUserValidationError() {
+    return (
+      this.newUserUsernameError ||
+      this.newUserPasswordErrors[0] ||
+      this.newUserRoleError ||
+      this.newUserTenantError ||
+      'Fix user form validation errors'
+    );
+  }
+
+  private firstEditUserValidationError() {
+    return (
+      this.editUserRoleError ||
+      this.editUserTenantError ||
+      this.editUserPasswordErrors[0] ||
+      'Fix user form validation errors'
+    );
+  }
+
+  private resetAnnouncementForm() {
+    this.newAnnouncement = {
+      title: '',
+      message: '',
+      type: 'info',
+      audience: 'tenant_admins',
+      tenant_id: '',
+      starts_at: '',
+      ends_at: '',
+      active: true,
+    };
   }
 
   private copyText(value: string, successMessage: string) {

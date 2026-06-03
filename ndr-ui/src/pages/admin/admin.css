@@ -252,7 +252,8 @@ button:disabled {
 .search-field input,
 .tenant-filter,
 .form-field input,
-.form-field select {
+.form-field select,
+.form-field textarea {
   width: 100%;
   border: 0;
   outline: 0;
@@ -264,7 +265,8 @@ button:disabled {
 
 .tenant-filter,
 .form-field input,
-.form-field select {
+.form-field select,
+.form-field textarea {
   min-height: 2.65rem;
   padding: 0 0.8rem;
   border: 1px solid rgba(148, 163, 184, 0.14);
@@ -272,8 +274,15 @@ button:disabled {
   background: #0f172a;
 }
 
+.form-field textarea {
+  min-height: 7rem;
+  padding: 0.75rem 0.8rem;
+  resize: vertical;
+}
+
 .tenant-list,
 .engine-list,
+.announcement-list,
 .admin-table {
   width: 100%;
 }
@@ -320,11 +329,24 @@ button:disabled {
   gap: 1rem;
 }
 
+.announcement-toolbar {
+  align-items: center;
+  gap: 1rem;
+}
+
 .user-toolbar .search-field {
   flex: 1 1 28rem;
 }
 
+.announcement-toolbar .search-field {
+  flex: 1 1 28rem;
+}
+
 .user-toolbar .tenant-filter {
+  flex: 0 1 18rem;
+}
+
+.announcement-toolbar .tenant-filter {
   flex: 0 1 18rem;
 }
 
@@ -363,9 +385,45 @@ button:disabled {
   font-weight: 700;
 }
 
+.announcement-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.5rem;
+  padding: 0.85rem 1.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.announcement-summary strong,
+.announcement-summary span {
+  display: block;
+}
+
+.announcement-summary strong {
+  font-size: 0.9rem;
+}
+
+.announcement-summary span {
+  margin-top: 0.18rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
 .tenant-row,
 .engine-row {
   min-height: 4.75rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.07);
+}
+
+.announcement-row {
+  display: grid;
+  grid-template-columns: minmax(18rem, 1.6fr) minmax(18rem, 1fr);
+  align-items: center;
+  gap: 1rem;
+  min-height: 5.25rem;
   padding: 1rem 1.5rem;
   border-top: 1px solid rgba(148, 163, 184, 0.07);
 }
@@ -375,6 +433,13 @@ button:disabled {
 .user-cell {
   display: flex;
   align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.announcement-main {
+  display: flex;
+  align-items: flex-start;
   gap: 0.8rem;
   min-width: 0;
 }
@@ -394,11 +459,20 @@ button:disabled {
 
 .tenant-main strong,
 .engine-main strong,
-.user-cell strong {
+.user-cell strong,
+.announcement-main strong {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.announcement-main p {
+  display: -webkit-box;
+  margin-top: 0.25rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 code,
@@ -416,8 +490,19 @@ code,
   font-size: 0.8rem;
 }
 
+.announcement-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
 .status-pill,
-.role-pill {
+.role-pill,
+.announcement-type {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -426,6 +511,12 @@ code,
   border-radius: 999px;
   font-size: 0.7rem;
   font-weight: 800;
+}
+
+.announcement-type {
+  flex: 0 0 auto;
+  min-width: 6.5rem;
+  border-radius: 0.5rem;
 }
 
 .status-pill.active,
@@ -437,6 +528,32 @@ code,
 .status-pill.inactive {
   background: rgba(148, 163, 184, 0.12);
   color: #cbd5e1;
+}
+
+.announcement-info {
+  background: rgba(34, 211, 238, 0.14);
+  color: #67e8f9;
+}
+
+.announcement-maintenance {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+}
+
+.announcement-update {
+  background: rgba(56, 189, 248, 0.12);
+  color: #bae6fd;
+}
+
+.announcement-critical {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
+}
+
+.announcement-date-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
 }
 
 .table-row {
@@ -618,6 +735,14 @@ code,
   .sensor-table-row {
     min-width: 72rem;
   }
+
+  .announcement-row {
+    grid-template-columns: 1fr;
+  }
+
+  .announcement-meta {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 700px) {
@@ -645,7 +770,8 @@ code,
   }
 
   .sensor-form,
-  .command-strip {
+  .command-strip,
+  .announcement-date-grid {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
