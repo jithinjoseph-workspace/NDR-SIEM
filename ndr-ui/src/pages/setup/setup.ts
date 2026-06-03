@@ -25,6 +25,7 @@ type SetupTab = 'local' | 'external';
 type ExternalServiceStatus = 'running' | 'stopped' | 'restarting' | 'unknown';
 
 interface ExternalSensorCard extends SensorKey {
+  displayName: string;
   hostname: string;
   interface: string;
   os: string;
@@ -53,7 +54,7 @@ export class Setup implements OnInit, OnDestroy {
   externalLoading = false;
   externalError = '';
   externalActionMessage = '';
-  pendingExternalCommand: { tenantId: string; command: SensorControlCommand } | null = null;
+  pendingExternalCommand: { sensorId: string; command: SensorControlCommand } | null = null;
   showAddSensorModal = false;
   newSensorName = '';
   creatingSensor = false;
@@ -229,24 +230,24 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   controlExternalSensor(sensor: ExternalSensorCard, command: SensorControlCommand) {
+    const sensorName = this.getSensorDisplayName(sensor);
     this.pendingExternalCommand = {
-      tenantId: sensor.tenant_id,
+      sensorId: sensor.key_prefix,
       command,
     };
     this.externalActionMessage = '';
     this.externalError = '';
 
-    this.api.controlSensor(command, sensor.tenant_id).subscribe({
-      next: response => {
-        this.externalActionMessage =
-          response?.message || `Command '${command}' queued for ${sensor.tenant_id}.`;
+    this.api.controlSensor(command, sensor.tenant_id, sensor.key_prefix).subscribe({
+      next: () => {
+        this.externalActionMessage = `${this.getCommandLabel(command)} queued for ${sensorName}.`;
         this.pendingExternalCommand = null;
         this.loadExternalSensors(true);
         this.cdr.detectChanges();
       },
       error: error => {
         this.externalError =
-          error?.error?.message || `Unable to ${command} sensor for ${sensor.tenant_id}.`;
+          error?.error?.message || `Unable to ${command} ${sensorName}.`;
         this.pendingExternalCommand = null;
         this.cdr.detectChanges();
       },
@@ -323,7 +324,7 @@ export class Setup implements OnInit, OnDestroy {
       return false;
     }
 
-    return this.pendingExternalCommand.tenantId === sensor.tenant_id
+    return this.pendingExternalCommand.sensorId === sensor.key_prefix
       && (!command || this.pendingExternalCommand.command === command);
   }
 
@@ -458,9 +459,14 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   private mapExternalSensor(sensor: SensorKey): ExternalSensorCard {
+    const displayName = this.cleanLabel(sensor.name)
+      || this.cleanLabel(sensor.hostname)
+      || sensor.key_prefix;
+
     return {
       ...sensor,
-      hostname: sensor.hostname || sensor.name || sensor.key_prefix,
+      displayName,
+      hostname: this.cleanLabel(sensor.hostname) || 'Unregistered host',
       interface: sensor.interface || 'Unavailable',
       os: sensor.os || 'Unavailable',
       zeek: this.normalizeExternalStatus(sensor.zeek),
@@ -504,6 +510,25 @@ export class Setup implements OnInit, OnDestroy {
     if (value === 'stopped') return 'stopped';
     if (value === 'restarting') return 'restarting';
     return 'unknown';
+  }
+
+  private getSensorDisplayName(sensor: ExternalSensorCard): string {
+    return this.cleanLabel(sensor.displayName) || this.cleanLabel(sensor.name) || sensor.key_prefix;
+  }
+
+  private cleanLabel(value: unknown): string {
+    return String(value || '').trim();
+  }
+
+  private getCommandLabel(command: SensorControlCommand): string {
+    switch (command) {
+      case 'start':
+        return 'Start command';
+      case 'stop':
+        return 'Stop command';
+      case 'restart':
+        return 'Restart command';
+    }
   }
 
   private buildInstallCommand(key: string): string {

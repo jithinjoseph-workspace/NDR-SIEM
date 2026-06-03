@@ -707,6 +707,7 @@ pub async fn set_tenant_active(
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS zeek_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS suricata_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS vector_status String DEFAULT 'unknown'",
+                "ALTER TABLE ndr.sensor_commands ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -1672,17 +1673,43 @@ pub async fn revoke_sensor_key(
     Ok(())
 }
 
+pub async fn active_sensor_exists(
+    &self,
+    tenant_id: &str,
+    sensor_id: &str,
+) -> anyhow::Result<bool> {
+    let tenant_id = sql_escape(tenant_id);
+    let sensor_id = sql_escape(sensor_id);
+    let result = self.client
+        .query(&format!(
+            "SELECT id FROM ndr.sensor_keys FINAL \
+             WHERE tenant_id = '{}' \
+             AND key_prefix = '{}' \
+             AND active = 1 \
+             LIMIT 1",
+            tenant_id, sensor_id
+        ))
+        .fetch_all::<String>()
+        .await?;
+
+    Ok(!result.is_empty())
+}
+
 pub async fn set_sensor_command(
     &self,
     tenant_id: &str,
+    sensor_id: &str,
     command: &str,
 ) -> anyhow::Result<()> {
     let id = uuid::Uuid::new_v4().to_string();
+    let tenant_id = sql_escape(tenant_id);
+    let sensor_id = sql_escape(sensor_id);
+    let command = sql_escape(command);
     let query = format!(
         "INSERT INTO ndr.sensor_commands \
-         (id, tenant_id, command, status) \
-         VALUES ('{}', '{}', '{}', 'pending')",
-        id, tenant_id, command
+         (id, tenant_id, sensor_id, command, status) \
+         VALUES ('{}', '{}', '{}', '{}', 'pending')",
+        id, tenant_id, sensor_id, command
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -1691,35 +1718,43 @@ pub async fn set_sensor_command(
 pub async fn get_sensor_command(
     &self,
     tenant_id: &str,
-) -> anyhow::Result<String> {
+    sensor_id: &str,
+) -> anyhow::Result<(String, String)> {
+    let tenant_id = sql_escape(tenant_id);
+    let sensor_id = sql_escape(sensor_id);
     let result = self.client
         .query(&format!(
-            "SELECT command, status FROM ndr.sensor_commands FINAL \
+            "SELECT command, sensor_id FROM ndr.sensor_commands FINAL \
              WHERE tenant_id = '{}' \
+             AND (sensor_id = '{}' OR sensor_id = '') \
              AND status = 'pending' \
-             ORDER BY created_at DESC \
+             ORDER BY if(sensor_id = '{}', 0, 1), created_at DESC \
              LIMIT 1",
-            tenant_id
+            tenant_id, sensor_id, sensor_id
         ))
         .fetch_all::<(String, String)>()
         .await?;
     
     Ok(result.first()
-        .map(|r| r.0.clone())
+        .map(|r| (r.0.clone(), r.1.clone()))
         .unwrap_or_default())
 }
 
 pub async fn clear_sensor_command(
     &self,
     tenant_id: &str,
+    sensor_id: &str,
 ) -> anyhow::Result<()> {
+    let tenant_id = sql_escape(tenant_id);
+    let sensor_id = sql_escape(sensor_id);
     self.client
         .query(&format!(
             "ALTER TABLE ndr.sensor_commands \
              UPDATE status = 'done' \
              WHERE tenant_id = '{}' \
+             AND sensor_id = '{}' \
              AND status = 'pending'",
-            tenant_id
+            tenant_id, sensor_id
         ))
         .execute().await?;
     Ok(())

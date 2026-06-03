@@ -311,10 +311,11 @@ export class Api {
     return this.http.delete(`${this.baseUrl}/sensor-keys/${id}`);
   }
 
-  controlSensor(command: SensorControlCommand, tenantId: string): Observable<any> {
+  controlSensor(command: SensorControlCommand, tenantId: string, sensorId: string): Observable<any> {
     return this.http.post(`${this.baseUrl}/sensor/control`, {
       command,
       tenant_id: tenantId,
+      sensor_id: sensorId,
     });
   }
 }

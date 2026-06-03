@@ -206,9 +206,10 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_commands
 (
     id          String DEFAULT toString(generateUUIDv4()),
     tenant_id   String,
+    sensor_id   String DEFAULT '',
     command     String,
     status      String DEFAULT 'pending',
     created_at  DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(created_at)
-ORDER BY (tenant_id, created_at);
+ORDER BY (tenant_id, sensor_id, created_at);

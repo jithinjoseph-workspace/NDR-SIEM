@@ -4531,19 +4531,23 @@ pub async fn get_sensor_command_api(
         Ok(Some(tid)) => tid,
         _ => return Json(json!({ "command": "" }))
     };
+    let sensor_id = match extract_sensor_key_prefix(&headers) {
+        Some(prefix) => prefix,
+        None => return Json(json!({ "command": "" })),
+    };
 
     // Get pending command
-    let command = state.ch_storage
-        .get_sensor_command(&tenant_id).await
+    let (command, command_sensor_id) = state.ch_storage
+        .get_sensor_command(&tenant_id, &sensor_id).await
         .unwrap_or_default();
 
     // Clear command after sending
     if !command.is_empty() {
         let _ = state.ch_storage
-            .clear_sensor_command(&tenant_id).await;
+            .clear_sensor_command(&tenant_id, &command_sensor_id).await;
         tracing::info!(
-            "Command '{}' sent to sensor tenant={}",
-            command, tenant_id
+            "Command '{}' sent to sensor tenant={} sensor={}",
+            command, tenant_id, sensor_id
         );
     }
 
@@ -4598,21 +4602,43 @@ pub async fn sensor_control_api(
         claims.tenant_id.clone()
     };
 
-    // Store command for sensor to pick up
+    let sensor_id = payload["sensor_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    if !sensor_id.is_empty() {
+        match state.ch_storage.active_sensor_exists(&tenant_id, &sensor_id).await {
+            Ok(true) => {},
+            Ok(false) => return Json(json!({
+                "status": "error",
+                "message": "Sensor not found for tenant or sensor is revoked"
+            })),
+            Err(e) => return Json(json!({
+                "status": "error",
+                "message": format!("Failed to verify sensor: {}", e)
+            })),
+        }
+    }
+
+    // Store command for sensor to pick up. Empty sensor_id is kept as a
+    // legacy tenant-wide command for older clients.
     match state.ch_storage
-        .set_sensor_command(&tenant_id, &command).await {
+        .set_sensor_command(&tenant_id, &sensor_id, &command).await {
         Ok(_) => {
             tracing::info!(
-                "Sensor command '{}' set for tenant={}",
-                command, tenant_id
+                "Sensor command '{}' set for tenant={} sensor={}",
+                command, tenant_id, sensor_id
             );
             Json(json!({
                 "status": "ok",
                 "message": format!(
-                    "Command '{}' queued for tenant {}",
-                    command, tenant_id
+                    "Command '{}' queued for sensor {}",
+                    command,
+                    if sensor_id.is_empty() { tenant_id.as_str() } else { sensor_id.as_str() }
                 ),
                 "tenant_id": tenant_id,
+                "sensor_id": sensor_id,
                 "command": command
             }))
         },
