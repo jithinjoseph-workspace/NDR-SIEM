@@ -1561,16 +1561,16 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     //severity breakdown
     pub async fn get_severity_breakdown(&self) -> anyhow::Result<serde_json::Value> {
         let critical: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'critical'")
+            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'critical'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let high: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'high'")
+            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'high'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let medium: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'medium'")
+            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'medium'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let low: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'low'")
+            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'low'")
             .fetch_one::<u64>().await.unwrap_or(0);
 
         Ok(serde_json::json!({
@@ -1693,16 +1693,16 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let critical: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='CRITICAL' OR severity='critical'", db_name))
+            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='CRITICAL' OR severity='critical'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let high: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='HIGH' OR severity='high'", db_name))
+            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='HIGH' OR severity='high'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let medium: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='MEDIUM' OR severity='medium'", db_name))
+            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='MEDIUM' OR severity='medium'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let low: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='LOW' OR severity='low'", db_name))
+            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='LOW' OR severity='low'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         Ok(serde_json::json!({
             "critical":critical,"high":high,

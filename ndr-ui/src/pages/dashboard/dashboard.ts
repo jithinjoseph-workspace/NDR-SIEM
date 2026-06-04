@@ -81,6 +81,9 @@ export class Dashboard implements OnInit, OnDestroy {
   private subs:           Subscription[] = [];
   private supportInterval: any;   // drives /api/severity + /api/top-ips only
 
+  // Tracks unique incidents to deduplicate live stat card increments
+  private seenIncidents = new Set<string>();
+
   constructor(
     private api:          Api,
     private ws:           Websocket,
@@ -157,7 +160,26 @@ export class Dashboard implements OnInit, OnDestroy {
       this.ws.hits$.subscribe(hit => {
         this.totalHits++;
         this.hitsLastHour++;
-        const severity = hit.severity?.toUpperCase() || 'LOW';
+
+        const severity = (hit.severity ?? '').toUpperCase() || 'LOW';
+        const srcIp = hit.src || hit.suricata?.src || '-';
+        const dstIp = hit.dst || hit.suricata?.dst || '-';
+        const incidentId = `${srcIp}|${dstIp}|${severity}`;
+
+        // ── Real-time severity counter sync ─────────────────────────────────
+        // The 30-second poll provides the historical deduplicated baseline.
+        // We keep a Set of seen incidents so we don't increment the live
+        // stat card for every single raw hit within an ongoing flow.
+        if (!this.seenIncidents.has(incidentId)) {
+          this.seenIncidents.add(incidentId);
+          switch (severity) {
+            case 'CRITICAL': this.critical++; break;
+            case 'HIGH':     this.high++;     break;
+            case 'MEDIUM':   this.medium++;   break;
+            default:         this.low++;      break;
+          }
+        }
+
         if (['CRITICAL', 'HIGH'].includes(severity)) {
           this.recentCriticalAlerts = [{
             severity,
@@ -198,6 +220,7 @@ export class Dashboard implements OnInit, OnDestroy {
    */
   private loadSupportingStats() {
     this.api.getSeverity().subscribe(data => {
+      this.seenIncidents.clear(); // Reset live deduplication baseline
       this.critical = data.critical || 0;
       this.high     = data.high     || 0;
       this.medium   = data.medium   || 0;

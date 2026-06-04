@@ -948,7 +948,14 @@ tokio::spawn(async move {
         },
     });
 
-    let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
+    // Inject the tenant_id (already extracted from the hit's raw Kafka payload at the
+    // top of this function) into the WebSocket message so the client can cross-check it,
+    // then publish to the per-tenant Redis channel so only the correct tenant's browser
+    // connection receives this hit.
+    //
+    // NOTE: Do NOT re-derive tenant_id from TENANT_ID env-var here — that env var is not
+    // set in production docker-compose and would always fall back to "default", causing
+    // every hit to be routed to `tenant:default` regardless of which tenant generated it.
     if let Some(obj) = hit_msg.as_object_mut() {
         obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
