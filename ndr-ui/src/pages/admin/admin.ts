@@ -20,7 +20,7 @@ import {
   Users,
   X,
 } from 'lucide-angular';
-import { Api, SensorKey } from '../../services/api/api';
+import { Announcement, Api, SensorKey } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Router } from '@angular/router';
 
@@ -36,11 +36,6 @@ interface AnnouncementDraft {
   starts_at: string;
   ends_at: string;
   active: boolean;
-}
-
-interface Announcement extends AnnouncementDraft {
-  id: string;
-  created_at: string;
 }
 
 @Component({
@@ -141,34 +136,11 @@ export class Admin implements OnInit, OnDestroy {
   pendingStopEngine = '';
 
   showAddAnnouncement = false;
+  loadingAnnouncements = false;
+  savingAnnouncement = false;
   announcementSearch = '';
   announcementAudience = 'all_audiences';
-  announcements: Announcement[] = [
-    {
-      id: 'ann-001',
-      title: 'Scheduled Maintenance Window',
-      message: 'NDR services will run in maintenance mode tonight between 10:00 PM and 11:00 PM.',
-      type: 'maintenance',
-      audience: 'all',
-      tenant_id: '',
-      starts_at: new Date().toISOString(),
-      ends_at: '',
-      active: true,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'ann-002',
-      title: 'Platform Update',
-      message: 'New tenant management controls are available in the Super Admin console.',
-      type: 'update',
-      audience: 'tenant_admins',
-      tenant_id: '',
-      starts_at: new Date().toISOString(),
-      ends_at: '',
-      active: true,
-      created_at: new Date().toISOString(),
-    },
-  ];
+  announcements: Announcement[] = [];
   newAnnouncement: AnnouncementDraft = {
     title: '',
     message: '',
@@ -202,6 +174,7 @@ export class Admin implements OnInit, OnDestroy {
     this.loadTenants();
     this.loadSensorKeys();
     this.loadEngines();
+    this.loadAnnouncements();
     this.startSessionExpiryCheck();
   }
 
@@ -263,10 +236,11 @@ export class Admin implements OnInit, OnDestroy {
   get filteredAnnouncements() {
     const query = this.announcementSearch.trim().toLowerCase();
     return this.announcements.filter(announcement => {
+      const tenantId = this.announcementTenantId(announcement);
       const matchesAudience =
         this.announcementAudience === 'all_audiences' ||
         announcement.audience === this.announcementAudience ||
-        announcement.tenant_id === this.announcementAudience;
+        tenantId === this.announcementAudience;
       const matchesQuery =
         !query ||
         announcement.title.toLowerCase().includes(query) ||
@@ -811,30 +785,84 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  loadAnnouncements() {
+    this.loadingAnnouncements = true;
+    this.api.getAnnouncements().subscribe({
+      next: announcements => {
+        this.announcements = announcements.map(announcement => this.normalizeAnnouncement(announcement));
+        this.loadingAnnouncements = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.loadingAnnouncements = false;
+        this.showMsg('Failed to load announcements', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
   addAnnouncement() {
     if (!this.canCreateAnnouncement) {
       this.showMsg('Title, message, and audience are required', 'error');
       return;
     }
 
-    this.announcements = [
-      {
-        ...this.newAnnouncement,
-        id: `ann-${Date.now()}`,
-        title: this.newAnnouncement.title.trim(),
-        message: this.newAnnouncement.message.trim(),
-        tenant_id: this.newAnnouncement.audience === 'tenant' ? this.newAnnouncement.tenant_id : '',
-        created_at: new Date().toISOString(),
+    this.savingAnnouncement = true;
+    this.api.createAnnouncement(this.buildAnnouncementPayload(this.newAnnouncement)).subscribe({
+      next: (data: any) => {
+        this.savingAnnouncement = false;
+        if (data.status === 'ok') {
+          this.showAddAnnouncement = false;
+          this.resetAnnouncementForm();
+          this.loadAnnouncements();
+          this.showMsg('Announcement created', 'success');
+        } else {
+          this.showMsg(data.message || 'Failed to create announcement', 'error');
+        }
+        this.cdr.detectChanges();
       },
-      ...this.announcements,
-    ];
-    this.showAddAnnouncement = false;
-    this.resetAnnouncementForm();
-    this.showMsg('Announcement added to this frontend preview', 'success');
+      error: () => {
+        this.savingAnnouncement = false;
+        this.showMsg('Failed to create announcement', 'error');
+        this.cdr.detectChanges();
+      },
+    });
   }
 
   toggleAnnouncement(announcement: Announcement) {
-    announcement.active = !announcement.active;
+    const previous = announcement.active;
+    const nextActive = !announcement.active;
+    announcement.active = nextActive;
+    this.cdr.detectChanges();
+
+    this.api.updateAnnouncement(announcement.id, {
+      ...this.buildAnnouncementPayload({
+        title: announcement.title,
+        message: announcement.message,
+        type: announcement.type,
+        audience: announcement.audience,
+        tenant_id: this.announcementTenantId(announcement),
+        starts_at: announcement.starts_at || announcement.start_at || '',
+        ends_at: announcement.ends_at || announcement.end_at || '',
+        active: nextActive,
+      }),
+    }).subscribe({
+      next: (data: any) => {
+        if (data.status === 'ok') {
+          this.loadAnnouncements();
+          this.showMsg(nextActive ? 'Announcement activated' : 'Announcement deactivated', 'success');
+        } else {
+          announcement.active = previous;
+          this.showMsg(data.message || 'Failed to update announcement', 'error');
+          this.cdr.detectChanges();
+        }
+      },
+      error: () => {
+        announcement.active = previous;
+        this.showMsg('Failed to update announcement', 'error');
+        this.cdr.detectChanges();
+      },
+    });
   }
 
   closeAddAnnouncement() {
@@ -861,9 +889,9 @@ export class Admin implements OnInit, OnDestroy {
     }
   }
 
-  announcementAudienceLabel(announcement: AnnouncementDraft) {
+  announcementAudienceLabel(announcement: Partial<AnnouncementDraft & Announcement>) {
     if (announcement.audience === 'tenant') {
-      return `Tenant: ${this.tenantName(announcement.tenant_id)}`;
+      return `Tenant: ${this.tenantName(this.announcementTenantId(announcement))}`;
     }
     if (announcement.audience === 'tenant_admins') return 'Tenant admins';
     return 'All users';
@@ -1044,6 +1072,39 @@ export class Admin implements OnInit, OnDestroy {
       ends_at: '',
       active: true,
     };
+  }
+
+  private buildAnnouncementPayload(announcement: AnnouncementDraft): Partial<Announcement> {
+    return {
+      title: announcement.title.trim(),
+      message: announcement.message.trim(),
+      type: announcement.type,
+      audience: announcement.audience,
+      tenant_id: announcement.audience === 'tenant' ? announcement.tenant_id : '',
+      starts_at: announcement.starts_at || '',
+      ends_at: announcement.ends_at || '',
+      active: announcement.active,
+    };
+  }
+
+  private normalizeAnnouncement(announcement: Announcement): Announcement {
+    const targetTenant = this.announcementTenantId(announcement);
+    return {
+      ...announcement,
+      type: announcement.type || 'info',
+      audience: announcement.audience || (targetTenant ? 'tenant' : 'all'),
+      tenant_id: targetTenant,
+      starts_at: announcement.starts_at || announcement.start_at || '',
+      ends_at: announcement.ends_at || announcement.end_at || '',
+      active: announcement.active ?? announcement.status === 'active',
+    };
+  }
+
+  private announcementTenantId(announcement: Partial<AnnouncementDraft & Announcement>) {
+    if (announcement.tenant_id) return announcement.tenant_id;
+    const targetTenants = announcement.target_tenants || [];
+    const specificTenant = targetTenants.find(tenant => tenant !== 'all');
+    return specificTenant || '';
   }
 
   private copyText(value: string, successMessage: string) {

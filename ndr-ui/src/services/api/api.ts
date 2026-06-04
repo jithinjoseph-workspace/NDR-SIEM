@@ -21,6 +21,32 @@ export interface SensorKey {
 
 export type SensorControlCommand = 'start' | 'stop' | 'restart';
 
+export interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  type: 'info' | 'maintenance' | 'update' | 'critical';
+  audience: 'all' | 'tenant_admins' | 'tenant';
+  tenant_id?: string;
+  starts_at?: string;
+  ends_at?: string;
+  start_at?: string;
+  end_at?: string;
+  active: boolean;
+  read?: boolean;
+  status?: string;
+  target_roles?: string[];
+  target_tenants?: string[];
+  created_at: string;
+  updated_at?: string;
+}
+
+interface AnnouncementListResponse {
+  status?: string;
+  announcements?: Announcement[];
+  message?: string;
+}
+
 interface SensorKeyListResponse {
   status?: string;
   keys?: SensorKey[];
@@ -273,6 +299,40 @@ export class Api {
 
   setTenantStatus(id: string, active: boolean): Observable<any> {
     return this.http.post(`${this.baseUrl}/auth/tenants/${id}/status`, { active });
+  }
+
+  getAnnouncements(): Observable<Announcement[]> {
+    return this.http
+      .get<AnnouncementListResponse>(`${this.baseUrl}/announcements`)
+      .pipe(map(response => {
+        if (response.status && response.status !== 'ok') {
+          throw new Error(response.message || 'Failed to load announcements');
+        }
+        return response.announcements || [];
+      }));
+  }
+
+  getActiveAnnouncements(): Observable<Announcement[]> {
+    return this.http
+      .get<AnnouncementListResponse>(`${this.baseUrl}/announcements/active`)
+      .pipe(map(response => {
+        if (response.status && response.status !== 'ok') {
+          throw new Error(response.message || 'Failed to load active announcements');
+        }
+        return response.announcements || [];
+      }));
+  }
+
+  createAnnouncement(data: Partial<Announcement>): Observable<any> {
+    return this.http.post(`${this.baseUrl}/announcements`, data);
+  }
+
+  updateAnnouncement(id: string, data: Partial<Announcement>): Observable<any> {
+    return this.http.put(`${this.baseUrl}/announcements/${id}`, data);
+  }
+
+  markAnnouncementRead(id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/announcements/${id}/read`, {});
   }
 
   getEngines(): Observable<any> {

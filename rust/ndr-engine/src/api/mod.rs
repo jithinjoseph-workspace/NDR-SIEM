@@ -3932,7 +3932,7 @@ pub async fn get_active_announcements_api(
     };
 
     match state.ch_storage
-        .get_active_announcements(&claims.role, &claims.tenant_id)
+        .get_active_announcements(&claims.role, &claims.tenant_id, &claims.sub)
         .await {
         Ok(announcements) => Json(json!({
             "status": "ok",
@@ -3941,6 +3941,32 @@ pub async fn get_active_announcements_api(
         Err(e) => Json(json!({
             "status": "error",
             "announcements": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/announcements/:id/read
+pub async fn mark_announcement_read_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        })),
+    };
+
+    match state.ch_storage.mark_announcement_read(&id, &claims.sub).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Announcement marked as read"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
             "message": e.to_string()
         }))
     }

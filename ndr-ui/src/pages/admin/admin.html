@@ -424,7 +424,7 @@
     <div class="panel-head">
       <div>
         <h3>Announcements</h3>
-        <p>Create frontend preview notices for tenant admins, maintenance, and platform updates.</p>
+        <p>Create notices for tenant admins, maintenance, and platform updates.</p>
       </div>
       <button class="primary-action" type="button" (click)="showAddAnnouncement=true">
         <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
@@ -449,6 +449,10 @@
           {{ tenant.name }}
         </option>
       </select>
+      <button class="secondary-action" type="button" (click)="loadAnnouncements()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
+      </button>
     </div>
 
     <div class="announcement-summary">
@@ -456,15 +460,17 @@
         <strong>{{ activeAnnouncements }} active announcements</strong>
         <span>{{ filteredAnnouncements.length }} announcements shown</span>
       </div>
-      <span class="status-pill active">Frontend preview</span>
+      <span class="status-pill active">Backend synced</span>
     </div>
 
-    <div *ngIf="filteredAnnouncements.length === 0" class="empty-state">
+    <div *ngIf="loadingAnnouncements" class="loading-state">Loading announcements...</div>
+
+    <div *ngIf="!loadingAnnouncements && filteredAnnouncements.length === 0" class="empty-state">
       <strong>No announcements found</strong>
       <span>Create an announcement or adjust your search.</span>
     </div>
 
-    <div *ngIf="filteredAnnouncements.length > 0" class="announcement-list">
+    <div *ngIf="!loadingAnnouncements && filteredAnnouncements.length > 0" class="announcement-list">
       <article *ngFor="let announcement of filteredAnnouncements" class="announcement-row">
         <div class="announcement-main">
           <span [class]="'announcement-type ' + announcementTypeClass(announcement.type)">
@@ -552,7 +558,7 @@
       <div class="modal-head">
         <div>
           <h3>Add Announcement</h3>
-          <p>Create a frontend-only announcement preview.</p>
+          <p>Create an announcement notification for selected users.</p>
         </div>
         <button type="button" class="icon-button" (click)="closeAddAnnouncement()">
           <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
@@ -629,10 +635,10 @@
         <button
           class="primary-action"
           type="button"
-          [disabled]="!canCreateAnnouncement"
+          [disabled]="savingAnnouncement || !canCreateAnnouncement"
           (click)="addAnnouncement()"
         >
-          Create Announcement
+          {{ savingAnnouncement ? 'Creating...' : 'Create Announcement' }}
         </button>
         <button class="secondary-action" type="button" (click)="closeAddAnnouncement()">
           Cancel

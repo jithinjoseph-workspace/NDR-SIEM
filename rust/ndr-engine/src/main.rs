@@ -302,6 +302,7 @@ tokio::spawn(async move {
             get(api::get_announcements_api)
             .post(api::create_announcement_api))
         .route("/api/announcements/active", get(api::get_active_announcements_api))
+        .route("/api/announcements/:id/read", post(api::mark_announcement_read_api))
         .route("/api/announcements/:id",
             put(api::update_announcement_api)
             .delete(api::delete_announcement_api))
@@ -359,7 +360,6 @@ tokio::spawn(async move {
     axum::serve(listener, app).await.unwrap();
 
 }
-
 
 
 

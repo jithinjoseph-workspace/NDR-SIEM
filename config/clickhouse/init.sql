@@ -188,6 +188,15 @@ CREATE TABLE IF NOT EXISTS ndr.announcements
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY id;
 
+CREATE TABLE IF NOT EXISTS ndr.announcement_reads
+(
+    announcement_id String,
+    username        String,
+    read_at         DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(read_at)
+ORDER BY (announcement_id, username);
+
 CREATE TABLE IF NOT EXISTS ndr.sigma_rules
 (
     id          String,
