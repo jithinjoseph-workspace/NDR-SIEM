@@ -221,12 +221,12 @@
   right: 0;
   top: calc(100% + 10px);
   z-index: 60;
-  width: min(360px, calc(100vw - 32px));
+  width: min(400px, calc(100vw - 32px));
   overflow: hidden;
   border: 1px solid rgba(110, 117, 136, 0.2);
-  border-radius: 8px;
-  background: #10192b;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38);
+  border-radius: 12px;
+  background: #0d1526;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(105, 246, 184, 0.05);
 }
 
 .notification-head {
@@ -235,13 +235,15 @@
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid rgba(110, 117, 136, 0.14);
-  padding: 12px 14px;
+  padding: 14px 16px;
+  background: rgba(255,255,255,0.02);
 }
 
 .notification-head strong {
   color: #f7f9ff;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .notification-head small,
@@ -267,18 +269,94 @@
   border-bottom: 1px solid rgba(110, 117, 136, 0.1);
   background: rgba(216, 222, 236, 0.04);
   color: #8792a7;
-  padding: 9px 14px;
+  padding: 9px 16px;
   font-size: 10px;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .notification-list {
-  max-height: 280px;
+  max-height: 320px;
   overflow: auto;
 }
 
+/* ── Announcement card row ───────────────────────────────────── */
+.announcement-notification {
+  display: block !important;
+  padding: 12px 16px !important;
+  border-bottom: 1px solid rgba(110, 117, 136, 0.1);
+  transition: background 120ms ease;
+}
+
+.announcement-notification:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.unread-announcement {
+  background: rgba(105, 246, 184, 0.04);
+  border-left: 3px solid rgba(105, 246, 184, 0.45) !important;
+}
+
+.announcement-card-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.announcement-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.unread-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #69f6b8;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3px rgba(105, 246, 184, 0.18);
+}
+
+.announcement-card-title {
+  display: block;
+  color: #f0f4ff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+}
+
+.announcement-card-body {
+  margin: 0;
+  color: #9aa5bc;
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+}
+
+.announcement-card-footer {
+  margin-top: 2px;
+}
+
+.announcement-card-footer em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7894;
+  letter-spacing: 0.02em;
+}
+
+/* ── Alert notification rows ─────────────────────────────────── */
 .notification-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -329,24 +407,17 @@
   font-size: 11px;
 }
 
-.announcement-notification span {
-  font-family: inherit;
-  white-space: normal;
-}
-
-.unread-announcement {
-  background: rgba(105, 246, 184, 0.05);
-}
-
 .announcement-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
+  min-height: 20px;
   border-radius: 6px;
   padding: 0 8px;
   font-family: inherit;
   font-size: 10px;
   font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .announcement-info {

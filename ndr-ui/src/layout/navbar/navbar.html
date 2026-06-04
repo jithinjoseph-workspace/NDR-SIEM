@@ -65,18 +65,24 @@
             class="notification-row announcement-notification"
             [class.unread-announcement]="!announcement.read"
           >
-            <div>
-              <strong>{{ announcement.title }}</strong>
-              <span>{{ announcement.message }}</span>
-              <em *ngIf="announcement.starts_at || announcement.start_at">
-                Starts {{ (announcement.starts_at || announcement.start_at) | date:'short' }}
-              </em>
+            <div class="announcement-card-inner">
+              <div class="announcement-card-header">
+                <span [class]="'announcement-badge ' + announcementTypeClass(announcement.type)">
+                  {{ announcementTypeLabel(announcement.type) }}
+                </span>
+                <span *ngIf="!announcement.read" class="unread-dot" title="Unread"></span>
+              </div>
+              <strong class="announcement-card-title">{{ announcement.title }}</strong>
+              <p class="announcement-card-body">{{ announcement.message }}</p>
+              <div class="announcement-card-footer">
+                <em *ngIf="announcement.starts_at || announcement.start_at">
+                  Starts {{ (announcement.starts_at || announcement.start_at) | date:'MMM d, h:mm a' }}
+                </em>
+                <em *ngIf="!announcement.starts_at && !announcement.start_at">
+                  {{ announcement.created_at | date:'MMM d, h:mm a' }}
+                </em>
+              </div>
             </div>
-            <small>
-              <b [class]="'announcement-badge ' + announcementTypeClass(announcement.type)">
-                {{ announcementTypeLabel(announcement.type) }}
-              </b>
-            </small>
           </div>
         </div>
 

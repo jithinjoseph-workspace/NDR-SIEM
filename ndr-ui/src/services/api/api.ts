@@ -335,6 +335,10 @@ export class Api {
     return this.http.post(`${this.baseUrl}/announcements/${id}/read`, {});
   }
 
+  deleteAnnouncement(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/announcements/${id}`);
+  }
+
   getEngines(): Observable<any> {
     return this.http.get(`${this.baseUrl}/admin/engines`);
   }

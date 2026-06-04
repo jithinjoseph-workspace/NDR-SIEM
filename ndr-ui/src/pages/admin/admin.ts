@@ -136,11 +136,34 @@ export class Admin implements OnInit, OnDestroy {
   pendingStopEngine = '';
 
   showAddAnnouncement = false;
+  pendingDeleteAnnouncement: Announcement | null = null;
   loadingAnnouncements = false;
   savingAnnouncement = false;
   announcementSearch = '';
   announcementAudience = 'all_audiences';
   announcements: Announcement[] = [];
+
+  // Friendly date/time picker state
+  announcementStartDate = '';
+  announcementStartTime = '';
+  announcementEndDate   = '';
+  announcementEndTime   = '';
+
+  /** 30-minute time slots for the time dropdown */
+  readonly timeSlots = (() => {
+    const slots: { value: string; label: string }[] = [];
+    for (let h = 0; h < 24; h++) {
+      for (const m of [0, 30]) {
+        const hh = String(h).padStart(2, '0');
+        const mm = String(m).padStart(2, '0');
+        const suffix = h < 12 ? 'AM' : 'PM';
+        const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
+        slots.push({ value: `${hh}:${mm}`, label: `${displayH}:${mm} ${suffix}` });
+      }
+    }
+    return slots;
+  })();
+
   newAnnouncement: AnnouncementDraft = {
     title: '',
     message: '',
@@ -865,6 +888,35 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  requestDeleteAnnouncement(announcement: Announcement) {
+    this.pendingDeleteAnnouncement = announcement;
+  }
+
+  cancelDeleteAnnouncement() {
+    this.pendingDeleteAnnouncement = null;
+  }
+
+  confirmDeleteAnnouncement() {
+    if (!this.pendingDeleteAnnouncement) return;
+    const id = this.pendingDeleteAnnouncement.id;
+    this.api.deleteAnnouncement(id).subscribe({
+      next: (data: any) => {
+        this.pendingDeleteAnnouncement = null;
+        if (data.status === 'ok') {
+          this.loadAnnouncements();
+          this.showMsg('Announcement deleted', 'success');
+        } else {
+          this.showMsg(data.message || 'Failed to delete announcement', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.showMsg('Failed to delete announcement', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
   closeAddAnnouncement() {
     this.showAddAnnouncement = false;
     this.resetAnnouncementForm();
@@ -874,6 +926,35 @@ export class Admin implements OnInit, OnDestroy {
     if (this.newAnnouncement.audience !== 'tenant') {
       this.newAnnouncement.tenant_id = '';
     }
+  }
+
+  onStartDateTimeChange() {
+    this.newAnnouncement.starts_at = this.buildIso(
+      this.announcementStartDate, this.announcementStartTime
+    );
+  }
+
+  onEndDateTimeChange() {
+    this.newAnnouncement.ends_at = this.buildIso(
+      this.announcementEndDate, this.announcementEndTime
+    );
+  }
+
+  clearStartDateTime() {
+    this.announcementStartDate = '';
+    this.announcementStartTime = '';
+    this.newAnnouncement.starts_at = '';
+  }
+
+  clearEndDateTime() {
+    this.announcementEndDate = '';
+    this.announcementEndTime = '';
+    this.newAnnouncement.ends_at = '';
+  }
+
+  private buildIso(date: string, time: string): string {
+    if (!date) return '';
+    return time ? `${date}T${time}:00` : `${date}T00:00:00`;
   }
 
   announcementTypeLabel(type: AnnouncementType) {
@@ -1072,6 +1153,10 @@ export class Admin implements OnInit, OnDestroy {
       ends_at: '',
       active: true,
     };
+    this.announcementStartDate = '';
+    this.announcementStartTime = '';
+    this.announcementEndDate   = '';
+    this.announcementEndTime   = '';
   }
 
   private buildAnnouncementPayload(announcement: AnnouncementDraft): Partial<Announcement> {
