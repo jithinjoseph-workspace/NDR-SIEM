@@ -119,6 +119,49 @@ pub struct SensorKeyRow {
     pub last_seen: String,
 }
 
+#[derive(clickhouse::Row, serde::Deserialize)]
+pub struct SupportMessageRow {
+    pub id: String,
+    pub tenant_id: String,
+    pub sender_username: String,
+    pub sender_role: String,
+    pub subject: String,
+    pub category: String,
+    pub message: String,
+    pub status: String,
+    pub admin_reply: String,
+    pub replied_by: String,
+    pub forwarded: u8,
+    pub forwarded_by: String,
+    pub deleted: u8,
+    pub created_at: String,
+    pub updated_at: String,
+    pub replied_at: String,
+    pub forwarded_at: String,
+}
+
+fn support_message_to_json(row: SupportMessageRow) -> serde_json::Value {
+    json!({
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "sender_username": row.sender_username,
+        "sender_role": row.sender_role,
+        "subject": row.subject,
+        "category": row.category,
+        "message": row.message,
+        "status": row.status,
+        "admin_reply": row.admin_reply,
+        "replied_by": row.replied_by,
+        "forwarded": row.forwarded,
+        "forwarded_by": row.forwarded_by,
+        "deleted": row.deleted,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "replied_at": row.replied_at,
+        "forwarded_at": row.forwarded_at,
+    })
+}
+
 pub struct ClickhouseStorage {
     client: Client,
 }
@@ -715,6 +758,34 @@ pub async fn set_tenant_active(
                     tracing::debug!("Column add skipped: {}", e);
                 }
             }
+            // Ensure support_messages table exists (safe for existing deployments)
+            let support_ddl = "
+                CREATE TABLE IF NOT EXISTS ndr.support_messages
+                (
+                    id              String DEFAULT toString(generateUUIDv4()),
+                    tenant_id       String,
+                    sender_username String,
+                    sender_role     String,
+                    subject         String,
+                    category        String DEFAULT 'General',
+                    message         String,
+                    status          String DEFAULT 'open',
+                    admin_reply     String DEFAULT '',
+                    replied_by      String DEFAULT '',
+                    forwarded       UInt8 DEFAULT 0,
+                    forwarded_by    String DEFAULT '',
+                    deleted         UInt8 DEFAULT 0,
+                    created_at      DateTime DEFAULT now(),
+                    updated_at      DateTime DEFAULT now(),
+                    replied_at      Nullable(DateTime),
+                    forwarded_at    Nullable(DateTime)
+                )
+                ENGINE = ReplacingMergeTree(updated_at)
+                ORDER BY id
+            ";
+            if let Err(e) = self.client.query(support_ddl).execute().await {
+                tracing::debug!("support_messages table init skipped: {}", e);
+            }
             tracing::info!("✅ tenant_id columns verified");
             return;
         }
@@ -1194,6 +1265,188 @@ pub async fn save_setting(
     self.save_setting_by_tenant(key, value, "default").await
 }
 
+
+    //support messages
+    pub async fn create_support_message(
+        &self,
+        tenant_id: &str,
+        sender_username: &str,
+        sender_role: &str,
+        subject: &str,
+        category: &str,
+        message: &str,
+    ) -> anyhow::Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.client
+            .query(
+                "INSERT INTO ndr.support_messages
+                 (id, tenant_id, sender_username, sender_role, subject, category, message)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&id)
+            .bind(tenant_id)
+            .bind(sender_username)
+            .bind(sender_role)
+            .bind(subject)
+            .bind(category)
+            .bind(message)
+            .execute()
+            .await?;
+        Ok(id)
+    }
+
+    pub async fn get_support_messages_for_user(
+        &self,
+        tenant_id: &str,
+        sender_username: &str,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = self.client
+            .query(
+                "SELECT
+                    id, tenant_id, sender_username, sender_role, subject, category, message,
+                    status, admin_reply, replied_by, forwarded, forwarded_by, deleted,
+                    toString(created_at) AS created_at,
+                    toString(updated_at) AS updated_at,
+                    if(isNull(replied_at), '', toString(assumeNotNull(replied_at))) AS replied_at,
+                    if(isNull(forwarded_at), '', toString(assumeNotNull(forwarded_at))) AS forwarded_at
+                 FROM ndr.support_messages FINAL
+                 WHERE tenant_id = ? AND sender_username = ? AND deleted = 0
+                 ORDER BY updated_at DESC"
+            )
+            .bind(tenant_id)
+            .bind(sender_username)
+            .fetch_all::<SupportMessageRow>()
+            .await?;
+        Ok(rows.into_iter().map(support_message_to_json).collect())
+    }
+
+    pub async fn get_support_messages_for_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = self.client
+            .query(
+                "SELECT
+                    id, tenant_id, sender_username, sender_role, subject, category, message,
+                    status, admin_reply, replied_by, forwarded, forwarded_by, deleted,
+                    toString(created_at) AS created_at,
+                    toString(updated_at) AS updated_at,
+                    if(isNull(replied_at), '', toString(assumeNotNull(replied_at))) AS replied_at,
+                    if(isNull(forwarded_at), '', toString(assumeNotNull(forwarded_at))) AS forwarded_at
+                 FROM ndr.support_messages FINAL
+                 WHERE tenant_id = ? AND deleted = 0
+                 ORDER BY updated_at DESC"
+            )
+            .bind(tenant_id)
+            .fetch_all::<SupportMessageRow>()
+            .await?;
+        Ok(rows.into_iter().map(support_message_to_json).collect())
+    }
+
+    pub async fn get_support_messages_for_super_admin(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = self.client
+            .query(
+                "SELECT
+                    id, tenant_id, sender_username, sender_role, subject, category, message,
+                    status, admin_reply, replied_by, forwarded, forwarded_by, deleted,
+                    toString(created_at) AS created_at,
+                    toString(updated_at) AS updated_at,
+                    if(isNull(replied_at), '', toString(assumeNotNull(replied_at))) AS replied_at,
+                    if(isNull(forwarded_at), '', toString(assumeNotNull(forwarded_at))) AS forwarded_at
+                 FROM ndr.support_messages FINAL
+                 WHERE deleted = 0 AND (forwarded = 1 OR tenant_id = 'default')
+                 ORDER BY updated_at DESC"
+            )
+            .fetch_all::<SupportMessageRow>()
+            .await?;
+        Ok(rows.into_iter().map(support_message_to_json).collect())
+    }
+
+    pub async fn get_support_message_scope(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<(String, String, u8)>> {
+        let rows = self.client
+            .query(
+                "SELECT tenant_id, sender_username, forwarded
+                 FROM ndr.support_messages FINAL
+                 WHERE id = ? AND deleted = 0
+                 LIMIT 1"
+            )
+            .bind(id)
+            .fetch_all::<(String, String, u8)>()
+            .await?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub async fn update_support_status(&self, id: &str, status: &str) -> anyhow::Result<()> {
+        self.client
+            .query(
+                "ALTER TABLE ndr.support_messages
+                 UPDATE status = ?
+                 WHERE id = ?
+                 SETTINGS mutations_sync=1"
+            )
+            .bind(status)
+            .bind(id)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn reply_support_message(
+        &self,
+        id: &str,
+        reply: &str,
+        replied_by: &str,
+        status: &str,
+    ) -> anyhow::Result<()> {
+        self.client
+            .query(
+                "ALTER TABLE ndr.support_messages
+                 UPDATE admin_reply = ?, replied_by = ?, replied_at = now(),
+                        status = ?
+                 WHERE id = ?
+                 SETTINGS mutations_sync=1"
+            )
+            .bind(reply)
+            .bind(replied_by)
+            .bind(status)
+            .bind(id)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn forward_support_message(&self, id: &str, forwarded_by: &str) -> anyhow::Result<()> {
+        self.client
+            .query(
+                "ALTER TABLE ndr.support_messages
+                 UPDATE forwarded = 1, forwarded_by = ?, forwarded_at = now(),
+                        status = 'forwarded'
+                 WHERE id = ?
+                 SETTINGS mutations_sync=1"
+            )
+            .bind(forwarded_by)
+            .bind(id)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_support_message(&self, id: &str) -> anyhow::Result<()> {
+        self.client
+            .query(
+                "ALTER TABLE ndr.support_messages
+                 UPDATE deleted = 1, status = 'deleted'
+                 WHERE id = ?
+                 SETTINGS mutations_sync=1"
+            )
+            .bind(id)
+            .execute()
+            .await?;
+        Ok(())
+    }
 
     //recent hits
     pub async fn get_recent_hits(&self, limit: u64) -> anyhow::Result<Vec<RecentHit>> {
