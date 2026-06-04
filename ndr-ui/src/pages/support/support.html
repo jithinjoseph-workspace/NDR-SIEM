@@ -1,89 +1,124 @@
 <section class="support-shell">
+
+  <!-- ── PAGE HEADER ─────────────────────────────────── -->
   <div class="support-header">
-    <div>
-      <div class="eyebrow">Support Center</div>
+    <div class="header-left">
+      <div class="eyebrow">
+        <span class="eyebrow-dot"></span>
+        Support Center
+      </div>
       <h2>{{ pageTitle }}</h2>
       <p>{{ pageDescription }}</p>
     </div>
 
-    <button type="button" class="refresh-action" (click)="loadSupportMessages()" [disabled]="loading">
-      <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+    <button type="button" class="refresh-btn" (click)="loadSupportMessages()" [disabled]="loading">
+      <lucide-icon [name]="RefreshIcon" class="w-4 h-4" [class.spin]="loading"></lucide-icon>
       {{ loading ? 'Refreshing...' : 'Refresh' }}
     </button>
   </div>
 
-  <div class="support-strip">
-    <div>
-      <span>Total Messages</span>
-      <strong>{{ messages.length }}</strong>
+  <!-- ── STATS STRIP ──────────────────────────────────── -->
+  <div class="stats-strip">
+    <div class="stat-card">
+      <div class="stat-icon total">
+        <lucide-icon [name]="MessageIcon" class="w-4 h-4"></lucide-icon>
+      </div>
+      <div class="stat-body">
+        <span class="stat-label">Total Messages</span>
+        <strong class="stat-value">{{ messages.length }}</strong>
+      </div>
     </div>
-    <div>
-      <span>Open</span>
-      <strong>{{ openCount }}</strong>
+
+    <div class="stat-card">
+      <div class="stat-icon open">
+        <lucide-icon [name]="InboxIcon" class="w-4 h-4"></lucide-icon>
+      </div>
+      <div class="stat-body">
+        <span class="stat-label">Open</span>
+        <strong class="stat-value">{{ openCount }}</strong>
+      </div>
     </div>
-    <div>
-      <span>{{ isSuperAdmin ? 'Escalated' : 'Forwarded' }}</span>
-      <strong>{{ forwardedCount }}</strong>
+
+    <div class="stat-card">
+      <div class="stat-icon forwarded">
+        <lucide-icon [name]="ForwardIcon" class="w-4 h-4"></lucide-icon>
+      </div>
+      <div class="stat-body">
+        <span class="stat-label">{{ isSuperAdmin ? 'Escalated' : 'Forwarded' }}</span>
+        <strong class="stat-value">{{ forwardedCount }}</strong>
+      </div>
     </div>
   </div>
 
-  <div *ngIf="actionMessage" class="inline-message success">{{ actionMessage }}</div>
-  <div *ngIf="error" class="inline-message error">{{ error }}</div>
+  <!-- ── INLINE ALERTS ────────────────────────────────── -->
+  <div *ngIf="actionMessage" class="alert alert-success">
+    <lucide-icon [name]="CheckIcon" class="w-4 h-4"></lucide-icon>
+    {{ actionMessage }}
+  </div>
+  <div *ngIf="error" class="alert alert-error">
+    {{ error }}
+  </div>
 
+  <!-- ── SEND REQUEST PANEL ───────────────────────────── -->
   <section *ngIf="canSubmitRequest" class="panel request-panel">
-    <div class="panel-heading">
-      <div class="panel-icon">
+    <div class="panel-head">
+      <div class="panel-icon-wrap primary-icon">
         <lucide-icon [name]="SendIcon" class="w-5 h-5"></lucide-icon>
       </div>
       <div>
-        <h3>Send Support Request</h3>
-        <p>Your message goes to the tenant admin for your tenant.</p>
+        <h3>Send a Support Request</h3>
+        <p>Describe your issue and your tenant admin will respond shortly.</p>
       </div>
     </div>
 
-    <form class="support-form" (ngSubmit)="submitSupportRequest()">
-      <label>
-        <span>Subject</span>
-        <input
-          name="subject"
-          [(ngModel)]="subject"
-          placeholder="What do you need help with?"
-          maxlength="140"
-        />
-      </label>
+    <form class="request-form" (ngSubmit)="submitSupportRequest()">
+      <div class="form-row">
+        <label class="form-field">
+          <span class="field-label">Subject</span>
+          <input
+            name="subject"
+            [(ngModel)]="subject"
+            placeholder="What do you need help with?"
+            maxlength="140"
+          />
+        </label>
 
-      <label>
-        <span>Category</span>
-        <select name="category" [(ngModel)]="category">
-          <option *ngFor="let option of categories" [value]="option">{{ option }}</option>
-        </select>
-      </label>
+        <label class="form-field">
+          <span class="field-label">Category</span>
+          <select name="category" [(ngModel)]="category">
+            <option *ngFor="let option of categories" [value]="option">{{ option }}</option>
+          </select>
+        </label>
+      </div>
 
-      <label class="message-field">
-        <span>Message</span>
+      <label class="form-field">
+        <span class="field-label">Message</span>
         <textarea
           name="message"
           [(ngModel)]="message"
-          placeholder="Describe the issue, request, or support needed."
+          placeholder="Describe the issue, request, or support needed in detail."
           rows="5"
         ></textarea>
       </label>
 
-      <button
-        type="submit"
-        class="primary-action"
-        [disabled]="busyAction?.id === 'new' || !subject.trim() || !message.trim()"
-      >
-        <lucide-icon [name]="SendIcon" class="w-4 h-4"></lucide-icon>
-        {{ busyAction?.id === 'new' ? 'Sending...' : 'Send Request' }}
-      </button>
+      <div class="form-actions">
+        <button
+          type="submit"
+          class="btn btn-primary"
+          [disabled]="busyAction?.id === 'new' || !subject.trim() || !message.trim()"
+        >
+          <lucide-icon [name]="SendIcon" class="w-4 h-4"></lucide-icon>
+          {{ busyAction?.id === 'new' ? 'Sending...' : 'Send Request' }}
+        </button>
+      </div>
     </form>
   </section>
 
+  <!-- ── INBOX / MY REQUESTS ──────────────────────────── -->
   <section class="panel inbox-panel">
-    <div class="panel-heading split-heading">
-      <div class="heading-group">
-        <div class="panel-icon secondary">
+    <div class="panel-head split-head">
+      <div class="panel-head-left">
+        <div class="panel-icon-wrap secondary-icon">
           <lucide-icon [name]="isManager ? ShieldIcon : InboxIcon" class="w-5 h-5"></lucide-icon>
         </div>
         <div>
@@ -99,35 +134,53 @@
       </div>
     </div>
 
+    <!-- Loading -->
     <div *ngIf="loading" class="empty-state">
+      <div class="empty-icon">
+        <lucide-icon [name]="RefreshIcon" class="w-6 h-6 spin"></lucide-icon>
+      </div>
       <strong>Loading support messages...</strong>
       <p>Fetching the latest saved requests.</p>
     </div>
 
+    <!-- Empty -->
     <div *ngIf="!loading && !messages.length" class="empty-state">
+      <div class="empty-icon">
+        <lucide-icon [name]="InboxIcon" class="w-6 h-6"></lucide-icon>
+      </div>
       <strong>No support messages yet.</strong>
       <p>{{ canSubmitRequest ? 'Send a request above when you need help.' : 'New tenant requests will appear here.' }}</p>
     </div>
 
+    <!-- Message List -->
     <div *ngIf="!loading && messages.length" class="message-list">
       <article *ngFor="let item of messages; trackBy: trackMessage" class="message-card">
-        <div class="message-head">
-          <div class="message-title">
-            <lucide-icon [name]="MessageIcon" class="w-5 h-5"></lucide-icon>
-            <div>
+
+        <!-- Card Header -->
+        <div class="card-header">
+          <div class="card-title-group">
+            <div class="msg-icon">
+              <lucide-icon [name]="MessageIcon" class="w-4 h-4"></lucide-icon>
+            </div>
+            <div class="card-title-text">
               <h4>{{ item.subject }}</h4>
-              <p>
-                {{ item.category }} · {{ item.sender_username }} · {{ item.sender_role }}
-              </p>
+              <div class="card-meta">
+                <span class="meta-tag">{{ item.category }}</span>
+                <span class="meta-sep">·</span>
+                <span>{{ item.sender_username }}</span>
+                <span class="meta-sep">·</span>
+                <span class="meta-role">{{ item.sender_role }}</span>
+              </div>
             </div>
           </div>
 
           <div class="badge-group">
             <span
               class="status-badge"
-              [class.forwarded]="item.forwarded"
-              [class.replied]="item.status === 'replied'"
-              [class.pending]="item.status === 'sending' || item.status === 'syncing'"
+              [class.badge-replied]="item.status === 'replied'"
+              [class.badge-forwarded]="item.forwarded"
+              [class.badge-pending]="item.status === 'sending' || item.status === 'syncing'"
+              [class.badge-reviewed]="item.status === 'reviewed'"
             >
               {{ statusLabel(item) }}
             </span>
@@ -135,71 +188,111 @@
           </div>
         </div>
 
-        <p class="message-body">{{ item.message }}</p>
-
-        <div *ngIf="item.admin_reply" class="reply-box">
-          <span>Reply from {{ item.replied_by || 'admin' }}</span>
-          <strong>{{ item.admin_reply }}</strong>
-          <small>{{ formatDate(item.replied_at) }}</small>
+        <!-- Message Body -->
+        <div class="card-body">
+          <p class="message-body">{{ item.message }}</p>
         </div>
 
+        <!-- Admin Reply -->
+        <div *ngIf="item.admin_reply" class="reply-box">
+          <div class="reply-box-header">
+            <lucide-icon [name]="ReplyIcon" class="w-3 h-3"></lucide-icon>
+            <span>Reply from <strong>{{ item.replied_by || 'admin' }}</strong></span>
+            <small>{{ formatDate(item.replied_at) }}</small>
+          </div>
+          <p class="reply-text">{{ item.admin_reply }}</p>
+        </div>
+
+        <!-- Forward Note -->
         <div *ngIf="item.forwarded" class="forward-note">
+          <lucide-icon [name]="ForwardIcon" class="w-3 h-3"></lucide-icon>
           Forwarded to super admin by {{ item.forwarded_by || 'tenant admin' }}
         </div>
 
-        <div class="message-meta">
-          <span>Created {{ formatDate(item.created_at) }}</span>
-          <span>Updated {{ formatDate(item.updated_at) }}</span>
+        <!-- Card Footer -->
+        <div class="card-footer">
+          <div class="card-timestamps">
+            <span>Created {{ formatDate(item.created_at) }}</span>
+            <span class="ts-sep">·</span>
+            <span>Updated {{ formatDate(item.updated_at) }}</span>
+          </div>
+
+          <div *ngIf="isManager" class="card-actions">
+            <button
+              type="button"
+              class="btn btn-ghost"
+              (click)="reviewMessage(item)"
+              [disabled]="isBusy(item) || item.status === 'reviewed'"
+              title="Mark as reviewed"
+            >
+              <lucide-icon [name]="CheckIcon" class="w-4 h-4"></lucide-icon>
+              {{ isBusy(item, 'review') ? 'Reviewing...' : 'Reviewed' }}
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-primary"
+              (click)="toggleReply(item)"
+              [disabled]="isBusy(item)"
+              title="Reply to this message"
+            >
+              <lucide-icon [name]="ReplyIcon" class="w-4 h-4"></lucide-icon>
+              Reply
+            </button>
+
+            <button
+              *ngIf="isTenantAdmin"
+              type="button"
+              class="btn btn-forward"
+              (click)="forwardMessage(item)"
+              [disabled]="isBusy(item) || !!item.forwarded"
+              title="Escalate to super admin"
+            >
+              <lucide-icon [name]="ForwardIcon" class="w-4 h-4"></lucide-icon>
+              {{ isBusy(item, 'forward') ? 'Forwarding...' : item.forwarded ? 'Forwarded' : 'Forward' }}
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-danger"
+              (click)="deleteMessage(item)"
+              [disabled]="isBusy(item)"
+              title="Delete this message"
+            >
+              <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+              {{ isBusy(item, 'delete') ? 'Deleting...' : 'Delete' }}
+            </button>
+          </div>
         </div>
 
-        <div *ngIf="isManager" class="message-actions">
-          <button
-            type="button"
-            class="secondary-action"
-            (click)="reviewMessage(item)"
-            [disabled]="isBusy(item) || item.status === 'reviewed'"
-          >
-            <lucide-icon [name]="CheckIcon" class="w-4 h-4"></lucide-icon>
-            {{ isBusy(item, 'review') ? 'Reviewing...' : 'Reviewed' }}
-          </button>
-
-          <button type="button" class="primary-action" (click)="toggleReply(item)" [disabled]="isBusy(item)">
-            <lucide-icon [name]="ReplyIcon" class="w-4 h-4"></lucide-icon>
-            Reply
-          </button>
-
-          <button
-            *ngIf="isTenantAdmin"
-            type="button"
-            class="forward-action"
-            (click)="forwardMessage(item)"
-            [disabled]="isBusy(item) || !!item.forwarded"
-          >
-            <lucide-icon [name]="ForwardIcon" class="w-4 h-4"></lucide-icon>
-            {{ isBusy(item, 'forward') ? 'Forwarding...' : item.forwarded ? 'Forwarded' : 'Forward' }}
-          </button>
-
-          <button type="button" class="delete-action" (click)="deleteMessage(item)" [disabled]="isBusy(item)">
-            <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
-            {{ isBusy(item, 'delete') ? 'Deleting...' : 'Delete' }}
-          </button>
-        </div>
-
+        <!-- Reply Composer -->
         <div *ngIf="activeReplyId === item.id" class="reply-composer">
+          <div class="composer-label">
+            <lucide-icon [name]="ReplyIcon" class="w-4 h-4"></lucide-icon>
+            Write your reply
+          </div>
           <textarea
             [(ngModel)]="replyDrafts[item.id]"
             [name]="'reply-' + item.id"
             rows="4"
-            placeholder="Write a clear response for this support request."
+            placeholder="Write a clear, helpful response for this support request..."
           ></textarea>
-          <div>
-            <button type="button" class="primary-action" (click)="sendReply(item)" [disabled]="isBusy(item, 'reply')">
+          <div class="composer-actions">
+            <button
+              type="button"
+              class="btn btn-primary"
+              (click)="sendReply(item)"
+              [disabled]="isBusy(item, 'reply')"
+            >
+              <lucide-icon [name]="SendIcon" class="w-4 h-4"></lucide-icon>
               {{ isBusy(item, 'reply') ? 'Sending...' : 'Send Reply' }}
             </button>
-            <button type="button" class="secondary-action compact" (click)="toggleReply(item)">Cancel</button>
+            <button type="button" class="btn btn-ghost" (click)="toggleReply(item)">Cancel</button>
           </div>
         </div>
+
       </article>
     </div>
   </section>
+
 </section>

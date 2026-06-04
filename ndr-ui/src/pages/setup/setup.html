@@ -154,10 +154,15 @@
           type="button"
           class="primary-action"
           (click)="startMonitoring()"
-          [disabled]="status === 'Starting...'"
+          [disabled]="status === 'Starting...' || status === 'Running'"
         >
-          <lucide-icon [name]="PlayIcon" class="w-4 h-4"></lucide-icon>
-          {{ status === 'Starting...' ? 'Starting...' : 'Start Monitoring' }}
+          <lucide-icon [name]="PlayIcon" class="w-4 h-4"
+            *ngIf="status !== 'Running'"
+          ></lucide-icon>
+          <lucide-icon [name]="ShieldIcon" class="w-4 h-4"
+            *ngIf="status === 'Running'"
+          ></lucide-icon>
+          {{ status === 'Starting...' ? 'Starting...' : status === 'Running' ? 'Monitoring Active' : 'Start Monitoring' }}
         </button>
         <button
           type="button"
@@ -296,16 +301,21 @@
             type="button"
             class="primary-action"
             (click)="controlExternalSensor(sensor, 'start')"
-            [disabled]="!sensor.active || isCommandPending(sensor)"
+            [disabled]="!sensor.active || isCommandPending(sensor) || isSensorRunning(sensor)"
+            [title]="isSensorRunning(sensor) ? 'Sensor is already running' : 'Start sensor monitoring'"
           >
-            {{ isCommandPending(sensor, 'start') ? 'Starting...' : 'Start' }}
+            <lucide-icon [name]="PlayIcon" class="w-4 h-4" *ngIf="!isCommandPending(sensor, 'start') && !isSensorRunning(sensor)"></lucide-icon>
+            <lucide-icon [name]="ShieldIcon" class="w-4 h-4" *ngIf="isSensorRunning(sensor) && !isCommandPending(sensor, 'start')"></lucide-icon>
+            {{ isCommandPending(sensor, 'start') ? 'Starting...' : isSensorRunning(sensor) ? 'Running' : 'Start' }}
           </button>
           <button
             type="button"
             class="stop-action"
             (click)="controlExternalSensor(sensor, 'stop')"
-            [disabled]="!sensor.active || isCommandPending(sensor)"
+            [disabled]="!sensor.active || isCommandPending(sensor) || !isSensorRunning(sensor)"
+            [title]="!isSensorRunning(sensor) ? 'Sensor is already stopped' : 'Stop sensor monitoring'"
           >
+            <lucide-icon [name]="StopIcon" class="w-4 h-4" *ngIf="!isCommandPending(sensor, 'stop')"></lucide-icon>
             {{ isCommandPending(sensor, 'stop') ? 'Stopping...' : 'Stop' }}
           </button>
           <button
@@ -313,7 +323,9 @@
             class="secondary-action compact"
             (click)="controlExternalSensor(sensor, 'restart')"
             [disabled]="!sensor.active || isCommandPending(sensor)"
+            title="Restart all sensor services"
           >
+            <lucide-icon [name]="RefreshIcon" class="w-4 h-4" *ngIf="!isCommandPending(sensor, 'restart')"></lucide-icon>
             {{ isCommandPending(sensor, 'restart') ? 'Restarting...' : 'Restart' }}
           </button>
         </div>
@@ -372,17 +384,27 @@
 
             <div class="secret-block">
               <code>{{ createdSensorKey.key }}</code>
-              <button type="button" class="secondary-action compact" (click)="copyCreatedSensorKey()">
-                <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
-                Copy Key
+              <button type="button"
+                class="secondary-action compact"
+                [class.copied]="keyCopied"
+                (click)="copyCreatedSensorKey()"
+                [disabled]="keyCopied"
+              >
+                <lucide-icon [name]="CopyIcon" class="w-4 h-4" *ngIf="!keyCopied"></lucide-icon>
+                {{ keyCopied ? '✓ Copied!' : 'Copy Key' }}
               </button>
             </div>
 
             <div class="command-block">
               <code>{{ installCommand }}</code>
-              <button type="button" class="secondary-action compact" (click)="copyInstallCommand()">
-                <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
-                Copy Command
+              <button type="button"
+                class="secondary-action compact"
+                [class.copied]="commandCopied"
+                (click)="copyInstallCommand()"
+                [disabled]="commandCopied"
+              >
+                <lucide-icon [name]="CopyIcon" class="w-4 h-4" *ngIf="!commandCopied"></lucide-icon>
+                {{ commandCopied ? '✓ Copied!' : 'Copy Command' }}
               </button>
             </div>
           </ng-container>

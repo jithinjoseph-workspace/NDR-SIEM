@@ -343,6 +343,24 @@ button:disabled {
   opacity: 0.48;
 }
 
+.secondary-action.compact.copied,
+.secondary-action.compact.copied:disabled {
+  border-color: rgba(105, 246, 184, 0.42);
+  background: rgba(105, 246, 184, 0.14);
+  color: #69f6b8;
+  cursor: default;
+  opacity: 1;
+}
+
+.primary-action:disabled {
+  cursor: not-allowed;
+}
+
+.primary-action.running-state:disabled,
+.engine-actions .primary-action:disabled {
+  opacity: 0.6;
+}
+
 .engine-list {
   display: grid;
   gap: 10px;

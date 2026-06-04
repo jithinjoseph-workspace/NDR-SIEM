@@ -60,6 +60,8 @@ export class Setup implements OnInit, OnDestroy {
   creatingSensor = false;
   createdSensorKey: SensorKey | null = null;
   installCommand = '';
+  keyCopied = false;
+  commandCopied = false;
   cloudUrl = this.detectCloudUrl();
 
   private subs: Subscription[] = [];
@@ -309,14 +311,50 @@ export class Setup implements OnInit, OnDestroy {
 
   copyCreatedSensorKey() {
     if (this.createdSensorKey?.key) {
-      this.copyText(this.createdSensorKey.key, 'Sensor key copied.');
+      this.keyCopied = false;
+      navigator.clipboard.writeText(this.createdSensorKey.key).then(
+        () => {
+          this.keyCopied = true;
+          this.externalActionMessage = 'Sensor key copied.';
+          this.externalError = '';
+          this.cdr.detectChanges();
+          setTimeout(() => {
+            this.keyCopied = false;
+            this.cdr.detectChanges();
+          }, 2500);
+        },
+        () => {
+          this.externalError = 'Failed to copy to clipboard.';
+          this.cdr.detectChanges();
+        }
+      );
     }
   }
 
   copyInstallCommand() {
     if (this.installCommand) {
-      this.copyText(this.installCommand, 'Install command copied.');
+      this.commandCopied = false;
+      navigator.clipboard.writeText(this.installCommand).then(
+        () => {
+          this.commandCopied = true;
+          this.externalActionMessage = 'Install command copied.';
+          this.externalError = '';
+          this.cdr.detectChanges();
+          setTimeout(() => {
+            this.commandCopied = false;
+            this.cdr.detectChanges();
+          }, 2500);
+        },
+        () => {
+          this.externalError = 'Failed to copy to clipboard.';
+          this.cdr.detectChanges();
+        }
+      );
     }
+  }
+
+  isSensorRunning(sensor: ExternalSensorCard): boolean {
+    return sensor.zeek === 'running' || sensor.suricata === 'running' || sensor.vector === 'running';
   }
 
   isCommandPending(sensor: ExternalSensorCard, command?: SensorControlCommand): boolean {
