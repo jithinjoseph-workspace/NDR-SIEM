@@ -41,6 +41,26 @@ export interface Announcement {
   updated_at?: string;
 }
 
+export interface SupportMessage {
+  id: string;
+  tenant_id: string;
+  sender_username: string;
+  sender_role: string;
+  subject: string;
+  category: string;
+  message: string;
+  status: string;
+  admin_reply: string;
+  replied_by: string;
+  forwarded: number;
+  forwarded_by: string;
+  deleted: number;
+  created_at: string;
+  updated_at: string;
+  replied_at: string;
+  forwarded_at: string;
+}
+
 interface AnnouncementListResponse {
   status?: string;
   announcements?: Announcement[];
@@ -50,6 +70,12 @@ interface AnnouncementListResponse {
 interface SensorKeyListResponse {
   status?: string;
   keys?: SensorKey[];
+  message?: string;
+}
+
+interface SupportMessageListResponse {
+  status?: string;
+  messages?: SupportMessage[];
   message?: string;
 }
 
@@ -381,5 +407,36 @@ export class Api {
       tenant_id: tenantId,
       sensor_id: sensorId,
     });
+  }
+
+  getSupportMessages(): Observable<SupportMessage[]> {
+    return this.http
+      .get<SupportMessageListResponse>(`${this.baseUrl}/support/messages`)
+      .pipe(map(response => {
+        if (response.status && response.status !== 'ok') {
+          throw new Error(response.message || 'Failed to load support messages');
+        }
+        return response.messages || [];
+      }));
+  }
+
+  createSupportMessage(data: { subject: string; category: string; message: string }): Observable<any> {
+    return this.http.post(`${this.baseUrl}/support/messages`, data);
+  }
+
+  reviewSupportMessage(id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/support/messages/${id}/review`, {});
+  }
+
+  replySupportMessage(id: string, reply: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/support/messages/${id}/reply`, { reply });
+  }
+
+  forwardSupportMessage(id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/support/messages/${id}/forward`, {});
+  }
+
+  deleteSupportMessage(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/support/messages/${id}`);
   }
 }
