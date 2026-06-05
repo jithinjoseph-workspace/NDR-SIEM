@@ -298,11 +298,14 @@ tokio::spawn(async move {
         .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
         .route("/api/auth/tenants/:id", put(api::update_tenant_api))
         .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))
-        .route("/api/support/messages", get(api::get_support_messages).post(api::create_support_message))
-        .route("/api/support/messages/:id/review", post(api::review_support_message))
-        .route("/api/support/messages/:id/reply", post(api::reply_support_message))
-        .route("/api/support/messages/:id/forward", post(api::forward_support_message))
-        .route("/api/support/messages/:id", delete(api::delete_support_message_api))
+        .route("/api/announcements",
+            get(api::get_announcements_api)
+            .post(api::create_announcement_api))
+        .route("/api/announcements/active", get(api::get_active_announcements_api))
+        .route("/api/announcements/:id/read", post(api::mark_announcement_read_api))
+        .route("/api/announcements/:id",
+            put(api::update_announcement_api)
+            .delete(api::delete_announcement_api))
         .route("/api/admin/engines", get(api::get_engines))
         .route("/api/admin/engines/scale", post(api::scale_engines))
         .route("/api/install-sensor.sh", get(api::install_sensor_script))
@@ -357,8 +360,6 @@ tokio::spawn(async move {
     axum::serve(listener, app).await.unwrap();
 
 }
-
-
 
 
 

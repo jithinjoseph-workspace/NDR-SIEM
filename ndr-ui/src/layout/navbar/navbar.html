@@ -39,23 +39,62 @@
       </strong>
     </div>
 
-    <div *ngIf="canViewAlerts" class="notification-wrap" (focusout)="closeNotifications()">
+    <div *ngIf="canShowNotifications" class="notification-wrap" (focusout)="closeNotifications()">
       <button class="icon-button" aria-label="Notifications" (click)="openNotifications()">
         <lucide-icon [name]="BellIcon" class="w-5 h-5"></lucide-icon>
-        <span *ngIf="alertCount > 0">{{ alertCount > 9 ? '9+' : alertCount }}</span>
+        <span *ngIf="notificationCount > 0">{{ notificationCount > 9 ? '9+' : notificationCount }}</span>
       </button>
 
       <div *ngIf="showNotifications" class="notification-panel">
         <div class="notification-head">
-          <strong>Threat Alerts</strong>
-          <small>{{ recentAlerts.length }} recent</small>
+          <strong>Notifications</strong>
+          <small>{{ notificationCount }} active</small>
         </div>
 
-        <div *ngIf="recentAlerts.length === 0" class="notification-empty">
+        <div *ngIf="!hasNotificationItems" class="notification-empty">
+          No notifications yet
+        </div>
+
+        <div *ngIf="activeAnnouncements.length > 0" class="notification-section-title">
+          Announcements
+        </div>
+
+        <div *ngIf="activeAnnouncements.length > 0" class="notification-list">
+          <div
+            *ngFor="let announcement of activeAnnouncements"
+            class="notification-row announcement-notification"
+            [class.unread-announcement]="!announcement.read"
+          >
+            <div class="announcement-card-inner">
+              <div class="announcement-card-header">
+                <span [class]="'announcement-badge ' + announcementTypeClass(announcement.type)">
+                  {{ announcementTypeLabel(announcement.type) }}
+                </span>
+                <span *ngIf="!announcement.read" class="unread-dot" title="Unread"></span>
+              </div>
+              <strong class="announcement-card-title">{{ announcement.title }}</strong>
+              <p class="announcement-card-body">{{ announcement.message }}</p>
+              <div class="announcement-card-footer">
+                <em *ngIf="announcement.starts_at || announcement.start_at">
+                  Starts {{ (announcement.starts_at || announcement.start_at) | date:'MMM d, h:mm a' }}
+                </em>
+                <em *ngIf="!announcement.starts_at && !announcement.start_at">
+                  {{ announcement.created_at | date:'MMM d, h:mm a' }}
+                </em>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div *ngIf="canViewAlerts" class="notification-section-title">
+          Threat Alerts
+        </div>
+
+        <div *ngIf="canViewAlerts && recentAlerts.length === 0" class="notification-empty compact">
           No threat alerts yet
         </div>
 
-        <div *ngIf="recentAlerts.length > 0" class="notification-list">
+        <div *ngIf="canViewAlerts && recentAlerts.length > 0" class="notification-list">
           <div *ngFor="let alert of recentAlerts" class="notification-row">
             <div>
               <strong>{{ alert.message }}</strong>
@@ -69,7 +108,7 @@
           </div>
         </div>
 
-        <button class="notification-link" (mousedown)="viewThreatIntel()">
+        <button *ngIf="canViewAlerts" class="notification-link" (mousedown)="viewThreatIntel()">
           View Threat Intel
         </button>
       </div>

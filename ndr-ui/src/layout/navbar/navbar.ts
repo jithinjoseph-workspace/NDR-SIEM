@@ -6,7 +6,7 @@ import { AuthService } from '../../services/auth/auth';
 import { LucideAngularModule, Search, Bell, User, ChevronDown } from 'lucide-angular';
 import { Websocket } from '../../services/websocket/websocket';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
-import { Api } from '../../services/api/api';
+import { Announcement, Api } from '../../services/api/api';
 
 @Component({
   selector: 'app-navbar',
@@ -28,6 +28,7 @@ export class Navbar implements OnInit, OnDestroy {
   showNotifications = false;
   alertCount = 0;
   recentAlerts: ThreatNotification[] = [];
+  activeAnnouncements: Announcement[] = [];
 
   suggestions = [
     { label: 'Network Logs', hint: 'View all events', route: '/logs', permission: 'logs' },
@@ -41,6 +42,7 @@ export class Navbar implements OnInit, OnDestroy {
 
   filteredSuggestions: any[] = [];
   private statusInterval: ReturnType<typeof setInterval> | null = null;
+  private announcementInterval: ReturnType<typeof setInterval> | null = null;
 
   get permittedSuggestions() {
     return this.suggestions.filter(s => this.canOpenPermission(s.permission));
@@ -48,6 +50,22 @@ export class Navbar implements OnInit, OnDestroy {
 
   get canViewAlerts() {
     return this.canOpenPermission('alerts');
+  }
+
+  get notificationCount() {
+    return this.alertCount + this.unreadAnnouncementCount;
+  }
+
+  get unreadAnnouncementCount() {
+    return this.activeAnnouncements.filter(announcement => !announcement.read).length;
+  }
+
+  get canShowNotifications() {
+    return this.canViewAlerts || this.activeAnnouncements.length > 0;
+  }
+
+  get hasNotificationItems() {
+    return this.activeAnnouncements.length > 0 || (this.canViewAlerts && this.recentAlerts.length > 0);
   }
 
   constructor(
@@ -62,6 +80,8 @@ export class Navbar implements OnInit, OnDestroy {
   ngOnInit() {
     this.refreshSystemStatus();
     this.statusInterval = setInterval(() => this.refreshSystemStatus(), 10000);
+    this.loadActiveAnnouncements();
+    this.announcementInterval = setInterval(() => this.loadActiveAnnouncements(), 60000);
 
     this.ws.lastAgentStatus$.subscribe(data => {
       if (!data) return;
@@ -163,6 +183,7 @@ export class Navbar implements OnInit, OnDestroy {
   openNotifications() {
     this.showNotifications = !this.showNotifications;
     if (this.showNotifications) {
+      this.loadActiveAnnouncements();
       this.notifications.markAllRead();
     }
     this.showSuggestions = false;
@@ -179,6 +200,23 @@ export class Navbar implements OnInit, OnDestroy {
   viewThreatIntel() {
     this.showNotifications = false;
     this.navigateIfAllowed('/intel', 'intel');
+  }
+
+  announcementTypeLabel(type: string | undefined) {
+    switch (type) {
+      case 'maintenance':
+        return 'Maintenance';
+      case 'update':
+        return 'Platform Update';
+      case 'critical':
+        return 'Critical';
+      default:
+        return 'Information';
+    }
+  }
+
+  announcementTypeClass(type: string | undefined) {
+    return `announcement-${type || 'info'}`;
   }
 
   closeSearch() {
@@ -198,6 +236,7 @@ export class Navbar implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     if (this.statusInterval) clearInterval(this.statusInterval);
+    if (this.announcementInterval) clearInterval(this.announcementInterval);
   }
 
   private canOpenPermission(permission: string) {
@@ -217,6 +256,38 @@ export class Navbar implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
     });
+  }
+
+  private loadActiveAnnouncements() {
+    this.api.getActiveAnnouncements().subscribe({
+      next: announcements => {
+        this.activeAnnouncements = announcements;
+        if (this.showNotifications) {
+          this.markUnreadAnnouncementsRead();
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.activeAnnouncements = [];
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  private markUnreadAnnouncementsRead() {
+    const unread = this.activeAnnouncements.filter(announcement => !announcement.read);
+    if (unread.length === 0) return;
+
+    unread.forEach(announcement => {
+      announcement.read = true;
+      this.api.markAnnouncementRead(announcement.id).subscribe({
+        error: () => {
+          announcement.read = false;
+          this.cdr.detectChanges();
+        },
+      });
+    });
+    this.cdr.detectChanges();
   }
 
   private refreshTenantSystemStatus() {

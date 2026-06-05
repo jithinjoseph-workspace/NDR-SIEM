@@ -119,47 +119,26 @@ pub struct SensorKeyRow {
     pub last_seen: String,
 }
 
-#[derive(clickhouse::Row, serde::Deserialize)]
-pub struct SupportMessageRow {
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct AnnouncementRow {
     pub id: String,
-    pub tenant_id: String,
-    pub sender_username: String,
-    pub sender_role: String,
-    pub subject: String,
-    pub category: String,
+    pub title: String,
     pub message: String,
+    pub announcement_type: String,
+    pub audience: String,
     pub status: String,
-    pub admin_reply: String,
-    pub replied_by: String,
-    pub forwarded: u8,
-    pub forwarded_by: String,
-    pub deleted: u8,
+    pub target_roles: Vec<String>,
+    pub target_tenants: Vec<String>,
+    pub starts_at: String,
+    pub ends_at: String,
+    pub created_by: String,
     pub created_at: String,
     pub updated_at: String,
-    pub replied_at: String,
-    pub forwarded_at: String,
 }
 
-fn support_message_to_json(row: SupportMessageRow) -> serde_json::Value {
-    json!({
-        "id": row.id,
-        "tenant_id": row.tenant_id,
-        "sender_username": row.sender_username,
-        "sender_role": row.sender_role,
-        "subject": row.subject,
-        "category": row.category,
-        "message": row.message,
-        "status": row.status,
-        "admin_reply": row.admin_reply,
-        "replied_by": row.replied_by,
-        "forwarded": row.forwarded,
-        "forwarded_by": row.forwarded_by,
-        "deleted": row.deleted,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-        "replied_at": row.replied_at,
-        "forwarded_at": row.forwarded_at,
-    })
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct AnnouncementReadRow {
+    pub announcement_id: String,
 }
 
 pub struct ClickhouseStorage {
@@ -168,6 +147,19 @@ pub struct ClickhouseStorage {
 
 fn sql_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+fn sql_array_literal(values: &[String]) -> String {
+    if values.is_empty() {
+        return "CAST([], 'Array(String)')".to_string();
+    }
+
+    let items = values
+        .iter()
+        .map(|value| format!("'{}'", sql_escape(value)))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", items)
 }
 
 pub fn default_permissions(role: &str) -> String {
@@ -602,6 +594,8 @@ pub async fn create_tenant(
             if stmt.contains("CREATE DATABASE IF NOT EXISTS ndr") 
                 || stmt.contains("ndr.users") 
                 || stmt.contains("ndr.tenants") 
+                || stmt.contains("ndr.announcements")
+                || stmt.contains("ndr.announcement_reads")
                 || stmt.contains("ndr.rules_state")
             {
                 continue;
@@ -671,6 +665,219 @@ pub async fn set_tenant_active(
     self.client.query(&query).execute().await?;
     Ok(())
 }
+
+pub async fn create_announcement(
+    &self,
+    id: &str,
+    title: &str,
+    message: &str,
+    announcement_type: &str,
+    audience: &str,
+    status: &str,
+    target_roles: &[String],
+    target_tenants: &[String],
+    start_at: Option<&str>,
+    end_at: Option<&str>,
+    created_by: &str,
+) -> anyhow::Result<()> {
+    let start_expr = start_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "now()".to_string());
+    let end_expr = end_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "CAST(NULL, 'Nullable(DateTime)')".to_string());
+    let query = format!(
+        "INSERT INTO ndr.announcements \
+         (id, title, message, announcement_type, audience, status, target_roles, target_tenants, start_at, end_at, created_by, updated_at) \
+         VALUES ('{}','{}','{}','{}','{}','{}',{},{},{},{},'{}',now())",
+        sql_escape(id),
+        sql_escape(title),
+        sql_escape(message),
+        sql_escape(announcement_type),
+        sql_escape(audience),
+        sql_escape(status),
+        sql_array_literal(target_roles),
+        sql_array_literal(target_tenants),
+        start_expr,
+        end_expr,
+        sql_escape(created_by),
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn get_announcements(
+    &self,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let result = self.client
+        .query(
+            "SELECT id, title, message, announcement_type, audience, status, target_roles, target_tenants, \
+             toString(start_at) AS starts_at, ifNull(toString(end_at), '') AS ends_at, created_by, \
+             toString(created_at) AS created_at, toString(updated_at) AS updated_at \
+             FROM ndr.announcements FINAL \
+             ORDER BY updated_at DESC"
+        )
+        .fetch_all::<AnnouncementRow>()
+        .await?;
+
+    Ok(result.iter().map(|r| json!({
+        "id": r.id,
+        "title": r.title,
+        "message": r.message,
+        "type": r.announcement_type,
+        "audience": r.audience,
+        "status": r.status,
+        "active": r.status == "active",
+        "target_roles": r.target_roles,
+        "target_tenants": r.target_tenants,
+        "start_at": r.starts_at,
+        "starts_at": r.starts_at,
+        "end_at": r.ends_at,
+        "ends_at": r.ends_at,
+        "created_by": r.created_by,
+        "created_at": r.created_at,
+        "updated_at": r.updated_at
+    })).collect())
+}
+
+pub async fn get_active_announcements(
+    &self,
+    role: &str,
+    tenant_id: &str,
+    username: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let role = sql_escape(role);
+    let role_alias = if role == "tenant_admin" {
+        "tenant_admins".to_string()
+    } else {
+        role.clone()
+    };
+    let tenant_id = sql_escape(tenant_id);
+    let username = sql_escape(username);
+    let query = format!(
+        "SELECT id, title, message, announcement_type, audience, status, target_roles, target_tenants, \
+         toString(start_at) AS starts_at, ifNull(toString(end_at), '') AS ends_at, created_by, \
+         toString(created_at) AS created_at, toString(updated_at) AS updated_at \
+         FROM ndr.announcements FINAL \
+         WHERE status = 'active' \
+           AND start_at <= now() \
+           AND (isNull(end_at) OR end_at >= now()) \
+           AND (length(target_roles) = 0 OR has(target_roles, 'all') OR has(target_roles, '{}') OR has(target_roles, '{}')) \
+           AND (length(target_tenants) = 0 OR has(target_tenants, 'all') OR has(target_tenants, '{}')) \
+         ORDER BY start_at DESC, updated_at DESC",
+        role,
+        role_alias,
+        tenant_id,
+    );
+    let result = self.client
+        .query(&query)
+        .fetch_all::<AnnouncementRow>()
+        .await?;
+    let read_query = format!(
+        "SELECT announcement_id FROM ndr.announcement_reads FINAL WHERE username = '{}'",
+        username
+    );
+    let read_ids = self.client
+        .query(&read_query)
+        .fetch_all::<AnnouncementReadRow>()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| row.announcement_id)
+        .collect::<std::collections::HashSet<_>>();
+
+    Ok(result.iter().map(|r| json!({
+        "id": r.id,
+        "title": r.title,
+        "message": r.message,
+        "type": r.announcement_type,
+        "audience": r.audience,
+        "status": r.status,
+        "active": r.status == "active",
+        "read": read_ids.contains(&r.id),
+        "target_roles": r.target_roles,
+        "target_tenants": r.target_tenants,
+        "start_at": r.starts_at,
+        "starts_at": r.starts_at,
+        "end_at": r.ends_at,
+        "ends_at": r.ends_at,
+        "created_by": r.created_by,
+        "created_at": r.created_at,
+        "updated_at": r.updated_at
+    })).collect())
+}
+
+pub async fn mark_announcement_read(
+    &self,
+    announcement_id: &str,
+    username: &str,
+) -> anyhow::Result<()> {
+    let announcement_id = sql_escape(announcement_id);
+    let username = sql_escape(username);
+    let query = format!(
+        "INSERT INTO ndr.announcement_reads (announcement_id, username, read_at) \
+         VALUES ('{}','{}',now())",
+        announcement_id,
+        username
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn update_announcement(
+    &self,
+    id: &str,
+    title: &str,
+    message: &str,
+    announcement_type: &str,
+    audience: &str,
+    status: &str,
+    target_roles: &[String],
+    target_tenants: &[String],
+    start_at: Option<&str>,
+    end_at: Option<&str>,
+) -> anyhow::Result<()> {
+    let start_expr = start_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "now()".to_string());
+    let end_expr = end_at
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
+        .unwrap_or_else(|| "CAST(NULL, 'Nullable(DateTime)')".to_string());
+    let query = format!(
+        "ALTER TABLE ndr.announcements UPDATE \
+         title = '{}', message = '{}', announcement_type = '{}', audience = '{}', status = '{}', target_roles = {}, \
+         target_tenants = {}, start_at = {}, end_at = {} \
+         WHERE id = '{}' SETTINGS mutations_sync=1",
+        sql_escape(title),
+        sql_escape(message),
+        sql_escape(announcement_type),
+        sql_escape(audience),
+        sql_escape(status),
+        sql_array_literal(target_roles),
+        sql_array_literal(target_tenants),
+        start_expr,
+        end_expr,
+        sql_escape(id),
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn delete_announcement(
+    &self,
+    id: &str,
+) -> anyhow::Result<()> {
+    let query = format!(
+        "ALTER TABLE ndr.announcements DELETE WHERE id = '{}' SETTINGS mutations_sync=1",
+        sql_escape(id)
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
     pub fn new() -> Self {
         let url = std::env::var("CLICKHOUSE_URL")
             .unwrap_or_else(|_| "http://localhost:8123".to_string());
@@ -732,6 +939,50 @@ pub async fn set_tenant_active(
                 sql_path
             );
             
+            let announcements_table = "
+                CREATE TABLE IF NOT EXISTS ndr.announcements
+                (
+                    id             String,
+                    title          String,
+                    message        String,
+                    announcement_type String DEFAULT 'info',
+                    audience       String DEFAULT 'all',
+                    status         String DEFAULT 'draft',
+                    target_roles   Array(String),
+                    target_tenants Array(String),
+                    start_at       DateTime DEFAULT now(),
+                    end_at         Nullable(DateTime),
+                    created_by     String,
+                    created_at     DateTime DEFAULT now(),
+                    updated_at     DateTime DEFAULT now()
+                )
+                ENGINE = ReplacingMergeTree(updated_at)
+                ORDER BY id
+            ";
+            if let Err(e) = self.client
+                .query(announcements_table)
+                .execute()
+                .await {
+                tracing::debug!("Announcements table init skipped: {}", e);
+            }
+
+            let announcement_reads_table = "
+                CREATE TABLE IF NOT EXISTS ndr.announcement_reads
+                (
+                    announcement_id String,
+                    username        String,
+                    read_at         DateTime DEFAULT now()
+                )
+                ENGINE = ReplacingMergeTree(read_at)
+                ORDER BY (announcement_id, username)
+            ";
+            if let Err(e) = self.client
+                .query(announcement_reads_table)
+                .execute()
+                .await {
+                tracing::debug!("Announcement reads table init skipped: {}", e);
+            }
+
             // Ensure tenant_id columns exist
             for alter in &[
                 "ALTER TABLE ndr.ndr_events ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
@@ -751,40 +1002,15 @@ pub async fn set_tenant_active(
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS suricata_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS vector_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_commands ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
+                "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS announcement_type String DEFAULT 'info'",
+                "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS audience String DEFAULT 'all'",
+                "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS target_tenants Array(String) DEFAULT []",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
                     .execute().await {
                     tracing::debug!("Column add skipped: {}", e);
                 }
-            }
-            // Ensure support_messages table exists (safe for existing deployments)
-            let support_ddl = "
-                CREATE TABLE IF NOT EXISTS ndr.support_messages
-                (
-                    id              String DEFAULT toString(generateUUIDv4()),
-                    tenant_id       String,
-                    sender_username String,
-                    sender_role     String,
-                    subject         String,
-                    category        String DEFAULT 'General',
-                    message         String,
-                    status          String DEFAULT 'open',
-                    admin_reply     String DEFAULT '',
-                    replied_by      String DEFAULT '',
-                    forwarded       UInt8 DEFAULT 0,
-                    forwarded_by    String DEFAULT '',
-                    deleted         UInt8 DEFAULT 0,
-                    created_at      DateTime DEFAULT now(),
-                    updated_at      DateTime DEFAULT now(),
-                    replied_at      Nullable(DateTime),
-                    forwarded_at    Nullable(DateTime)
-                )
-                ENGINE = ReplacingMergeTree(updated_at)
-                ORDER BY id
-            ";
-            if let Err(e) = self.client.query(support_ddl).execute().await {
-                tracing::debug!("support_messages table init skipped: {}", e);
             }
             tracing::info!("✅ tenant_id columns verified");
             return;
@@ -1266,188 +1492,6 @@ pub async fn save_setting(
 }
 
 
-    //support messages
-    pub async fn create_support_message(
-        &self,
-        tenant_id: &str,
-        sender_username: &str,
-        sender_role: &str,
-        subject: &str,
-        category: &str,
-        message: &str,
-    ) -> anyhow::Result<String> {
-        let id = uuid::Uuid::new_v4().to_string();
-        self.client
-            .query(
-                "INSERT INTO ndr.support_messages
-                 (id, tenant_id, sender_username, sender_role, subject, category, message)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(&id)
-            .bind(tenant_id)
-            .bind(sender_username)
-            .bind(sender_role)
-            .bind(subject)
-            .bind(category)
-            .bind(message)
-            .execute()
-            .await?;
-        Ok(id)
-    }
-
-    pub async fn get_support_messages_for_user(
-        &self,
-        tenant_id: &str,
-        sender_username: &str,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let rows = self.client
-            .query(
-                "SELECT
-                    id, tenant_id, sender_username, sender_role, subject, category, message,
-                    status, admin_reply, replied_by, forwarded, forwarded_by, deleted,
-                    toString(created_at) AS created_at,
-                    toString(updated_at) AS updated_at,
-                    if(isNull(replied_at), '', toString(assumeNotNull(replied_at))) AS replied_at,
-                    if(isNull(forwarded_at), '', toString(assumeNotNull(forwarded_at))) AS forwarded_at
-                 FROM ndr.support_messages FINAL
-                 WHERE tenant_id = ? AND sender_username = ? AND deleted = 0
-                 ORDER BY updated_at DESC"
-            )
-            .bind(tenant_id)
-            .bind(sender_username)
-            .fetch_all::<SupportMessageRow>()
-            .await?;
-        Ok(rows.into_iter().map(support_message_to_json).collect())
-    }
-
-    pub async fn get_support_messages_for_tenant(
-        &self,
-        tenant_id: &str,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
-        let rows = self.client
-            .query(
-                "SELECT
-                    id, tenant_id, sender_username, sender_role, subject, category, message,
-                    status, admin_reply, replied_by, forwarded, forwarded_by, deleted,
-                    toString(created_at) AS created_at,
-                    toString(updated_at) AS updated_at,
-                    if(isNull(replied_at), '', toString(assumeNotNull(replied_at))) AS replied_at,
-                    if(isNull(forwarded_at), '', toString(assumeNotNull(forwarded_at))) AS forwarded_at
-                 FROM ndr.support_messages FINAL
-                 WHERE tenant_id = ? AND deleted = 0
-                 ORDER BY updated_at DESC"
-            )
-            .bind(tenant_id)
-            .fetch_all::<SupportMessageRow>()
-            .await?;
-        Ok(rows.into_iter().map(support_message_to_json).collect())
-    }
-
-    pub async fn get_support_messages_for_super_admin(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-        let rows = self.client
-            .query(
-                "SELECT
-                    id, tenant_id, sender_username, sender_role, subject, category, message,
-                    status, admin_reply, replied_by, forwarded, forwarded_by, deleted,
-                    toString(created_at) AS created_at,
-                    toString(updated_at) AS updated_at,
-                    if(isNull(replied_at), '', toString(assumeNotNull(replied_at))) AS replied_at,
-                    if(isNull(forwarded_at), '', toString(assumeNotNull(forwarded_at))) AS forwarded_at
-                 FROM ndr.support_messages FINAL
-                 WHERE deleted = 0 AND (forwarded = 1 OR tenant_id = 'default')
-                 ORDER BY updated_at DESC"
-            )
-            .fetch_all::<SupportMessageRow>()
-            .await?;
-        Ok(rows.into_iter().map(support_message_to_json).collect())
-    }
-
-    pub async fn get_support_message_scope(
-        &self,
-        id: &str,
-    ) -> anyhow::Result<Option<(String, String, u8)>> {
-        let rows = self.client
-            .query(
-                "SELECT tenant_id, sender_username, forwarded
-                 FROM ndr.support_messages FINAL
-                 WHERE id = ? AND deleted = 0
-                 LIMIT 1"
-            )
-            .bind(id)
-            .fetch_all::<(String, String, u8)>()
-            .await?;
-        Ok(rows.into_iter().next())
-    }
-
-    pub async fn update_support_status(&self, id: &str, status: &str) -> anyhow::Result<()> {
-        self.client
-            .query(
-                "ALTER TABLE ndr.support_messages
-                 UPDATE status = ?
-                 WHERE id = ?
-                 SETTINGS mutations_sync=1"
-            )
-            .bind(status)
-            .bind(id)
-            .execute()
-            .await?;
-        Ok(())
-    }
-
-    pub async fn reply_support_message(
-        &self,
-        id: &str,
-        reply: &str,
-        replied_by: &str,
-        status: &str,
-    ) -> anyhow::Result<()> {
-        self.client
-            .query(
-                "ALTER TABLE ndr.support_messages
-                 UPDATE admin_reply = ?, replied_by = ?, replied_at = now(),
-                        status = ?
-                 WHERE id = ?
-                 SETTINGS mutations_sync=1"
-            )
-            .bind(reply)
-            .bind(replied_by)
-            .bind(status)
-            .bind(id)
-            .execute()
-            .await?;
-        Ok(())
-    }
-
-    pub async fn forward_support_message(&self, id: &str, forwarded_by: &str) -> anyhow::Result<()> {
-        self.client
-            .query(
-                "ALTER TABLE ndr.support_messages
-                 UPDATE forwarded = 1, forwarded_by = ?, forwarded_at = now(),
-                        status = 'forwarded'
-                 WHERE id = ?
-                 SETTINGS mutations_sync=1"
-            )
-            .bind(forwarded_by)
-            .bind(id)
-            .execute()
-            .await?;
-        Ok(())
-    }
-
-    pub async fn delete_support_message(&self, id: &str) -> anyhow::Result<()> {
-        self.client
-            .query(
-                "ALTER TABLE ndr.support_messages
-                 UPDATE deleted = 1, status = 'deleted'
-                 WHERE id = ?
-                 SETTINGS mutations_sync=1"
-            )
-            .bind(id)
-            .execute()
-            .await?;
-        Ok(())
-    }
-
     //recent hits
     pub async fn get_recent_hits(&self, limit: u64) -> anyhow::Result<Vec<RecentHit>> {
     let hits = self.client
@@ -1561,16 +1605,16 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     //severity breakdown
     pub async fn get_severity_breakdown(&self) -> anyhow::Result<serde_json::Value> {
         let critical: u64 = self.client
-            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'critical'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'critical'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let high: u64 = self.client
-            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'high'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'high'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let medium: u64 = self.client
-            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'medium'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'medium'")
             .fetch_one::<u64>().await.unwrap_or(0);
         let low: u64 = self.client
-            .query("SELECT count(DISTINCT src_ip, dst_ip) FROM ndr_hits WHERE lower(severity) = 'low'")
+            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'low'")
             .fetch_one::<u64>().await.unwrap_or(0);
 
         Ok(serde_json::json!({
@@ -1693,16 +1737,16 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let critical: u64 = self.client.query(&format!(
-            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='CRITICAL' OR severity='critical'", db_name))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='CRITICAL' OR severity='critical'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let high: u64 = self.client.query(&format!(
-            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='HIGH' OR severity='high'", db_name))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='HIGH' OR severity='high'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let medium: u64 = self.client.query(&format!(
-            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='MEDIUM' OR severity='medium'", db_name))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='MEDIUM' OR severity='medium'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         let low: u64 = self.client.query(&format!(
-            "SELECT count(DISTINCT src_ip, dst_ip) FROM {}.ndr_hits WHERE severity='LOW' OR severity='low'", db_name))
+            "SELECT count() FROM {}.ndr_hits WHERE severity='LOW' OR severity='low'", db_name))
             .fetch_one::<u64>().await.unwrap_or(0);
         Ok(serde_json::json!({
             "critical":critical,"high":high,

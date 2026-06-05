@@ -419,12 +419,12 @@
       </div>
     </div>
   </section>
-
+#admin
   <section *ngIf="activeTab === 'announcements'" class="admin-panel">
     <div class="panel-head">
       <div>
         <h3>Announcements</h3>
-        <p>Create frontend preview notices for tenant admins, maintenance, and platform updates.</p>
+        <p>Create notices for tenant admins, maintenance, and platform updates.</p>
       </div>
       <button class="primary-action" type="button" (click)="showAddAnnouncement=true">
         <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
@@ -449,6 +449,10 @@
           {{ tenant.name }}
         </option>
       </select>
+      <button class="secondary-action" type="button" (click)="loadAnnouncements()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
+      </button>
     </div>
 
     <div class="announcement-summary">
@@ -456,15 +460,17 @@
         <strong>{{ activeAnnouncements }} active announcements</strong>
         <span>{{ filteredAnnouncements.length }} announcements shown</span>
       </div>
-      <span class="status-pill active">Frontend preview</span>
+      <span class="status-pill active">Backend synced</span>
     </div>
 
-    <div *ngIf="filteredAnnouncements.length === 0" class="empty-state">
+    <div *ngIf="loadingAnnouncements" class="loading-state">Loading announcements...</div>
+
+    <div *ngIf="!loadingAnnouncements && filteredAnnouncements.length === 0" class="empty-state">
       <strong>No announcements found</strong>
       <span>Create an announcement or adjust your search.</span>
     </div>
 
-    <div *ngIf="filteredAnnouncements.length > 0" class="announcement-list">
+    <div *ngIf="!loadingAnnouncements && filteredAnnouncements.length > 0" class="announcement-list">
       <article *ngFor="let announcement of filteredAnnouncements" class="announcement-row">
         <div class="announcement-main">
           <span [class]="'announcement-type ' + announcementTypeClass(announcement.type)">
@@ -490,6 +496,14 @@
             (click)="toggleAnnouncement(announcement)"
           >
             {{ announcement.active ? 'Deactivate' : 'Reactivate' }}
+          </button>
+          <button
+            class="danger-icon"
+            type="button"
+            title="Delete announcement"
+            (click)="requestDeleteAnnouncement(announcement)"
+          >
+            <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
           </button>
         </div>
       </article>
@@ -552,7 +566,7 @@
       <div class="modal-head">
         <div>
           <h3>Add Announcement</h3>
-          <p>Create a frontend-only announcement preview.</p>
+          <p>Create an announcement notification for selected users.</p>
         </div>
         <button type="button" class="icon-button" (click)="closeAddAnnouncement()">
           <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
@@ -609,15 +623,59 @@
       </label>
 
       <div class="announcement-date-grid">
-        <label class="form-field">
-          <span>Start Time</span>
-          <input [(ngModel)]="newAnnouncement.starts_at" type="datetime-local" />
-        </label>
+        <div class="form-field">
+          <span>Start Date & Time</span>
+          <div class="datetime-picker-row">
+            <input
+              [(ngModel)]="announcementStartDate"
+              type="date"
+              class="datetime-part date-part"
+              (ngModelChange)="onStartDateTimeChange()"
+            />
+            <select
+              [(ngModel)]="announcementStartTime"
+              class="datetime-part time-part"
+              (ngModelChange)="onStartDateTimeChange()"
+            >
+              <option value="">— time —</option>
+              <option *ngFor="let t of timeSlots" [value]="t.value">{{ t.label }}</option>
+            </select>
+            <button
+              *ngIf="announcementStartDate || announcementStartTime"
+              type="button"
+              class="datetime-clear"
+              title="Clear start time"
+              (click)="clearStartDateTime()"
+            >✕</button>
+          </div>
+        </div>
 
-        <label class="form-field">
-          <span>End Time</span>
-          <input [(ngModel)]="newAnnouncement.ends_at" type="datetime-local" />
-        </label>
+        <div class="form-field">
+          <span>End Date & Time</span>
+          <div class="datetime-picker-row">
+            <input
+              [(ngModel)]="announcementEndDate"
+              type="date"
+              class="datetime-part date-part"
+              (ngModelChange)="onEndDateTimeChange()"
+            />
+            <select
+              [(ngModel)]="announcementEndTime"
+              class="datetime-part time-part"
+              (ngModelChange)="onEndDateTimeChange()"
+            >
+              <option value="">— time —</option>
+              <option *ngFor="let t of timeSlots" [value]="t.value">{{ t.label }}</option>
+            </select>
+            <button
+              *ngIf="announcementEndDate || announcementEndTime"
+              type="button"
+              class="datetime-clear"
+              title="Clear end time"
+              (click)="clearEndDateTime()"
+            >✕</button>
+          </div>
+        </div>
       </div>
 
       <label class="toggle-field">
@@ -629,12 +687,39 @@
         <button
           class="primary-action"
           type="button"
-          [disabled]="!canCreateAnnouncement"
+          [disabled]="savingAnnouncement || !canCreateAnnouncement"
           (click)="addAnnouncement()"
         >
-          Create Announcement
+          {{ savingAnnouncement ? 'Creating...' : 'Create Announcement' }}
         </button>
         <button class="secondary-action" type="button" (click)="closeAddAnnouncement()">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="pendingDeleteAnnouncement" class="modal-backdrop">
+    <div class="modal-panel compact">
+      <div class="modal-head">
+        <div>
+          <h3>Delete Announcement</h3>
+          <p>This permanently removes "{{ pendingDeleteAnnouncement.title }}".</p>
+        </div>
+        <button type="button" class="icon-button" (click)="cancelDeleteAnnouncement()">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <div class="warning-box">
+        Deactivating is safer — only delete if this announcement should be permanently removed.
+      </div>
+
+      <div class="modal-actions">
+        <button class="danger-action solid" type="button" (click)="confirmDeleteAnnouncement()">
+          Delete Announcement
+        </button>
+        <button class="secondary-action" type="button" (click)="cancelDeleteAnnouncement()">
           Cancel
         </button>
       </div>
