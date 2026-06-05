@@ -241,3 +241,26 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_commands
 )
 ENGINE = ReplacingMergeTree(created_at)
 ORDER BY (tenant_id, sensor_id, created_at);
+
+CREATE TABLE IF NOT EXISTS ndr.support_messages
+(
+    id              String DEFAULT toString(generateUUIDv4()),
+    tenant_id       String,
+    sender_username String,
+    sender_role     String,
+    subject         String,
+    category        String DEFAULT 'General',
+    message         String,
+    status          String DEFAULT 'open',
+    admin_reply     String DEFAULT '',
+    replied_by      String DEFAULT '',
+    forwarded       UInt8 DEFAULT 0,
+    forwarded_by    String DEFAULT '',
+    deleted         UInt8 DEFAULT 0,
+    created_at      DateTime DEFAULT now(),
+    updated_at      DateTime DEFAULT now(),
+    replied_at      Nullable(DateTime),
+    forwarded_at    Nullable(DateTime)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY id;
