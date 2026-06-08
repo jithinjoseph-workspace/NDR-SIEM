@@ -1,4 +1,5 @@
 /* ─── Login Page ────────────────────────────────────────────────────────── */
+/* Readability pass: all text values lifted for legibility on dark BG */
 
 /* Root wrapper */
 .login-root {
@@ -123,9 +124,9 @@
 
 .login-card-heading {
   font-family: 'Inter', sans-serif;
-  font-size: 1rem;
+  font-size: 1.05rem;
   font-weight: 600;
-  color: #ffffff;
+  color: #f0f4ff;        /* slightly warm-white, more vivid */
   margin: 0 0 1.75rem;
 }
 
@@ -156,11 +157,11 @@
 
 .login-label {
   display: block;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #a4abbf;
+  color: #c8cfe0;        /* was #a4abbf — lifted for legibility */
   margin-bottom: 0.5rem;
 }
 
@@ -170,12 +171,95 @@
   align-items: center;
 }
 
+/* ── Live username status ─────────────────────────────────────────────── */
+.username-status {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding-left: 0.25rem;
+  animation: fade-in 0.15s ease;
+}
+.username-status svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+.username-status--checking {
+  color: #a4abbf;
+}
+.username-status--checking .login-spinner {
+  width: 13px;
+  height: 13px;
+  animation: spin 0.9s linear infinite;
+}
+.username-status--found {
+  color: #69f6b8;
+}
+.username-status--not-found {
+  color: #ff9690;
+}
+
+/* Input border colour when status is known */
+.input-found {
+  border-color: rgba(105, 246, 184, 0.5) !important;
+}
+.input-not-found {
+  border-color: rgba(255, 113, 108, 0.45) !important;
+}
+
+/* Extra right padding so typed text doesn't overlap the status icon */
+.login-input--has-status {
+  padding-right: 2.75rem;
+}
+
+/* ── Inline status icon (right side of input) ─────────────────────────── */
+.input-status-icon {
+  position: absolute;
+  right: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+  animation: fade-in 0.15s ease;
+}
+.input-status-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.input-status-icon--checking {
+  color: #a4abbf;
+}
+.input-status-icon--checking .login-spinner {
+  width: 15px;
+  height: 15px;
+  animation: spin 0.9s linear infinite;
+}
+.input-status-icon--found {
+  color: #69f6b8;
+  /* Pop-in scale effect */
+  animation: tick-pop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+}
+.input-status-icon--not-found {
+  color: #ff9690;
+}
+
+@keyframes tick-pop {
+  0%   { transform: scale(0.4); opacity: 0; }
+  60%  { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+
 .field-icon {
   position: absolute;
   left: 0.875rem;
   width: 16px;
   height: 16px;
-  color: #6e7588;
+  color: #8b94ab;        /* was #6e7588 — lifted so icons are readable */
   pointer-events: none;
   flex-shrink: 0;
 }
@@ -186,7 +270,7 @@
   border: 1px solid rgba(110, 117, 136, 0.25);
   border-radius: 12px;
   padding: 0.75rem 1rem 0.75rem 2.75rem;
-  color: #ffffff;
+  color: #e8edf8;        /* crisp white text for typed input */
   font-size: 0.875rem;
   font-family: 'Inter', sans-serif;
   outline: none;
@@ -194,7 +278,7 @@
   box-sizing: border-box;
 }
 .login-input::placeholder {
-  color: rgba(164, 171, 191, 0.4);
+  color: rgba(180, 188, 210, 0.55); /* was 0.4 — more visible hint text */
 }
 .login-input:focus {
   border-color: rgba(105, 246, 184, 0.45);
@@ -217,13 +301,13 @@
   background: none;
   border: none;
   cursor: pointer;
-  color: #6e7588;
+  color: #8b94ab;        /* was #6e7588 — visible toggle icon */
   padding: 0.25rem;
   border-radius: 6px;
   transition: color 0.15s;
 }
 .toggle-pw:hover {
-  color: #a4abbf;
+  color: #dde3f0;
 }
 .toggle-pw svg {
   width: 16px;
@@ -289,7 +373,7 @@
 
 .hint-label {
   font-size: 0.7125rem;
-  color: #6e7588;
+  color: #a4abbf;        /* was #6e7588 — readable label */
   margin-right: 0.25rem;
 }
 .hint-cred {
@@ -301,7 +385,7 @@
   border-radius: 4px;
 }
 .hint-sep {
-  color: #6e7588;
+  color: #8b94ab;        /* was #6e7588 */
   font-size: 0.7125rem;
 }
 
@@ -309,7 +393,7 @@
 .login-footer {
   text-align: center;
   font-size: 0.7rem;
-  color: #6e7588;
+  color: #8b94ab;        /* was #6e7588 — footer now legible */
   margin-top: 1.5rem;
   letter-spacing: 0.02em;
 }

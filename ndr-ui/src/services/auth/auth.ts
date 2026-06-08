@@ -57,6 +57,15 @@ export class AuthService implements OnDestroy {
     );
   }
 
+  /** Check if a username exists in the database (no auth required). */
+  checkUsername(username: string): Observable<{ exists: boolean }> {
+    return this.http.get<{ exists: boolean }>(
+      `${this.baseUrl}/auth/check-username`,
+      { params: { username } }
+    );
+  }
+
+
   logout() {
     // Stop polling before clearing state so any in-flight poll doesn't restart it
     this.stopSessionPoll();

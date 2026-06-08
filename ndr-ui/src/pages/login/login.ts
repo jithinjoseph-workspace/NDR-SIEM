@@ -1,9 +1,10 @@
-import { Component, ChangeDetectorRef } from '@angular/core';
+import { Component, ChangeDetectorRef, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth/auth';
 import { Websocket } from '../../services/websocket/websocket';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-login',
@@ -12,12 +13,17 @@ import { Websocket } from '../../services/websocket/websocket';
   templateUrl: './login.html',
   styleUrl: './login.css'
 })
-export class Login {
+export class Login implements OnDestroy {
   username = '';
   password = '';
   loading = false;
   error = '';
   showPassword = false;
+
+  // ── Live username check ──────────────────────────────────────────────────
+  usernameStatus: 'idle' | 'checking' | 'found' | 'not_found' = 'idle';
+  private usernameTimer: any = null;
+  private usernameCheckSub: Subscription | null = null;
 
   constructor(
     private auth: AuthService,
@@ -28,6 +34,40 @@ export class Login {
     if (this.auth.isLoggedIn()) {
       this.router.navigate([this.auth.getDefaultRoute()]);
     }
+  }
+
+  ngOnDestroy(): void {
+    clearTimeout(this.usernameTimer);
+    this.usernameCheckSub?.unsubscribe();
+  }
+
+  /** Called on every keystroke in the username field. Debounces 400ms. */
+  onUsernameChange(): void {
+    clearTimeout(this.usernameTimer);
+    this.usernameCheckSub?.unsubscribe();
+
+    if (!this.username.trim()) {
+      this.usernameStatus = 'idle';
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.usernameStatus = 'checking';
+    this.cdr.detectChanges();
+
+    this.usernameTimer = setTimeout(() => {
+      this.usernameCheckSub = this.auth.checkUsername(this.username.trim()).subscribe({
+        next: (res) => {
+          this.usernameStatus = res.exists ? 'found' : 'not_found';
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          // Network error — silently reset; don't block the user from trying to log in
+          this.usernameStatus = 'idle';
+          this.cdr.detectChanges();
+        }
+      });
+    }, 400);
   }
 
   login() {
@@ -80,3 +120,4 @@ export class Login {
     });
   }
 }
+
