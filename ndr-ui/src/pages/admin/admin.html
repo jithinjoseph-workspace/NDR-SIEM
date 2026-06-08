@@ -12,10 +12,7 @@
     </div>
   </div>
 
-  <div
-    *ngIf="userMsg"
-    [class]="'admin-message ' + (userMsgType === 'success' ? 'success' : 'error')"
-  >
+  <div *ngIf="userMsg" [class]="'admin-message ' + (userMsgType === 'success' ? 'success' : 'error')">
     {{ userMsg }}
   </div>
 
@@ -47,43 +44,23 @@
   </section>
 
   <div class="admin-tabs" role="tablist" aria-label="Super admin sections">
-    <button
-      type="button"
-      (click)="activeTab='tenants'"
-      [class.active]="activeTab === 'tenants'"
-    >
+    <button type="button" (click)="activeTab='tenants'" [class.active]="activeTab === 'tenants'">
       <lucide-icon [name]="BuildingIcon" class="w-4 h-4"></lucide-icon>
       Tenants
     </button>
-    <button
-      type="button"
-      (click)="activeTab='users'"
-      [class.active]="activeTab === 'users'"
-    >
+    <button type="button" (click)="activeTab='users'" [class.active]="activeTab === 'users'">
       <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
       Users
     </button>
-    <button
-      type="button"
-      (click)="activeTab='engines'"
-      [class.active]="activeTab === 'engines'"
-    >
+    <button type="button" (click)="activeTab='engines'" [class.active]="activeTab === 'engines'">
       <lucide-icon [name]="GaugeIcon" class="w-4 h-4"></lucide-icon>
       Engines
     </button>
-    <button
-      type="button"
-      (click)="activeTab='sensors'"
-      [class.active]="activeTab === 'sensors'"
-    >
+    <button type="button" (click)="activeTab='sensors'" [class.active]="activeTab === 'sensors'">
       <lucide-icon [name]="KeyIcon" class="w-4 h-4"></lucide-icon>
       Sensors
     </button>
-    <button
-      type="button"
-      (click)="activeTab='announcements'"
-      [class.active]="activeTab === 'announcements'"
-    >
+    <button type="button" (click)="activeTab='announcements'" [class.active]="activeTab === 'announcements'">
       <lucide-icon [name]="AnnouncementIcon" class="w-4 h-4"></lucide-icon>
       Announcements
     </button>
@@ -104,11 +81,7 @@
     <div class="toolbar">
       <label class="search-field">
         <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
-        <input
-          [(ngModel)]="tenantSearch"
-          type="search"
-          placeholder="Search tenants"
-        />
+        <input [(ngModel)]="tenantSearch" type="search" placeholder="Search tenants" />
       </label>
       <button class="secondary-action" type="button" (click)="loadTenants()">
         <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
@@ -144,12 +117,8 @@
           <button class="icon-button" type="button" title="Edit tenant" (click)="openEditTenant(tenant)">
             <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
           </button>
-          <button
-            class="secondary-action compact-action"
-            type="button"
-            [disabled]="tenant.id === 'default'"
-            (click)="setTenantActive(tenant, !tenant.active)"
-          >
+          <button class="secondary-action compact-action" type="button" [disabled]="tenant.id === 'default'"
+            (click)="setTenantActive(tenant, !tenant.active)">
             {{ tenant.active ? 'Deactivate' : 'Reactivate' }}
           </button>
         </div>
@@ -172,11 +141,7 @@
     <div class="toolbar user-toolbar">
       <label class="search-field">
         <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
-        <input
-          [(ngModel)]="userSearch"
-          type="search"
-          placeholder="Search users or roles"
-        />
+        <input [(ngModel)]="userSearch" type="search" placeholder="Search users or roles" />
       </label>
       <select [(ngModel)]="selectedTenant" class="tenant-filter">
         <option value="all">All tenants</option>
@@ -217,58 +182,72 @@
       <span>Create a user or adjust your search.</span>
     </div>
 
-    <div *ngIf="!loadingUsers && filteredTenantAdmins.length > 0" class="admin-table">
-      <div class="table-row table-head">
-        <span>User</span>
-        <span>Tenant</span>
-        <span>Role</span>
-        <span>Status</span>
-        <span>Actions</span>
-      </div>
+    <div *ngIf="!loadingUsers && filteredTenantAdmins.length > 0" class="user-groups">
+      <div *ngFor="let group of usersByTenant" class="tenant-group">
 
-      <div *ngFor="let user of filteredTenantAdmins" class="table-row">
-        <div class="user-cell">
-          <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
-          <div>
-            <strong>{{ user.username }}</strong>
-            <span>{{ user.created_at | date:'short' }}</span>
+        <!-- Accordion Header -->
+        <div class="tenant-group-header" (click)="toggleTenantGroup(group.tenantId)">
+          <div class="tenant-group-title">
+            <div class="tenant-mark">{{ group.tenantName.charAt(0).toUpperCase() }}</div>
+            <strong>{{ group.tenantName }}</strong>
+            <span class="group-count">{{ group.users.length }} user{{ group.users.length !== 1 ? 's' : '' }}</span>
+            <span [class]="'status-pill ' + (group.isActive ? 'active' : 'inactive')">
+              {{ group.isActive ? 'Active' : 'Inactive' }}
+            </span>
+          </div>
+          <lucide-icon
+            [name]="isGroupCollapsed(group.tenantId) ? ChevronRightIcon : ChevronDownIcon"
+            class="w-4 h-4 chevron-icon"
+          ></lucide-icon>
+        </div>
+
+        <!-- Collapsible Table -->
+        <div *ngIf="!isGroupCollapsed(group.tenantId)" class="tenant-group-body admin-table">
+          <div class="table-row table-head">
+            <span>User</span>
+            <span>Role</span>
+            <span>Status</span>
+            <span>Actions</span>
+          </div>
+
+          <div *ngFor="let user of group.users" class="table-row">
+            <div class="user-cell">
+              <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
+              <div>
+                <strong>{{ user.username }}</strong>
+                <span>{{ user.created_at | date:'short' }}</span>
+              </div>
+            </div>
+            <span class="role-pill">{{ roleLabel(user.role) }}</span>
+            <span [class]="'status-pill ' + userStatusClass(user)">
+              {{ userStatusLabel(user) }}
+            </span>
+            <div class="row-actions action-row">
+              <button class="icon-button" type="button" title="Edit user" (click)="openEditUser(user)">
+                <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+              </button>
+              <button
+                *ngIf="user.username !== currentUser?.username"
+                class="secondary-action compact-action"
+                type="button"
+                (click)="setUserActive(user, user.active === false)"
+              >
+                {{ user.active === false ? 'Reactivate' : 'Deactivate' }}
+              </button>
+              <button
+                *ngIf="user.username !== currentUser?.username"
+                class="danger-icon" type="button" title="Delete user"
+                (click)="requestDeleteUser(user)"
+              >
+                <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+              </button>
+              <span *ngIf="user.username === currentUser?.username" class="muted-note">
+                Current user
+              </span>
+            </div>
           </div>
         </div>
-        <span>{{ tenantName(user.tenant_id) }}</span>
-        <span class="role-pill">{{ roleLabel(user.role) }}</span>
-        <span [class]="'status-pill ' + userStatusClass(user)">
-          {{ userStatusLabel(user) }}
-        </span>
-        <div class="row-actions action-row">
-          <button
-            class="icon-button"
-            type="button"
-            title="Edit user"
-            (click)="openEditUser(user)"
-          >
-            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
-          </button>
-          <button
-            *ngIf="user.username !== currentUser?.username"
-            class="secondary-action compact-action"
-            type="button"
-            (click)="setUserActive(user, user.active === false)"
-          >
-            {{ user.active === false ? 'Reactivate' : 'Deactivate' }}
-          </button>
-          <button
-            *ngIf="user.username !== currentUser?.username"
-            class="danger-icon"
-            type="button"
-            title="Delete user"
-            (click)="requestDeleteUser(user)"
-          >
-            <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
-          </button>
-          <span *ngIf="user.username === currentUser?.username" class="muted-note">
-            Current user
-          </span>
-        </div>
+
       </div>
     </div>
   </section>
@@ -287,12 +266,7 @@
           <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
           Refresh
         </button>
-        <button
-          class="primary-action"
-          type="button"
-          [disabled]="scaling"
-          (click)="scaleUp()"
-        >
+        <button class="primary-action" type="button" [disabled]="scaling" (click)="scaleUp()">
           <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
           {{ scaling ? 'Starting...' : 'Add Engine' }}
         </button>
@@ -315,13 +289,9 @@
             <span>{{ engine.status }}</span>
           </div>
         </div>
-        <button
-          class="danger-action"
-          type="button"
-          [disabled]="engines.length <= 1"
+        <button class="danger-action" type="button" [disabled]="engines.length <= 1"
           [title]="engines.length <= 1 ? 'Keep at least one engine running' : 'Stop engine'"
-          (click)="requestStopEngine(engine.name)"
-        >
+          (click)="requestStopEngine(engine.name)">
           Stop
         </button>
       </div>
@@ -353,18 +323,11 @@
 
       <label class="form-field">
         <span>Sensor Name</span>
-        <input
-          [(ngModel)]="newSensorKey.name"
-          name="sensorName"
-          placeholder="Office gateway sensor"
-        />
+        <input [(ngModel)]="newSensorKey.name" name="sensorName" placeholder="Office gateway sensor" />
       </label>
 
-      <button
-        class="primary-action"
-        type="submit"
-        [disabled]="creatingSensorKey || !newSensorKey.tenant_id || !newSensorKey.name.trim()"
-      >
+      <button class="primary-action" type="submit"
+        [disabled]="creatingSensorKey || !newSensorKey.tenant_id || !newSensorKey.name.trim()">
         <lucide-icon [name]="KeyIcon" class="w-4 h-4"></lucide-icon>
         {{ creatingSensorKey ? 'Creating...' : 'Create Key' }}
       </button>
@@ -407,19 +370,15 @@
         <span *ngIf="key.last_seen">{{ key.last_seen | date:'short' }}</span>
         <span *ngIf="!key.last_seen">Never</span>
         <div class="row-actions action-row">
-          <button
-            class="danger-action compact-action"
-            type="button"
-            [disabled]="!key.active"
-            (click)="revokeSensorKey(key)"
-          >
+          <button class="danger-action compact-action" type="button" [disabled]="!key.active"
+            (click)="revokeSensorKey(key)">
             Revoke
           </button>
         </div>
       </div>
     </div>
   </section>
-#admin
+
   <section *ngIf="activeTab === 'announcements'" class="admin-panel">
     <div class="panel-head">
       <div>
@@ -435,11 +394,7 @@
     <div class="toolbar announcement-toolbar">
       <label class="search-field">
         <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
-        <input
-          [(ngModel)]="announcementSearch"
-          type="search"
-          placeholder="Search announcements"
-        />
+        <input [(ngModel)]="announcementSearch" type="search" placeholder="Search announcements" />
       </label>
       <select [(ngModel)]="announcementAudience" class="tenant-filter">
         <option value="all_audiences">All audiences</option>
@@ -490,19 +445,11 @@
           <span [class]="'status-pill ' + (announcement.active ? 'active' : 'inactive')">
             {{ announcement.active ? 'Active' : 'Inactive' }}
           </span>
-          <button
-            class="secondary-action compact-action"
-            type="button"
-            (click)="toggleAnnouncement(announcement)"
-          >
+          <button class="secondary-action compact-action" type="button" (click)="toggleAnnouncement(announcement)">
             {{ announcement.active ? 'Deactivate' : 'Reactivate' }}
           </button>
-          <button
-            class="danger-icon"
-            type="button"
-            title="Delete announcement"
-            (click)="requestDeleteAnnouncement(announcement)"
-          >
+          <button class="danger-icon" type="button" title="Delete announcement"
+            (click)="requestDeleteAnnouncement(announcement)">
             <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
           </button>
         </div>
@@ -526,32 +473,20 @@
 
       <label class="form-field">
         <span>Company Name</span>
-        <input
-          [(ngModel)]="newTenant.name"
-          (ngModelChange)="onTenantNameChange()"
-          placeholder="Acme Corporation"
-        />
+        <input [(ngModel)]="newTenant.name" (ngModelChange)="onTenantNameChange()" placeholder="Acme Corporation" />
       </label>
 
       <label class="form-field">
         <span>Tenant ID</span>
-        <input
-          [(ngModel)]="newTenant.id"
-          (ngModelChange)="onTenantIdChange()"
-          placeholder="acme-corporation"
-        />
+        <input [(ngModel)]="newTenant.id" (ngModelChange)="onTenantIdChange()" placeholder="acme-corporation" />
         <small *ngIf="newTenant.id && tenantIdExists(newTenant.id)">
           This tenant ID already exists.
         </small>
       </label>
 
       <div class="modal-actions">
-        <button
-          class="primary-action"
-          type="button"
-          [disabled]="savingTenant || !canCreateTenant"
-          (click)="addTenant()"
-        >
+        <button class="primary-action" type="button" [disabled]="savingTenant || !canCreateTenant"
+          (click)="addTenant()">
           {{ savingTenant ? 'Creating...' : 'Create Tenant' }}
         </button>
         <button class="secondary-action" type="button" (click)="showAddTenant=false">
@@ -575,19 +510,13 @@
 
       <label class="form-field">
         <span>Title</span>
-        <input
-          [(ngModel)]="newAnnouncement.title"
-          placeholder="Scheduled maintenance"
-        />
+        <input [(ngModel)]="newAnnouncement.title" placeholder="Scheduled maintenance" />
       </label>
 
       <label class="form-field">
         <span>Message</span>
-        <textarea
-          [(ngModel)]="newAnnouncement.message"
-          rows="4"
-          placeholder="Write the announcement message"
-        ></textarea>
+        <textarea [(ngModel)]="newAnnouncement.message" rows="4"
+          placeholder="Write the announcement message"></textarea>
       </label>
 
       <label class="form-field">
@@ -602,10 +531,7 @@
 
       <label class="form-field">
         <span>Audience</span>
-        <select
-          [(ngModel)]="newAnnouncement.audience"
-          (ngModelChange)="onAnnouncementAudienceChange()"
-        >
+        <select [(ngModel)]="newAnnouncement.audience" (ngModelChange)="onAnnouncementAudienceChange()">
           <option value="tenant_admins">Tenant Admins</option>
           <option value="all">All Users</option>
           <option value="tenant">Specific Tenant</option>
@@ -624,57 +550,38 @@
 
       <div class="announcement-date-grid">
         <div class="form-field">
-          <span>Start Date & Time</span>
+          <span>Start Date &amp; Time <small style="color:#94a3b8;font-weight:400;text-transform:none;">(leave blank to start immediately)</small></span>
           <div class="datetime-picker-row">
-            <input
-              [(ngModel)]="announcementStartDate"
-              type="date"
-              class="datetime-part date-part"
-              (ngModelChange)="onStartDateTimeChange()"
-            />
-            <select
-              [(ngModel)]="announcementStartTime"
-              class="datetime-part time-part"
-              (ngModelChange)="onStartDateTimeChange()"
-            >
+            <input [(ngModel)]="announcementStartDate" type="date" class="datetime-part date-part"
+              [min]="todayDate"
+              (ngModelChange)="onStartDateTimeChange()" />
+            <select [(ngModel)]="announcementStartTime" class="datetime-part time-part"
+              (ngModelChange)="onStartDateTimeChange()">
               <option value="">— time —</option>
-              <option *ngFor="let t of timeSlots" [value]="t.value">{{ t.label }}</option>
+              <option *ngFor="let t of filteredStartTimeSlots" [value]="t.value">{{ t.label }}</option>
             </select>
-            <button
-              *ngIf="announcementStartDate || announcementStartTime"
-              type="button"
-              class="datetime-clear"
-              title="Clear start time"
-              (click)="clearStartDateTime()"
-            >✕</button>
+            <button *ngIf="announcementStartDate || announcementStartTime" type="button" class="datetime-clear"
+              title="Clear start time" (click)="clearStartDateTime()">✕</button>
           </div>
         </div>
 
         <div class="form-field">
-          <span>End Date & Time</span>
+          <span>End Date &amp; Time</span>
           <div class="datetime-picker-row">
-            <input
-              [(ngModel)]="announcementEndDate"
-              type="date"
-              class="datetime-part date-part"
-              (ngModelChange)="onEndDateTimeChange()"
-            />
-            <select
-              [(ngModel)]="announcementEndTime"
-              class="datetime-part time-part"
-              (ngModelChange)="onEndDateTimeChange()"
-            >
+            <input [(ngModel)]="announcementEndDate" type="date" class="datetime-part date-part"
+              [min]="announcementStartDate || todayDate"
+              (ngModelChange)="onEndDateTimeChange()" />
+            <select [(ngModel)]="announcementEndTime" class="datetime-part time-part"
+              (ngModelChange)="onEndDateTimeChange()">
               <option value="">— time —</option>
-              <option *ngFor="let t of timeSlots" [value]="t.value">{{ t.label }}</option>
+              <option *ngFor="let t of filteredEndTimeSlots" [value]="t.value">{{ t.label }}</option>
             </select>
-            <button
-              *ngIf="announcementEndDate || announcementEndTime"
-              type="button"
-              class="datetime-clear"
-              title="Clear end time"
-              (click)="clearEndDateTime()"
-            >✕</button>
+            <button *ngIf="announcementEndDate || announcementEndTime" type="button" class="datetime-clear"
+              title="Clear end time" (click)="clearEndDateTime()">✕</button>
           </div>
+          <small *ngIf="endBeforeStartError" style="color:#fca5a5;">
+            ⚠ End time must be after the start time.
+          </small>
         </div>
       </div>
 
@@ -684,12 +591,8 @@
       </label>
 
       <div class="modal-actions">
-        <button
-          class="primary-action"
-          type="button"
-          [disabled]="savingAnnouncement || !canCreateAnnouncement"
-          (click)="addAnnouncement()"
-        >
+        <button class="primary-action" type="button" [disabled]="savingAnnouncement || !canCreateAnnouncement"
+          (click)="addAnnouncement()">
           {{ savingAnnouncement ? 'Creating...' : 'Create Announcement' }}
         </button>
         <button class="secondary-action" type="button" (click)="closeAddAnnouncement()">
@@ -772,11 +675,7 @@
 
       <label class="form-field">
         <span>Username</span>
-        <input
-          [(ngModel)]="newUser.username"
-          placeholder="admin username"
-          maxlength="50"
-        />
+        <input [(ngModel)]="newUser.username" placeholder="admin username" maxlength="50" />
         <small *ngIf="newUserUsernameError">
           {{ newUserUsernameError }}
         </small>
@@ -784,11 +683,7 @@
 
       <label class="form-field">
         <span>Password</span>
-        <input
-          [(ngModel)]="newUser.password"
-          type="password"
-          placeholder="temporary password"
-        />
+        <input [(ngModel)]="newUser.password" type="password" placeholder="temporary password" />
         <small *ngFor="let error of newUserPasswordErrors">
           {{ error }}
         </small>
@@ -808,18 +703,13 @@
         <span>Tenant</span>
         <select [(ngModel)]="newUser.tenant_id" [disabled]="newUser.role === 'default_user'">
           <option value="" [hidden]="newUser.role === 'default_user'">Select tenant</option>
-          <option
-            *ngFor="let tenant of tenants"
-            [value]="tenant.id"
-            [hidden]="
+          <option *ngFor="let tenant of tenants" [value]="tenant.id" [hidden]="
               (newUser.role === 'tenant_admin' && tenant.id === 'default') ||
               (newUser.role === 'default_user' && tenant.id !== 'default')
-            "
-            [disabled]="
+            " [disabled]="
               (newUser.role === 'tenant_admin' && tenant.id === 'default') ||
               (newUser.role === 'default_user' && tenant.id !== 'default')
-            "
-          >
+            ">
             {{ tenant.name }}
           </option>
         </select>
@@ -827,12 +717,7 @@
       </label>
 
       <div class="modal-actions">
-        <button
-          class="primary-action"
-          type="button"
-          [disabled]="savingUser || !canCreateUser"
-          (click)="addUser()"
-        >
+        <button class="primary-action" type="button" [disabled]="savingUser || !canCreateUser" (click)="addUser()">
           {{ savingUser ? 'Creating...' : 'Create User' }}
         </button>
         <button class="secondary-action" type="button" (click)="showAddUser=false">
@@ -921,18 +806,13 @@
       <label class="form-field">
         <span>Tenant</span>
         <select [(ngModel)]="userForm.tenant_id" [disabled]="userForm.role === 'default_user'">
-          <option
-            *ngFor="let tenant of tenants"
-            [value]="tenant.id"
-            [hidden]="
+          <option *ngFor="let tenant of tenants" [value]="tenant.id" [hidden]="
               (userForm.role === 'tenant_admin' && tenant.id === 'default') ||
               (userForm.role === 'default_user' && tenant.id !== 'default')
-            "
-            [disabled]="
+            " [disabled]="
               (userForm.role === 'tenant_admin' && tenant.id === 'default') ||
               (userForm.role === 'default_user' && tenant.id !== 'default')
-            "
-          >
+            ">
             {{ tenant.name }}
           </option>
         </select>
@@ -953,12 +833,7 @@
       </label>
 
       <div class="modal-actions">
-        <button
-          class="primary-action"
-          type="button"
-          [disabled]="!canSaveUserEdit"
-          (click)="saveUserEdit()"
-        >
+        <button class="primary-action" type="button" [disabled]="!canSaveUserEdit" (click)="saveUserEdit()">
           Save User
         </button>
         <button class="secondary-action" type="button" (click)="closeEditUser()">
@@ -986,11 +861,7 @@
       </label>
 
       <label class="toggle-field">
-        <input
-          [(ngModel)]="tenantForm.active"
-          type="checkbox"
-          [disabled]="editingTenant.id === 'default'"
-        />
+        <input [(ngModel)]="tenantForm.active" type="checkbox" [disabled]="editingTenant.id === 'default'" />
         <span>Tenant is active</span>
       </label>
 
