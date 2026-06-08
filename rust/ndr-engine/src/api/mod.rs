@@ -1021,7 +1021,6 @@ tokio::spawn(async move {
         },
     });
 
-    let tenant_id = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
     if let Some(obj) = hit_msg.as_object_mut() {
         obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
