@@ -452,10 +452,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let settings = state.ch_storage
         .get_settings_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
-let store_threshold = settings["store_threshold"]
-    .as_f64().unwrap_or(10.0) as f32;
-let alert_threshold = settings["soar_threshold"]
-    .as_f64().unwrap_or(75.0) as f32;
+    let store_threshold    = settings["store_threshold"].as_f64().unwrap_or(10.0) as f32;
+    let alert_threshold    = settings["alert_threshold"].as_f64().unwrap_or(75.0) as f32;
+    let critical_threshold = settings["critical_threshold"].as_f64().unwrap_or(90.0) as u32;
+    let soar_threshold     = settings["soar_threshold"].as_f64().unwrap_or(75.0) as f32;
         
     let (src, dst) = match hit.source.as_str() {
         "zeek" => (
@@ -479,12 +479,26 @@ let alert_threshold = settings["soar_threshold"]
     // Enrich
     let enrichment = state.enrichment.enrich(src, dst);
 
-    // Score
-    let risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country);
+    // Score — use tenant-configured severity thresholds so critical_threshold
+    // and alert_threshold bands from the Settings page are respected.
+    let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country);
+    let severity = crate::scoring::Severity::from_score_with_thresholds(
+        raw_risk.score,
+        critical_threshold,
+        alert_threshold as u32,
+        50,
+        25,
+    );
+    let risk = crate::scoring::RiskResult {
+        score:    raw_risk.score,
+        severity,
+        tags:     raw_risk.tags,
+        reasons:  raw_risk.reasons,
+    };
 
     // SIGMA detection on both sides
-let mut detections = state.detection.read().await.check(&hit.zeek);
-detections.extend(state.detection.read().await.check(&hit.suricata));
+    let mut detections = state.detection.read().await.check(&hit.zeek);
+    detections.extend(state.detection.read().await.check(&hit.suricata));
 
     let cs      = hit.zeek.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);
@@ -553,8 +567,8 @@ detections.extend(state.detection.read().await.check(&hit.suricata));
     };
 
 
-// ── Execute playbooks directly ────────────────
-if risk.score >= alert_threshold {
+// ── Execute playbooks directly (gated on soar_threshold) ────────────────
+if risk.score >= soar_threshold {
 let playbooks = state.ch_storage
     .get_soar_playbooks().await
     .unwrap_or_default();
@@ -663,8 +677,8 @@ for pb in &playbooks {
 } // end playbooks threshold check
 
 
-// Execute integrations - only above alert threshold
-if risk.score >= alert_threshold {
+// Execute integrations — gated on soar_threshold (separate from alert display threshold)
+if risk.score >= soar_threshold {
 let integrations = state.ch_storage
     .get_integrations().await
     .unwrap_or_default();
@@ -936,7 +950,7 @@ for integration in &integrations {
 
 // ── Send webhook to Shuffle SOAR ──────────────
 // ── Send to Shuffle SOAR ──────────────────────
-if risk.score >= alert_threshold {
+if risk.score >= soar_threshold {
     let shuffle_url = std::env::var("SHUFFLE_WEBHOOK_URL")
         .unwrap_or_default();
 
