@@ -9,7 +9,8 @@ import { Websocket } from '../../services/websocket/websocket';
   selector: 'app-login',
   standalone: true,
   imports: [CommonModule, FormsModule],
-  templateUrl: './login.html'
+  templateUrl: './login.html',
+  styleUrl: './login.css'
 })
 export class Login {
   username = '';

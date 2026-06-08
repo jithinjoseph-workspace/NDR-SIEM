@@ -14,6 +14,7 @@ import {
   Settings,
   ShieldCheck,
   Square,
+  AlertTriangle,
 } from 'lucide-angular';
 import { Subscription, timer } from 'rxjs';
 import { filter } from 'rxjs/operators';
@@ -60,7 +61,13 @@ export class Setup implements OnInit, OnDestroy {
   creatingSensor = false;
   createdSensorKey: SensorKey | null = null;
   installCommand = '';
+  keyCopied = false;
+  commandCopied = false;
   cloudUrl = this.detectCloudUrl();
+
+  showErrorModal = false;
+  errorTitle = '';
+  errorMessage = '';
 
   private subs: Subscription[] = [];
   private currentRole = '';
@@ -76,6 +83,7 @@ export class Setup implements OnInit, OnDestroy {
   ShieldIcon = ShieldCheck;
   ActivityIcon = Activity;
   ServerIcon = Server;
+  AlertIcon = AlertTriangle;
 
   constructor(
     private api: Api,
@@ -120,6 +128,10 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   get canViewLocalSensor(): boolean {
+    return this.currentTenantId === 'default';
+  }
+
+  get isDefaultTenant(): boolean {
     return this.currentTenantId === 'default';
   }
 
@@ -179,14 +191,21 @@ export class Setup implements OnInit, OnDestroy {
     this.selectedInterface = data.interface || this.selectedInterface;
 
     if (
-      this.zeekStatus === 'running' ||
-      this.suricataStatus === 'running' ||
+      this.zeekStatus === 'running' &&
+      this.suricataStatus === 'running' &&
       this.vectorStatus === 'running'
     ) {
       this.status = 'Running';
     } else if (this.status !== 'Starting...' && this.status !== 'Stopping...') {
       this.status = 'Stopped';
     }
+  }
+
+  showError(title: string, message: string) {
+    this.errorTitle = title;
+    this.errorMessage = message;
+    this.showErrorModal = true;
+    this.cdr.detectChanges();
   }
 
   selectTab(tab: SetupTab) {
@@ -198,8 +217,13 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   applyInterface() {
-    this.api.setInterface(this.selectedInterface).subscribe(() => {
-      console.log('Interface set to', this.selectedInterface);
+    this.api.setInterface(this.selectedInterface).subscribe({
+      next: () => {
+        console.log('Interface set to', this.selectedInterface);
+      },
+      error: (error) => {
+        this.showError('Apply Interface Failed', error?.error?.message || 'Could not apply interface to local sensor. Please verify connection and try again.');
+      }
     });
   }
 
@@ -209,9 +233,10 @@ export class Setup implements OnInit, OnDestroy {
       next: () => {
         this.pollStatus('Running');
       },
-      error: () => {
+      error: (error) => {
         this.status = 'Stopped';
         this.cdr.detectChanges();
+        this.showError('Start Monitoring Failed', error?.error?.message || 'Failed to start local sensor monitoring services (Zeek, Suricata, Vector). Please check host status.');
       },
     });
   }
@@ -222,9 +247,10 @@ export class Setup implements OnInit, OnDestroy {
       next: () => {
         this.pollStatus('Stopped');
       },
-      error: () => {
+      error: (error) => {
         this.status = 'Running';
         this.cdr.detectChanges();
+        this.showError('Stop Monitoring Failed', error?.error?.message || 'Failed to stop local sensor monitoring services. Please verify status on host.');
       },
     });
   }
@@ -309,14 +335,50 @@ export class Setup implements OnInit, OnDestroy {
 
   copyCreatedSensorKey() {
     if (this.createdSensorKey?.key) {
-      this.copyText(this.createdSensorKey.key, 'Sensor key copied.');
+      this.keyCopied = false;
+      navigator.clipboard.writeText(this.createdSensorKey.key).then(
+        () => {
+          this.keyCopied = true;
+          this.externalActionMessage = 'Sensor key copied.';
+          this.externalError = '';
+          this.cdr.detectChanges();
+          setTimeout(() => {
+            this.keyCopied = false;
+            this.cdr.detectChanges();
+          }, 2500);
+        },
+        () => {
+          this.externalError = 'Failed to copy to clipboard.';
+          this.cdr.detectChanges();
+        }
+      );
     }
   }
 
   copyInstallCommand() {
     if (this.installCommand) {
-      this.copyText(this.installCommand, 'Install command copied.');
+      this.commandCopied = false;
+      navigator.clipboard.writeText(this.installCommand).then(
+        () => {
+          this.commandCopied = true;
+          this.externalActionMessage = 'Install command copied.';
+          this.externalError = '';
+          this.cdr.detectChanges();
+          setTimeout(() => {
+            this.commandCopied = false;
+            this.cdr.detectChanges();
+          }, 2500);
+        },
+        () => {
+          this.externalError = 'Failed to copy to clipboard.';
+          this.cdr.detectChanges();
+        }
+      );
     }
+  }
+
+  isSensorRunning(sensor: ExternalSensorCard): boolean {
+    return sensor.zeek === 'running' || sensor.suricata === 'running' || sensor.vector === 'running';
   }
 
   isCommandPending(sensor: ExternalSensorCard, command?: SensorControlCommand): boolean {
@@ -375,13 +437,18 @@ export class Setup implements OnInit, OnDestroy {
       this.api.getAgentStatus().subscribe({
         next: (data: any) => {
           if (data) {
-            const normalizedRunning =
-              this.normalizeStatus(data.zeek) === 'running' ||
-              this.normalizeStatus(data.suricata) === 'running' ||
+            const allRunning =
+              this.normalizeStatus(data.zeek) === 'running' &&
+              this.normalizeStatus(data.suricata) === 'running' &&
               this.normalizeStatus(data.vector) === 'running';
+            const noneRunning =
+              this.normalizeStatus(data.zeek) !== 'running' &&
+              this.normalizeStatus(data.suricata) !== 'running' &&
+              this.normalizeStatus(data.vector) !== 'running';
+
             const matched =
-              (expected === 'Running' && normalizedRunning) ||
-              (expected === 'Stopped' && !normalizedRunning);
+              (expected === 'Running' && allRunning) ||
+              (expected === 'Stopped' && noneRunning);
 
             if (matched || attempts >= 5) {
               this.status = 'Ready';
@@ -412,15 +479,25 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   private loadLocalSensorSetup() {
-    this.api.getInterfaces().subscribe(data => {
-      this.interfaces = data || [];
-      this.cdr.detectChanges();
+    this.api.getInterfaces().subscribe({
+      next: data => {
+        this.interfaces = data || [];
+        this.cdr.detectChanges();
+      },
+      error: error => {
+        this.showError('Interfaces Load Failed', error?.error?.message || 'Could not load network interfaces.');
+      }
     });
 
-    this.api.getAgentStatus().subscribe(data => {
-      if (data) {
-        this.updateStatus(data);
-        this.cdr.detectChanges();
+    this.api.getAgentStatus().subscribe({
+      next: data => {
+        if (data) {
+          this.updateStatus(data);
+          this.cdr.detectChanges();
+        }
+      },
+      error: error => {
+        this.showError('Sensor Status Load Failed', error?.error?.message || 'Could not retrieve local sensor service statuses.');
       }
     });
 

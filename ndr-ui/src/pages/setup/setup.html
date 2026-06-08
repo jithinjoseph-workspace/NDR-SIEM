@@ -61,6 +61,7 @@
       Local Sensor
     </button>
     <button
+      *ngIf="!isDefaultTenant"
       type="button"
       (click)="selectTab('external')"
       [class.active]="activeTab === 'external'"
@@ -154,16 +155,21 @@
           type="button"
           class="primary-action"
           (click)="startMonitoring()"
-          [disabled]="status === 'Starting...'"
+          [disabled]="status === 'Starting...' || status === 'Stopping...' || status === 'Running'"
         >
-          <lucide-icon [name]="PlayIcon" class="w-4 h-4"></lucide-icon>
-          {{ status === 'Starting...' ? 'Starting...' : 'Start Monitoring' }}
+          <lucide-icon [name]="PlayIcon" class="w-4 h-4"
+            *ngIf="status !== 'Running'"
+          ></lucide-icon>
+          <lucide-icon [name]="ShieldIcon" class="w-4 h-4"
+            *ngIf="status === 'Running'"
+          ></lucide-icon>
+          {{ status === 'Starting...' ? 'Starting...' : status === 'Running' ? 'Monitoring Active' : 'Start Monitoring' }}
         </button>
         <button
           type="button"
           class="stop-action"
           (click)="stopMonitoring()"
-          [disabled]="status === 'Stopped' || status === 'Stopping...' || status === 'Ready'"
+          [disabled]="localRunningCount === 0 || status === 'Stopping...' || status === 'Starting...'"
         >
           <lucide-icon [name]="StopIcon" class="w-4 h-4"></lucide-icon>
           {{ status === 'Stopping...' ? 'Stopping...' : 'Stop Monitoring' }}
@@ -296,16 +302,21 @@
             type="button"
             class="primary-action"
             (click)="controlExternalSensor(sensor, 'start')"
-            [disabled]="!sensor.active || isCommandPending(sensor)"
+            [disabled]="!sensor.active || isCommandPending(sensor) || isSensorRunning(sensor)"
+            [title]="isSensorRunning(sensor) ? 'Sensor is already running' : 'Start sensor monitoring'"
           >
-            {{ isCommandPending(sensor, 'start') ? 'Starting...' : 'Start' }}
+            <lucide-icon [name]="PlayIcon" class="w-4 h-4" *ngIf="!isCommandPending(sensor, 'start') && !isSensorRunning(sensor)"></lucide-icon>
+            <lucide-icon [name]="ShieldIcon" class="w-4 h-4" *ngIf="isSensorRunning(sensor) && !isCommandPending(sensor, 'start')"></lucide-icon>
+            {{ isCommandPending(sensor, 'start') ? 'Starting...' : isSensorRunning(sensor) ? 'Running' : 'Start' }}
           </button>
           <button
             type="button"
             class="stop-action"
             (click)="controlExternalSensor(sensor, 'stop')"
-            [disabled]="!sensor.active || isCommandPending(sensor)"
+            [disabled]="!sensor.active || isCommandPending(sensor) || !isSensorRunning(sensor)"
+            [title]="!isSensorRunning(sensor) ? 'Sensor is already stopped' : 'Stop sensor monitoring'"
           >
+            <lucide-icon [name]="StopIcon" class="w-4 h-4" *ngIf="!isCommandPending(sensor, 'stop')"></lucide-icon>
             {{ isCommandPending(sensor, 'stop') ? 'Stopping...' : 'Stop' }}
           </button>
           <button
@@ -313,7 +324,9 @@
             class="secondary-action compact"
             (click)="controlExternalSensor(sensor, 'restart')"
             [disabled]="!sensor.active || isCommandPending(sensor)"
+            title="Restart all sensor services"
           >
+            <lucide-icon [name]="RefreshIcon" class="w-4 h-4" *ngIf="!isCommandPending(sensor, 'restart')"></lucide-icon>
             {{ isCommandPending(sensor, 'restart') ? 'Restarting...' : 'Restart' }}
           </button>
         </div>
@@ -372,17 +385,27 @@
 
             <div class="secret-block">
               <code>{{ createdSensorKey.key }}</code>
-              <button type="button" class="secondary-action compact" (click)="copyCreatedSensorKey()">
-                <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
-                Copy Key
+              <button type="button"
+                class="secondary-action compact"
+                [class.copied]="keyCopied"
+                (click)="copyCreatedSensorKey()"
+                [disabled]="keyCopied"
+              >
+                <lucide-icon [name]="CopyIcon" class="w-4 h-4" *ngIf="!keyCopied"></lucide-icon>
+                {{ keyCopied ? '✓ Copied!' : 'Copy Key' }}
               </button>
             </div>
 
             <div class="command-block">
               <code>{{ installCommand }}</code>
-              <button type="button" class="secondary-action compact" (click)="copyInstallCommand()">
-                <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
-                Copy Command
+              <button type="button"
+                class="secondary-action compact"
+                [class.copied]="commandCopied"
+                (click)="copyInstallCommand()"
+                [disabled]="commandCopied"
+              >
+                <lucide-icon [name]="CopyIcon" class="w-4 h-4" *ngIf="!commandCopied"></lucide-icon>
+                {{ commandCopied ? '✓ Copied!' : 'Copy Command' }}
               </button>
             </div>
           </ng-container>
@@ -391,6 +414,37 @@
 
       <div class="modal-actions">
         <button type="button" class="secondary-action compact" (click)="showAddSensorModal = false">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error Modal -->
+  <div *ngIf="showErrorModal" class="modal-backdrop">
+    <div class="sensor-modal" style="border-color: rgba(255, 113, 106, 0.25); background: rgba(16, 25, 43, 0.99);">
+      <div class="modal-head">
+        <div>
+          <h3 style="color: #ff918b; display: flex; align-items: center; gap: 8px;">
+            <lucide-icon [name]="AlertIcon" class="w-5 h-5"></lucide-icon>
+            {{ errorTitle || 'Error Occurred' }}
+          </h3>
+          <p>An operation failed. Please review the details below.</p>
+        </div>
+        <button type="button" class="icon-close" (click)="showErrorModal = false" style="border-color: rgba(255, 113, 106, 0.2); color: #ff918b;">
+          x
+        </button>
+      </div>
+
+      <div class="sensor-step" style="border-color: rgba(255, 113, 106, 0.15); background: rgba(255, 113, 106, 0.03);">
+        <div class="step-content" style="padding-top: 4px;">
+          <h4 style="color: #f7f9ff;">Details</h4>
+          <p style="color: #ffb1ac; font-size: 13px; line-height: 1.6; margin: 0; white-space: pre-wrap;">{{ errorMessage }}</p>
+        </div>
+      </div>
+
+      <div class="modal-actions" style="margin-top: 24px;">
+        <button type="button" class="stop-action" (click)="showErrorModal = false" style="min-width: 100px;">
           Close
         </button>
       </div>
