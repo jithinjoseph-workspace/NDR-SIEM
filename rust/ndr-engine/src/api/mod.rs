@@ -4880,6 +4880,31 @@ pub async fn revoke_sensor_key_api(
     }
 }
 
+pub async fn reactivate_sensor_key_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" {
+        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can reactivate sensor keys"}));
+    }
+    
+    match state.ch_storage.reactivate_sensor_key(&id).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Sensor key reactivated"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
+
 pub async fn sensor_register(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,

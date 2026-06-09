@@ -370,9 +370,13 @@
         <span *ngIf="key.last_seen">{{ key.last_seen | date:'short' }}</span>
         <span *ngIf="!key.last_seen">Never</span>
         <div class="row-actions action-row">
-          <button class="danger-action compact-action" type="button" [disabled]="!key.active"
+          <button *ngIf="key.active" class="danger-action compact-action" type="button"
             (click)="revokeSensorKey(key)">
             Revoke
+          </button>
+          <button *ngIf="!key.active" class="secondary-action compact-action" type="button"
+            (click)="reactivateSensorKey(key)">
+            Reactivate
           </button>
         </div>
       </div>

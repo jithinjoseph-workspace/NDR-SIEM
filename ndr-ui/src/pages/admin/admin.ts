@@ -819,6 +819,26 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  reactivateSensorKey(key: SensorKey) {
+    if (key.active) return;
+    this.api.reactivateSensorKey(key.id).subscribe({
+      next: (data: any) => {
+        if (!data.status || data.status === 'ok') {
+          key.active = true;
+          this.showMsg('Sensor key reactivated', 'success');
+          this.loadSensorKeys();
+        } else {
+          this.showMsg(data.message || 'Failed to reactivate sensor key', 'error');
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.showMsg('Failed to reactivate sensor key', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
   closeSensorKeyModal() {
     this.showSensorKeyModal = false;
   }

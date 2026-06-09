@@ -2013,6 +2013,20 @@ pub async fn revoke_sensor_key(
     Ok(())
 }
 
+pub async fn reactivate_sensor_key(
+    &self,
+    id: &str,
+) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "ALTER TABLE ndr.sensor_keys \
+             UPDATE active = 1 \
+             WHERE id = '{}'", id
+        ))
+        .execute().await?;
+    Ok(())
+}
+
 pub async fn active_sensor_exists(
     &self,
     tenant_id: &str,
