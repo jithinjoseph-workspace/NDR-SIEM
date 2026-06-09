@@ -342,6 +342,22 @@
   -webkit-line-clamp: 2;
   overflow: hidden;
   white-space: normal;
+  transition: all 0.2s ease;
+}
+
+.announcement-card-body.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.expand-hint {
+  display: block;
+  margin-top: 4px;
+  color: #4d5c7a !important;
+  font-size: 10px !important;
+  font-style: normal;
+  letter-spacing: 0.02em;
 }
 
 .announcement-card-footer {

@@ -39,7 +39,7 @@
       </strong>
     </div>
 
-    <div *ngIf="canShowNotifications" class="notification-wrap" (focusout)="closeNotifications()">
+    <div *ngIf="canShowNotifications" class="notification-wrap">
       <button class="icon-button" aria-label="Notifications" (click)="openNotifications()">
         <lucide-icon [name]="BellIcon" class="w-5 h-5"></lucide-icon>
         <span *ngIf="notificationCount > 0">{{ notificationCount > 9 ? '9+' : notificationCount }}</span>
@@ -64,6 +64,8 @@
             *ngFor="let announcement of activeAnnouncements"
             class="notification-row announcement-notification"
             [class.unread-announcement]="!announcement.read"
+            (click)="toggleAnnouncementExpand(announcement.id)"
+            style="cursor:pointer"
           >
             <div class="announcement-card-inner">
               <div class="announcement-card-header">
@@ -73,7 +75,10 @@
                 <span *ngIf="!announcement.read" class="unread-dot" title="Unread"></span>
               </div>
               <strong class="announcement-card-title">{{ announcement.title }}</strong>
-              <p class="announcement-card-body">{{ announcement.message }}</p>
+              <p
+                class="announcement-card-body"
+                [class.expanded]="isAnnouncementExpanded(announcement.id)"
+              >{{ announcement.message }}</p>
               <div class="announcement-card-footer">
                 <em *ngIf="announcement.starts_at || announcement.start_at">
                   Starts {{ (announcement.starts_at || announcement.start_at) | date:'MMM d, h:mm a' }}
@@ -81,6 +86,7 @@
                 <em *ngIf="!announcement.starts_at && !announcement.start_at">
                   {{ announcement.created_at | date:'MMM d, h:mm a' }}
                 </em>
+                <em class="expand-hint">{{ isAnnouncementExpanded(announcement.id) ? 'Click to collapse' : 'Click to read more' }}</em>
               </div>
             </div>
           </div>
