@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -29,6 +29,19 @@ export class Navbar implements OnInit, OnDestroy {
   alertCount = 0;
   recentAlerts: ThreatNotification[] = [];
   activeAnnouncements: Announcement[] = [];
+  expandedAnnouncements = new Set<string>();
+
+  toggleAnnouncementExpand(id: string) {
+    if (this.expandedAnnouncements.has(id)) {
+      this.expandedAnnouncements.delete(id);
+    } else {
+      this.expandedAnnouncements.add(id);
+    }
+  }
+
+  isAnnouncementExpanded(id: string): boolean {
+    return this.expandedAnnouncements.has(id);
+  }
 
   suggestions = [
     { label: 'Network Logs', hint: 'View all events', route: '/logs', permission: 'logs' },
@@ -74,8 +87,30 @@ export class Navbar implements OnInit, OnDestroy {
     private ws: Websocket,
     private notifications: Notifications,
     private api: Api,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private el: ElementRef
   ) {}
+
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    
+    if (this.showNotifications) {
+      const wrap = this.el.nativeElement.querySelector('.notification-wrap');
+      if (wrap && !wrap.contains(target)) {
+        this.showNotifications = false;
+        this.cdr.detectChanges();
+      }
+    }
+    
+    if (this.showUserMenu) {
+      const profileBtn = this.el.nativeElement.querySelector('.profile-button');
+      if (profileBtn && !profileBtn.contains(target)) {
+        this.showUserMenu = false;
+        this.cdr.detectChanges();
+      }
+    }
+  }
 
   ngOnInit() {
     this.refreshSystemStatus();
@@ -190,12 +225,6 @@ export class Navbar implements OnInit, OnDestroy {
     this.cdr.detectChanges();
   }
 
-  closeNotifications() {
-    setTimeout(() => {
-      this.showNotifications = false;
-      this.cdr.detectChanges();
-    }, 150);
-  }
 
   viewThreatIntel() {
     this.showNotifications = false;
