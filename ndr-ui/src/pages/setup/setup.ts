@@ -144,6 +144,14 @@ export class Setup implements OnInit, OnDestroy {
     return this.externalSensors.filter(sensor => sensor.online).length;
   }
 
+  get externalOfflineCount(): number {
+    return Math.max(this.externalSensors.length - this.externalOnlineCount, 0);
+  }
+
+  get tenantDisplayName(): string {
+    return this.currentTenantId || 'Tenant';
+  }
+
   get summaryActive(): boolean {
     return this.activeTab === 'local'
       ? this.status === 'Running'
@@ -523,7 +531,8 @@ export class Setup implements OnInit, OnDestroy {
 
     this.api.getSensorKeys().subscribe({
       next: sensors => {
-        this.externalSensors = sensors.map(sensor => this.mapExternalSensor(sensor));
+        this.externalSensors = this.getVisibleExternalSensors(sensors)
+          .map(sensor => this.mapExternalSensor(sensor));
         this.externalLoading = false;
         this.cdr.detectChanges();
       },
@@ -533,6 +542,14 @@ export class Setup implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
     });
+  }
+
+  private getVisibleExternalSensors(sensors: SensorKey[]): SensorKey[] {
+    if (this.currentRole !== 'tenant_admin') {
+      return sensors;
+    }
+
+    return sensors.filter(sensor => sensor.active);
   }
 
   private mapExternalSensor(sensor: SensorKey): ExternalSensorCard {

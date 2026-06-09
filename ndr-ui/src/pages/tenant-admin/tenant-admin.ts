@@ -1,4 +1,4 @@
-import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -15,6 +15,7 @@ import {
 } from 'lucide-angular';
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
+import { Subscription } from 'rxjs';
 
 interface TenantUser {
   id: string;
@@ -39,7 +40,7 @@ interface PermissionOption {
   templateUrl: './tenant-admin.html',
   styleUrl: './tenant-admin.css',
 })
-export class TenantAdmin implements OnInit {
+export class TenantAdmin implements OnInit, OnDestroy {
   UsersIcon = Users;
   UserPlusIcon = UserPlus;
   ShieldIcon = ShieldCheck;
@@ -60,6 +61,10 @@ export class TenantAdmin implements OnInit {
   editingUser: TenantUser | null = null;
   message = '';
   messageType: 'success' | 'error' = 'success';
+  usernameStatus: 'idle' | 'checking' | 'available' | 'taken' | 'unavailable' = 'idle';
+  private usernameTimer: ReturnType<typeof setTimeout> | null = null;
+  private usernameCheckSub: Subscription | null = null;
+  private readonly usernamePattern = /^[A-Za-z0-9._-]+$/;
 
   permissionOptions: PermissionOption[] = [
     { key: 'dashboard', label: 'Dashboard', description: 'Operational overview and metrics' },
@@ -116,6 +121,10 @@ export class TenantAdmin implements OnInit {
     this.loadUsers();
   }
 
+  ngOnDestroy(): void {
+    this.clearUsernameCheck();
+  }
+
   get activeUsers() {
     return this.users.filter(user => user.active !== false).length;
   }
@@ -134,6 +143,42 @@ export class TenantAdmin implements OnInit {
 
   get pageSubtitle() {
     return `Manage analysts and page access for ${this.tenantName}.`;
+  }
+
+  get usernameError() {
+    return this.validateUsername(this.userForm.username);
+  }
+
+  get usernameFeedback() {
+    if (this.editingUser || this.usernameError) return '';
+    if (this.usernameStatus === 'checking') return 'Checking username availability...';
+    if (this.usernameStatus === 'available') return 'Username is available';
+    if (this.usernameStatus === 'taken') return 'Username already exists';
+    if (this.usernameStatus === 'unavailable') return 'Could not check username availability';
+    return '';
+  }
+
+  get usernameFeedbackType(): 'neutral' | 'success' | 'error' {
+    if (this.usernameStatus === 'available') return 'success';
+    if (this.usernameStatus === 'taken' || this.usernameStatus === 'unavailable') return 'error';
+    return 'neutral';
+  }
+
+  get passwordErrors() {
+    return this.validatePassword(
+      this.userForm.password,
+      this.userForm.username,
+      !this.editingUser
+    );
+  }
+
+  get canSaveUser() {
+    return (
+      !this.saving &&
+      !this.usernameError &&
+      this.passwordErrors.length === 0 &&
+      (this.editingUser || this.usernameStatus === 'available')
+    );
   }
 
   loadUsers() {
@@ -161,6 +206,7 @@ export class TenantAdmin implements OnInit {
   }
 
   openCreateForm() {
+    this.clearUsernameCheck();
     this.editingUser = null;
     this.userForm = {
       username: '',
@@ -173,6 +219,7 @@ export class TenantAdmin implements OnInit {
   }
 
   openEditForm(user: TenantUser) {
+    this.clearUsernameCheck();
     this.editingUser = user;
     this.userForm = {
       username: user.username,
@@ -184,14 +231,44 @@ export class TenantAdmin implements OnInit {
     this.showForm = true;
   }
 
-  saveUser() {
-    if (!this.userForm.username.trim()) {
-      this.showMessage('Username is required', 'error');
+  closeForm() {
+    this.clearUsernameCheck();
+    this.showForm = false;
+  }
+
+  onUsernameChange() {
+    this.clearUsernameCheck();
+
+    if (this.editingUser || this.usernameError) {
+      this.usernameStatus = 'idle';
+      this.cdr.detectChanges();
       return;
     }
 
-    if (!this.editingUser && !this.userForm.password.trim()) {
-      this.showMessage('Password is required for a new user', 'error');
+    const username = this.userForm.username.trim();
+    this.usernameStatus = 'checking';
+    this.cdr.detectChanges();
+
+    this.usernameTimer = setTimeout(() => {
+      this.usernameCheckSub = this.auth.checkUsername(username).subscribe({
+        next: (res) => {
+          if (this.userForm.username.trim() !== username) return;
+          this.usernameStatus = res.exists ? 'taken' : 'available';
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          if (this.userForm.username.trim() !== username) return;
+          this.usernameStatus = 'unavailable';
+          this.cdr.detectChanges();
+        },
+      });
+    }, 400);
+  }
+
+  saveUser() {
+    const validationError = this.firstValidationError();
+    if (validationError) {
+      this.showMessage(validationError, 'error');
       return;
     }
 
@@ -281,7 +358,7 @@ export class TenantAdmin implements OnInit {
       next: (data: any) => {
         this.saving = false;
         if (data.status === 'ok') {
-          this.showForm = false;
+          this.closeForm();
           this.showMessage('User created for this tenant', 'success');
           this.loadUsers();
         } else {
@@ -305,7 +382,7 @@ export class TenantAdmin implements OnInit {
         ? { ...user, permissions, active }
         : user
     );
-    this.showForm = false;
+    this.closeForm();
     this.showMessage(
       active ? 'User updated successfully' : 'User disabled successfully',
       'success'
@@ -417,5 +494,64 @@ export class TenantAdmin implements OnInit {
       .filter(Boolean)
       .map(part => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ') || 'Organization';
+  }
+
+  private validateUsername(username: string) {
+    const value = username.trim();
+    if (!value) return 'Username is required';
+    if (value.length < 3) return 'Username must be at least 3 characters';
+    if (value.length > 50) return 'Username must be 50 characters or less';
+    if (!this.usernamePattern.test(value)) {
+      return 'Username can use letters, numbers, dot, underscore, and hyphen only';
+    }
+    if (!this.editingUser && this.localUsernameExists(value)) return 'Username already exists';
+    return '';
+  }
+
+  private validatePassword(password: string, username: string, required: boolean) {
+    const value = password || '';
+    const errors: string[] = [];
+
+    if (!value) {
+      if (required) errors.push('Password is required');
+      return errors;
+    }
+
+    if (value.length < 8) errors.push('Password must be at least 8 characters');
+    if (!/[A-Z]/.test(value)) errors.push('Password needs an uppercase letter');
+    if (!/[a-z]/.test(value)) errors.push('Password needs a lowercase letter');
+    if (!/[0-9]/.test(value)) errors.push('Password needs a number');
+    if (!/[^A-Za-z0-9]/.test(value)) errors.push('Password needs a special character');
+    if (username.trim() && value.toLowerCase() === username.trim().toLowerCase()) {
+      errors.push('Password cannot be the same as username');
+    }
+
+    return errors;
+  }
+
+  private firstValidationError() {
+    if (this.usernameError) return this.usernameError;
+    if (!this.editingUser && this.usernameStatus === 'checking') return 'Wait for username availability check';
+    if (!this.editingUser && this.usernameStatus === 'taken') return 'Username already exists';
+    if (!this.editingUser && this.usernameStatus === 'unavailable') {
+      return 'Could not check username availability';
+    }
+    if (!this.editingUser && this.usernameStatus !== 'available') return 'Confirm username availability';
+    return this.passwordErrors[0] || '';
+  }
+
+  private localUsernameExists(username: string) {
+    const normalized = username.trim().toLowerCase();
+    return this.users.some(user => user.username?.trim().toLowerCase() === normalized);
+  }
+
+  private clearUsernameCheck() {
+    if (this.usernameTimer) {
+      clearTimeout(this.usernameTimer);
+      this.usernameTimer = null;
+    }
+    this.usernameCheckSub?.unsubscribe();
+    this.usernameCheckSub = null;
+    this.usernameStatus = 'idle';
   }
 }
