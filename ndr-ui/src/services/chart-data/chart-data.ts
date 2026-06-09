@@ -21,7 +21,6 @@ export interface StatsSnapshot {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY  = 'ndr_chart_data';
 const CACHE_TTL_MS = 20 * 60 * 1000;   // 20 minutes
 const MAX_POINTS   = 20;                // sliding window size
 const REFRESH_MS   = 30_000;           // poll interval
@@ -104,6 +103,17 @@ export class ChartDataService implements OnDestroy {
 
   constructor(private api: Api) {}
 
+  private getStorageKey(): string {
+    try {
+      const u = localStorage.getItem('ndr_user');
+      if (u) {
+        const user = JSON.parse(u);
+        if (user.username) return `ndr_chart_data_${user.username}`;
+      }
+    } catch (_) {}
+    return 'ndr_chart_data';
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   /** Start data accumulation. Idempotent — safe to call multiple times. */
@@ -179,7 +189,7 @@ export class ChartDataService implements OnDestroy {
 
   private saveToCache(): void {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      localStorage.setItem(this.getStorageKey(), JSON.stringify({
         labels:    this.labels,
         data:      this.data,
         timestamp: Date.now()
@@ -194,12 +204,12 @@ export class ChartDataService implements OnDestroy {
    */
   private loadFromCache(): ChartSnapshot | null {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(this.getStorageKey());
       if (!raw) return null;
 
       const stored = JSON.parse(raw);
       if (Date.now() - (stored.timestamp || 0) > CACHE_TTL_MS) {
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(this.getStorageKey());
         return null;
       }
       if (

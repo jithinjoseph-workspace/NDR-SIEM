@@ -35,7 +35,7 @@ export class AuthService implements OnDestroy {
   constructor(
     private http: HttpClient,
     private router: Router
-  ) {}
+  ) { }
 
   ngOnDestroy(): void {
     this.stopSessionPoll();
@@ -63,7 +63,7 @@ export class AuthService implements OnDestroy {
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.USER_KEY);
     sessionStorage.clear();
-    this.router.navigate(['/login'], { replaceUrl: true });
+    window.location.href = '/login';
   }
 
   getToken(): string | null {

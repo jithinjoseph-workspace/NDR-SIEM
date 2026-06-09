@@ -238,7 +238,7 @@ fi
 # ══════════════════════════════════════════════════════
 log "Step 7: Cleaning up Suricata runtime files..."
 run "rm -rf /var/run/suricata"
-run "rm -f /tmp/ndr-sensor-zeek.log /tmp/ndr-sensor-suricata.log"
+run "rm -f /tmp/ndr-sensor-zeek.log /tmp/ndr-sensor-suricata.log /tmp/zeek.log /tmp/suricata.log"
 log "  ✅ Suricata runtime files cleaned"
 
 # ══════════════════════════════════════════════════════

@@ -105,19 +105,14 @@ async fn handle_ws(
     loop {
         match rx.recv().await {
             Ok(msg) => {
-                // Filter messages by tenant_id
-                let should_send = if tenant_id == "default" {
-                    true // admin sees all
+                // Strictly filter messages by tenant_id to align with REST APIs
+                let should_send = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
+                    parsed.get("tenant_id")
+                        .and_then(|t| t.as_str())
+                        .map(|t| t == tenant_id)
+                        .unwrap_or(false)
                 } else {
-                    // Check if message contains tenant_id
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
-                        parsed.get("tenant_id")
-                            .and_then(|t| t.as_str())
-                            .map(|t| t == tenant_id)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    }
+                    false
                 };
 
                 if should_send {
