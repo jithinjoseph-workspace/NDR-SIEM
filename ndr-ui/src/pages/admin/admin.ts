@@ -4,6 +4,8 @@ import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
   Building2,
+  ChevronDown,
+  ChevronRight,
   CircleCheck,
   Copy,
   Edit,
@@ -62,6 +64,8 @@ export class Admin implements OnInit, OnDestroy {
   UserPlusIcon = UserPlus;
   UsersIcon = Users;
   XIcon = X;
+  ChevronDownIcon = ChevronDown;
+  ChevronRightIcon = ChevronRight;
 
   activeTab = 'tenants';
 
@@ -164,6 +168,48 @@ export class Admin implements OnInit, OnDestroy {
     return slots;
   })();
 
+  /** Today's date as a yyyy-mm-dd string — used as the min for the start date picker. */
+  get todayDate(): string {
+    return new Date().toISOString().split('T')[0];
+  }
+
+  /**
+   * Time slots available for the start time picker.
+   * When today is selected, past half-hour slots are removed so the admin
+   * cannot pick a start time that has already elapsed.
+   */
+  get filteredStartTimeSlots(): { value: string; label: string }[] {
+    if (this.announcementStartDate !== this.todayDate) return this.timeSlots;
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    return this.timeSlots.filter(t => {
+      const [h, m] = t.value.split(':').map(Number);
+      return (h * 60 + m) > currentMinutes;
+    });
+  }
+
+  /**
+   * Time slots available for the end time picker.
+   * When the end date equals the start date, slots at or before the chosen
+   * start time are removed so the end cannot precede the start.
+   */
+  get filteredEndTimeSlots(): { value: string; label: string }[] {
+    if (
+      this.announcementEndDate &&
+      this.announcementStartDate &&
+      this.announcementEndDate === this.announcementStartDate &&
+      this.announcementStartTime
+    ) {
+      const [sh, sm] = this.announcementStartTime.split(':').map(Number);
+      const startMinutes = sh * 60 + sm;
+      return this.timeSlots.filter(t => {
+        const [h, m] = t.value.split(':').map(Number);
+        return (h * 60 + m) > startMinutes;
+      });
+    }
+    return this.timeSlots;
+  }
+
   newAnnouncement: AnnouncementDraft = {
     title: '',
     message: '',
@@ -230,6 +276,40 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  /** Tracks which tenant group accordion sections are collapsed. */
+  collapsedTenants = new Set<string>();
+
+  /** Groups filteredTenantAdmins by tenant for the accordion view. */
+  get usersByTenant(): { tenantId: string; tenantName: string; isActive: boolean; users: any[] }[] {
+    const groups = new Map<string, any[]>();
+    for (const user of this.filteredTenantAdmins) {
+      const tid = user.tenant_id || 'default';
+      if (!groups.has(tid)) groups.set(tid, []);
+      groups.get(tid)!.push(user);
+    }
+    return Array.from(groups.entries()).map(([tenantId, users]) => {
+      const tenant = this.tenants.find(t => t.id === tenantId);
+      return {
+        tenantId,
+        tenantName: tenant?.name ?? tenantId,
+        isActive: tenant?.active ?? true,
+        users,
+      };
+    });
+  }
+
+  toggleTenantGroup(tenantId: string) {
+    if (this.collapsedTenants.has(tenantId)) {
+      this.collapsedTenants.delete(tenantId);
+    } else {
+      this.collapsedTenants.add(tenantId);
+    }
+  }
+
+  isGroupCollapsed(tenantId: string): boolean {
+    return this.collapsedTenants.has(tenantId);
+  }
+
   get selectedTenantName() {
     return this.selectedTenant === 'all'
       ? 'All tenants'
@@ -275,10 +355,23 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   get canCreateAnnouncement() {
+    const endAfterStart =
+      !this.newAnnouncement.ends_at ||
+      !this.newAnnouncement.starts_at ||
+      this.newAnnouncement.ends_at > this.newAnnouncement.starts_at;
     return (
       !!this.newAnnouncement.title.trim() &&
       !!this.newAnnouncement.message.trim() &&
-      (this.newAnnouncement.audience !== 'tenant' || !!this.newAnnouncement.tenant_id)
+      (this.newAnnouncement.audience !== 'tenant' || !!this.newAnnouncement.tenant_id) &&
+      endAfterStart
+    );
+  }
+
+  get endBeforeStartError(): boolean {
+    return (
+      !!this.newAnnouncement.ends_at &&
+      !!this.newAnnouncement.starts_at &&
+      this.newAnnouncement.ends_at <= this.newAnnouncement.starts_at
     );
   }
 

@@ -65,6 +65,7 @@ export class AuthService implements OnDestroy {
     );
   }
 
+
   logout() {
     // Stop polling before clearing state so any in-flight poll doesn't restart it
     this.stopSessionPoll();

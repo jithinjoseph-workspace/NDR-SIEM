@@ -295,7 +295,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/install-sensor.sh"];
+    let public = ["/api/auth/login", "/api/auth/check-username", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/install-sensor.sh"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -3058,6 +3058,22 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
                 "low": 0
             }))
         }
+    }
+}
+
+// GET /api/auth/check-username?username=xxx
+// Public, read-only — only confirms existence, never reveals password or role.
+pub async fn check_username(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let username = params.get("username").map(|s| s.trim().to_string()).unwrap_or_default();
+    if username.is_empty() {
+        return Json(json!({ "exists": false }));
+    }
+    match state.ch_storage.get_user_by_username(&username).await {
+        Ok(Some(_)) => Json(json!({ "exists": true })),
+        _           => Json(json!({ "exists": false })),
     }
 }
 
