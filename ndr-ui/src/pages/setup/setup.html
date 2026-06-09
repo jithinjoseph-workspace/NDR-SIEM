@@ -1,4 +1,4 @@
-<section class="setup-shell">
+<section class="setup-shell" [class.external-mode]="activeTab === 'external'">
   <div class="setup-header">
     <div>
       <div class="eyebrow">Sensor Control</div>
@@ -178,15 +178,16 @@
     </section>
   </div>
 
-  <section *ngIf="activeTab === 'external'" class="panel external-panel">
-    <div class="panel-heading split-heading">
-      <div class="heading-group">
+  <section *ngIf="activeTab === 'external'" class="external-panel">
+    <div class="external-command">
+      <div class="command-copy">
         <div class="panel-icon secondary">
           <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
         </div>
         <div>
+          <div class="eyebrow">Tenant Sensor Fleet</div>
           <h3>External Sensor Fleet</h3>
-          <p>Registered remote sensors with queued control actions per sensor.</p>
+          <p>Monitor registered capture hosts, review service posture, and queue runtime actions for {{ tenantDisplayName }}.</p>
         </div>
       </div>
 
@@ -201,8 +202,28 @@
       </button>
     </div>
 
+    <div class="fleet-overview">
+      <div class="fleet-metric primary">
+        <span>Registered</span>
+        <strong>{{ externalSensors.length }}</strong>
+      </div>
+      <div class="fleet-metric">
+        <span>Online</span>
+        <strong>{{ externalOnlineCount }}</strong>
+      </div>
+      <div class="fleet-metric">
+        <span>Offline</span>
+        <strong>{{ externalOfflineCount }}</strong>
+      </div>
+      <div class="fleet-metric wide">
+        <span>Control Status</span>
+        <strong>{{ canViewExternalSensors ? 'Ready' : 'Restricted' }}</strong>
+      </div>
+    </div>
+
     <div class="setup-note">
-      Generate a one-time key, install the sensor on the capture host, then manage command actions here.
+      <span>Install flow</span>
+      <strong>Generate a one-time key, install it on a capture host, then manage queued sensor actions here.</strong>
     </div>
 
     <div *ngIf="externalActionMessage" class="inline-message success">
@@ -238,6 +259,7 @@
       <article
         *ngFor="let sensor of externalSensors; trackBy: trackSensor"
         class="sensor-card"
+        [class.online]="sensor.online"
       >
         <div class="sensor-card-head">
           <div class="sensor-identity">
@@ -392,7 +414,7 @@
                 [disabled]="keyCopied"
               >
                 <lucide-icon [name]="CopyIcon" class="w-4 h-4" *ngIf="!keyCopied"></lucide-icon>
-                {{ keyCopied ? '✓ Copied!' : 'Copy Key' }}
+                {{ keyCopied ? 'Copied' : 'Copy Key' }}
               </button>
             </div>
 
@@ -405,7 +427,7 @@
                 [disabled]="commandCopied"
               >
                 <lucide-icon [name]="CopyIcon" class="w-4 h-4" *ngIf="!commandCopied"></lucide-icon>
-                {{ commandCopied ? '✓ Copied!' : 'Copy Command' }}
+                {{ commandCopied ? 'Copied' : 'Copy Command' }}
               </button>
             </div>
           </ng-container>

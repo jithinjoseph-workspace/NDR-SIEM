@@ -144,11 +144,15 @@
   <div *ngIf="showForm" class="modal-backdrop">
     <div class="tenant-modal">
       <div class="modal-head">
-        <div>
+        <div class="modal-title-block">
+          <div class="modal-kicker">
+            <lucide-icon [name]="ShieldIcon" class="w-4 h-4"></lucide-icon>
+            {{ tenantName }}
+          </div>
           <h3>{{ editingUser ? 'Edit User Access' : 'Add Analyst' }}</h3>
-          <p>{{ editingUser ? 'Update role status and page access for this user.' : 'Create a tenant-scoped account and assign page access.' }}</p>
+          <p>{{ editingUser ? 'Update account status and page permissions.' : 'Create a tenant-scoped account with validated credentials.' }}</p>
         </div>
-        <button type="button" class="icon-button" (click)="showForm = false">
+        <button type="button" class="icon-button" (click)="closeForm()">
           <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
         </button>
       </div>
@@ -156,30 +160,54 @@
       <div class="modal-body">
         <section class="modal-section account-section">
           <div class="section-title">
-            <strong>Account Details</strong>
-            <span>{{ editingUser ? 'Existing user' : 'New analyst' }}</span>
+            <div>
+              <strong>Account Details</strong>
+              <small>{{ editingUser ? userForm.username : 'New tenant user' }}</small>
+            </div>
+            <span>{{ editingUser ? 'Existing' : 'New' }}</span>
           </div>
 
           <div class="form-grid">
-            <label>
+            <label class="form-field">
               <span>Username</span>
               <input
                 [(ngModel)]="userForm.username"
+                (ngModelChange)="onUsernameChange()"
                 [disabled]="!!editingUser"
+                [class.field-invalid]="!!usernameError || usernameStatus === 'taken' || usernameStatus === 'unavailable'"
+                [class.field-valid]="!editingUser && usernameStatus === 'available'"
+                maxlength="50"
                 placeholder="analyst01"
               />
+              <div class="field-feedback-group">
+                <small *ngIf="usernameError" class="field-feedback error">
+                  {{ usernameError }}
+                </small>
+                <small
+                  *ngIf="usernameFeedback"
+                  [class]="'field-feedback ' + usernameFeedbackType"
+                >
+                  {{ usernameFeedback }}
+                </small>
+              </div>
             </label>
 
-            <label>
+            <label class="form-field">
               <span>Password</span>
               <input
                 [(ngModel)]="userForm.password"
                 type="password"
+                [class.field-invalid]="passwordErrors.length > 0"
                 [placeholder]="editingUser ? 'Leave blank to keep current password' : 'Temporary password'"
               />
+              <div class="field-feedback-group">
+                <small *ngFor="let error of passwordErrors" class="field-feedback error">
+                  {{ error }}
+                </small>
+              </div>
             </label>
 
-            <label>
+            <label class="form-field">
               <span>Role</span>
               <select
                 [(ngModel)]="userForm.role"
@@ -192,7 +220,7 @@
               </select>
             </label>
 
-            <label>
+            <label class="form-field">
               <span>Status</span>
               <select [(ngModel)]="userForm.active">
                 <option [ngValue]="true">Active</option>
@@ -204,7 +232,10 @@
 
         <section class="modal-section permission-section">
           <div class="section-title">
-            <strong>Page Access</strong>
+            <div>
+              <strong>Page Access</strong>
+              <small>Choose visible workspaces for this role</small>
+            </div>
             <span>{{ userForm.permissions.length }} selected</span>
           </div>
 
@@ -223,11 +254,17 @@
       </div>
 
       <div class="modal-actions">
-        <button class="secondary-action" type="button" (click)="showForm = false">Cancel</button>
-        <button class="primary-action" type="button" [disabled]="saving" (click)="saveUser()">
-          <lucide-icon [name]="SaveIcon" class="w-4 h-4"></lucide-icon>
-          {{ saving ? 'Saving...' : (editingUser ? 'Save Access' : 'Create User') }}
-        </button>
+        <div class="modal-action-copy">
+          <strong>{{ userForm.permissions.length }}</strong>
+          <span>pages selected</span>
+        </div>
+        <div class="modal-action-buttons">
+          <button class="secondary-action" type="button" (click)="closeForm()">Cancel</button>
+          <button class="primary-action" type="button" [disabled]="!canSaveUser" (click)="saveUser()">
+            <lucide-icon [name]="SaveIcon" class="w-4 h-4"></lucide-icon>
+            {{ saving ? 'Saving...' : (editingUser ? 'Save Access' : 'Create User') }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
