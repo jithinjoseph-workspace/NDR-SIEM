@@ -49,9 +49,12 @@ export class Websocket {
     console.log('Connecting to websocket...');
     try {
       const token = localStorage.getItem('ndr_token') || '';
-      const wsUrl = token
-        ? `ws://localhost:3000/ws?token=${token}`
-        : 'ws://localhost:3000/ws';
+      if (!token) {
+        console.warn('No token found, aborting WebSocket connection');
+        return;
+      }
+      
+      const wsUrl = `ws://localhost:3000/ws?token=${token}`;
 
       this.socket = new WebSocket(wsUrl);
 

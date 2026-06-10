@@ -10,7 +10,7 @@ pub async fn ws_handler(
     Query(params): Query<HashMap<String, String>>,
 ) -> axum::response::Response {
     // Extract token from query string: /ws?token=xxx
-    let tenant_id = params.get("token")
+    let tenant_id_opt = params.get("token")
         .and_then(|token| {
             let secret = std::env::var("JWT_SECRET")
                 .unwrap_or_else(|_| "ndr-secret-key-2026".to_string());
@@ -21,8 +21,17 @@ pub async fn ws_handler(
                 &DecodingKey::from_secret(secret.as_bytes()),
                 &Validation::default()
             ).ok().map(|d| d.claims.tenant_id)
-        })
-        .unwrap_or_else(|| "default".to_string());
+        });
+
+    let tenant_id = match tenant_id_opt {
+        Some(id) => id,
+        None => {
+            return axum::response::Response::builder()
+                .status(axum::http::StatusCode::UNAUTHORIZED)
+                .body(axum::body::Body::from("Unauthorized"))
+                .unwrap();
+        }
+    };
 
     ws.on_upgrade(move |socket| handle_ws(socket, state, tenant_id))
 }

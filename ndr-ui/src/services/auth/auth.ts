@@ -2,6 +2,7 @@ import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable, tap, Subscription } from 'rxjs';
+import { Websocket } from '../websocket/websocket';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService implements OnDestroy {
@@ -34,7 +35,8 @@ export class AuthService implements OnDestroy {
 
   constructor(
     private http: HttpClient,
-    private router: Router
+    private router: Router,
+    private ws: Websocket
   ) { }
 
   ngOnDestroy(): void {
@@ -69,6 +71,7 @@ export class AuthService implements OnDestroy {
   logout() {
     // Stop polling before clearing state so any in-flight poll doesn't restart it
     this.stopSessionPoll();
+    this.ws.disconnect();
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.USER_KEY);
     sessionStorage.clear();
