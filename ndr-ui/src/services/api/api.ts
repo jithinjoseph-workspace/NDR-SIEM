@@ -369,6 +369,11 @@ export class Api {
     return this.http.get(`${this.baseUrl}/admin/engines`);
   }
 
+  getPlatformTelemetry(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/telemetry`);
+  }
+
+
   scaleEngines(action: string, engine?: string): Observable<any> {
     return this.http.post(
       `${this.baseUrl}/admin/engines/scale`,

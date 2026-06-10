@@ -44,25 +44,29 @@
   </section>
 
   <div class="admin-tabs" role="tablist" aria-label="Super admin sections">
-    <button type="button" (click)="activeTab='tenants'" [class.active]="activeTab === 'tenants'">
+    <button type="button" (click)="switchTab('tenants')" [class.active]="activeTab === 'tenants'">
       <lucide-icon [name]="BuildingIcon" class="w-4 h-4"></lucide-icon>
       Tenants
     </button>
-    <button type="button" (click)="activeTab='users'" [class.active]="activeTab === 'users'">
+    <button type="button" (click)="switchTab('users')" [class.active]="activeTab === 'users'">
       <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
       Users
     </button>
-    <button type="button" (click)="activeTab='engines'" [class.active]="activeTab === 'engines'">
+    <button type="button" (click)="switchTab('engines')" [class.active]="activeTab === 'engines'">
       <lucide-icon [name]="GaugeIcon" class="w-4 h-4"></lucide-icon>
       Engines
     </button>
-    <button type="button" (click)="activeTab='sensors'" [class.active]="activeTab === 'sensors'">
+    <button type="button" (click)="switchTab('sensors')" [class.active]="activeTab === 'sensors'">
       <lucide-icon [name]="KeyIcon" class="w-4 h-4"></lucide-icon>
       Sensors
     </button>
-    <button type="button" (click)="activeTab='announcements'" [class.active]="activeTab === 'announcements'">
+    <button type="button" (click)="switchTab('announcements')" [class.active]="activeTab === 'announcements'">
       <lucide-icon [name]="AnnouncementIcon" class="w-4 h-4"></lucide-icon>
       Announcements
+    </button>
+    <button type="button" (click)="switchTab('telemetry')" [class.active]="activeTab === 'telemetry'">
+      <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
+      Telemetry
     </button>
   </div>
 
@@ -457,6 +461,57 @@
           </button>
         </div>
       </article>
+    </div>
+  </section>
+
+  <section *ngIf="activeTab === 'telemetry'" class="admin-panel">
+    <header class="panel-header">
+      <div>
+        <h2>Platform Health & Telemetry</h2>
+        <p>Real-time backend hardware and performance metrics.</p>
+      </div>
+    </header>
+
+    <div class="telemetry-grid" *ngIf="telemetryData">
+      <div class="stat-card">
+        <h3>CPU Usage</h3>
+        <div class="stat-value" [class.danger]="telemetryData.cpu_usage_percent > 90">
+          {{ telemetryData.cpu_usage_percent | number:'1.0-1' }}%
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar" [style.width.%]="telemetryData.cpu_usage_percent" [class.danger]="telemetryData.cpu_usage_percent > 90"></div>
+        </div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Memory Usage</h3>
+        <div class="stat-value" [class.danger]="telemetryData.memory_percent > 90">
+          {{ telemetryData.memory_percent | number:'1.0-1' }}%
+        </div>
+        <div class="stat-subtitle">
+          {{ telemetryData.memory_used_gb | number:'1.1-2' }} GB / {{ telemetryData.memory_total_gb | number:'1.1-2' }} GB
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar" [style.width.%]="telemetryData.memory_percent" [class.danger]="telemetryData.memory_percent > 90"></div>
+        </div>
+      </div>
+
+      <!-- Disabled Event Ingestion Card 
+      <div class="stat-card">
+        <h3>Event Ingestion</h3>
+        <div class="stat-value">
+          {{ telemetryData.events_per_sec | number }} EPS
+        </div>
+        <div class="stat-subtitle">
+          {{ telemetryData.events_1h | number }} events (last hour)
+        </div>
+      </div>
+      -->
+    </div>
+    
+    <div class="empty-state" *ngIf="!telemetryData">
+      <lucide-icon [name]="RefreshIcon" class="w-8 h-8 spinning"></lucide-icon>
+      <p>Loading telemetry data...</p>
     </div>
   </section>
 

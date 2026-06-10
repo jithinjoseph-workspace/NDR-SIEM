@@ -5260,3 +5260,45 @@ pub async fn sensor_control_api(
         }))
     }
 }
+
+pub async fn get_telemetry(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"}))
+    };
+
+    if claims.role != "super_admin" && claims.role != "admin" {
+        return Json(json!({"status": "error", "message": "Unauthorized"}));
+    }
+
+    let mut sys = sysinfo::System::new_all();
+    sys.refresh_all();
+
+    let cpu_usage_percent = sys.global_cpu_info().cpu_usage();
+    let memory_total_bytes = sys.total_memory();
+    let memory_used_bytes = sys.used_memory();
+    let memory_total_gb = memory_total_bytes as f64 / 1_073_741_824.0;
+    let memory_used_gb = memory_used_bytes as f64 / 1_073_741_824.0;
+    let memory_percent = if memory_total_bytes > 0 {
+        (memory_used_bytes as f64 / memory_total_bytes as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let stats = state.ch_storage.get_stats().await.unwrap_or(json!({}));
+    let events_1h = stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0);
+    let events_per_sec = events_1h / 3600;
+
+    Json(json!({
+        "status": "ok",
+        "cpu_usage_percent": cpu_usage_percent,
+        "memory_used_gb": memory_used_gb,
+        "memory_total_gb": memory_total_gb,
+        "memory_percent": memory_percent,
+        "events_per_sec": events_per_sec,
+        "events_1h": events_1h
+    }))
+}

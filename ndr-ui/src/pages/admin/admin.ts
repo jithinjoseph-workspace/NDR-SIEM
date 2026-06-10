@@ -21,6 +21,7 @@ import {
   UserPlus,
   Users,
   X,
+  Activity
 } from 'lucide-angular';
 import { Announcement, Api, SensorKey } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
@@ -66,8 +67,11 @@ export class Admin implements OnInit, OnDestroy {
   XIcon = X;
   ChevronDownIcon = ChevronDown;
   ChevronRightIcon = ChevronRight;
+  ActivityIcon = Activity;
 
   activeTab = 'tenants';
+  telemetryData: any = null;
+  private telemetryInterval: ReturnType<typeof setInterval> | null = null;
 
   users: any[] = [];
   loadingUsers = false;
@@ -253,6 +257,33 @@ export class Admin implements OnInit, OnDestroy {
     if (this.sessionCheckInterval !== null) {
       clearInterval(this.sessionCheckInterval);
     }
+    if (this.telemetryInterval !== null) {
+      clearInterval(this.telemetryInterval);
+    }
+  }
+
+  switchTab(tab: string) {
+    this.activeTab = tab;
+    if (tab === 'telemetry') {
+      this.loadTelemetry();
+      if (!this.telemetryInterval) {
+        this.telemetryInterval = setInterval(() => this.loadTelemetry(), 5000);
+      }
+    } else {
+      if (this.telemetryInterval !== null) {
+        clearInterval(this.telemetryInterval);
+        this.telemetryInterval = null;
+      }
+    }
+  }
+
+  loadTelemetry() {
+    this.api.getPlatformTelemetry().subscribe({
+      next: (data: any) => {
+        this.telemetryData = data;
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   get tenantAdmins() {
