@@ -35,7 +35,7 @@ export class AuthService implements OnDestroy {
   constructor(
     private http: HttpClient,
     private router: Router
-  ) {}
+  ) { }
 
   ngOnDestroy(): void {
     this.stopSessionPoll();
@@ -57,13 +57,22 @@ export class AuthService implements OnDestroy {
     );
   }
 
+  /** Check if a username exists in the database (no auth required). */
+  checkUsername(username: string): Observable<{ exists: boolean }> {
+    return this.http.get<{ exists: boolean }>(
+      `${this.baseUrl}/auth/check-username`,
+      { params: { username } }
+    );
+  }
+
+
   logout() {
     // Stop polling before clearing state so any in-flight poll doesn't restart it
     this.stopSessionPoll();
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.USER_KEY);
     sessionStorage.clear();
-    this.router.navigate(['/login'], { replaceUrl: true });
+    window.location.href = '/login';
   }
 
   getToken(): string | null {
