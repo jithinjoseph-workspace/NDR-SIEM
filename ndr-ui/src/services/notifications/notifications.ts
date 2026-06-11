@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
 import { Websocket } from '../websocket/websocket';
+import { ToastService } from '../toast/toast';
 
 export interface ThreatNotification {
   id: string;
@@ -25,7 +26,7 @@ export class Notifications {
   readonly alerts$ = this.alertsSubject.asObservable();
   readonly unreadCount$ = this.unreadCountSubject.asObservable();
 
-  constructor(private ws: Websocket) {
+  constructor(private ws: Websocket, private toastService: ToastService) {
     this.ws.hits$.subscribe((hit: any) => {
       // ── Notification eligibility gate ────────────────────────────────────
       // Surface a hit in the bell if EITHER condition is true:
@@ -82,6 +83,21 @@ export class Notifications {
         // New flow: prepend and cap the list at 50 entries.
         this.alertsSubject.next([incoming, ...alerts].slice(0, 50));
       }
+
+      // ── Fire toast overlay ─────────────────────────────────────────────
+      // Re-uses the same dedup key and message already computed above so
+      // the toast system stays 100 % in sync with the bell notifications.
+      this.toastService.add({
+        severity:  incoming.severity as 'CRITICAL' | 'HIGH',
+        message:   incoming.message,
+        src_ip:    srcIp,
+        dst_ip:    dstIp,
+        score:     incoming.score,
+        hits:      1,
+        tags:      incoming.tags,
+        timestamp: incoming.time,
+        flowKey:   id,
+      });
 
       // Unread badge: count distinct IP pairs seen since last panel open.
       this.unreadNotificationIds.add(id);

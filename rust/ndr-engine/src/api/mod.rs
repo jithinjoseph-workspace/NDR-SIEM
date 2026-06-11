@@ -2526,7 +2526,7 @@ pub async fn export_report(
         .unwrap_or_default();
     let severity = state.ch_storage.get_severity_by_tenant(&tenant_id).await
         .unwrap_or(json!({}));
-    let threat   = state.ch_storage.get_threat_intel_hits().await
+    let threat   = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id).await
         .unwrap_or_default();
 let rules = state.detection.read().await.get_rules();
 
