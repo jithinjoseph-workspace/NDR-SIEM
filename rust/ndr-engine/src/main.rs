@@ -321,6 +321,8 @@ tokio::spawn(async move {
             .post(api::create_sensor_key_api))
         .route("/api/sensor-keys/:id",
             delete(api::revoke_sensor_key_api))
+        .route("/api/sensor-keys/:id/reactivate",
+            post(api::reactivate_sensor_key_api))
         .route("/api/sensor/register",  post(api::sensor_register))
         .route("/api/sensor/heartbeat", post(api::sensor_heartbeat))
         .route("/api/ingest",           post(api::ingest_events))
