@@ -5270,13 +5270,19 @@ pub async fn arkime_sessions(
     // Build Arkime expression query (Arkime uses expression=field==value, not custom params)
     let mut expression_parts: Vec<String> = Vec::new();
     if let Some(cid) = community_id {
-        expression_parts.push(format!("communityId=={}", cid));
+        expression_parts.push(format!("network.community_id=={}", cid));
     }
     if let Some(ip) = src_ip {
         expression_parts.push(format!("ip=={}", ip));
     }
     let mut arkime_query = format!(
-        "{}/api/sessions?length={}&startTime=-7d&stopTime=now",
+        "{}/api/sessions?length={}&startTime=-7d&stopTime=now\
+&fields=id,network.community_id,\
+source.ip,source.port,\
+destination.ip,destination.port,\
+ipProtocol,network.bytes,\
+network.packets,firstPacket,\
+lastPacket,node",
         arkime_url, limit
     );
     if !expression_parts.is_empty() {
@@ -5314,10 +5320,7 @@ pub async fn arkime_sessions(
                         .unwrap_or("").to_string();
                     if session_id.is_empty() { continue; }
 
-                    let community_id = s.get("network.community_id")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| s.get("communityId").and_then(|v| v.as_str()))
-                        .or_else(|| s.get("network.communityId").and_then(|v| v.as_str()))
+                    let community_id = s["network"]["community_id"].as_str()
                         .unwrap_or("").to_string();
 
                     let src_ip = s.get("source.ip").and_then(|v| v.as_str())
@@ -5383,9 +5386,8 @@ pub async fn arkime_sessions(
                 let proto = if ip_proto == 6 { "tcp" } else if ip_proto == 17 { "udp" } else { "other" };
                 json!({
                     "session_id":   s["id"],
-                    "community_id": s.get("network.community_id").cloned()
-                        .or_else(|| s.get("communityId").cloned())
-                        .or_else(|| s.get("network.communityId").cloned())
+                    "community_id": s["network"]["community_id"].as_str()
+                        .map(|v| json!(v))
                         .unwrap_or(json!("")),
                     "src_ip":   src_ip,
                     "dst_ip":   dst_ip,
