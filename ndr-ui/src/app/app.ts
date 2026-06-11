@@ -6,11 +6,12 @@ import { Navbar } from '../layout/navbar/navbar';
 import { Websocket } from '../services/websocket/websocket';
 import { AuthService } from '../services/auth/auth';
 import { filter } from 'rxjs/operators';
+import { ToastContainer } from '../components/toast-container/toast-container';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterOutlet, Sidebar, Navbar],
+  imports: [CommonModule, RouterOutlet, Sidebar, Navbar, ToastContainer],
   templateUrl: './app.html',
   styleUrl: './app.css',
   encapsulation: ViewEncapsulation.None
