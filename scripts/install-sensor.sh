@@ -129,7 +129,29 @@ apt-get update -qq
 apt-get install -y -qq \
     curl wget git python3 python3-pip \
     apt-transport-https gnupg2 \
-    software-properties-common > /dev/null
+    software-properties-common \
+    libpcre3 > /dev/null 2>&1 || true
+# libpcre3 may not be in repos on Ubuntu 24+ — fallback to direct download
+if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
+    for PCRE3_URL in \
+        "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.45-4_amd64.deb" \
+        "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-17build1_amd64.deb" \
+        "http://security.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-13ubuntu0.22.04.1_amd64.deb"; do
+        if wget -q --timeout=60 "$PCRE3_URL" -O /tmp/libpcre3.deb 2>/dev/null \
+            && dpkg -i /tmp/libpcre3.deb > /dev/null 2>&1; then
+            rm -f /tmp/libpcre3.deb
+            break
+        fi
+        rm -f /tmp/libpcre3.deb
+    done
+fi
+# Ensure libpcre.so.3 symlink exists (missing on some Ubuntu installs)
+if [ ! -e /usr/lib/x86_64-linux-gnu/libpcre.so.3 ]; then
+    PCRE_SO=$(find /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu \
+        -name "libpcre.so.3.*" 2>/dev/null | head -1)
+    [ -n "$PCRE_SO" ] && ln -sf "$PCRE_SO" /usr/lib/x86_64-linux-gnu/libpcre.so.3 \
+        && ldconfig
+fi
 
 # Install python requests
 pip3 install requests --quiet 2>/dev/null || true
@@ -189,6 +211,247 @@ fi
 log "Loading Suricata rules..."
 suricata-update > /dev/null 2>&1 || true
 log "✅ Suricata rules loaded"
+
+# ── Install Arkime ────────────────────────────────
+log "Installing Arkime (Full Packet Capture)..."
+
+ARKIME_VERSION="5.1.0"
+UBUNTU_VER=$(lsb_release -rs 2>/dev/null || echo "22.04")
+UBUNTU_MAJOR=$(echo $UBUNTU_VER | cut -d. -f1)
+
+if ! command -v /opt/arkime/bin/capture &>/dev/null; then
+    if [ "$UBUNTU_MAJOR" -le "21" ] 2>/dev/null; then
+        ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2004_amd64.deb"
+    elif [ "$UBUNTU_MAJOR" -le "23" ] 2>/dev/null; then
+        ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2204_amd64.deb"
+    elif [ "$UBUNTU_MAJOR" -ge "24" ] 2>/dev/null; then
+        ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2404_amd64.deb"
+    else
+        warn "Unsupported Ubuntu version for Arkime: $UBUNTU_VER"
+        ARKIME_DEB=""
+    fi
+
+    if [ -n "$ARKIME_DEB" ]; then
+        log "Downloading Arkime ${ARKIME_VERSION} (${ARKIME_DEB})..."
+        if wget --timeout=120 --progress=dot:mega \
+            "https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}" \
+            -O /tmp/arkime.deb 2>&1; then
+            DEB_SIZE=$(du -sh /tmp/arkime.deb 2>/dev/null | cut -f1)
+            log "Download complete (${DEB_SIZE})"
+        else
+            warn "❌ Arkime download FAILED"
+            warn "  URL: https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}"
+            warn "  Check internet/proxy and re-run"
+            ARKIME_DEB=""
+            rm -f /tmp/arkime.deb
+        fi
+    fi
+
+    if [ -n "$ARKIME_DEB" ] && [ -f /tmp/arkime.deb ]; then
+        log "Installing Arkime dependencies..."
+        sudo apt-get install -y -qq \
+            libwww-perl libjson-perl \
+            libyaml-dev libyara10 \
+            librdkafka1 ethtool \
+            libpcre3 libpcre3-dev \
+            libmagic1 libmaxminddb0 \
+            libpcre2-8-0 \
+            libyaml-0-2 > /dev/null 2>&1 || true
+
+        # Install real libpcre3 (Arkime capture needs pcre_version symbol; PCRE2 is not compatible)
+        if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
+            if sudo apt-get install -y -qq libpcre3 > /dev/null 2>&1; then
+                log "✅ libpcre3 installed from apt"
+            else
+                log "libpcre3 not in repos — downloading from Ubuntu archive..."
+                PCRE3_INSTALLED=false
+                for PCRE3_URL in \
+                    "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.45-4_amd64.deb" \
+                    "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-17build1_amd64.deb" \
+                    "http://security.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-13ubuntu0.22.04.1_amd64.deb"; do
+                    if wget -q --timeout=60 "$PCRE3_URL" -O /tmp/libpcre3.deb 2>/dev/null \
+                        && dpkg -i /tmp/libpcre3.deb > /dev/null 2>&1; then
+                        rm -f /tmp/libpcre3.deb
+                        log "✅ libpcre3 installed"
+                        PCRE3_INSTALLED=true
+                        break
+                    fi
+                    rm -f /tmp/libpcre3.deb
+                done
+                $PCRE3_INSTALLED || warn "⚠️ libpcre3 install failed — capture may crash"
+            fi
+        fi
+
+        log "Installing Arkime package..."
+        if dpkg -i /tmp/arkime.deb 2>&1; then
+            log "dpkg install succeeded"
+        else
+            warn "dpkg reported errors — running apt-get install -f to fix..."
+            apt-get install -f -y 2>&1 || true
+        fi
+        rm -f /tmp/arkime.deb
+
+        if [ -f /opt/arkime/bin/capture ]; then
+            ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
+            log "✅ Arkime installed: ${ARKIME_VER}"
+        else
+            warn "❌ Arkime install FAILED — /opt/arkime/bin/capture not found"
+            warn "  Run: dpkg -l arkime  or  apt-get install -f -y  for details"
+        fi
+    else
+        warn "❌ Arkime installation skipped (no .deb available)"
+    fi
+else
+    ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
+    log "✅ Arkime already installed: ${ARKIME_VER}"
+fi
+
+# ── Configure Arkime ──────────────────────────────
+if [ -f /opt/arkime/bin/capture ]; then
+    log "Configuring Arkime..."
+    log "Arkime using interface: $IFACE"
+
+    # Create directories BEFORE config
+    mkdir -p /opt/arkime/raw
+    mkdir -p /opt/arkime/logs
+    mkdir -p /opt/arkime/etc
+    chmod 755 /opt/arkime/raw
+
+    cat > /opt/arkime/etc/config.ini << ARKIME_EOF
+[default]
+elasticsearch=http://localhost:9200
+passwordSecret=${API_KEY:-ndr-arkime-secret}
+serverSecret=${API_KEY:-ndr-arkime-secret}
+httpRealm=Arkime
+interface=${IFACE:-eno1}
+pcapDir=/opt/arkime/raw
+maxFileSizeG=4
+maxFileTimeM=60
+viewPort=8005
+viewHost=0.0.0.0
+pcapWriteMethod=simple
+pcapWriteSize=262143
+authMode=basic
+logLevel=warn
+maxDays=7
+freeSpaceG=5
+tcpTimeout=600
+udpTimeout=30
+maxStreams=500000
+maxPackets=10000
+packetThreads=2
+communityId=true
+cronQueries=true
+ARKIME_EOF
+
+    # Create Arkime capture service
+    cat > /etc/systemd/system/arkime-capture.service << EOF
+[Unit]
+Description=Arkime Packet Capture
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/arkime/bin/capture \
+    -c /opt/arkime/etc/config.ini \
+    -o pcapDir=/opt/arkime/raw \
+    --insecure
+Restart=always
+RestartSec=10
+LimitCORE=infinity
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create Arkime viewer service
+    cat > /etc/systemd/system/arkime-viewer.service << EOF
+[Unit]
+Description=Arkime Packet Viewer
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/arkime/viewer
+ExecStart=/opt/arkime/bin/node \
+    viewer.js \
+    -c /opt/arkime/etc/config.ini
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable \
+        arkime-capture \
+        arkime-viewer 2>/dev/null || true
+
+    if [ -f /opt/arkime/bin/capture ]; then
+        log "✅ Arkime configured on interface: ${IFACE}"
+    else
+        warn "❌ Arkime install FAILED"
+    fi
+fi
+
+# ── Install OpenSearch for Arkime ─────────────────
+log "Installing OpenSearch (required for Arkime)..."
+if ! command -v docker &>/dev/null; then
+    apt-get install -y -qq ca-certificates curl gnupg lsb-release > /dev/null
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null
+    chmod a+r /etc/apt/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+        https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+        > /etc/apt/sources.list.d/docker.list
+    apt-get update -qq
+    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin > /dev/null
+    systemctl enable docker
+    systemctl start docker
+    chmod 666 /var/run/docker.sock 2>/dev/null || true
+    log "✅ Docker installed"
+fi
+
+if ! docker ps 2>/dev/null | grep -q opensearch-arkime; then
+    docker run -d --name opensearch-arkime \
+        -e "discovery.type=single-node" \
+        -e "DISABLE_SECURITY_PLUGIN=true" \
+        -e "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m" \
+        -p 9200:9200 \
+        --restart unless-stopped \
+        opensearchproject/opensearch:2.5.0 > /dev/null 2>&1 \
+    && log "✅ OpenSearch container started" \
+    || warn "⚠️ OpenSearch container start failed"
+else
+    log "✅ OpenSearch already running"
+fi
+
+log "Waiting for OpenSearch to be ready..."
+for i in {1..30}; do
+    if curl -s http://localhost:9200 > /dev/null 2>&1; then
+        log "✅ OpenSearch ready"
+        break
+    fi
+    echo -n "."
+    sleep 3
+done
+echo ""
+
+# Initialize Arkime DB and create admin user now that OpenSearch is ready
+if [ -f /opt/arkime/bin/capture ]; then
+    log "Initializing Arkime database..."
+    echo "yes" | timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init --ifneeded 2>&1 || \
+        echo "yes" | timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init 2>&1 || true
+    log "✅ Arkime database initialized"
+    log "Creating Arkime admin user..."
+    ARKIME_PASS=$(echo "$API_KEY" | sha256sum | cut -c1-16)
+    /opt/arkime/bin/arkime_add_user.sh admin "Admin" "$ARKIME_PASS" --admin 2>/dev/null \
+        && log "✅ Arkime admin user ready (user: admin / pass derived from API_KEY)" \
+        || warn "⚠️ Arkime admin user creation failed — run manually after install"
+fi
 
 # ── Install Vector ────────────────────────────────
 log "Installing Vector..."
@@ -500,17 +763,52 @@ def start_vector():
         print(f"[NDR] Vector start failed: {e}")
     return False
 
+def start_arkime():
+    try:
+        subprocess.run(
+            ['systemctl', 'start', 'arkime-capture'],
+            capture_output=True, timeout=30)
+        subprocess.run(
+            ['systemctl', 'start', 'arkime-viewer'],
+            capture_output=True, timeout=30)
+        print("[NDR] ✅ Arkime started!")
+        return True
+    except Exception as e:
+        print(f"[NDR] Arkime start failed: {e}")
+    return False
+
+def stop_arkime():
+    subprocess.run(
+        ['systemctl', 'stop', 'arkime-capture'],
+        capture_output=True)
+    subprocess.run(
+        ['systemctl', 'stop', 'arkime-viewer'],
+        capture_output=True)
+
+def is_arkime_running():
+    capture = subprocess.run(
+        ['pgrep', '-f', 'arkime/bin/capture'],
+        capture_output=True
+    ).returncode == 0
+    viewer = subprocess.run(
+        ['pgrep', '-f', 'viewer.js'],
+        capture_output=True
+    ).returncode == 0
+    return capture and viewer
+
 def check_and_restart():
     if DESIRED_STATE == 'stopped':
         return {
             'zeek': 'stopped',
             'suricata': 'stopped',
-            'vector': 'stopped'
+            'vector': 'stopped',
+            'arkime': 'stopped'
         }
 
     zeek_ok     = is_running('zeek')
     suricata_ok = is_running('suricata')
     vector_ok   = is_running('vector')
+    arkime_ok   = is_arkime_running()
 
     if not zeek_ok:
         print("[NDR] Zeek stopped! Restarting...")
@@ -521,18 +819,34 @@ def check_and_restart():
     if not vector_ok:
         print("[NDR] Vector stopped! Restarting...")
         start_vector()
+    if not arkime_ok:
+        print("[NDR] Arkime stopped! Restarting...")
+        start_arkime()
 
     return {
         'zeek':     'running' if zeek_ok else 'restarting',
         'suricata': 'running' if suricata_ok else 'restarting',
-        'vector':   'running' if vector_ok else 'restarting'
+        'vector':   'running' if vector_ok else 'restarting',
+        'arkime':   'running' if arkime_ok else 'restarting'
     }
 
+def derive_arkime_pass(api_key):
+    import hashlib
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+
 def report_status(services):
+    import socket
+    try:
+        sensor_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        sensor_ip = '127.0.0.1'
     status = {
         'tenant_id': TENANT_ID,
         'timestamp': datetime.utcnow().isoformat(),
-        **services
+        'arkime_url': f'http://{sensor_ip}:8005',
+        'arkime_pass': derive_arkime_pass(API_KEY),
+        **services,
+        'arkime': 'running' if is_arkime_running() else 'stopped'
     }
     try:
         requests.post(
@@ -568,6 +882,7 @@ def execute_command(cmd):
         start_zeek()
         start_suricata()
         start_vector()
+        start_arkime()
     elif cmd == 'stop':
         DESIRED_STATE = 'stopped'
         subprocess.run(['systemctl', 'stop', 'ndr-vector'],
@@ -578,6 +893,7 @@ def execute_command(cmd):
             capture_output=True)
         subprocess.run(['rm', '-f', '/var/run/suricata.pid', '/run/suricata.pid', '/tmp/suricata.pid'],
             capture_output=True)
+        stop_arkime()
         print("[NDR] All services stopped!")
     elif cmd == 'restart':
         DESIRED_STATE = 'running'
@@ -599,6 +915,7 @@ if __name__ == '__main__':
     start_zeek()
     start_suricata()
     start_vector()
+    start_arkime()
     time.sleep(5)
 
     while True:
@@ -616,6 +933,129 @@ if __name__ == '__main__':
         time.sleep(30)
 AGENT
 chmod +x /opt/ndr-sensor/agent.py
+
+# ── Write pcap-uploader.py ────────────────────────
+cat > /opt/ndr-sensor/pcap-uploader.py << 'PCAP_UPLOADER'
+#!/usr/bin/env python3
+"""
+Upload a PCAP for a given community_id from local Arkime to the NDR cloud.
+Usage: pcap-uploader.py <community_id>
+"""
+import sys, os, subprocess, tempfile, json
+
+CONF = "/etc/ndr/sensor.conf"
+ARKIME = "http://localhost:8005"
+
+def derive_arkime_pass(api_key):
+    import hashlib
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+
+def read_conf():
+    cfg = {}
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+    except Exception as e:
+        print(f"[pcap-uploader] Cannot read {CONF}: {e}", file=sys.stderr)
+        sys.exit(1)
+    return cfg
+
+def arkime_get(path, auth):
+    r = subprocess.run(
+        ["curl", "-s", "-u", auth, f"{ARKIME}{path}"],
+        capture_output=True, text=True, timeout=30
+    )
+    return r.stdout
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: pcap-uploader.py <community_id>", file=sys.stderr)
+        sys.exit(1)
+
+    community_id = sys.argv[1]
+    cfg = read_conf()
+    cloud_url    = cfg.get("CLOUD_URL", "").rstrip("/")
+    api_key      = cfg.get("API_KEY", "")
+    arkime_pass  = derive_arkime_pass(api_key)
+    arkime_auth  = f"admin:{arkime_pass}"
+
+    if not cloud_url or not api_key:
+        print("[pcap-uploader] CLOUD_URL or API_KEY missing in sensor.conf", file=sys.stderr)
+        sys.exit(1)
+
+    # Get session metadata from Arkime
+    expr = f"communityId=={community_id}"
+    meta_json = arkime_get(
+        f"/api/sessions?expression={expr}&startTime=-7d&stopTime=now&length=1",
+        arkime_auth
+    )
+    try:
+        meta = json.loads(meta_json)
+        sessions = meta.get("data", [])
+    except Exception:
+        sessions = []
+
+    src_ip = dst_ip = proto = sensor_host = ""
+    src_port = dst_port = 0
+    if sessions:
+        s = sessions[0]
+        src_ip      = s.get("srcIp",   "")
+        dst_ip      = s.get("dstIp",   "")
+        src_port    = int(s.get("srcPort", 0))
+        dst_port    = int(s.get("dstPort", 0))
+        proto       = s.get("protocol", "")
+        sensor_host = s.get("node", os.uname().nodename)
+
+    # Download PCAP from Arkime
+    with tempfile.NamedTemporaryFile(suffix=".pcap", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-u", arkime_auth,
+             f"{ARKIME}/api/sessions/pcap?expression={expr}&startTime=-7d&stopTime=now",
+             "-o", tmp_path],
+            capture_output=True, timeout=120
+        )
+        if r.returncode != 0:
+            print("[pcap-uploader] curl download failed", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(tmp_path)
+        if file_size < 24:
+            print(f"[pcap-uploader] PCAP too small ({file_size} bytes) — skipping", file=sys.stderr)
+            sys.exit(0)
+
+        # Upload to NDR cloud
+        result = subprocess.run(
+            ["curl", "-s", "-X", "POST",
+             f"{cloud_url}/api/pcap/upload",
+             "-H", f"X-Sensor-Key: {api_key}",
+             "-F", f"pcap=@{tmp_path};type=application/vnd.tcpdump.pcap",
+             "-F", f"community_id={community_id}",
+             "-F", f"src_ip={src_ip}",
+             "-F", f"dst_ip={dst_ip}",
+             "-F", f"src_port={src_port}",
+             "-F", f"dst_port={dst_port}",
+             "-F", f"proto={proto}",
+             "-F", f"sensor_host={sensor_host}"],
+            capture_output=True, text=True, timeout=300
+        )
+        print(f"[pcap-uploader] Upload result: {result.stdout}")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    main()
+PCAP_UPLOADER
+chmod +x /opt/ndr-sensor/pcap-uploader.py
 
 # ── Create systemd services ───────────────────────
 log "Creating systemd services..."
@@ -704,6 +1144,8 @@ printf "║  Cloud:     %-28s ║\n" "${CLOUD_URL:0:28}"
 echo "╠══════════════════════════════════════════╣"
 echo "║  Agent running — manages all services    ║"
 echo "║  Sensor data flowing to cloud platform   ║"
+printf "║  Arkime UI: http://%-20s ║\n" \
+    "$(hostname -I | awk '{print $1}'):8005"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 log "Config: /etc/ndr/sensor.conf"

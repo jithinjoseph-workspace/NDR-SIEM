@@ -173,6 +173,17 @@ pub struct AuthClaims {
     pub exp: usize,
 }
 
+// Accepts token from Authorization header OR ?token= query param (needed for window.open downloads)
+pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
+    let secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "ndr-secret-key-2026".to_string());
+    decode::<AuthClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default()
+    ).ok().map(|d| d.claims)
+}
+
 pub fn extract_claims(
     headers: &axum::http::HeaderMap
 ) -> Option<AuthClaims> {
@@ -4940,11 +4951,14 @@ pub async fn sensor_heartbeat(
     let zeek = payload["zeek"].as_str().unwrap_or("unknown");
     let suricata = payload["suricata"].as_str().unwrap_or("unknown");
     let vector = payload["vector"].as_str().unwrap_or("unknown");
+    let arkime = payload["arkime"].as_str().unwrap_or("unknown");
+    let arkime_url = payload["arkime_url"].as_str().unwrap_or("");
+    let arkime_pass = payload["arkime_pass"].as_str().unwrap_or("");
     let key_prefix = extract_sensor_key_prefix(&headers);
 
     if let Some(prefix) = key_prefix.as_deref() {
         if let Err(e) = state.ch_storage
-            .update_sensor_heartbeat(prefix, zeek, suricata, vector)
+            .update_sensor_heartbeat(prefix, zeek, suricata, vector, arkime, arkime_url, arkime_pass)
             .await {
             tracing::warn!(
                 "Failed to persist sensor heartbeat for tenant={}: {}",
@@ -4963,10 +4977,11 @@ pub async fn sensor_heartbeat(
     }
 
     tracing::info!(
-        "Heartbeat from tenant={} zeek={} suricata={}",
+        "Heartbeat from tenant={} zeek={} suricata={} arkime={}",
         tenant_id,
         zeek,
-        suricata
+        suricata,
+        arkime
     );
 
     Json(json!({"status": "ok"}))
@@ -5139,6 +5154,546 @@ pub async fn get_sensor_command_api(
     }
 
     Json(json!({ "command": command }))
+}
+
+// ── Arkime Proxy Endpoints ────────────────────────────────────────────────
+
+fn arkime_basic_auth(pass: &str) -> String {
+    let credential = if pass.is_empty() {
+        "admin:admin".to_string()
+    } else {
+        format!("admin:{}", pass)
+    };
+    base64::engine::general_purpose::STANDARD.encode(credential)
+}
+
+async fn get_tenant_arkime_creds(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(String, String), axum::response::Response> {
+    use axum::response::IntoResponse;
+    let claims = match extract_claims(headers) {
+        Some(c) => c,
+        None => return Err((axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(json!({"status":"error","message":"Unauthorized"}))).into_response()),
+    };
+    let (url, pass) = state.ch_storage
+        .get_arkime_creds(&claims.tenant_id)
+        .await
+        .unwrap_or_default();
+    if url.is_empty() {
+        return Err(axum::Json(json!({
+            "status": "error",
+            "message": "Arkime not configured for this tenant"
+        })).into_response());
+    }
+    Ok((url, pass))
+}
+
+pub async fn arkime_sessions(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return axum::Json(json!({"status":"error","message":"Unauthorized"})).into_response(),
+    };
+
+    // Parse optional query params
+    let params: std::collections::HashMap<String, String> = raw_query
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|kv| {
+            let mut parts = kv.splitn(2, '=');
+            Some((parts.next()?.to_string(), parts.next().unwrap_or("").to_string()))
+        })
+        .collect();
+
+    let community_id = params.get("cid").map(|s| s.as_str());
+    let src_ip = params.get("ip").map(|s| s.as_str());
+    let limit = params.get("limit")
+        .and_then(|l| l.parse::<u32>().ok())
+        .unwrap_or(50);
+
+    // Check ClickHouse cache first
+    let sessions = state.ch_storage
+        .get_pcap_sessions(&claims.tenant_id, community_id, src_ip, limit)
+        .await
+        .unwrap_or_default();
+
+    if !sessions.is_empty() {
+        return axum::Json(json!({
+            "status": "ok",
+            "sessions": sessions,
+            "source": "clickhouse"
+        })).into_response();
+    }
+
+    // Fallback: query Arkime directly with correct expression format
+    let (arkime_url, arkime_pass) = match get_tenant_arkime_creds(&state, &headers).await {
+        Ok(creds) => creds,
+        Err(_) => return axum::Json(json!({
+            "status": "ok",
+            "sessions": [],
+            "message": "No Arkime configured"
+        })).into_response(),
+    };
+
+    // Build Arkime expression query (Arkime uses expression=field==value, not custom params)
+    let mut expression_parts: Vec<String> = Vec::new();
+    if let Some(cid) = community_id {
+        expression_parts.push(format!("communityId=={}", cid));
+    }
+    if let Some(ip) = src_ip {
+        expression_parts.push(format!("ip=={}", ip));
+    }
+    let mut arkime_query = format!(
+        "{}/api/sessions?length={}&startTime=-7d&stopTime=now",
+        arkime_url, limit
+    );
+    if !expression_parts.is_empty() {
+        let expr = expression_parts.join(" && ");
+        arkime_query.push_str(&format!("&expression={}", urlencoding_encode(&expr)));
+    }
+
+    match reqwest::Client::new()
+        .get(&arkime_query)
+        .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let arkime_data: serde_json::Value = resp.json().await.unwrap_or_default();
+            // Arkime returns {"data":[...], "recordsTotal":N} — map to our format
+            let raw_sessions: Vec<serde_json::Value> = arkime_data["data"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+
+            let tenant_id_clone = claims.tenant_id.clone();
+            let arkime_url_clone = arkime_url.clone();
+            let ch = state.ch_storage.clone();
+
+            // Cache sessions into ClickHouse for evidence retention
+            // (on-premise: Arkime is source of truth; cloud: sensor upload is source)
+            let sessions_to_cache = raw_sessions.clone();
+            tokio::spawn(async move {
+                for s in sessions_to_cache {
+                    // Arkime 5 returns flat dotted keys e.g. "source.ip"; fallback to nested
+                    let session_id = s["id"].as_str()
+                        .or_else(|| s["_id"].as_str())
+                        .unwrap_or("").to_string();
+                    if session_id.is_empty() { continue; }
+
+                    let community_id = s.get("network.community_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| s.get("communityId").and_then(|v| v.as_str()))
+                        .or_else(|| s.get("network.communityId").and_then(|v| v.as_str()))
+                        .unwrap_or("").to_string();
+
+                    let src_ip = s.get("source.ip").and_then(|v| v.as_str())
+                        .or_else(|| s["source"]["ip"].as_str())
+                        .or_else(|| s["srcIp"].as_str())
+                        .unwrap_or("").to_string();
+                    let dst_ip = s.get("destination.ip").and_then(|v| v.as_str())
+                        .or_else(|| s["destination"]["ip"].as_str())
+                        .or_else(|| s["dstIp"].as_str())
+                        .unwrap_or("").to_string();
+                    let src_port = s.get("source.port").and_then(|v| v.as_u64())
+                        .or_else(|| s["source"]["port"].as_u64())
+                        .or_else(|| s["srcPort"].as_u64())
+                        .unwrap_or(0) as u16;
+                    let dst_port = s.get("destination.port").and_then(|v| v.as_u64())
+                        .or_else(|| s["destination"]["port"].as_u64())
+                        .or_else(|| s["dstPort"].as_u64())
+                        .unwrap_or(0) as u16;
+                    let ip_proto = s["ipProtocol"].as_u64()
+                        .or_else(|| s.get("ipProtocol").and_then(|v| v.as_u64()))
+                        .unwrap_or(0);
+                    let proto = if ip_proto == 6 { "tcp" }
+                                else if ip_proto == 17 { "udp" }
+                                else { "other" };
+                    let bytes = s.get("network.bytes").and_then(|v| v.as_u64())
+                        .or_else(|| s["network"]["bytes"].as_u64())
+                        .or_else(|| s["totBytes"].as_u64())
+                        .unwrap_or(0);
+                    let sensor_host = s["node"].as_str().unwrap_or("").to_string();
+
+                    if let Err(e) = ch.save_pcap_session(
+                        &tenant_id_clone, &session_id, &community_id,
+                        &src_ip, &dst_ip, src_port, dst_port, proto,
+                        bytes, &arkime_url_clone, "", &sensor_host,
+                    ).await {
+                        tracing::warn!("pcap_sessions insert failed for {}: {}", session_id, e);
+                    }
+                }
+            });
+
+            let sessions: Vec<serde_json::Value> = raw_sessions.iter().map(|s| {
+                let src_ip = s.get("source.ip").cloned()
+                    .or_else(|| s["source"]["ip"].as_str().map(|v| json!(v)))
+                    .or_else(|| s.get("srcIp").cloned())
+                    .unwrap_or(json!(""));
+                let dst_ip = s.get("destination.ip").cloned()
+                    .or_else(|| s["destination"]["ip"].as_str().map(|v| json!(v)))
+                    .or_else(|| s.get("dstIp").cloned())
+                    .unwrap_or(json!(""));
+                let src_port = s.get("source.port").cloned()
+                    .or_else(|| s.get("srcPort").cloned())
+                    .unwrap_or(s["source"]["port"].clone());
+                let dst_port = s.get("destination.port").cloned()
+                    .or_else(|| s.get("dstPort").cloned())
+                    .unwrap_or(s["destination"]["port"].clone());
+                let bytes = s.get("network.bytes").cloned()
+                    .or_else(|| s.get("totBytes").cloned())
+                    .unwrap_or(s["network"]["bytes"].clone());
+                let packets = s.get("network.packets").cloned()
+                    .or_else(|| s.get("totPackets").cloned())
+                    .unwrap_or(s["network"]["packets"].clone());
+                let ip_proto = s["ipProtocol"].as_u64().unwrap_or(0);
+                let proto = if ip_proto == 6 { "tcp" } else if ip_proto == 17 { "udp" } else { "other" };
+                json!({
+                    "session_id":   s["id"],
+                    "community_id": s.get("network.community_id").cloned()
+                        .or_else(|| s.get("communityId").cloned())
+                        .or_else(|| s.get("network.communityId").cloned())
+                        .unwrap_or(json!("")),
+                    "src_ip":   src_ip,
+                    "dst_ip":   dst_ip,
+                    "src_port": src_port,
+                    "dst_port": dst_port,
+                    "proto":    proto,
+                    "start_time": s["firstPacket"],
+                    "end_time":   s["lastPacket"],
+                    "bytes":   bytes,
+                    "packets": packets,
+                    "arkime_url":  arkime_url,
+                    "sensor_host": s["node"]
+                })
+            }).collect();
+
+            axum::Json(json!({
+                "status": "ok",
+                "sessions": sessions,
+                "total": arkime_data["recordsTotal"],
+                "source": "arkime"
+            })).into_response()
+        }
+        Err(e) => axum::Json(json!({
+            "status": "error",
+            "message": format!("Failed to reach Arkime: {}", e)
+        })).into_response()
+    }
+}
+
+pub async fn arkime_pcap_download(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    // Support ?token= for window.open() downloads (cannot set Authorization header)
+    let mut effective_headers = headers.clone();
+    if let Some(q) = raw_query.as_deref() {
+        for part in q.split('&') {
+            if let Some(tok) = part.strip_prefix("token=") {
+                effective_headers.insert(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {}", tok).parse().unwrap(),
+                );
+                break;
+            }
+        }
+    }
+
+    let (arkime_url, arkime_pass) = match get_tenant_arkime_creds(&state, &effective_headers).await {
+        Ok(creds) => creds,
+        Err(r) => return r,
+    };
+    let target = format!("{}/api/session/{}/pcap", arkime_url, session_id);
+    match reqwest::Client::new()
+        .get(&target)
+        .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = axum::http::StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(axum::http::StatusCode::OK);
+            let bytes = resp.bytes().await.unwrap_or_default();
+            (
+                status,
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/vnd.tcpdump.pcap"),
+                    (axum::http::header::CONTENT_DISPOSITION,
+                        &format!("attachment; filename=\"{}.pcap\"", session_id)),
+                ],
+                bytes,
+            ).into_response()
+        }
+        Err(e) => axum::Json(json!({
+            "status": "error",
+            "message": format!("Failed to reach Arkime: {}", e)
+        })).into_response()
+    }
+}
+
+pub async fn arkime_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (arkime_url, arkime_pass) = match get_tenant_arkime_creds(&state, &headers).await {
+        Ok(creds) => creds,
+        Err(r) => return r,
+    };
+    let target = format!("{}/api/stats", arkime_url);
+    match reqwest::Client::new()
+        .get(&target)
+        .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = axum::http::StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(axum::http::StatusCode::OK);
+            let body = resp.text().await.unwrap_or_default();
+            (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        Err(e) => axum::Json(json!({
+            "status": "error",
+            "message": format!("Arkime unreachable: {}", e)
+        })).into_response()
+    }
+}
+
+pub async fn arkime_session_link(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(community_id): axum::extract::Path<String>,
+) -> axum::Json<serde_json::Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return axum::Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let (arkime_url, _) = state.ch_storage
+        .get_arkime_creds(&claims.tenant_id)
+        .await
+        .unwrap_or_default();
+    if arkime_url.is_empty() {
+        return axum::Json(json!({
+            "status": "error",
+            "message": "No Arkime configured"
+        }));
+    }
+    let link = format!(
+        "{}/?expression=communityId%3D%3D{}&startTime=-1h&stopTime=now",
+        arkime_url,
+        urlencoding_encode(&community_id)
+    );
+    axum::Json(json!({
+        "status": "ok",
+        "link": link,
+        "arkime_url": arkime_url
+    }))
+}
+
+pub async fn pcap_upload(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    mut multipart: axum::extract::Multipart,
+) -> axum::Json<serde_json::Value> {
+    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+        Some(tid) => tid,
+        None => return axum::Json(json!({
+            "status": "error",
+            "message": "Unauthorized: invalid sensor key"
+        })),
+    };
+
+    let mut pcap_bytes: Vec<u8> = Vec::new();
+    let mut community_id = String::new();
+    let mut src_ip = String::new();
+    let mut dst_ip = String::new();
+    let mut src_port: u16 = 0;
+    let mut dst_port: u16 = 0;
+    let mut proto = String::new();
+    let mut sensor_host = String::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "pcap" => {
+                pcap_bytes = match field.bytes().await {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => return axum::Json(json!({
+                        "status": "error",
+                        "message": format!("Failed to read pcap field: {}", e)
+                    })),
+                };
+            }
+            "community_id" => {
+                community_id = field.text().await.unwrap_or_default();
+            }
+            "src_ip" => { src_ip = field.text().await.unwrap_or_default(); }
+            "dst_ip" => { dst_ip = field.text().await.unwrap_or_default(); }
+            "src_port" => {
+                src_port = field.text().await.unwrap_or_default()
+                    .parse().unwrap_or(0);
+            }
+            "dst_port" => {
+                dst_port = field.text().await.unwrap_or_default()
+                    .parse().unwrap_or(0);
+            }
+            "proto" => { proto = field.text().await.unwrap_or_default(); }
+            "sensor_host" => { sensor_host = field.text().await.unwrap_or_default(); }
+            _ => {}
+        }
+    }
+
+    if pcap_bytes.is_empty() {
+        return axum::Json(json!({"status":"error","message":"No pcap data received"}));
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let date_str = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let file_dir = format!("/opt/ndr/pcap/{}/{}", tenant_id, date_str);
+    let file_path = format!("{}/{}.pcap", file_dir, session_id);
+    let bytes_count = pcap_bytes.len() as u64;
+
+    if let Err(e) = tokio::fs::create_dir_all(&file_dir).await {
+        return axum::Json(json!({
+            "status": "error",
+            "message": format!("Failed to create storage directory: {}", e)
+        }));
+    }
+
+    if let Err(e) = tokio::fs::write(&file_path, &pcap_bytes).await {
+        return axum::Json(json!({
+            "status": "error",
+            "message": format!("Failed to write pcap file: {}", e)
+        }));
+    }
+
+    if let Err(e) = state.ch_storage.save_pcap_session(
+        &tenant_id, &session_id, &community_id,
+        &src_ip, &dst_ip, src_port, dst_port, &proto,
+        bytes_count, "", &file_path, &sensor_host,
+    ).await {
+        tracing::warn!("Failed to index pcap session in ClickHouse: {}", e);
+    }
+
+    axum::Json(json!({
+        "status": "ok",
+        "session_id": session_id,
+        "file_path": file_path,
+        "bytes": bytes_count
+    }))
+}
+
+pub async fn pcap_download_stored(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    // Support ?token= for window.open() downloads
+    let mut effective_headers = headers.clone();
+    if let Some(q) = raw_query.as_deref() {
+        for part in q.split('&') {
+            if let Some(tok) = part.strip_prefix("token=") {
+                effective_headers.insert(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {}", tok).parse().unwrap(),
+                );
+                break;
+            }
+        }
+    }
+
+    let claims = match extract_claims(&effective_headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+    };
+
+    let file_path = state.ch_storage
+        .get_pcap_file_path(&claims.tenant_id, &session_id)
+        .await
+        .unwrap_or_default();
+
+    // If a stored file exists (remote sensor upload) — serve it directly
+    if !file_path.is_empty() {
+        return match tokio::fs::read(&file_path).await {
+            Ok(data) => (
+                [
+                    ("Content-Type", "application/vnd.tcpdump.pcap"),
+                    ("Content-Disposition",
+                     &format!("attachment; filename=\"{}.pcap\"", session_id)),
+                ],
+                data,
+            ).into_response(),
+            Err(e) => (
+                axum::http::StatusCode::NOT_FOUND,
+                format!("PCAP file not found on disk: {}", e),
+            ).into_response(),
+        };
+    }
+
+    // Fallback: on-premise session — proxy download through Arkime
+    // session_id is the Arkime session ID stored by the caching layer
+    let (arkime_url, arkime_pass) = state.ch_storage
+        .get_arkime_creds(&claims.tenant_id)
+        .await
+        .unwrap_or_default();
+
+    if arkime_url.is_empty() {
+        return (axum::http::StatusCode::NOT_FOUND, "PCAP not available").into_response();
+    }
+
+    let target = format!("{}/api/session/{}/pcap", arkime_url, session_id);
+    match reqwest::Client::new()
+        .get(&target)
+        .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let bytes = resp.bytes().await.unwrap_or_default();
+            (
+                [
+                    ("Content-Type", "application/vnd.tcpdump.pcap"),
+                    ("Content-Disposition",
+                     &format!("attachment; filename=\"{}.pcap\"", session_id)),
+                ],
+                bytes,
+            ).into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::BAD_GATEWAY,
+            format!("Arkime unreachable: {}", e),
+        ).into_response(),
+    }
+}
+
+fn urlencoding_encode(s: &str) -> String {
+    s.chars().flat_map(|c| {
+        if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            vec![c]
+        } else {
+            format!("%{:02X}", c as u32).chars().collect()
+        }
+    }).collect()
 }
 
 pub async fn sensor_control_api(

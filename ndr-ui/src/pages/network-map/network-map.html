@@ -112,6 +112,58 @@
         <span>Identifier</span>
         <code>{{ selectedNode.id }}</code>
       </div>
+
+      <button class="pcap-sessions-btn"
+        type="button"
+        (click)="viewPcapSessions(selectedNode.id)">
+        <lucide-icon [name]="PackageIcon" class="w-4 h-4"></lucide-icon>
+        View PCAP Sessions
+      </button>
     </aside>
+  </div>
+
+  <!-- PCAP sessions panel -->
+  <div class="pcap-drawer" *ngIf="showPcapPanel">
+    <div class="pcap-drawer-header">
+      <div class="pcap-drawer-title">
+        <lucide-icon [name]="PackageIcon" class="w-4 h-4"></lucide-icon>
+        <span>Sessions for <code>{{ pcapIp }}</code></span>
+      </div>
+      <button class="icon-button" type="button" (click)="closePcapPanel()">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+
+    <div *ngIf="pcapLoading" class="pcap-drawer-state">Loading...</div>
+    <div *ngIf="pcapError && !pcapLoading" class="pcap-drawer-state error">{{ pcapError }}</div>
+
+    <div *ngIf="!pcapLoading && !pcapError && pcapSessions.length === 0" class="pcap-drawer-state">
+      No sessions found.
+    </div>
+
+    <div *ngIf="!pcapLoading && pcapSessions.length > 0" class="pcap-session-list">
+      <div *ngFor="let s of pcapSessions" class="pcap-session-row">
+        <div class="session-flow">
+          <span>{{ s.src_ip }}:{{ s.src_port }}</span>
+          <span class="arrow">→</span>
+          <span>{{ s.dst_ip }}:{{ s.dst_port }}</span>
+          <span class="proto-tag">{{ s.proto }}</span>
+        </div>
+        <div class="session-meta">
+          <span>{{ formatBytes(s.bytes) }}</span>
+          <span>{{ s.packets }} pkts</span>
+          <div class="session-actions">
+            <button class="icon-button sm" title="Download PCAP"
+              type="button" (click)="downloadPcap(s.session_id)">
+              <lucide-icon [name]="DownloadIcon" class="w-3.5 h-3.5"></lucide-icon>
+            </button>
+            <button class="icon-button sm" title="Open in Arkime"
+              type="button" (click)="openArkime(s.community_id)">
+              <lucide-icon [name]="ExternalLinkIcon" class="w-3.5 h-3.5"></lucide-icon>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </section>

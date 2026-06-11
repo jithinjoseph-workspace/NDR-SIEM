@@ -223,12 +223,37 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_keys
     zeek_status String DEFAULT 'unknown',
     suricata_status String DEFAULT 'unknown',
     vector_status String DEFAULT 'unknown',
+    arkime_status String DEFAULT 'unknown',
+    arkime_url  String DEFAULT '',
+    arkime_pass String DEFAULT '',
     active      UInt8 DEFAULT 1,
     created_at  DateTime DEFAULT now(),
     last_seen   DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(last_seen)
 ORDER BY id;
+
+CREATE TABLE IF NOT EXISTS ndr.pcap_sessions
+(
+    session_id   String,
+    community_id String,
+    src_ip       String,
+    dst_ip       String,
+    src_port     UInt16,
+    dst_port     UInt16,
+    proto        String,
+    start_time   DateTime DEFAULT now(),
+    end_time     DateTime DEFAULT now(),
+    bytes        UInt64 DEFAULT 0,
+    packets      UInt64 DEFAULT 0,
+    arkime_url   String DEFAULT '',
+    tenant_id    String DEFAULT 'default',
+    sensor_host  String DEFAULT '',
+    file_path    String DEFAULT ''
+)
+ENGINE = ReplacingMergeTree(start_time)
+ORDER BY (tenant_id, session_id)
+TTL start_time + INTERVAL 30 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.sensor_commands
 (

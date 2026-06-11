@@ -454,3 +454,130 @@
     width: fit-content;
   }
 }
+
+/* ── PCAP Sessions Button in Inspector ─── */
+.pcap-sessions-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.875rem;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(105, 246, 184, 0.25);
+  background: rgba(105, 246, 184, 0.06);
+  color: var(--color-primary, #69f6b8);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 150ms;
+}
+
+.pcap-sessions-btn:hover {
+  background: rgba(105, 246, 184, 0.12);
+}
+
+/* ── PCAP Drawer ─── */
+.pcap-drawer {
+  background: var(--color-surface, #0f1724);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0.75rem;
+  margin-top: 0.75rem;
+  overflow: hidden;
+}
+
+.pcap-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.pcap-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-primary, #69f6b8);
+}
+
+.pcap-drawer-title code {
+  color: #c8d6f0;
+  font-size: 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+}
+
+.pcap-drawer-state {
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--color-on-surface-variant);
+  font-size: 0.8rem;
+}
+
+.pcap-drawer-state.error {
+  color: #f87171;
+}
+
+.pcap-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pcap-session-row {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+}
+
+.pcap-session-row:last-child {
+  border-bottom: none;
+}
+
+.session-flow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #c8d6f0;
+  flex-wrap: wrap;
+}
+
+.session-flow .arrow {
+  color: var(--color-on-surface-variant);
+}
+
+.proto-tag {
+  padding: 0.1rem 0.4rem;
+  border-radius: 9999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  background: rgba(124, 163, 255, 0.1);
+  color: #7ca3ff;
+  border: 1px solid rgba(124, 163, 255, 0.2);
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.3rem;
+  color: var(--color-on-surface-variant);
+  font-size: 0.68rem;
+}
+
+.session-actions {
+  display: flex;
+  gap: 0.2rem;
+  margin-left: auto;
+}
+
+.icon-button.sm {
+  width: 1.6rem;
+  height: 1.6rem;
+}

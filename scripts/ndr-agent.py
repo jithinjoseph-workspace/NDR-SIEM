@@ -13,6 +13,33 @@ IFACE_FILE = RUNTIME_DIR / "ndr_interface"
 os.makedirs(f"{LOGDIR}/suricata", exist_ok=True)
 os.makedirs(f"{LOGDIR}/zeek", exist_ok=True)
 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def start_arkime():
+    subprocess.run(
+        ["sudo", "systemctl", "start", "arkime-capture"],
+        capture_output=True)
+    subprocess.run(
+        ["sudo", "systemctl", "start", "arkime-viewer"],
+        capture_output=True)
+
+
+def stop_arkime():
+    subprocess.run(
+        ["sudo", "systemctl", "stop", "arkime-capture"],
+        capture_output=True)
+    subprocess.run(
+        ["sudo", "systemctl", "stop", "arkime-viewer"],
+        capture_output=True)
+
+
+def get_arkime_status():
+    r = subprocess.run(
+        ["systemctl", "is-active", "arkime-capture"],
+        capture_output=True, text=True)
+    return r.stdout.strip()
+
+
 class AgentHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         print(f"[Agent] {args[0]} {args[1]}")
@@ -60,6 +87,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "vector":     "running" if vector      else "stopped",
                 "kafka":      "running" if kafka       else "stopped",
                 "clickhouse": "running" if clickhouse  else "stopped",
+                "arkime":     get_arkime_status(),
                 "interface":  iface
             })                   
 
@@ -121,6 +149,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                  ],  # use /tmp instead
                             stdout=open("/tmp/suricata.log", "w"),
                             stderr=subprocess.STDOUT)
+
+            # Start Arkime
+            start_arkime()
     
             self.send_json({"status": "started", "interface": iface})
         elif self.path == "/agent/stop":
@@ -136,6 +167,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 f"{HOME_DIR}/.vector/data/suricata",
                 f"{HOME_DIR}/.vector/data/zeek"],
                 capture_output=True)
+            # Stop Arkime
+            stop_arkime()
             # Rotate logs
             subprocess.run(["sudo", "logrotate", "-f",
                 "/etc/logrotate.d/suricata-ndr"],

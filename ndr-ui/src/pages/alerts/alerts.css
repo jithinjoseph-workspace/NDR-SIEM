@@ -444,3 +444,152 @@ html[data-theme="light"] .alerts-action.primary {
     flex: 1 1 auto;
   }
 }
+
+/* ── PCAP Action Buttons ─── */
+.pcap-btn {
+  color: var(--color-primary);
+}
+
+.arkime-btn {
+  color: #7ca3ff;
+}
+
+.icon-action:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+/* ── PCAP Modal ─── */
+.pcap-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.pcap-modal {
+  background: var(--color-surface, #0f1724);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.75rem;
+  width: 100%;
+  max-width: 860px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.pcap-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.pcap-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--color-primary);
+}
+
+.pcap-modal-title h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.pcap-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.375rem;
+  border: none;
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+  transition: background 150ms;
+}
+
+.pcap-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.pcap-state {
+  padding: 2rem;
+  text-align: center;
+  color: var(--color-on-surface-variant);
+  font-size: 0.875rem;
+}
+
+.pcap-state.error {
+  color: #f87171;
+}
+
+.pcap-table-wrap {
+  overflow: auto;
+  flex: 1;
+}
+
+.pcap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+}
+
+.pcap-table th {
+  padding: 0.6rem 1rem;
+  text-align: left;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-on-surface-variant);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.02);
+  white-space: nowrap;
+}
+
+.pcap-table td {
+  padding: 0.55rem 1rem;
+  color: #c8d6f0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+
+.pcap-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pcap-time {
+  color: var(--color-on-surface-variant) !important;
+  font-size: 0.72rem !important;
+}
+
+.proto-pill {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  background: rgba(124, 163, 255, 0.1);
+  color: #7ca3ff;
+  border: 1px solid rgba(124, 163, 255, 0.2);
+}
+
+.pcap-row-actions {
+  display: flex;
+  gap: 0.25rem;
+}

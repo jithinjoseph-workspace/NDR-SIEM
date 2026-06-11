@@ -1,22 +1,27 @@
 import { Component, OnDestroy, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
+import { ArkimeService } from '../../services/arkime/arkime';
 import { Subscription } from 'rxjs';
 import { ActivatedRoute } from '@angular/router';
 import {
   LucideAngularModule,
   AlertTriangle,
+  Download,
   ExternalLink,
   MoreHorizontal,
+  Package,
   RefreshCw,
   ShieldAlert,
+  X,
 } from 'lucide-angular';
 
 @Component({
   selector: 'app-alerts',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule],
+  imports: [CommonModule, FormsModule, LucideAngularModule],
   templateUrl: './alerts.html',
   styleUrl: './alerts.css',
 })
@@ -27,11 +32,20 @@ export class Alerts implements OnInit, OnDestroy {
   activeSeverity: string = '';
   priorityOnly: boolean = false;
 
+  // PCAP modal state
+  showPcapModal = false;
+  pcapLoading = false;
+  pcapSessions: any[] = [];
+  pcapError = '';
+
   ShieldAlertIcon = ShieldAlert;
   AlertTriangleIcon = AlertTriangle;
+  DownloadIcon = Download;
   ExternalLinkIcon = ExternalLink;
   MoreIcon = MoreHorizontal;
+  PackageIcon = Package;
   RefreshIcon = RefreshCw;
+  XIcon = X;
 
   private subs: Subscription[] = [];
 
@@ -39,7 +53,8 @@ export class Alerts implements OnInit, OnDestroy {
     private api: Api,
     private ws: Websocket,
     private route: ActivatedRoute,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private arkime: ArkimeService,
   ) {}
 
   ngOnInit() {
@@ -63,7 +78,7 @@ export class Alerts implements OnInit, OnDestroy {
           description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
           time: new Date().toLocaleTimeString(),
           score: hit.score,
-          community_id: hit.cid,
+          community_id: hit.cid || hit.community_id || '',
           src_country: this.formatOrigin(hit.src || hit.suricata?.src || hit.zeek?.src, hit.src_country),
           dst_country: hit.dst_country,
         };
@@ -87,6 +102,7 @@ export class Alerts implements OnInit, OnDestroy {
           time: this.formatAlertTime(hit.timestamp || hit.time),
           score: hit.score,
           threat_intel: hit.threat_intel,
+          community_id: hit.community_id || hit.cid || '',
           src_country: this.formatOrigin(hit.src_ip, hit.src_country),
           dst_country: hit.dst_country,
         }));
@@ -197,6 +213,46 @@ export class Alerts implements OnInit, OnDestroy {
 
     const lower = ip.toLowerCase();
     return lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80:');
+  }
+
+  viewPcap(cid: string) {
+    if (!cid) return;
+    this.pcapSessions = [];
+    this.pcapError = '';
+    this.pcapLoading = true;
+    this.showPcapModal = true;
+    this.arkime.getSessions({ cid, limit: 20 }).subscribe({
+      next: (data: any) => {
+        this.pcapSessions = data.sessions || [];
+        this.pcapLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.pcapError = 'Failed to load PCAP sessions';
+        this.pcapLoading = false;
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  openArkime(cid: string) {
+    if (!cid) return;
+    this.arkime.getSessionLink(cid).subscribe({
+      next: (data: any) => {
+        if (data.link) window.open(data.link, '_blank');
+      },
+    });
+  }
+
+  downloadPcap(sessionId: string) {
+    this.arkime.downloadPcap(sessionId);
+  }
+
+  formatBytes(bytes: number): string {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
   }
 
   ngOnDestroy() {

@@ -103,6 +103,24 @@ pub struct ThreatIntelHit {
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+pub struct PcapSessionRow {
+    pub session_id:   String,
+    pub community_id: String,
+    pub src_ip:       String,
+    pub dst_ip:       String,
+    pub src_port:     u16,
+    pub dst_port:     u16,
+    pub proto:        String,
+    pub start_time:   String,
+    pub end_time:     String,
+    pub bytes:        u64,
+    pub packets:      u64,
+    pub arkime_url:   String,
+    pub sensor_host:  String,
+    pub file_path:    String,
+}
+
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct SensorKeyRow {
     pub id: String,
     pub key_prefix: String,
@@ -114,6 +132,9 @@ pub struct SensorKeyRow {
     pub zeek_status: String,
     pub suricata_status: String,
     pub vector_status: String,
+    pub arkime_status: String,
+    pub arkime_url: String,
+    pub arkime_pass: String,
     pub active: u8,
     pub created_at: String,
     pub last_seen: String,
@@ -1923,7 +1944,8 @@ pub async fn get_sensor_keys(
             "SELECT id, key_prefix, tenant_id, \
                     name, hostname, interface_name, \
                     os_name, zeek_status, suricata_status, \
-                    vector_status, active, toString(created_at), \
+                    vector_status, arkime_status, arkime_url, arkime_pass, \
+                    active, toString(created_at), \
                     toString(last_seen) \
              FROM ndr.sensor_keys FINAL \
              WHERE {} \
@@ -1943,6 +1965,8 @@ pub async fn get_sensor_keys(
         "zeek": r.zeek_status,
         "suricata": r.suricata_status,
         "vector": r.vector_status,
+        "arkime": r.arkime_status,
+        "arkime_url": r.arkime_url,
         "active": r.active == 1,
         "created_at": r.created_at,
         "last_seen": r.last_seen
@@ -1980,23 +2004,224 @@ pub async fn update_sensor_heartbeat(
     zeek_status: &str,
     suricata_status: &str,
     vector_status: &str,
+    arkime_status: &str,
+    arkime_url: &str,
+    arkime_pass: &str,
 ) -> anyhow::Result<()> {
     let key_prefix = sql_escape(key_prefix);
     let zeek_status = sql_escape(zeek_status);
     let suricata_status = sql_escape(suricata_status);
     let vector_status = sql_escape(vector_status);
+    let arkime_status = sql_escape(arkime_status);
+    let arkime_url = sql_escape(arkime_url);
+    let arkime_pass_esc = sql_escape(arkime_pass);
+    let update_pass = if arkime_pass.is_empty() {
+        "arkime_pass".to_string()
+    } else {
+        format!("'{}'", arkime_pass_esc)
+    };
     let query = format!(
         "INSERT INTO ndr.sensor_keys \
          (id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
-          os_name, zeek_status, suricata_status, vector_status, active, created_at, last_seen) \
+          os_name, zeek_status, suricata_status, vector_status, \
+          arkime_status, arkime_url, arkime_pass, active, created_at, last_seen) \
          SELECT id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
-                os_name, '{}', '{}', '{}', active, created_at, now() \
+                os_name, '{}', '{}', '{}', '{}', '{}', {}, active, created_at, now() \
          FROM ndr.sensor_keys FINAL \
          WHERE key_prefix = '{}' AND active = 1",
-        zeek_status, suricata_status, vector_status, key_prefix
+        zeek_status, suricata_status, vector_status,
+        arkime_status, arkime_url, update_pass, key_prefix
     );
     self.client.query(&query).execute().await?;
     Ok(())
+}
+
+pub async fn get_arkime_creds(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<(String, String)> {
+    let tenant_id_esc = sql_escape(tenant_id);
+
+    // Query sensor_keys — ignore errors (e.g. arkime_pass column not yet migrated)
+    // so the env var fallback below is always reachable
+    let db_creds = self.client
+        .query(&format!(
+            "SELECT arkime_url, arkime_pass FROM ndr.sensor_keys FINAL \
+             WHERE tenant_id = '{}' AND active = 1 AND arkime_url != '' \
+             ORDER BY last_seen DESC LIMIT 1",
+            tenant_id_esc
+        ))
+        .fetch_all::<(String, String)>()
+        .await
+        .unwrap_or_default();
+
+    if let Some(creds) = db_creds.into_iter().next() {
+        if !creds.0.is_empty() {
+            return Ok(creds);
+        }
+    }
+
+    // On-premise fallback: read from environment (set by install.sh for default tenant)
+    if tenant_id == "default" {
+        let url  = std::env::var("ARKIME_URL").unwrap_or_default();
+        let pass = std::env::var("ARKIME_PASS").unwrap_or_default();
+        if !url.is_empty() {
+            return Ok((url, pass));
+        }
+    }
+
+    Ok((String::new(), String::new()))
+}
+
+pub async fn get_arkime_url(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<String> {
+    let tenant_id = sql_escape(tenant_id);
+    let result = self.client
+        .query(&format!(
+            "SELECT arkime_url FROM ndr.sensor_keys FINAL \
+             WHERE tenant_id = '{}' AND active = 1 AND arkime_url != '' \
+             ORDER BY last_seen DESC LIMIT 1",
+            tenant_id
+        ))
+        .fetch_all::<String>()
+        .await?;
+    Ok(result.into_iter().next().unwrap_or_default())
+}
+
+pub async fn save_arkime_url(
+    &self,
+    tenant_id: &str,
+    arkime_url: &str,
+) -> anyhow::Result<()> {
+    let tenant_id = sql_escape(tenant_id);
+    let arkime_url = sql_escape(arkime_url);
+    self.client
+        .query(&format!(
+            "ALTER TABLE ndr.sensor_keys \
+             UPDATE arkime_url = '{}' \
+             WHERE tenant_id = '{}' AND active = 1",
+            arkime_url, tenant_id
+        ))
+        .execute()
+        .await?;
+    Ok(())
+}
+
+pub async fn get_pcap_sessions(
+    &self,
+    tenant_id: &str,
+    community_id: Option<&str>,
+    src_ip: Option<&str>,
+    limit: u32,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    let tenant_id_esc = sql_escape(tenant_id);
+    let mut conditions = format!("tenant_id = '{}'", tenant_id_esc);
+    if let Some(cid) = community_id {
+        conditions.push_str(&format!(" AND community_id = '{}'", sql_escape(cid)));
+    }
+    if let Some(ip) = src_ip {
+        let ip = sql_escape(ip);
+        conditions.push_str(&format!(" AND (src_ip = '{}' OR dst_ip = '{}')", ip, ip));
+    }
+    let query = format!(
+        "SELECT session_id, any(community_id), any(src_ip), any(dst_ip), \
+                any(src_port), any(dst_port), any(proto), \
+                toString(any(start_time)), toString(any(end_time)), \
+                any(bytes), any(packets), any(arkime_url), any(sensor_host), any(file_path) \
+         FROM {}.pcap_sessions \
+         WHERE {} \
+         GROUP BY session_id \
+         ORDER BY any(start_time) DESC \
+         LIMIT {}",
+        db, conditions, limit
+    );
+    let rows = self.client
+        .query(&query)
+        .fetch_all::<PcapSessionRow>()
+        .await?;
+    Ok(rows.iter().map(|r| json!({
+        "session_id":   r.session_id,
+        "community_id": r.community_id,
+        "src_ip":       r.src_ip,
+        "dst_ip":       r.dst_ip,
+        "src_port":     r.src_port,
+        "dst_port":     r.dst_port,
+        "proto":        r.proto,
+        "start_time":   r.start_time,
+        "end_time":     r.end_time,
+        "bytes":        r.bytes,
+        "packets":      r.packets,
+        "arkime_url":   r.arkime_url,
+        "sensor_host":  r.sensor_host,
+        "file_path":    r.file_path
+    })).collect())
+}
+
+pub async fn save_pcap_session(
+    &self,
+    tenant_id: &str,
+    session_id: &str,
+    community_id: &str,
+    src_ip: &str,
+    dst_ip: &str,
+    src_port: u16,
+    dst_port: u16,
+    proto: &str,
+    bytes: u64,
+    arkime_url: &str,
+    file_path: &str,
+    sensor_host: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    // Skip insert if this session_id is already stored (prevents duplicate rows
+    // from repeated Arkime live-queries on the same sessions)
+    let exists_query = format!(
+        "SELECT count() FROM {}.pcap_sessions \
+         WHERE session_id = '{}' AND tenant_id = '{}'",
+        db, sql_escape(session_id), sql_escape(tenant_id)
+    );
+    let count: Vec<u64> = self.client.query(&exists_query).fetch_all().await?;
+    if count.into_iter().next().unwrap_or(0) > 0 {
+        return Ok(());
+    }
+
+    let query = format!(
+        "INSERT INTO {}.pcap_sessions \
+         (session_id, community_id, src_ip, dst_ip, src_port, dst_port, \
+          proto, start_time, end_time, bytes, packets, arkime_url, \
+          tenant_id, sensor_host, file_path) \
+         VALUES ('{}', '{}', '{}', '{}', {}, {}, '{}', now(), now(), \
+                 {}, 0, '{}', '{}', '{}', '{}')",
+        db,
+        sql_escape(session_id), sql_escape(community_id),
+        sql_escape(src_ip), sql_escape(dst_ip),
+        src_port, dst_port, sql_escape(proto),
+        bytes, sql_escape(arkime_url), sql_escape(tenant_id),
+        sql_escape(sensor_host), sql_escape(file_path)
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+pub async fn get_pcap_file_path(
+    &self,
+    tenant_id: &str,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    let db = tenant_db(tenant_id);
+    let result = self.client
+        .query(&format!(
+            "SELECT file_path FROM {}.pcap_sessions \
+             WHERE session_id = '{}' AND tenant_id = '{}' \
+             LIMIT 1",
+            db, sql_escape(session_id), sql_escape(tenant_id)
+        ))
+        .fetch_all::<String>()
+        .await?;
+    Ok(result.into_iter().next().unwrap_or_default())
 }
 
 pub async fn revoke_sensor_key(

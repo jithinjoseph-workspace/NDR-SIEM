@@ -1,13 +1,17 @@
 import { Component, OnInit, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../services/api/api';
+import { ArkimeService } from '../../services/arkime/arkime';
 import * as d3 from 'd3';
 import {
   CircleDot,
+  Download,
+  ExternalLink,
   GitBranch,
   Globe,
   LucideAngularModule,
   Network,
+  Package,
   RefreshCw,
   Router,
   Server,
@@ -31,17 +35,31 @@ export class NetworkMap implements OnInit {
   selectedNode: any = null;
   lastUpdated: string = '--';
 
+  // PCAP sessions panel
+  pcapSessions: any[] = [];
+  pcapLoading = false;
+  pcapError = '';
+  showPcapPanel = false;
+  pcapIp = '';
+
   CircleDotIcon = CircleDot;
+  DownloadIcon = Download;
+  ExternalLinkIcon = ExternalLink;
   GitBranchIcon = GitBranch;
   GlobeIcon = Globe;
   NetworkIcon = Network;
+  PackageIcon = Package;
   RefreshIcon = RefreshCw;
   RouterIcon = Router;
   ServerIcon = Server;
   ThreatIcon = TriangleAlert;
   XIcon = X;
 
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  constructor(
+    private api: Api,
+    private cdr: ChangeDetectorRef,
+    private arkime: ArkimeService,
+  ) {}
 
   ngOnInit() {
     this.loadMap();
@@ -93,6 +111,51 @@ export class NetworkMap implements OnInit {
         this.cdr.detectChanges();
       },
     });
+  }
+
+  viewPcapSessions(ip: string) {
+    this.pcapIp = ip;
+    this.pcapSessions = [];
+    this.pcapError = '';
+    this.pcapLoading = true;
+    this.showPcapPanel = true;
+    this.arkime.getSessions({ ip, limit: 10 }).subscribe({
+      next: (data: any) => {
+        this.pcapSessions = data.sessions || [];
+        this.pcapLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.pcapError = 'Failed to load sessions';
+        this.pcapLoading = false;
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  openArkime(cid: string) {
+    if (!cid) return;
+    this.arkime.getSessionLink(cid).subscribe({
+      next: (data: any) => {
+        if (data.link) window.open(data.link, '_blank');
+      },
+    });
+  }
+
+  downloadPcap(sessionId: string) {
+    this.arkime.downloadPcap(sessionId);
+  }
+
+  formatBytes(bytes: number): string {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+  }
+
+  closePcapPanel() {
+    this.showPcapPanel = false;
+    this.pcapSessions = [];
   }
 
   renderGraph(nodes: any[], edges: any[]) {

@@ -95,9 +95,18 @@
           </div>
         </div>
 
-        <span class="service-badge" [class]="getStatusBadgeClass(srv.status)">
-          {{ getStatusLabel(srv.status) }}
-        </span>
+        <div class="service-card-right">
+          <span class="service-badge" [class]="getStatusBadgeClass(srv.status)">
+            {{ getStatusLabel(srv.status) }}
+          </span>
+          <a *ngIf="srv.type === 'arkime' && arkimeUrl && srv.status === 'running'"
+             [href]="arkimeUrl"
+             target="_blank"
+             rel="noopener noreferrer"
+             class="arkime-open-link">
+            Open UI
+          </a>
+        </div>
       </article>
     </div>
   </section>

@@ -58,6 +58,8 @@ services:
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
+      - ARKIME_URL=${ARKIME_URL}
+      - ARKIME_PASS=${ARKIME_PASS}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -90,6 +92,8 @@ services:
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
+      - ARKIME_URL=${ARKIME_URL}
+      - ARKIME_PASS=${ARKIME_PASS}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -122,6 +126,8 @@ services:
       - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
+      - ARKIME_URL=${ARKIME_URL}
+      - ARKIME_PASS=${ARKIME_PASS}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts

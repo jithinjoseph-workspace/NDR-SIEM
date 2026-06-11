@@ -90,11 +90,19 @@
             </td>
             <td>
               <div class="row-actions">
-                <button class="icon-action" type="button" aria-label="Open alert details">
-                  <lucide-icon [name]="ExternalLinkIcon" class="w-4 h-4"></lucide-icon>
+                <button class="icon-action pcap-btn"
+                  type="button"
+                  title="View PCAP sessions"
+                  [disabled]="!alert.community_id"
+                  (click)="viewPcap(alert.community_id)">
+                  <lucide-icon [name]="PackageIcon" class="w-4 h-4"></lucide-icon>
                 </button>
-                <button class="icon-action" type="button" aria-label="More alert actions">
-                  <lucide-icon [name]="MoreIcon" class="w-4 h-4"></lucide-icon>
+                <button class="icon-action arkime-btn"
+                  type="button"
+                  title="Open in Arkime"
+                  [disabled]="!alert.community_id"
+                  (click)="openArkime(alert.community_id)">
+                  <lucide-icon [name]="ExternalLinkIcon" class="w-4 h-4"></lucide-icon>
                 </button>
               </div>
             </td>
@@ -114,5 +122,67 @@
 
   <div *ngIf="alerts.length > 0" class="alerts-footnote">
     Showing {{ alerts.length }} alerts - updates in real-time via WebSocket
+  </div>
+</div>
+
+<!-- PCAP Sessions Modal -->
+<div class="pcap-overlay" *ngIf="showPcapModal" (click)="showPcapModal=false">
+  <div class="pcap-modal" (click)="$event.stopPropagation()">
+    <div class="pcap-modal-header">
+      <div class="pcap-modal-title">
+        <lucide-icon [name]="PackageIcon" class="w-5 h-5"></lucide-icon>
+        <h3>PCAP Sessions</h3>
+      </div>
+      <button class="pcap-close" type="button" (click)="showPcapModal=false">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+
+    <div *ngIf="pcapLoading" class="pcap-state">Loading sessions...</div>
+    <div *ngIf="pcapError && !pcapLoading" class="pcap-state error">{{ pcapError }}</div>
+
+    <div *ngIf="!pcapLoading && !pcapError">
+      <div *ngIf="pcapSessions.length === 0" class="pcap-state">
+        No PCAP sessions found for this community ID.
+      </div>
+
+      <div *ngIf="pcapSessions.length > 0" class="pcap-table-wrap">
+        <table class="pcap-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Source</th>
+              <th>Destination</th>
+              <th>Proto</th>
+              <th>Bytes</th>
+              <th>Packets</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let s of pcapSessions">
+              <td class="pcap-time">{{ s.start_time }}</td>
+              <td>{{ s.src_ip }}:{{ s.src_port }}</td>
+              <td>{{ s.dst_ip }}:{{ s.dst_port }}</td>
+              <td><span class="proto-pill">{{ s.proto }}</span></td>
+              <td>{{ formatBytes(s.bytes) }}</td>
+              <td>{{ s.packets }}</td>
+              <td>
+                <div class="pcap-row-actions">
+                  <button class="icon-action" title="Download PCAP"
+                    type="button" (click)="downloadPcap(s.session_id)">
+                    <lucide-icon [name]="DownloadIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  </button>
+                  <button class="icon-action arkime-btn" title="Open in Arkime"
+                    type="button" (click)="openArkime(s.community_id)">
+                    <lucide-icon [name]="ExternalLinkIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>

@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api, SensorKey } from '../../services/api/api';
+import { ArkimeService } from '../../services/arkime/arkime';
 import { LucideAngularModule, Cpu, Server, Database, CheckCircle, Activity } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
 
@@ -26,10 +27,13 @@ export class Health implements OnInit, OnDestroy {
     { name: 'Zeek IDS',        status: 'unknown', type: 'zeek',       label: 'Tenant Sensor'     },
     { name: 'Suricata EVE',    status: 'unknown', type: 'suricata',   label: 'Tenant Sensor'     },
     { name: 'Vector Pipeline', status: 'unknown', type: 'vector',     label: 'Tenant Sensor'     },
+    { name: 'Arkime PCAP',     status: 'unknown', type: 'arkime',     label: 'Tenant Sensor'     },
     { name: 'Kafka Broker',    status: 'unknown', type: 'kafka',      label: 'Platform Service'  },
     { name: 'NDR Engine',      status: 'unknown', type: 'engine',     label: 'Platform Service'  },
     { name: 'ClickHouse DB',   status: 'unknown', type: 'clickhouse', label: 'Platform Service'  },
   ];
+
+  arkimeUrl = '';
 
   CpuIcon = Cpu;
   ServerIcon = Server;
@@ -42,7 +46,8 @@ export class Health implements OnInit, OnDestroy {
   constructor(
     private api: Api,
     private auth: AuthService,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private arkime: ArkimeService,
   ) {}
 
   ngOnInit() {
@@ -51,6 +56,7 @@ export class Health implements OnInit, OnDestroy {
   }
 
   loadHealth() {
+    this.loadArkimeStatus();
     // Single API call — /api/health returns everything
     this.api.getDashboardStats().subscribe({
       next: (data: any) => {
@@ -75,6 +81,22 @@ export class Health implements OnInit, OnDestroy {
     });
 
     this.loadSensorHealth();
+    this.loadArkimeStatus();
+  }
+
+  loadArkimeStatus() {
+    this.arkime.getStatus().subscribe({
+      next: (data: any) => {
+        const status = data.status === 'online' ? 'running' : 'stopped';
+        this.updateStatus('arkime', status);
+        this.arkimeUrl = data.arkime_url || '';
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.updateStatus('arkime', 'stopped');
+        this.cdr.detectChanges();
+      },
+    });
   }
 
   loadSensorHealth() {

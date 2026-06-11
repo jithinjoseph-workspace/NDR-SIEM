@@ -144,7 +144,29 @@ log "  → Installing packages..."
 sudo apt-get install -y \
     curl wget git jq python3 \
     net-tools iproute2 \
-    netcat-traditional
+    netcat-traditional \
+    libpcre3 2>/dev/null || true
+# libpcre3 may not be in repos on Ubuntu 24+ — fallback to direct download
+if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
+    for PCRE3_URL in \
+        "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.45-4_amd64.deb" \
+        "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-17build1_amd64.deb" \
+        "http://security.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-13ubuntu0.22.04.1_amd64.deb"; do
+        if wget -q --timeout=60 "$PCRE3_URL" -O /tmp/libpcre3.deb 2>/dev/null \
+            && sudo dpkg -i /tmp/libpcre3.deb > /dev/null 2>&1; then
+            rm -f /tmp/libpcre3.deb
+            break
+        fi
+        rm -f /tmp/libpcre3.deb
+    done
+fi
+# Ensure libpcre.so.3 symlink exists (missing on some Ubuntu installs)
+if [ ! -e /usr/lib/x86_64-linux-gnu/libpcre.so.3 ]; then
+    PCRE_SO=$(find /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu \
+        -name "libpcre.so.3.*" 2>/dev/null | head -1)
+    [ -n "$PCRE_SO" ] && sudo ln -sf "$PCRE_SO" /usr/lib/x86_64-linux-gnu/libpcre.so.3 \
+        && sudo ldconfig
+fi
 log "✅ System dependencies installed"
 
 step "Installing Node.js 20"
@@ -215,6 +237,101 @@ else
     sudo systemctl disable suricata 2>/dev/null || true
     sudo systemctl stop suricata 2>/dev/null || true
 fi
+
+# ── Install Arkime ────────────────────────────────
+log "Installing Arkime (Full Packet Capture)..."
+
+ARKIME_VERSION="5.1.0"
+UBUNTU_VER=$(lsb_release -rs 2>/dev/null || echo "22.04")
+UBUNTU_MAJOR=$(echo $UBUNTU_VER | cut -d. -f1)
+
+if ! command -v /opt/arkime/bin/capture &>/dev/null; then
+    if [ "$UBUNTU_MAJOR" -le "21" ] 2>/dev/null; then
+        ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2004_amd64.deb"
+    elif [ "$UBUNTU_MAJOR" -le "23" ] 2>/dev/null; then
+        ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2204_amd64.deb"
+    elif [ "$UBUNTU_MAJOR" -ge "24" ] 2>/dev/null; then
+        ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2404_amd64.deb"
+    else
+        warn "Unsupported Ubuntu version for Arkime: $UBUNTU_VER"
+        ARKIME_DEB=""
+    fi
+
+    if [ -n "$ARKIME_DEB" ]; then
+        log "Downloading Arkime ${ARKIME_VERSION} (${ARKIME_DEB})..."
+        if wget --timeout=120 --progress=dot:mega \
+            "https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}" \
+            -O /tmp/arkime.deb 2>&1; then
+            DEB_SIZE=$(du -sh /tmp/arkime.deb 2>/dev/null | cut -f1)
+            log "Download complete (${DEB_SIZE})"
+        else
+            warn "❌ Arkime download FAILED"
+            warn "  URL: https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}"
+            warn "  Check internet/proxy and re-run"
+            ARKIME_DEB=""
+            rm -f /tmp/arkime.deb
+        fi
+    fi
+
+    if [ -n "$ARKIME_DEB" ] && [ -f /tmp/arkime.deb ]; then
+        log "Installing Arkime dependencies..."
+        sudo apt-get install -y -qq \
+            libwww-perl libjson-perl \
+            libyaml-dev libyara10 \
+            librdkafka1 ethtool \
+            libpcre3 libpcre3-dev \
+            libmagic1 libmaxminddb0 \
+            libpcre2-8-0 \
+            libyaml-0-2 > /dev/null 2>&1 || true
+
+        # Install real libpcre3 (Arkime capture needs pcre_version symbol; PCRE2 is not compatible)
+        if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
+            if sudo apt-get install -y -qq libpcre3 > /dev/null 2>&1; then
+                log "✅ libpcre3 installed from apt"
+            else
+                log "libpcre3 not in repos — downloading from Ubuntu archive..."
+                PCRE3_INSTALLED=false
+                for PCRE3_URL in \
+                    "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.45-4_amd64.deb" \
+                    "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-17build1_amd64.deb" \
+                    "http://security.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-13ubuntu0.22.04.1_amd64.deb"; do
+                    if wget -q --timeout=60 "$PCRE3_URL" -O /tmp/libpcre3.deb 2>/dev/null \
+                        && sudo dpkg -i /tmp/libpcre3.deb > /dev/null 2>&1; then
+                        rm -f /tmp/libpcre3.deb
+                        log "✅ libpcre3 installed"
+                        PCRE3_INSTALLED=true
+                        break
+                    fi
+                    rm -f /tmp/libpcre3.deb
+                done
+                $PCRE3_INSTALLED || warn "⚠️ libpcre3 install failed — capture may crash"
+            fi
+        fi
+
+        log "Installing Arkime package..."
+        if sudo dpkg -i /tmp/arkime.deb 2>&1; then
+            log "dpkg install succeeded"
+        else
+            warn "dpkg reported errors — running apt-get install -f to fix..."
+            sudo apt-get install -f -y 2>&1 || true
+        fi
+        rm -f /tmp/arkime.deb
+
+        if [ -f /opt/arkime/bin/capture ]; then
+            ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
+            log "✅ Arkime installed: ${ARKIME_VER}"
+        else
+            warn "❌ Arkime install FAILED — /opt/arkime/bin/capture not found"
+            warn "  Run: dpkg -l arkime  or  sudo apt-get install -f -y  for details"
+        fi
+    else
+        warn "❌ Arkime installation skipped (no .deb available)"
+    fi
+else
+    ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
+    log "✅ Arkime already installed: ${ARKIME_VER}"
+fi
+
 
 step "Installing Zeek"
 
@@ -338,6 +455,96 @@ log "Using interface: $IFACE"
 mkdir -p "$RUNTIME_DIR"
 echo "$IFACE" > "$IFACE_FILE"
 
+# ── Configure Arkime ──────────────────────────────
+if [ -f /opt/arkime/bin/capture ]; then
+    log "Configuring Arkime..."
+    log "Arkime using interface: $IFACE"
+
+    # Create directories BEFORE config
+    sudo mkdir -p /opt/arkime/raw
+    sudo mkdir -p /opt/arkime/logs
+    sudo mkdir -p /opt/arkime/etc
+    sudo chmod 755 /opt/arkime/raw
+
+    sudo tee /opt/arkime/etc/config.ini > /dev/null << ARKIME_EOF
+[default]
+elasticsearch=http://localhost:9200
+passwordSecret=${API_KEY:-ndr-arkime-secret}
+serverSecret=${API_KEY:-ndr-arkime-secret}
+httpRealm=Arkime
+interface=${IFACE:-eno1}
+pcapDir=/opt/arkime/raw
+maxFileSizeG=4
+maxFileTimeM=60
+viewPort=8005
+viewHost=0.0.0.0
+pcapWriteMethod=simple
+pcapWriteSize=262143
+authMode=basic
+logLevel=warn
+maxDays=7
+freeSpaceG=5
+tcpTimeout=600
+udpTimeout=30
+maxStreams=500000
+maxPackets=10000
+packetThreads=2
+communityId=true
+cronQueries=true
+ARKIME_EOF
+
+    # Create Arkime capture service
+    sudo tee /etc/systemd/system/arkime-capture.service > /dev/null << EOF
+[Unit]
+Description=Arkime Packet Capture
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/arkime/bin/capture \
+    -c /opt/arkime/etc/config.ini \
+    -o pcapDir=/opt/arkime/raw \
+    --insecure
+Restart=always
+RestartSec=10
+LimitCORE=infinity
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create Arkime viewer service
+    sudo tee /etc/systemd/system/arkime-viewer.service > /dev/null << EOF
+[Unit]
+Description=Arkime Packet Viewer
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/arkime/viewer
+ExecStart=/opt/arkime/bin/node \
+    viewer.js \
+    -c /opt/arkime/etc/config.ini
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable \
+        arkime-capture \
+        arkime-viewer 2>/dev/null || true
+
+    if [ -f /opt/arkime/bin/capture ]; then
+        log "✅ Arkime configured on interface: ${IFACE}"
+    else
+        warn "❌ Arkime install FAILED"
+    fi
+fi
+
 # ── Configure Zeek ────────────────────────────
 log "Configuring Zeek..."
 sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
@@ -457,6 +664,8 @@ SHUFFLE_INTERNAL_URL=http://${HOST_IP}:5001
 SHUFFLE_WEBHOOK_URL=
 SHUFFLE_API_KEY=$SHUFFLE_KEY
 JWT_SECRET=$JWT_SECRET
+ARKIME_URL=http://${HOST_IP}:8005
+ARKIME_PASS=admin
 ENVEOF
 log "✅ .env generated with JWT_SECRET"
 
@@ -701,7 +910,28 @@ cd $INSTALL_DIR
 # Start opensearch first (needs most time)
 sudo docker compose up -d shuffle-opensearch
 log "  → Waiting for OpenSearch..."
-sleep 30
+for i in {1..30}; do
+    if curl -s http://localhost:9200 > /dev/null 2>&1; then
+        log "✅ OpenSearch ready"
+        break
+    fi
+    echo -n "."
+    sleep 3
+done
+echo ""
+
+# Initialize Arkime DB and create admin user now that OpenSearch is up
+if [ -f /opt/arkime/bin/capture ]; then
+    log "Initializing Arkime database..."
+    # Use 'init --ifneeded' to skip if already initialized; pipe 'yes' for the upgrade prompt
+    echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init --ifneeded 2>&1 || \
+        echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init 2>&1 || true
+    log "✅ Arkime database initialized"
+    log "Creating Arkime admin user..."
+    sudo /opt/arkime/bin/arkime_add_user.sh admin "Admin" admin --admin 2>/dev/null \
+        && log "✅ Arkime admin user ready (user: admin / pass: admin)" \
+        || warn "⚠️ Arkime admin user creation failed — run manually after install"
+fi
 
 # Start backend and frontend
 sudo docker compose up -d \
@@ -828,6 +1058,7 @@ echo "╠═══════════════════════�
 echo "║  UI:      http://localhost:4200           ║"
 echo "║  API:     http://localhost:3000           ║"
 echo "║  Agent:   http://localhost:3001           ║"
+echo "║  Arkime:  http://localhost:8005           ║"
 echo "╠══════════════════════════════════════════╣"
 echo "║  start:   ./start.sh                     ║"
 echo "║  stop:    ./stop.sh                      ║"
