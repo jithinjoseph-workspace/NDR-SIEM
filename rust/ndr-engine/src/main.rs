@@ -335,7 +335,7 @@ tokio::spawn(async move {
         .route("/api/pcap/upload",               post(api::pcap_upload))
         .route("/api/pcap/:session_id",          get(api::pcap_download_stored))
         .with_state(state.clone())
-        .layer(axum::middleware::from_fn_with_state(state, api::auth_middleware))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
         .layer(RequestDecompressionLayer::new())
         .layer(cors);
 
@@ -367,6 +367,16 @@ tokio::spawn(async move {
                     }
                 }
             }
+        });
+    }
+
+    // ── Background: Arkime → pcap_sessions sync (every 5 min) ────────────────
+    {
+        let arkime_state = state.clone();
+        tokio::spawn(async move {
+            // Wait 30s so engine is fully initialized before first Arkime query
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            api::sync_arkime_sessions(arkime_state).await;
         });
     }
 

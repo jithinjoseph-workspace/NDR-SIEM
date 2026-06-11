@@ -586,6 +586,16 @@ pub async fn get_tenants(
     })).collect())
 }
 
+pub async fn get_all_tenants(
+    &self,
+) -> anyhow::Result<Vec<String>> {
+    let result = self.client
+        .query("SELECT id FROM ndr.tenants FINAL WHERE active = 1")
+        .fetch_all::<String>()
+        .await?;
+    Ok(result)
+}
+
 pub async fn is_tenant_active(
     &self,
     id: &str,

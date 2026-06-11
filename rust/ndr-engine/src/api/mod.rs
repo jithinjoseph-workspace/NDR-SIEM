@@ -5860,3 +5860,148 @@ pub async fn get_telemetry(
         "events_1h": events_1h
     }))
 }
+
+// ── Background: Arkime → pcap_sessions proactive sync ────────────────────────
+// Called once from main.rs on startup (after 30s delay), then loops every 5 min.
+// Fetches the last 5-min window from Arkime for every active tenant and caches
+// results into pcap_sessions so the UI is pre-populated without a user visit.
+pub async fn sync_arkime_sessions(state: AppState) {
+    // Create one shared HTTP client for all tenants / all cycles.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("reqwest::Client::builder failed in sync_arkime_sessions");
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+
+        let tenants = match state.ch_storage.get_all_tenants().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!("Arkime sync: could not fetch tenants: {}", e);
+                continue;
+            }
+        };
+
+        for tenant_id in &tenants {
+            let (arkime_url, arkime_pass) =
+                match state.ch_storage.get_arkime_creds(tenant_id).await {
+                    Ok(creds) if !creds.0.is_empty() => creds,
+                    _ => continue, // tenant has no Arkime configured
+                };
+
+            // Query the last 6 minutes (60s overlap guards against boundary gaps)
+            let now = chrono::Utc::now().timestamp();
+            let window_start = now - 360;
+
+            let query_url = format!(
+                "{}/api/sessions?\
+length=1000\
+&startTime={}&stopTime={}\
+&fields=id,network.community_id,\
+source.ip,source.port,\
+destination.ip,destination.port,\
+ipProtocol,network.bytes,\
+network.packets,firstPacket,\
+lastPacket,node",
+                arkime_url, window_start, now
+            );
+
+            let resp = match client
+                .get(&query_url)
+                .basic_auth("admin", Some(&arkime_pass))
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(
+                        "Arkime sync: HTTP error tenant={}: {}",
+                        tenant_id, e
+                    );
+                    continue;
+                }
+            };
+
+            let data = match resp.json::<serde_json::Value>().await {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let sessions = match data["data"].as_array() {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+
+            let mut saved = 0u32;
+            for s in &sessions {
+                let session_id = s["id"]
+                    .as_str()
+                    .or_else(|| s["_id"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if session_id.is_empty() {
+                    continue;
+                }
+
+                let community_id = s["network"]["community_id"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+
+                // Arkime 5 returns flat dotted keys; older versions return nested.
+                let src_ip = s.get("source.ip").and_then(|v| v.as_str())
+                    .or_else(|| s["source"]["ip"].as_str())
+                    .or_else(|| s["srcIp"].as_str())
+                    .unwrap_or("").to_string();
+                let dst_ip = s.get("destination.ip").and_then(|v| v.as_str())
+                    .or_else(|| s["destination"]["ip"].as_str())
+                    .or_else(|| s["dstIp"].as_str())
+                    .unwrap_or("").to_string();
+                let src_port = s.get("source.port").and_then(|v| v.as_u64())
+                    .or_else(|| s["source"]["port"].as_u64())
+                    .or_else(|| s["srcPort"].as_u64())
+                    .unwrap_or(0) as u16;
+                let dst_port = s.get("destination.port").and_then(|v| v.as_u64())
+                    .or_else(|| s["destination"]["port"].as_u64())
+                    .or_else(|| s["dstPort"].as_u64())
+                    .unwrap_or(0) as u16;
+                let ip_proto = s["ipProtocol"].as_u64()
+                    .or_else(|| s.get("ipProtocol").and_then(|v| v.as_u64()))
+                    .unwrap_or(0);
+                let proto = if ip_proto == 6 { "tcp" }
+                            else if ip_proto == 17 { "udp" }
+                            else { "other" };
+                let bytes = s.get("network.bytes").and_then(|v| v.as_u64())
+                    .or_else(|| s["network"]["bytes"].as_u64())
+                    .or_else(|| s["totBytes"].as_u64())
+                    .unwrap_or(0);
+                let sensor_host = s["node"].as_str().unwrap_or("").to_string();
+
+                if state.ch_storage.save_pcap_session(
+                    tenant_id,
+                    &session_id,
+                    &community_id,
+                    &src_ip,
+                    &dst_ip,
+                    src_port,
+                    dst_port,
+                    proto,
+                    bytes,
+                    &arkime_url,
+                    "",
+                    &sensor_host,
+                ).await.is_ok() {
+                    saved += 1;
+                }
+            }
+
+            if saved > 0 {
+                tracing::info!(
+                    "Arkime sync: saved {} sessions for tenant={}",
+                    saved, tenant_id
+                );
+            }
+        }
+    }
+}
