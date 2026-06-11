@@ -369,6 +369,11 @@ export class Api {
     return this.http.get(`${this.baseUrl}/admin/engines`);
   }
 
+  getPlatformTelemetry(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/telemetry`);
+  }
+
+
   scaleEngines(action: string, engine?: string): Observable<any> {
     return this.http.post(
       `${this.baseUrl}/admin/engines/scale`,
@@ -399,6 +404,10 @@ export class Api {
 
   revokeSensorKey(id: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/sensor-keys/${id}`);
+  }
+
+  reactivateSensorKey(id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/sensor-keys/${id}/reactivate`, {});
   }
 
   controlSensor(command: SensorControlCommand, tenantId: string, sensorId: string): Observable<any> {

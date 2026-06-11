@@ -314,12 +314,15 @@ tokio::spawn(async move {
         .route("/api/support/messages/:id", delete(api::delete_support_message_api))
         .route("/api/admin/engines", get(api::get_engines))
         .route("/api/admin/engines/scale", post(api::scale_engines))
+        .route("/api/admin/telemetry", get(api::get_telemetry))
         .route("/api/install-sensor.sh", get(api::install_sensor_script))
         .route("/api/sensor-keys", 
             get(api::get_sensor_keys)
             .post(api::create_sensor_key_api))
         .route("/api/sensor-keys/:id",
             delete(api::revoke_sensor_key_api))
+        .route("/api/sensor-keys/:id/reactivate",
+            post(api::reactivate_sensor_key_api))
         .route("/api/sensor/register",  post(api::sensor_register))
         .route("/api/sensor/heartbeat", post(api::sensor_heartbeat))
         .route("/api/ingest",           post(api::ingest_events))
