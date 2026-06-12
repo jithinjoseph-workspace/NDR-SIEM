@@ -268,111 +268,101 @@
     </div>
 
     <!-- Jira Ticket Tracker -->
-<div *ngIf="jiraTickets.length > 0 || loadingTickets"
-    class="bg-surface-container-highest rounded-xl
+    <div *ngIf="jiraTickets.length > 0 || loadingTickets" class="bg-surface-container-highest rounded-xl
     border border-outline/10">
-    <div class="px-6 py-4 border-b border-outline/10
+      <div class="px-6 py-4 border-b border-outline/10
         flex items-center justify-between">
         <div>
-            <h3 class="text-white font-bold text-sm uppercase">
-                🎫 Jira Tickets
-            </h3>
-            <p class="text-on-surface-variant text-xs mt-0.5">
-                Auto-created NDR alerts in Jira
-            </p>
+          <h3 class="text-white font-bold text-sm uppercase">
+            🎫 Jira Tickets
+          </h3>
+          <p class="text-on-surface-variant text-xs mt-0.5">
+            Auto-created NDR alerts in Jira
+          </p>
         </div>
-        <button (click)="loadJiraTickets()"
-            class="text-xs px-3 py-1.5 rounded-lg
+        <button (click)="loadJiraTickets()" class="text-xs px-3 py-1.5 rounded-lg
             bg-surface-container text-on-surface-variant
             hover:text-white transition-all">
-            🔄 Refresh
+          🔄 Refresh
         </button>
-    </div>
-    <div *ngIf="loadingTickets"
-        class="px-6 py-4 text-on-surface-variant
+      </div>
+      <div *ngIf="loadingTickets" class="px-6 py-4 text-on-surface-variant
         text-sm animate-pulse">
         Loading tickets...
-    </div>
-    <div class="divide-y divide-outline/5">
-        <div *ngFor="let ticket of jiraTickets"
-            class="px-6 py-3 flex items-center
+      </div>
+      <div class="divide-y divide-outline/5">
+        <div *ngFor="let ticket of jiraTickets" class="px-6 py-3 flex items-center
             justify-between hover:bg-surface-container/50">
-            <div class="flex items-center gap-3">
-                <span class="text-[10px] font-mono
+          <div class="flex items-center gap-3">
+            <span class="text-[10px] font-mono
                     text-primary font-bold">
-                    {{ ticket.key }}
-                </span>
-                <span class="text-sm text-white truncate
+              {{ ticket.key }}
+            </span>
+            <span class="text-sm text-white truncate
                     max-w-xs">
-                    {{ ticket.summary }}
-                </span>
-            </div>
-            <div class="flex items-center gap-3">
-                <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded ' +
+              {{ ticket.summary }}
+            </span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded ' +
                     (ticket.status === 'Done' ?
                         'bg-primary/20 text-primary' :
                         ticket.status === 'In Progress' ?
                         'bg-yellow-500/20 text-yellow-400' :
                         'bg-surface-container text-on-surface-variant')">
-                    {{ ticket.status }}
-                </span>
-                <a [href]="ticket.url" target="_blank"
-                    class="text-xs text-primary hover:underline">
-                    Open ↗
-                </a>
-            </div>
+              {{ ticket.status }}
+            </span>
+            <a [href]="ticket.url" target="_blank" class="text-xs text-primary hover:underline">
+              Open ↗
+            </a>
+          </div>
         </div>
+      </div>
     </div>
-</div>
 
-<!-- Integration Status Dashboard -->
-<div class="bg-surface-container-highest rounded-xl
+    <!-- Integration Status Dashboard -->
+    <div class="bg-surface-container-highest rounded-xl
     border border-outline/10">
-    <div class="px-6 py-4 border-b border-outline/10
+      <div class="px-6 py-4 border-b border-outline/10
         flex items-center justify-between">
         <h3 class="text-white font-bold text-sm uppercase">
-            📊 Integration Status
+          📊 Integration Status
         </h3>
-        <button (click)="testAllIntegrations()"
-            [disabled]="testingAll"
-            class="text-xs px-3 py-1.5 rounded-lg
+        <button (click)="testAllIntegrations()" [disabled]="testingAll" class="text-xs px-3 py-1.5 rounded-lg
             bg-primary/10 text-primary
             hover:bg-primary/20 disabled:opacity-50">
-            {{ testingAll ? '⏳ Testing...' : '🧪 Test All' }}
+          {{ testingAll ? '⏳ Testing...' : '🧪 Test All' }}
         </button>
-    </div>
-    <div class="p-6 grid grid-cols-2 gap-4">
-        <div *ngFor="let t of getIntegrationsByType()"
-            class="bg-surface-container rounded-lg p-4
+      </div>
+      <div class="p-6 grid grid-cols-2 gap-4">
+        <div *ngFor="let t of getIntegrationsByType()" class="bg-surface-container rounded-lg p-4
             border border-outline/10">
-            <div class="flex items-center gap-2 mb-2">
-                <span class="text-lg">{{ t.icon }}</span>
-                <span class="text-white font-bold text-sm">
-                    {{ t.name }}
-                </span>
-            </div>
-            <div class="text-xs text-on-surface-variant">
-                {{ t.active }}/{{ t.count }} active
-            </div>
-        </div>
-    </div>
-    <!-- Test results -->
-    <div *ngIf="testAllResults.length > 0"
-        class="px-6 pb-4 space-y-2">
-        <div *ngFor="let r of testAllResults"
-            [class]="'flex items-center justify-between p-2 rounded ' +
-            (r.ok ? 'bg-primary/10' : 'bg-red-500/10')">
-            <span class="text-sm">
-                {{ r.name }}
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-lg">{{ t.icon }}</span>
+            <span class="text-white font-bold text-sm">
+              {{ t.name }}
             </span>
-            <span [class]="r.ok ?
+          </div>
+          <div class="text-xs text-on-surface-variant">
+            {{ t.active }}/{{ t.count }} active
+          </div>
+        </div>
+      </div>
+      <!-- Test results -->
+      <div *ngIf="testAllResults.length > 0" class="px-6 pb-4 space-y-2">
+        <div *ngFor="let r of testAllResults" [class]="'flex items-center justify-between p-2 rounded ' +
+            (r.ok ? 'bg-primary/10' : 'bg-red-500/10')">
+          <span class="text-sm">
+            {{ r.name }}
+          </span>
+          <span [class]="r.ok ?
                 'text-primary text-xs' :
                 'text-red-400 text-xs'">
-                {{ r.result }}
-            </span>
+            {{ r.result }}
+          </span>
         </div>
+      </div>
     </div>
-</div>
 
     <!-- Add Integration Modal -->
     <div *ngIf="showNewIntegration" class="fixed inset-0 bg-black/60 z-50
@@ -437,7 +427,7 @@
       </div>
     </div>
 
-    
+
 
 
     <!-- Recent Automated Actions -->

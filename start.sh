@@ -51,6 +51,16 @@ sudo systemctl start ndr-agent 2>/dev/null || \
 sleep 2
 # Fix Docker socket permissions
 sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
+
+# ── Clear Vector checkpoints BEFORE starting Docker ──────────────
+# Must happen before `docker compose up` so Vector starts fresh,
+# not skipping log data it thinks it already read
+log "Resetting Vector checkpoints..."
+sudo rm -rf $HOME_DIR/.vector/data/suricata \
+    $HOME_DIR/.vector/data/zeek 2>/dev/null || true
+mkdir -p $HOME_DIR/.vector/data
+log "✅ Vector checkpoints cleared"
+
 # Start Docker stack
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
@@ -120,13 +130,6 @@ sudo docker exec kafka \
     --describe
 
     
-# ── Smart Vector checkpoint reset ────────────
-log "Resetting Vector checkpoints..."
-sudo rm -rf $HOME_DIR/.vector/data/suricata \
-    $HOME_DIR/.vector/data/zeek 2>/dev/null || true
-mkdir -p $HOME_DIR/.vector/data
-log "✅ Vector checkpoints cleared"
-
 # ── Check Shuffle SOAR ────────────────────────
 echo "  → Checking Shuffle SOAR..."
 sleep 5
