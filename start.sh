@@ -54,6 +54,14 @@ sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 # Start Docker stack
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
+
+# ── Smart Vector checkpoint reset ────────────
+log "Resetting Vector checkpoints..."
+sudo rm -rf $HOME_DIR/.vector/data/suricata \
+    $HOME_DIR/.vector/data/zeek 2>/dev/null || true
+mkdir -p $HOME_DIR/.vector/data
+log "✅ Vector checkpoints cleared"
+
 sudo docker rm -f vector 2>/dev/null || true
 sudo docker compose up -d
 
@@ -80,29 +88,7 @@ sudo docker exec kafka \
     --replication-factor 1 \
     2>/dev/null || true
 
-# Delete and recreate if partition count is wrong
-PARTITION_COUNT=$(sudo docker exec kafka \
-    /opt/kafka/bin/kafka-topics.sh \
-    --bootstrap-server localhost:9092 \
-    --describe --topic ndr-events 2>/dev/null | \
-    grep PartitionCount | awk -F: '{print $2}' | tr -d ' ')
 
-if [ "$PARTITION_COUNT" != "3" ]; then
-    log "Resetting Kafka topic to 3 partitions..."
-    sudo docker exec kafka \
-        /opt/kafka/bin/kafka-topics.sh \
-        --bootstrap-server localhost:9092 \
-        --delete --topic ndr-events \
-        2>/dev/null || true
-    sleep 3
-    sudo docker exec kafka \
-        /opt/kafka/bin/kafka-topics.sh \
-        --bootstrap-server localhost:9092 \
-        --create --topic ndr-events \
-        --partitions 3 \
-        --replication-factor 1 \
-        2>/dev/null || true
-fi
 log "✅ Kafka 3 partitions ready for scaling"
 
 # Verify
@@ -120,12 +106,7 @@ sudo docker exec kafka \
     --describe
 
     
-# ── Smart Vector checkpoint reset ────────────
-log "Resetting Vector checkpoints..."
-sudo rm -rf $HOME_DIR/.vector/data/suricata \
-    $HOME_DIR/.vector/data/zeek 2>/dev/null || true
-mkdir -p $HOME_DIR/.vector/data
-log "✅ Vector checkpoints cleared"
+
 
 # ── Check Shuffle SOAR ────────────────────────
 echo "  → Checking Shuffle SOAR..."
