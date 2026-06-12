@@ -50,6 +50,7 @@ export class Setup implements OnInit, OnDestroy {
   zeekStatus = 'stopped';
   suricataStatus = 'stopped';
   vectorStatus = 'stopped';
+  arkimeStatus = 'stopped';
   activeTab: SetupTab = 'local';
   externalSensors: ExternalSensorCard[] = [];
   externalLoading = false;
@@ -136,7 +137,7 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   get localRunningCount(): number {
-    return [this.zeekStatus, this.suricataStatus, this.vectorStatus]
+    return [this.zeekStatus, this.suricataStatus, this.vectorStatus, this.arkimeStatus]
       .filter(status => status === 'running').length;
   }
 
@@ -196,12 +197,14 @@ export class Setup implements OnInit, OnDestroy {
     this.zeekStatus = this.normalizeStatus(data.zeek);
     this.suricataStatus = this.normalizeStatus(data.suricata);
     this.vectorStatus = this.normalizeStatus(data.vector);
+    this.arkimeStatus = this.normalizeStatus(data.arkime);
     this.selectedInterface = data.interface || this.selectedInterface;
 
     if (
       this.zeekStatus === 'running' &&
       this.suricataStatus === 'running' &&
-      this.vectorStatus === 'running'
+      this.vectorStatus === 'running' &&
+      this.arkimeStatus === 'running'
     ) {
       this.status = 'Running';
     } else if (this.status !== 'Starting...' && this.status !== 'Stopping...') {

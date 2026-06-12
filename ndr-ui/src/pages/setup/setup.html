@@ -148,6 +148,16 @@
             {{ vectorStatus === 'running' ? 'Running' : 'Stopped' }}
           </span>
         </article>
+
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>Arkime</strong>
+            <span>Full packet capture</span>
+          </div>
+          <span class="engine-badge" [class.running]="arkimeStatus === 'running'">
+            {{ arkimeStatus === 'running' ? 'Running' : 'Stopped' }}
+          </span>
+        </article>
       </div>
 
       <div class="engine-actions">

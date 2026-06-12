@@ -534,7 +534,7 @@ WantedBy=multi-user.target
 EOF
 
     sudo systemctl daemon-reload
-    sudo systemctl enable \
+    sudo systemctl disable \
         arkime-capture \
         arkime-viewer 2>/dev/null || true
 
