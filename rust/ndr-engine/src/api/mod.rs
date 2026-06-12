@@ -586,6 +586,9 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     };
 
 
+    // Execute Native SOAR Playbooks
+    crate::soar::execute_native_playbooks(state, hit.clone(), risk.clone(), enrichment.clone()).await;
+
 // ── Execute playbooks directly (gated on soar_threshold) ────────────────
 if risk.score >= soar_threshold {
 let playbooks = state.ch_storage
@@ -5231,5 +5234,143 @@ lastPacket,node",
                 );
             }
         }
+    }
+}
+
+// ── NATIVE SOAR API ENDPOINTS ───────────────────────────────────────────────
+
+pub async fn get_soar_cases(
+    State(state): State<AppState>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+) -> Json<Value> {
+    match state.ch_storage.get_soar_cases(&claims.tenant_id).await {
+        Ok(cases) => Json(json!({"status": "success", "data": cases})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn get_soar_case_comments(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+) -> Json<Value> {
+    match state.ch_storage.get_soar_case_comments(&id, &claims.tenant_id).await {
+        Ok(comments) => Json(json!({"status": "success", "data": comments})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn add_soar_case_comment(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+    axum::extract::Json(payload): axum::extract::Json<Value>,
+) -> Json<Value> {
+    let comment = payload.get("comment").and_then(|v| v.as_str()).unwrap_or("");
+    if comment.is_empty() {
+        return Json(json!({"status": "error", "message": "Comment cannot be empty"}));
+    }
+    match state.ch_storage.insert_soar_case_comment(&id, &claims.sub, comment, &claims.tenant_id).await {
+        Ok(_) => Json(json!({"status": "success", "message": "Comment added"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn update_soar_case_status(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+    axum::extract::Json(payload): axum::extract::Json<Value>,
+) -> Json<Value> {
+    let status = payload.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if status.is_empty() {
+        return Json(json!({"status": "error", "message": "Status cannot be empty"}));
+    }
+    match state.ch_storage.update_soar_case_status(&id, status, &claims.tenant_id).await {
+        Ok(_) => Json(json!({"status": "success", "message": "Status updated"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn get_native_playbooks(
+    State(state): State<AppState>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+) -> Json<Value> {
+    match state.ch_storage.get_native_playbooks().await {
+        Ok(pbs) => {
+            let filtered: Vec<_> = pbs.into_iter().filter(|p| p.tenant_id == claims.tenant_id).collect();
+            Json(json!({"status": "success", "data": filtered}))
+        },
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn create_native_playbook(
+    State(state): State<AppState>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+    axum::extract::Json(payload): axum::extract::Json<Value>,
+) -> Json<Value> {
+    let pb = crate::soar::SoarNativePlaybook {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: payload.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        description: payload.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        enabled: payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true) as u8,
+        cond_field: payload.get("cond_field").and_then(|v| v.as_str()).unwrap_or("score").to_string(),
+        cond_op: payload.get("cond_op").and_then(|v| v.as_str()).unwrap_or(">").to_string(),
+        cond_value: payload.get("cond_value").and_then(|v| v.as_str()).unwrap_or("75").to_string(),
+        action_type: payload.get("action_type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        action_config: payload.get("action_config").and_then(|v| v.as_str()).unwrap_or("{}").to_string(),
+        run_count: 0,
+        last_run: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        tenant_id: claims.tenant_id,
+    };
+
+    match state.ch_storage.insert_native_playbook(&pb).await {
+        Ok(_) => Json(json!({"status": "success", "message": "Playbook created"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn update_native_playbook(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+    axum::extract::Json(payload): axum::extract::Json<Value>,
+) -> Json<Value> {
+    let enabled = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true) as u8;
+    let cond_field = payload.get("cond_field").and_then(|v| v.as_str()).unwrap_or("");
+    let cond_op = payload.get("cond_op").and_then(|v| v.as_str()).unwrap_or("");
+    let cond_value = payload.get("cond_value").and_then(|v| v.as_str()).unwrap_or("");
+    let action_type = payload.get("action_type").and_then(|v| v.as_str()).unwrap_or("");
+    let action_config = payload.get("action_config").and_then(|v| v.as_str()).unwrap_or("{}");
+
+    match state.ch_storage.update_native_playbook(
+        &id, enabled, cond_field, cond_op, cond_value, action_type, action_config, &claims.tenant_id
+    ).await {
+        Ok(_) => Json(json!({"status": "success", "message": "Playbook updated"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn delete_native_playbook(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+) -> Json<Value> {
+    match state.ch_storage.delete_native_playbook(&id, &claims.tenant_id).await {
+        Ok(_) => Json(json!({"status": "success", "message": "Playbook deleted"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn get_soar_runs(
+    State(state): State<AppState>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+) -> Json<Value> {
+    match state.ch_storage.get_soar_playbook_runs(&claims.tenant_id).await {
+        Ok(runs) => Json(json!({"status": "success", "data": runs})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
 }

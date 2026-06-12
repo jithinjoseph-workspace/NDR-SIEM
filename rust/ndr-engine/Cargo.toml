@@ -33,3 +33,4 @@ uuid = { version = "1", features = ["v4"] }
 redis = { version = "0.23", features = ["tokio-comp"] }
 futures-util = "0.3"
 sysinfo = "0.30"
+lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }

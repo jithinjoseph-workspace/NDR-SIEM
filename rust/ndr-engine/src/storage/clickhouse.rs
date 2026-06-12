@@ -2582,4 +2582,195 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+    pub async fn get_native_playbooks(&self) -> anyhow::Result<Vec<crate::soar::SoarNativePlaybook>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct PlaybookRow {
+            id: String,
+            name: String,
+            description: String,
+            enabled: u8,
+            cond_field: String,
+            cond_op: String,
+            cond_value: String,
+            action_type: String,
+            action_config: String,
+            run_count: u64,
+            last_run_ts: Option<u32>,
+            created_at_ts: u32,
+            updated_at_ts: u32,
+            tenant_id: String,
+        }
+        let result = self.client
+            .query("SELECT id, name, description, enabled, cond_field, cond_op, cond_value, action_type, action_config, run_count, toUnixTimestamp(last_run) as last_run_ts, toUnixTimestamp(created_at) as created_at_ts, toUnixTimestamp(updated_at) as updated_at_ts, tenant_id FROM ndr.soar_native_playbooks FINAL")
+            .fetch_all::<PlaybookRow>()
+            .await?;
+            
+        Ok(result.into_iter().map(|r| crate::soar::SoarNativePlaybook {
+            id: r.id,
+            name: r.name,
+            description: r.description,
+            enabled: r.enabled,
+            cond_field: r.cond_field,
+            cond_op: r.cond_op,
+            cond_value: r.cond_value,
+            action_type: r.action_type,
+            action_config: r.action_config,
+            run_count: r.run_count,
+            last_run: r.last_run_ts.map(|t| t.to_string()),
+            created_at: r.created_at_ts.to_string(),
+            updated_at: r.updated_at_ts.to_string(),
+            tenant_id: r.tenant_id,
+        }).collect())
+    }
+
+    pub async fn insert_soar_case(
+        &self,
+        id: &str,
+        title: &str,
+        description: &str,
+        severity: &str,
+        status: &str,
+        src_ip: &str,
+        dst_ip: &str,
+        community_id: &str,
+        tags: &[String],
+        tenant_id: &str,
+    ) -> anyhow::Result<()> {
+        let tags_str = sql_array_literal(tags);
+        let query = format!(
+            "INSERT INTO ndr.soar_cases \
+             (id, title, description, severity, status, src_ip, dst_ip, community_id, tags, tenant_id) \
+             VALUES ('{}','{}','{}','{}','{}','{}','{}','{}',{},'{}')",
+            sql_escape(id), sql_escape(title), sql_escape(description), sql_escape(severity),
+            sql_escape(status), sql_escape(src_ip), sql_escape(dst_ip), sql_escape(community_id),
+            tags_str, sql_escape(tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn insert_soar_playbook_run(
+        &self,
+        run: &crate::soar::SoarPlaybookRun,
+    ) -> anyhow::Result<()> {
+        let query = format!(
+            "INSERT INTO ndr.soar_playbook_runs \
+             (id, playbook_id, playbook_name, hit_id, status, detail, tenant_id) \
+             VALUES ('{}','{}','{}','{}','{}','{}','{}')",
+            sql_escape(&run.id), sql_escape(&run.playbook_id), sql_escape(&run.playbook_name),
+            sql_escape(&run.hit_id), sql_escape(&run.status), sql_escape(&run.detail),
+            sql_escape(&run.tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        
+        let update = format!(
+            "ALTER TABLE ndr.soar_native_playbooks \
+             UPDATE run_count = run_count + 1, last_run = now(), updated_at = now() \
+             WHERE id = '{}'",
+             sql_escape(&run.playbook_id)
+        );
+        let _ = self.client.query(&update).execute().await;
+        Ok(())
+    }
+    pub async fn get_soar_cases(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct CaseRow {
+            id: String,
+            title: String,
+            description: String,
+            severity: String,
+            status: String,
+            assigned_to: String,
+            src_ip: String,
+            dst_ip: String,
+            community_id: String,
+            tags: Vec<String>,
+            created_at_ts: u32,
+            updated_at_ts: u32,
+            closed_at_ts: Option<u32>,
+        }
+        let result = self.client
+            .query("SELECT id, title, description, severity, status, assigned_to, src_ip, dst_ip, community_id, tags, toUnixTimestamp(created_at) as created_at_ts, toUnixTimestamp(updated_at) as updated_at_ts, toUnixTimestamp(closed_at) as closed_at_ts FROM ndr.soar_cases FINAL WHERE tenant_id = ? ORDER BY created_at DESC")
+            .bind(tenant_id)
+            .fetch_all::<CaseRow>()
+            .await?;
+        Ok(result.into_iter().map(|r| json!({
+            "id": r.id, "title": r.title, "description": r.description, "severity": r.severity,
+            "status": r.status, "assigned_to": r.assigned_to, "src_ip": r.src_ip, "dst_ip": r.dst_ip,
+            "community_id": r.community_id, "tags": r.tags, "created_at": r.created_at_ts, "updated_at": r.updated_at_ts, "closed_at": r.closed_at_ts
+        })).collect())
+    }
+
+    pub async fn update_soar_case_status(&self, id: &str, status: &str, tenant_id: &str) -> anyhow::Result<()> {
+        let closed_at = if status == "Resolved" || status == "False Positive" { "now()" } else { "NULL" };
+        let query = format!(
+            "ALTER TABLE ndr.soar_cases UPDATE status = '{}', updated_at = now(), closed_at = {} WHERE id = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
+            sql_escape(status), closed_at, sql_escape(id), sql_escape(tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn get_soar_case_comments(&self, case_id: &str, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let result = self.client
+            .query("SELECT id, case_id, author, comment, toUnixTimestamp(created_at) FROM ndr.soar_case_comments WHERE case_id = ? AND tenant_id = ? ORDER BY created_at ASC")
+            .bind(case_id).bind(tenant_id)
+            .fetch_all::<(String, String, String, String, u32)>()
+            .await?;
+        Ok(result.into_iter().map(|r| json!({
+            "id": r.0, "case_id": r.1, "author": r.2, "comment": r.3, "created_at": r.4
+        })).collect())
+    }
+
+    pub async fn insert_soar_case_comment(&self, case_id: &str, author: &str, comment: &str, tenant_id: &str) -> anyhow::Result<()> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let query = format!(
+            "INSERT INTO ndr.soar_case_comments (id, case_id, author, comment, tenant_id) VALUES ('{}','{}','{}','{}','{}')",
+            sql_escape(&id), sql_escape(case_id), sql_escape(author), sql_escape(comment), sql_escape(tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn insert_native_playbook(&self, pb: &crate::soar::SoarNativePlaybook) -> anyhow::Result<()> {
+        let query = format!(
+            "INSERT INTO ndr.soar_native_playbooks (id, name, description, enabled, cond_field, cond_op, cond_value, action_type, action_config, tenant_id) VALUES ('{}','{}','{}',{},'{}','{}','{}','{}','{}','{}')",
+            sql_escape(&pb.id), sql_escape(&pb.name), sql_escape(&pb.description), pb.enabled,
+            sql_escape(&pb.cond_field), sql_escape(&pb.cond_op), sql_escape(&pb.cond_value),
+            sql_escape(&pb.action_type), sql_escape(&pb.action_config), sql_escape(&pb.tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn update_native_playbook(&self, id: &str, enabled: u8, cond_field: &str, cond_op: &str, cond_value: &str, action_type: &str, action_config: &str, tenant_id: &str) -> anyhow::Result<()> {
+        let query = format!(
+            "ALTER TABLE ndr.soar_native_playbooks UPDATE enabled = {}, cond_field = '{}', cond_op = '{}', cond_value = '{}', action_type = '{}', action_config = '{}', updated_at = now() WHERE id = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
+            enabled, sql_escape(cond_field), sql_escape(cond_op), sql_escape(cond_value),
+            sql_escape(action_type), sql_escape(action_config), sql_escape(id), sql_escape(tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn delete_native_playbook(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        let query = format!(
+            "ALTER TABLE ndr.soar_native_playbooks DELETE WHERE id = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
+            sql_escape(id), sql_escape(tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn get_soar_playbook_runs(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let result = self.client
+            .query("SELECT id, playbook_id, playbook_name, hit_id, status, detail, toUnixTimestamp(created_at) FROM ndr.soar_playbook_runs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 100")
+            .bind(tenant_id)
+            .fetch_all::<(String, String, String, String, String, String, u32)>()
+            .await?;
+        Ok(result.into_iter().map(|r| json!({
+            "id": r.0, "playbook_id": r.1, "playbook_name": r.2, "hit_id": r.3,
+            "status": r.4, "detail": r.5, "created_at": r.6
+        })).collect())
+    }
 }

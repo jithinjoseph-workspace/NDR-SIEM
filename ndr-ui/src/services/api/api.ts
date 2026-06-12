@@ -417,4 +417,33 @@ export class Api {
   deleteSupportMessage(id: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/support/messages/${id}`);
   }
+
+  // --- Native SOAR ---
+  getNativePlaybooks(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/soar/native/playbooks`);
+  }
+  createNativePlaybook(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/native/playbooks`, data);
+  }
+  updateNativePlaybook(id: string, data: any): Observable<any> {
+    return this.http.put(`${this.baseUrl}/soar/native/playbooks/${id}`, data);
+  }
+  deleteNativePlaybook(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/soar/native/playbooks/${id}`);
+  }
+  getSoarCases(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/soar/cases`);
+  }
+  updateSoarCaseStatus(id: string, status: string): Observable<any> {
+    return this.http.put(`${this.baseUrl}/soar/cases/${id}/status`, { status });
+  }
+  getSoarCaseComments(id: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/soar/cases/${id}/comments`);
+  }
+  addSoarCaseComment(id: string, comment: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/cases/${id}/comments`, { comment });
+  }
+  getSoarRuns(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/soar/runs`);
+  }
 }

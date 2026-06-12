@@ -6,8 +6,8 @@ import {
     LucideAngularModule,
     Zap, Play, Pause, Settings,
     CheckCircle, XCircle, Link,
-    RefreshCw, Plus,
-    Trash2, Bell, Mail, Globe
+    RefreshCw, ExternalLink, Plus,
+    Trash2, Bell, Mail, Globe, Shield, Activity, ShieldAlert
 } from 'lucide-angular';
 
 @Component({
@@ -26,26 +26,40 @@ export class Soar implements OnInit {
     XIcon = XCircle;
     LinkIcon = Link;
     RefreshIcon = RefreshCw;
+    ExternalIcon = ExternalLink;
     PlusIcon = Plus;
     TrashIcon = Trash2;
     BellIcon = Bell;
     MailIcon = Mail;
     GlobeIcon = Globe;
+    ShieldIcon = Shield;
+    ActivityIcon = Activity;
+    ShieldAlertIcon = ShieldAlert;
 
-    // Playbooks
+    activeTab: 'cases' | 'playbooks' | 'integrations' | 'activity' = 'cases';
+    loading = false;
+
+    // --- Cases ---
+    cases: any[] = [];
+    selectedCase: any = null;
+    caseComments: any[] = [];
+    newComment = '';
+    loadingCase = false;
+
+    // --- Playbooks ---
     playbooks: any[] = [];
+    showNewPlaybook = false;
+    pbName = '';
+    pbDesc = '';
+    pbCondField = 'score';
+    pbCondOp = '>';
+    pbCondValue = '75';
+    pbActionType = 'slack';
+    pbActionConfig: any = {};
+    savingPb = false;
+    pbError = '';
 
-    // Notification actions
-    showNewAction = false;
-    actionType = 'slack';
-    actionName = '';
-    actionWebhook = '';
-    actionEmail = '';
-    actionTrigger = 'score > 75';
-    savingAction = false;
-    actionMsg = '';
-
-    // Integrations
+    // --- Integrations ---
     integrations: any[] = [];
     showNewIntegration = false;
     intType = 'slack';
@@ -54,293 +68,221 @@ export class Soar implements OnInit {
     testingInt = false;
     testResult = '';
     savingInt = false;
-
-    // Test all
     testingAll = false;
     testAllResults: any[] = [];
 
+    // --- Activity Log ---
+    runs: any[] = [];
+
     integrationTypes = [
         {
-            type: 'slack',
-            name: 'Slack',
-            icon: '💬',
-            fields: [
-                {
-                    key: 'webhook_url', label: 'Webhook URL',
-                    placeholder: 'https://hooks.slack.com/...'
-                }
-            ]
+            type: 'slack', name: 'Slack', icon: '💬',
+            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://hooks.slack.com/...' }]
         },
         {
-            type: 'teams',
-            name: 'Microsoft Teams',
-            icon: '🟦',
-            fields: [
-                {
-                    key: 'webhook_url', label: 'Webhook URL',
-                    placeholder: 'https://outlook.office.com/webhook/...'
-                }
-            ]
+            type: 'teams', name: 'Microsoft Teams', icon: '🟦',
+            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://outlook.office.com/webhook/...' }]
         },
         {
-            type: 'discord',
-            name: 'Discord',
-            icon: '🎮',
-            fields: [
-                {
-                    key: 'webhook_url', label: 'Webhook URL',
-                    placeholder: 'https://discord.com/api/webhooks/...'
-                }
-            ]
+            type: 'discord', name: 'Discord', icon: '🎮',
+            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://discord.com/api/webhooks/...' }]
         },
         {
-            type: 'telegram',
-            name: 'Telegram',
-            icon: '✈️',
-            fields: [
-                {
-                    key: 'bot_token', label: 'Bot Token',
-                    placeholder: '1234567890:ABC...'
-                },
-                {
-                    key: 'chat_id', label: 'Chat ID',
-                    placeholder: '-1001234567890'
-                }
-            ]
+            type: 'webhook', name: 'Custom Webhook', icon: '🔗',
+            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://your-endpoint.com/alert' }]
         },
         {
-            type: 'pagerduty',
-            name: 'PagerDuty',
-            icon: '🚨',
+            type: 'smtp', name: 'SMTP Email', icon: '📧',
             fields: [
-                {
-                    key: 'routing_key', label: 'Routing Key',
-                    placeholder: 'abc123...'
-                }
-            ]
-        },
-        {
-            type: 'jira',
-            name: 'Jira',
-            icon: '🎫',
-            fields: [
-                {
-                    key: 'url', label: 'Jira URL',
-                    placeholder: 'https://yoursite.atlassian.net'
-                },
-                {
-                    key: 'email', label: 'Email',
-                    placeholder: 'your@email.com'
-                },
-                {
-                    key: 'token', label: 'API Token',
-                    placeholder: 'ATATT3x...'
-                },
-                {
-                    key: 'project_key', label: 'Project Key',
-                    placeholder: 'NAR'
-                }
-            ]
-        },
-        {
-            type: 'webhook',
-            name: 'Custom Webhook',
-            icon: '🔗',
-            fields: [
-                {
-                    key: 'webhook_url', label: 'Webhook URL',
-                    placeholder: 'https://your-endpoint.com/alert'
-                }
+                { key: 'smtp_host', label: 'SMTP Host', placeholder: 'smtp.gmail.com' },
+                { key: 'smtp_port', label: 'SMTP Port', placeholder: '587' },
+                { key: 'smtp_user', label: 'SMTP User', placeholder: 'user@domain.com' },
+                { key: 'smtp_pass', label: 'SMTP Password', placeholder: 'password' },
+                { key: 'from_addr', label: 'From Address', placeholder: 'alerts@domain.com' },
+                { key: 'to_addr', label: 'Default To Address', placeholder: 'soc@domain.com' }
             ]
         }
     ];
 
-
-    constructor(
-        private api: Api,
-        private cdr: ChangeDetectorRef
-    ) { }
+    constructor(private api: Api, private cdr: ChangeDetectorRef) {}
 
     ngOnInit() {
-        this.loadIntegrations();
+        this.loadCases();
         this.loadPlaybooks();
+        this.loadIntegrations();
+        this.loadRuns();
+    }
+
+    // --- API Loaders ---
+    loadCases() {
+        this.api.getSoarCases().subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.cases = res.data;
+                this.cdr.detectChanges();
+            }
+        });
     }
 
     loadPlaybooks() {
-        this.api.getPlaybooks().subscribe({
-            next: (data: any) => {
-                this.playbooks = data.playbooks || [];
+        this.api.getNativePlaybooks().subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.playbooks = res.data;
                 this.cdr.detectChanges();
             }
         });
-    }
-
-    getIntIcon(type: string): string {
-        const icons: any = {
-            'slack': '💬',
-            'teams': '🟦',
-            'discord': '🎮',
-            'telegram': '✈️',
-            'pagerduty': '🚨',
-            'webhook': '🔗',
-            'email': '📧',
-            'jira': '🎫'
-        };
-        return icons[type] || '🔔';
-    }
-
-    togglePlaybook(pb: any) {
-        pb.enabled = !pb.enabled;
-        this.api.togglePlaybook({
-            id: pb.id,
-            enabled: pb.enabled
-        }).subscribe({
-            next: () => this.loadPlaybooks()
-        });
-    }
-
-    saveAction() {
-        this.savingAction = true;
-        this.actionMsg = '';
-
-        const action_config: any = {
-            trigger: this.actionTrigger
-        };
-
-        if (this.actionType === 'slack') {
-            action_config.webhook_url = this.actionWebhook;
-        } else if (this.actionType === 'email') {
-            action_config.email = this.actionEmail;
-        } else if (this.actionType === 'webhook') {
-            action_config.url = this.actionWebhook;
-        }
-
-        this.api.createPlaybook({
-            name: this.actionType === 'slack'
-                ? 'Slack Alert'
-                : this.actionType === 'email'
-                    ? 'Email Alert'
-                    : 'Webhook Alert',
-            description: `Send ${this.actionType} when ${this.actionTrigger}`,
-            trigger: this.actionTrigger,
-            action_type: this.actionType,
-            action_config: action_config
-        }).subscribe({
-            next: () => {
-                this.savingAction = false;
-                this.showNewAction = false;
-                this.actionWebhook = '';
-                this.actionEmail = '';
-                this.actionName = '';
-                this.loadPlaybooks();
-                this.cdr.detectChanges();
-            },
-            error: () => {
-                this.savingAction = false;
-                this.actionMsg = '❌ Failed to save';
-                this.cdr.detectChanges();
-            }
-        });
-    }
-
-    // helper used in template
-    get emailAddress(): string { return this.actionEmail; }
-    set emailAddress(v: string) { this.actionEmail = v; }
-
-    get activeCount(): number {
-        return this.playbooks.filter(p => p.enabled).length;
-    }
-
-    statusBg(status: string): string {
-        switch (status) {
-            case 'FINISHED': return 'bg-primary/20 text-primary';
-            case 'EXECUTING': return 'bg-yellow-500/20 text-yellow-400';
-            case 'ABORTED': return 'bg-red-500/20 text-red-400';
-            default: return 'bg-surface-container text-on-surface-variant';
-        }
-    }
-
-    get selectedIntType() {
-        return this.integrationTypes
-            .find(t => t.type === this.intType);
     }
 
     loadIntegrations() {
-        this.api.getIntegrations().subscribe({
-            next: (data: any) => {
-                this.integrations = data.integrations || [];
-                this.cdr.detectChanges();
-            }
-        });
-    }
-
-    testAllIntegrations() {
-        this.testingAll = true;
-        this.testAllResults = [];
-
-        const tests = this.integrations
-            .filter(i => i.enabled)
-            .map(i => this.api.testIntegration({
-                type: i.type,
-                config: i.config
-            }).toPromise().then((r: any) => ({
-                name: i.name,
-                type: i.type,
-                result: r.message,
-                ok: r.status === 'ok'
-            })).catch(() => ({
-                name: i.name,
-                type: i.type,
-                result: '❌ Failed',
-                ok: false
-            })));
-
-        Promise.all(tests).then(results => {
-            this.testAllResults = results;
-            this.testingAll = false;
+        this.api.getIntegrations().subscribe((res: any) => {
+            this.integrations = res.integrations || [];
             this.cdr.detectChanges();
         });
     }
 
-    get activeIntegrations(): number {
-        return this.integrations.filter(i => i.enabled).length;
+    loadRuns() {
+        this.api.getSoarRuns().subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.runs = res.data;
+                this.cdr.detectChanges();
+            }
+        });
     }
 
-    get totalIntegrations(): number {
-        return this.integrations.length;
+    // --- Tab Switching ---
+    switchTab(tab: 'cases' | 'playbooks' | 'integrations' | 'activity') {
+        this.activeTab = tab;
+        if (tab === 'cases') this.loadCases();
+        if (tab === 'playbooks') this.loadPlaybooks();
+        if (tab === 'integrations') this.loadIntegrations();
+        if (tab === 'activity') this.loadRuns();
     }
 
-    getIntegrationsByType(): any[] {
-        const types = ['slack', 'teams', 'discord',
-            'telegram', 'pagerduty', 'jira', 'webhook'];
-        return types.map(t => ({
-            type: t,
-            icon: this.getIntIcon(t),
-            name: this.integrationTypes
-                .find(it => it.type === t)?.name || t,
-            count: this.integrations
-                .filter(i => i.type === t).length,
-            active: this.integrations
-                .filter(i => i.type === t && i.enabled).length
-        })).filter(t => t.count > 0);
+    // --- Cases Logic ---
+    openCase(c: any) {
+        this.selectedCase = c;
+        this.loadingCase = true;
+        this.api.getSoarCaseComments(c.id).subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.caseComments = res.data;
+            }
+            this.loadingCase = false;
+            this.cdr.detectChanges();
+        });
     }
 
-    ticketColor(severity: string): string {
-        switch (severity?.toUpperCase()) {
-            case 'CRITICAL': return 'text-red-400';
-            case 'HIGH': return 'text-orange-400';
-            case 'MEDIUM': return 'text-yellow-400';
-            default: return 'text-blue-400';
+    closeCaseModal() {
+        this.selectedCase = null;
+        this.caseComments = [];
+    }
+
+    updateCaseStatus(status: string) {
+        if (!this.selectedCase) return;
+        this.api.updateSoarCaseStatus(this.selectedCase.id, status).subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.selectedCase.status = status;
+                this.loadCases();
+            }
+        });
+    }
+
+    addComment() {
+        if (!this.newComment.trim() || !this.selectedCase) return;
+        this.api.addSoarCaseComment(this.selectedCase.id, this.newComment).subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.newComment = '';
+                this.openCase(this.selectedCase); // reload comments
+            }
+        });
+    }
+
+    getCaseColor(severity: string) {
+        const s = (severity || '').toLowerCase();
+        if (s === 'critical') return 'text-red-400 bg-red-500/10';
+        if (s === 'high') return 'text-orange-400 bg-orange-500/10';
+        if (s === 'medium') return 'text-yellow-400 bg-yellow-500/10';
+        return 'text-blue-400 bg-blue-500/10';
+    }
+
+    // --- Playbooks Logic ---
+    togglePlaybook(pb: any) {
+        pb.enabled = pb.enabled === 1 ? 0 : 1;
+        this.api.updateNativePlaybook(pb.id, {
+            enabled: pb.enabled === 1,
+            cond_field: pb.cond_field,
+            cond_op: pb.cond_op,
+            cond_value: pb.cond_value,
+            action_type: pb.action_type,
+            action_config: pb.action_config
+        }).subscribe(() => this.loadPlaybooks());
+    }
+
+    deletePlaybook(pb: any) {
+        if (confirm(`Delete playbook ${pb.name}?`)) {
+            this.api.deleteNativePlaybook(pb.id).subscribe(() => this.loadPlaybooks());
         }
+    }
+
+    savePlaybook() {
+        if (!this.pbName) {
+            this.pbError = 'Name is required';
+            return;
+        }
+        this.savingPb = true;
+        this.pbError = '';
+
+        const data = {
+            name: this.pbName,
+            description: this.pbDesc,
+            enabled: true,
+            cond_field: this.pbCondField,
+            cond_op: this.pbCondOp,
+            cond_value: this.pbCondValue,
+            action_type: this.pbActionType,
+            action_config: JSON.stringify(this.pbActionConfig) // Must send string
+        };
+
+        this.api.createNativePlaybook(data).subscribe({
+            next: (res: any) => {
+                this.savingPb = false;
+                if (res.status === 'success') {
+                    this.showNewPlaybook = false;
+                    this.loadPlaybooks();
+                } else {
+                    this.pbError = res.message;
+                }
+            },
+            error: (err) => {
+                this.savingPb = false;
+                this.pbError = 'Failed to create playbook';
+            }
+        });
+    }
+
+    initPlaybookModal() {
+        this.showNewPlaybook = true;
+        this.pbName = '';
+        this.pbDesc = '';
+        this.pbCondField = 'score';
+        this.pbCondOp = '>';
+        this.pbCondValue = '75';
+        this.pbActionType = 'slack';
+        this.pbActionConfig = {};
+        this.pbError = '';
+    }
+
+    // --- Integrations Logic (Reused) ---
+    getIntIcon(type: string): string {
+        return this.integrationTypes.find(t => t.type === type)?.icon || '🔔';
+    }
+
+    get selectedIntType() {
+        return this.integrationTypes.find(t => t.type === this.intType);
     }
 
     testIntegration() {
         this.testingInt = true;
         this.testResult = '';
-        this.api.testIntegration({
-            type: this.intType,
-            config: this.intConfig
-        }).subscribe({
+        this.api.testIntegration({ type: this.intType, config: this.intConfig }).subscribe({
             next: (data: any) => {
                 this.testingInt = false;
                 this.testResult = data.message;
@@ -367,29 +309,27 @@ export class Soar implements OnInit {
                 this.intConfig = {};
                 this.intName = '';
                 this.loadIntegrations();
-                this.cdr.detectChanges();
             },
             error: () => {
                 this.savingInt = false;
-                this.cdr.detectChanges();
             }
         });
     }
 
     toggleIntegration(int: any) {
         int.enabled = !int.enabled;
-        this.api.toggleIntegration({
-            id: int.id,
-            enabled: int.enabled
-        }).subscribe();
+        this.api.toggleIntegration({ id: int.id, enabled: int.enabled }).subscribe();
     }
 
     deleteIntegration(int: any) {
         if (!confirm(`Delete ${int.name}?`)) return;
-        this.api.deleteIntegration({ id: int.id })
-            .subscribe({
-                next: () => this.loadIntegrations()
-            });
+        this.api.deleteIntegration({ id: int.id }).subscribe(() => this.loadIntegrations());
     }
 
+    // --- Date Formatting ---
+    formatDate(ts: any) {
+        if (!ts) return 'N/A';
+        const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
+        return d.toLocaleString();
+    }
 }

@@ -300,3 +300,73 @@ CREATE TABLE IF NOT EXISTS ndr.support_messages
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY id;
+
+-- Native SOAR Tables
+CREATE TABLE IF NOT EXISTS ndr.soar_cases
+(
+    id           String DEFAULT toString(generateUUIDv4()),
+    title        String,
+    description  String DEFAULT '',
+    severity     String DEFAULT 'MEDIUM',
+    status       String DEFAULT 'New',  -- New, Investigating, Resolved, False Positive
+    assigned_to  String DEFAULT '',
+    src_ip       String DEFAULT '',
+    dst_ip       String DEFAULT '',
+    community_id String DEFAULT '',
+    hit_ids      Array(String) DEFAULT [],
+    tags         Array(String) DEFAULT [],
+    created_at   DateTime DEFAULT now(),
+    updated_at   DateTime DEFAULT now(),
+    closed_at    Nullable(DateTime),
+    tenant_id    String DEFAULT 'default'
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (tenant_id, created_at);
+
+CREATE TABLE IF NOT EXISTS ndr.soar_case_comments
+(
+    id         String DEFAULT toString(generateUUIDv4()),
+    case_id    String,
+    author     String,
+    comment    String,
+    created_at DateTime DEFAULT now(),
+    tenant_id  String DEFAULT 'default'
+)
+ENGINE = MergeTree()
+ORDER BY (tenant_id, case_id, created_at);
+
+CREATE TABLE IF NOT EXISTS ndr.soar_native_playbooks
+(
+    id           String DEFAULT toString(generateUUIDv4()),
+    name         String,
+    description  String DEFAULT '',
+    enabled      UInt8 DEFAULT 1,
+    -- condition fields
+    cond_field   String,   -- 'score','severity','threat_intel','src_country','sigma_tag'
+    cond_op      String,   -- '>','>=','==','contains'
+    cond_value   String,
+    -- action
+    action_type  String,   -- 'slack','teams','discord','telegram','pagerduty','jira','webhook','email','create_case','block_ip'
+    action_config String,  -- JSON config
+    run_count    UInt64 DEFAULT 0,
+    last_run     Nullable(DateTime),
+    created_at   DateTime DEFAULT now(),
+    updated_at   DateTime DEFAULT now(),
+    tenant_id    String DEFAULT 'default'
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (tenant_id, id);
+
+CREATE TABLE IF NOT EXISTS ndr.soar_playbook_runs
+(
+    id            String DEFAULT toString(generateUUIDv4()),
+    playbook_id   String,
+    playbook_name String,
+    hit_id        String,
+    status        String,
+    detail        String,
+    created_at    DateTime DEFAULT now(),
+    tenant_id     String DEFAULT 'default'
+)
+ENGINE = MergeTree()
+ORDER BY (tenant_id, created_at);

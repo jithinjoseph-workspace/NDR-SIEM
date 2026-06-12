@@ -10,6 +10,7 @@ mod enrichment;
 mod normalizer;
 mod scoring;
 mod storage;
+pub mod soar;
 
 use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
@@ -247,6 +248,12 @@ async fn main() {
         .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))
         .route("/api/soar/integrations/test",post(api::test_integration_endpoint))
         .route("/api/soar/integrations/toggle",post(api::toggle_integration))
+        .route("/api/soar/cases", get(api::get_soar_cases))
+        .route("/api/soar/cases/:id/comments", get(api::get_soar_case_comments).post(api::add_soar_case_comment))
+        .route("/api/soar/cases/:id/status", put(api::update_soar_case_status))
+        .route("/api/soar/native/playbooks", get(api::get_native_playbooks).post(api::create_native_playbook))
+        .route("/api/soar/native/playbooks/:id", put(api::update_native_playbook).delete(api::delete_native_playbook))
+        .route("/api/soar/runs", get(api::get_soar_runs))
         .route("/api/soar/integrations/delete",post(api::delete_integration))
         .route("/api/soar/jira/tickets", post(api::get_jira_tickets))
         .route("/api/auth/login",          post(api::login))
