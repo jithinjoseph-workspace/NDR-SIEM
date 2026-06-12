@@ -223,7 +223,7 @@ echo "📊 Status:"
 echo "  ClickHouse: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
 echo "  Docker: $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ')"
 echo "  Agent:  $(curl -s http://localhost:3001/agent/status 2>/dev/null)"
-echo "  Arkime: start via NDR UI → Agent → Start"
+
 
 echo ""
 echo "✅ NDR Stack started"
