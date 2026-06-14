@@ -17,7 +17,6 @@ sudo modprobe br_netfilter 2>/dev/null || true
 # ── Set interface ─────────────────────────────
 if [ -f "$INSTALL_DIR/.env" ]; then
     source "$INSTALL_DIR/.env"
-
 fi
 
 WEBHOOK=$(clickhouse-client --user=ndr \
@@ -30,7 +29,6 @@ if [ -n "$WEBHOOK" ]; then
         $INSTALL_DIR/.env
     log "✅ SOAR webhook restored"
 fi
-
 
 IFACE=${IFACE:-$(ip -o -4 addr show 2>/dev/null | \
     grep -v "127.0.0.1\|docker\|br-\|veth" | \
@@ -49,12 +47,13 @@ echo "  → Starting NDR Agent..."
 sudo systemctl start ndr-agent 2>/dev/null || \
     nohup python3 $INSTALL_DIR/scripts/ndr-agent.py > /tmp/ndr-agent.log 2>&1 &
 sleep 2
+
 # Fix Docker socket permissions
 sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 
 # ── Clear Vector checkpoints BEFORE starting Docker ──────────────
-# Must happen before `docker compose up` so Vector starts fresh,
-# not skipping log data it thinks it already read
+# Must happen before docker compose up so Vector starts with no memory
+# of old log positions — otherwise it skips data it thinks it already read
 log "Resetting Vector checkpoints..."
 sudo rm -rf $HOME_DIR/.vector/data/suricata \
     $HOME_DIR/.vector/data/zeek 2>/dev/null || true
@@ -69,8 +68,19 @@ sudo docker compose up -d
 
 # Arkime capture is started only via the NDR UI (Start Agent button)
 
-# ── Set Kafka retention ───────────────────────
-sleep 15
+# ── Set Kafka retention and ensure 3-partition topic ─────────────
+# Wait for Kafka to be healthy before touching topics
+echo "  → Waiting for Kafka to be ready..."
+for i in {1..30}; do
+    if sudo docker exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh \
+        --bootstrap-server localhost:9092 > /dev/null 2>&1; then
+        log "✅ Kafka ready"
+        break
+    fi
+    sleep 3
+done
+
+# Set retention
 sudo docker exec kafka \
     /opt/kafka/bin/kafka-configs.sh \
     --bootstrap-server localhost:9092 \
@@ -79,8 +89,8 @@ sudo docker exec kafka \
     --add-config retention.ms=3600000 \
     2>/dev/null || true
 
-
-# Create topic with 3 partitions (or reset to 3 if exists with more)
+# Create topic with 3 partitions only if it doesn't exist yet
+# Never delete an existing topic — that breaks live consumer connections
 sudo docker exec kafka \
     /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:9092 \
@@ -90,29 +100,6 @@ sudo docker exec kafka \
     --replication-factor 1 \
     2>/dev/null || true
 
-# Delete and recreate if partition count is wrong
-PARTITION_COUNT=$(sudo docker exec kafka \
-    /opt/kafka/bin/kafka-topics.sh \
-    --bootstrap-server localhost:9092 \
-    --describe --topic ndr-events 2>/dev/null | \
-    grep PartitionCount | awk -F: '{print $2}' | tr -d ' ')
-
-if [ "$PARTITION_COUNT" != "3" ]; then
-    log "Resetting Kafka topic to 3 partitions..."
-    sudo docker exec kafka \
-        /opt/kafka/bin/kafka-topics.sh \
-        --bootstrap-server localhost:9092 \
-        --delete --topic ndr-events \
-        2>/dev/null || true
-    sleep 3
-    sudo docker exec kafka \
-        /opt/kafka/bin/kafka-topics.sh \
-        --bootstrap-server localhost:9092 \
-        --create --topic ndr-events \
-        --partitions 3 \
-        --replication-factor 1 \
-        2>/dev/null || true
-fi
 log "✅ Kafka 3 partitions ready for scaling"
 
 # Verify
@@ -121,7 +108,7 @@ sudo docker exec kafka \
     --bootstrap-server localhost:9092 \
     --describe --topic ndr-events
 
-# Check consumer group now
+# Check consumer group
 sleep 5
 sudo docker exec kafka \
     /opt/kafka/bin/kafka-consumer-groups.sh \
@@ -129,7 +116,6 @@ sudo docker exec kafka \
     --group ndr-engine-group \
     --describe
 
-    
 # ── Check Shuffle SOAR ────────────────────────
 echo "  → Checking Shuffle SOAR..."
 sleep 5
@@ -137,7 +123,6 @@ if curl -s http://localhost:5001/api/v1/health \
     > /dev/null 2>&1; then
     echo "  ✅ Shuffle SOAR running"
 
-    # Check webhook configured
     source $INSTALL_DIR/.env 2>/dev/null || true
     if [ -z "$SHUFFLE_WEBHOOK_URL" ]; then
         echo "  ⚠️  Shuffle webhook not configured"
@@ -178,16 +163,9 @@ print(d.get('apikey',''))
             "s|SHUFFLE_API_KEY=.*|SHUFFLE_API_KEY=$NEW_KEY|" \
             $INSTALL_DIR/.env
         log "✅ Shuffle API key refreshed"
-        # Restart engine with new key
         sudo docker compose up -d ndr-engine-1
     fi
 fi
-
-# Wait for Kafka to be healthy
-echo "  → Waiting for Kafka..."
-sleep 10
-
-
 
 # Start Angular UI
 echo "  → Starting Angular UI..."
@@ -226,7 +204,7 @@ echo "📊 Status:"
 echo "  ClickHouse: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
 echo "  Docker: $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ')"
 echo "  Agent:  $(curl -s http://localhost:3001/agent/status 2>/dev/null)"
-
+echo "  Arkime: start via NDR UI → Agent → Start"
 
 echo ""
 echo "✅ NDR Stack started"

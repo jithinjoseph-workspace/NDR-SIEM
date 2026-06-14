@@ -6,7 +6,7 @@ import {
     LucideAngularModule,
     Zap, Play, Pause, Settings,
     CheckCircle, XCircle, Link,
-    RefreshCw, ExternalLink, Plus,
+    RefreshCw, Plus,
     Trash2, Bell, Mail, Globe
 } from 'lucide-angular';
 
@@ -26,34 +26,14 @@ export class Soar implements OnInit {
     XIcon = XCircle;
     LinkIcon = Link;
     RefreshIcon = RefreshCw;
-    ExternalIcon = ExternalLink;
     PlusIcon = Plus;
     TrashIcon = Trash2;
     BellIcon = Bell;
     MailIcon = Mail;
     GlobeIcon = Globe;
 
-    view = 'check';
-    loading = true;
-
-    // Setup
-    shuffleUrl = 'http://localhost:5001';
-    username = 'admin';
-    password = '';
-    setting = false;
-    setupError = '';
-    setupMsg = '';
-
-    // Connected state
-    soarConnected = false;
-    webhookUrl = '';
-    shuffleUiUrl = '';
-
     // Playbooks
     playbooks: any[] = [];
-
-    // Recent executions
-    recentActions: any[] = [];
 
     // Notification actions
     showNewAction = false;
@@ -65,13 +45,7 @@ export class Soar implements OnInit {
     savingAction = false;
     actionMsg = '';
 
-    // Settings
-    showSettings = false;
-    manualWebhook = '';
-    manualShuffleUrl = '';
-
-    //SOAR Integrations
-
+    // Integrations
     integrations: any[] = [];
     showNewIntegration = false;
     intType = 'slack';
@@ -81,10 +55,9 @@ export class Soar implements OnInit {
     testResult = '';
     savingInt = false;
 
-    // Jira ticket tracker
-    jiraTickets: any[] = [];
-    loadingTickets = false;
-
+    // Test all
+    testingAll = false;
+    testAllResults: any[] = [];
 
     integrationTypes = [
         {
@@ -146,7 +119,6 @@ export class Soar implements OnInit {
                 }
             ]
         },
-
         {
             type: 'jira',
             name: 'Jira',
@@ -190,31 +162,14 @@ export class Soar implements OnInit {
     ) { }
 
     ngOnInit() {
-        this.checkStatus();
+        this.loadIntegrations();
+        this.loadPlaybooks();
     }
 
-    checkStatus() {
-        this.loading = true;
-        this.api.getSoarStatus().subscribe({
+    loadPlaybooks() {
+        this.api.getPlaybooks().subscribe({
             next: (data: any) => {
-                this.soarConnected = data.connected || false;
-                this.webhookUrl = data.webhook_url || '';
-                this.shuffleUiUrl = data.shuffle_url || '';
                 this.playbooks = data.playbooks || [];
-                this.loading = false;
-                if (this.webhookUrl) {
-                    this.view = 'connected';
-                    this.loadExecutions();
-                    this.loadIntegrations();
-                    setTimeout(() => this.loadJiraTickets(), 1000);
-                } else {
-                    this.view = 'setup';
-                }
-                this.cdr.detectChanges();
-            },
-            error: () => {
-                this.loading = false;
-                this.view = 'setup';
                 this.cdr.detectChanges();
             }
         });
@@ -234,77 +189,13 @@ export class Soar implements OnInit {
         return icons[type] || '🔔';
     }
 
-    setupSoar() {
-        if (!this.shuffleUrl || !this.username || !this.password) {
-            this.setupError = 'Please fill all fields!';
-            return;
-        }
-        this.setting = true;
-        this.setupError = '';
-        this.setupMsg = 'Connecting to Shuffle...';
-        this.cdr.detectChanges();
-
-        this.api.setupSoar({
-            shuffle_url: this.shuffleUrl,
-            username: this.username,
-            password: this.password,
-        }).subscribe({
-            next: (data: any) => {
-                this.setting = false;
-                if (data.status === 'ok') {
-                    this.webhookUrl = data.webhook_url;
-                    this.shuffleUiUrl = this.shuffleUrl
-                        .replace(':5001', ':3002');
-                    this.view = 'connected';
-                    this.setupMsg = '✅ ' + data.message;
-                    this.checkStatus();
-                } else {
-                    this.setupError = data.message;
-                }
-                this.cdr.detectChanges();
-            },
-            error: () => {
-                this.setting = false;
-                this.setupError = 'Connection failed — check URL and credentials';
-                this.cdr.detectChanges();
-            }
-        });
-    }
-
-    loadExecutions() {
-        this.api.getSoarExecutions().subscribe({
-            next: (data: any) => {
-                const execs = data.executions || [];
-                if (Array.isArray(execs)) {
-                    this.recentActions = execs
-                        .slice(0, 10)
-                        .map((e: any) => {
-                            try {
-                                const arg = JSON.parse(
-                                    e.execution_argument || '{}'
-                                );
-                                return {
-                                    name: `${arg.severity || 'ALERT'}: ${arg.src_ip} → ${arg.dst_ip}`,
-                                    time: new Date((e.started_at || 0) * 1000).toLocaleString(),
-                                    status: e.status,
-                                    score: arg.score
-                                };
-                            } catch { return null; }
-                        })
-                        .filter((e: any) => e !== null);
-                    this.cdr.detectChanges();
-                }
-            }
-        });
-    }
-
     togglePlaybook(pb: any) {
         pb.enabled = !pb.enabled;
         this.api.togglePlaybook({
             id: pb.id,
             enabled: pb.enabled
         }).subscribe({
-            next: () => this.checkStatus()
+            next: () => this.loadPlaybooks()
         });
     }
 
@@ -312,7 +203,6 @@ export class Soar implements OnInit {
         this.savingAction = true;
         this.actionMsg = '';
 
-        // Build action config
         const action_config: any = {
             trigger: this.actionTrigger
         };
@@ -325,7 +215,6 @@ export class Soar implements OnInit {
             action_config.url = this.actionWebhook;
         }
 
-        // Save as playbook to DB
         this.api.createPlaybook({
             name: this.actionType === 'slack'
                 ? 'Slack Alert'
@@ -337,55 +226,18 @@ export class Soar implements OnInit {
             action_type: this.actionType,
             action_config: action_config
         }).subscribe({
-            next: (data: any) => {
+            next: () => {
                 this.savingAction = false;
                 this.showNewAction = false;
                 this.actionWebhook = '';
                 this.actionEmail = '';
                 this.actionName = '';
-                this.checkStatus();
+                this.loadPlaybooks();
                 this.cdr.detectChanges();
             },
             error: () => {
                 this.savingAction = false;
                 this.actionMsg = '❌ Failed to save';
-                this.cdr.detectChanges();
-            }
-        });
-    }
-    testWebhook() {
-        this.api.testSoarWebhook().subscribe({
-            next: (data: any) => {
-                alert(data.status === 'ok'
-                    ? '✅ Test alert sent!'
-                    : '❌ ' + data.message);
-            }
-        });
-    }
-
-    openShuffle() {
-        const url = this.shuffleUiUrl ||
-            this.shuffleUrl.replace(':5001', ':3002');
-        window.open(url, '_blank');
-    }
-
-    reconfigure() {
-        this.showSettings = true;
-        this.manualWebhook = this.webhookUrl;
-        this.manualShuffleUrl = this.shuffleUiUrl;
-        this.cdr.detectChanges();
-    }
-
-    saveManualConfig() {
-        this.api.updateSoarConfig({
-            webhook_url: this.manualWebhook,
-            shuffle_url: this.manualShuffleUrl,
-        }).subscribe({
-            next: () => {
-                this.webhookUrl = this.manualWebhook;
-                this.shuffleUiUrl = this.manualShuffleUrl;
-                this.showSettings = false;
-                this.view = 'connected';
                 this.cdr.detectChanges();
             }
         });
@@ -399,15 +251,6 @@ export class Soar implements OnInit {
         return this.playbooks.filter(p => p.enabled).length;
     }
 
-    statusColor(status: string): string {
-        switch (status) {
-            case 'FINISHED': return 'text-primary';
-            case 'EXECUTING': return 'text-yellow-400';
-            case 'ABORTED': return 'text-red-400';
-            default: return 'text-on-surface-variant';
-        }
-    }
-
     statusBg(status: string): string {
         switch (status) {
             case 'FINISHED': return 'bg-primary/20 text-primary';
@@ -416,7 +259,6 @@ export class Soar implements OnInit {
             default: return 'bg-surface-container text-on-surface-variant';
         }
     }
-
 
     get selectedIntType() {
         return this.integrationTypes
@@ -432,38 +274,6 @@ export class Soar implements OnInit {
         });
     }
 
-
-    loadJiraTickets() {
-        const jiraInt = this.integrations.find(
-            i => i.type === 'jira' && i.enabled
-        );
-        if (!jiraInt) return;
-
-        this.loadingTickets = true;
-        const config = jiraInt.config;
-
-        this.api.getJiraTickets({
-            url: config.url,
-            email: config.email,
-            token: config.token,
-            project_key: config.project_key
-        }).subscribe({
-            next: (data: any) => {
-                this.jiraTickets = data.tickets || [];
-                this.loadingTickets = false;
-                this.cdr.detectChanges();
-            },
-            error: () => {
-                this.loadingTickets = false;
-                this.cdr.detectChanges();
-            }
-        });
-    }
-
-    // Test all integrations
-    testingAll = false;
-    testAllResults: any[] = [];
-
     testAllIntegrations() {
         this.testingAll = true;
         this.testAllResults = [];
@@ -473,7 +283,7 @@ export class Soar implements OnInit {
             .map(i => this.api.testIntegration({
                 type: i.type,
                 config: i.config
-            }).toPromise().then(r => ({
+            }).toPromise().then((r: any) => ({
                 name: i.name,
                 type: i.type,
                 result: r.message,
@@ -492,7 +302,6 @@ export class Soar implements OnInit {
         });
     }
 
-    // Integration stats
     get activeIntegrations(): number {
         return this.integrations.filter(i => i.enabled).length;
     }
@@ -515,6 +324,7 @@ export class Soar implements OnInit {
                 .filter(i => i.type === t && i.enabled).length
         })).filter(t => t.count > 0);
     }
+
     ticketColor(severity: string): string {
         switch (severity?.toUpperCase()) {
             case 'CRITICAL': return 'text-red-400';
@@ -523,6 +333,7 @@ export class Soar implements OnInit {
             default: return 'text-blue-400';
         }
     }
+
     testIntegration() {
         this.testingInt = true;
         this.testResult = '';
@@ -550,7 +361,7 @@ export class Soar implements OnInit {
             type: this.intType,
             config: this.intConfig
         }).subscribe({
-            next: (data: any) => {
+            next: () => {
                 this.savingInt = false;
                 this.showNewIntegration = false;
                 this.intConfig = {};

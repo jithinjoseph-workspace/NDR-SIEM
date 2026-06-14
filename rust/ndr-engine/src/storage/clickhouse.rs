@@ -2234,6 +2234,57 @@ pub async fn get_pcap_file_path(
     Ok(result.into_iter().next().unwrap_or_default())
 }
 
+pub async fn queue_pcap_request(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "INSERT INTO ndr.pcap_pending \
+             (community_id, tenant_id, fulfilled) VALUES \
+             ('{}', '{}', 0)",
+            sql_escape(community_id), sql_escape(tenant_id)
+        ))
+        .execute()
+        .await?;
+    Ok(())
+}
+
+pub async fn get_pending_pcap_requests(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Vec<String>> {
+    let rows = self.client
+        .query(&format!(
+            "SELECT community_id FROM ndr.pcap_pending FINAL \
+             WHERE tenant_id = '{}' AND fulfilled = 0 \
+             AND requested_at > now() - INTERVAL 1 DAY",
+            sql_escape(tenant_id)
+        ))
+        .fetch_all::<String>()
+        .await
+        .unwrap_or_default();
+    Ok(rows)
+}
+
+pub async fn mark_pcap_fulfilled(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "ALTER TABLE ndr.pcap_pending \
+             UPDATE fulfilled = 1 \
+             WHERE tenant_id = '{}' AND community_id = '{}'",
+            sql_escape(tenant_id), sql_escape(community_id)
+        ))
+        .execute()
+        .await?;
+    Ok(())
+}
+
 pub async fn revoke_sensor_key(
     &self,
     id: &str,

@@ -106,13 +106,6 @@ pub struct TogglePayload {
 
 
 
-#[derive(serde::Deserialize)]
-pub struct SoarSetupPayload {
-    pub shuffle_url: String,
-    pub username:    String,
-    pub password:    String,
-}
-
 // ── Shared application state ──────────────────────────────────────────────
 
 
@@ -568,6 +561,21 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             tracing::warn!("ClickHouse hit insert error: {}", e);
         }
     });
+
+    // Queue PCAP upload request for external sensors on MEDIUM+ alerts
+    if tenant_id != "default" && !hit.community_id.is_empty()
+        && risk.severity.as_str() != "LOW"
+    {
+        let ch2 = state.ch_storage.clone();
+        let tid2 = tenant_id.clone();
+        let cid2 = hit.community_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = ch2.queue_pcap_request(&tid2, &cid2).await {
+                tracing::warn!("pcap_pending queue failed: {}", e);
+            }
+        });
+    }
+
     // Build WebSocket hit message
     let sigma_hits: Vec<String> = {
         let mut seen = std::collections::HashSet::new();
@@ -959,50 +967,6 @@ for integration in &integrations {
 }
 } // end alert_threshold check
 
-// ── Send webhook to Shuffle SOAR ──────────────
-// ── Send to Shuffle SOAR ──────────────────────
-if risk.score >= soar_threshold {
-    let shuffle_url = std::env::var("SHUFFLE_WEBHOOK_URL")
-        .unwrap_or_default();
-
-    if !shuffle_url.is_empty() {
-        let payload = json!({
-            "alert_type":   "ndr_threat_detected",
-            "src_ip":       src,
-            "dst_ip":       dst,
-            "score":        risk.score,
-            "severity":     risk.severity.as_str(),
-            "threat_intel": enrichment.is_malicious,
-            "sigma_hits":   sigma_hits,
-            "timestamp":    chrono::Utc::now().to_rfc3339(),
-            "tags":         risk.tags,
-            "community_id": hit.community_id,
-        });
-
-        let url = shuffle_internal_url(&shuffle_url);
-let api_key = std::env::var("SHUFFLE_API_KEY")
-    .unwrap_or_default();
-tokio::spawn(async move {
-    let client = reqwest::Client::new();
-    let mut req = client
-        .post(&url)
-        .json(&payload)
-        .timeout(std::time::Duration::from_secs(5));
-    if !api_key.is_empty() {
-        req = req.header(
-            "Authorization",
-            format!("Bearer {}", api_key)
-        );
-    }
-    match req.send().await
-            {
-                Ok(_)  => info!("✅ Alert sent to Shuffle SOAR"),
-                Err(e) => warn!("Shuffle webhook failed: {}", e),
-            }
-        });
-    }
-}
-
     let mut hit_msg = json!({
         "type":            "hit",
         "cid":             hit.community_id,
@@ -1141,24 +1105,6 @@ pub async fn stop_services() -> Json<Value> {
 }
 
 
-
-/// Convert external Shuffle URL to internal Docker URL
-fn shuffle_internal_url(external_url: &str) -> String {
-    let internal = std::env::var("SHUFFLE_INTERNAL_URL")
-        .unwrap_or_else(|_|
-            "http://shuffle-backend:5001".to_string());
-
-    // Extract path+query from external URL
-    // and replace host with internal
-    if let Ok(parsed) = reqwest::Url::parse(external_url) {
-        let path = parsed.path().to_string();
-        let query = parsed.query()
-            .map(|q| format!("?{}", q))
-            .unwrap_or_default();
-        return format!("{}{}{}", internal, path, query);
-    }
-    external_url.to_string()
-}
 
 
 
@@ -1586,64 +1532,25 @@ pub async fn reload_rules_api(
     }))
 }
 
-//soar status
 pub async fn get_soar_status(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
 
-    // Get from ClickHouse first
-    let config = state.ch_storage
-        .get_soar_config_by_tenant(&tenant_id).await
-        .unwrap_or(json!({}));
-    
-    // Fall back to env vars// Only fall back to env vars for default tenant
-    let webhook_url = config["webhook_url"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            if tenant_id == "default" {
-                std::env::var("SHUFFLE_WEBHOOK_URL")
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        });
-    let shuffle_url = config["shuffle_url"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            if tenant_id == "default" {
-                std::env::var("SHUFFLE_URL")
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        });
-
-    let connected = !webhook_url.is_empty();
-
-    // Get playbooks from ClickHouse
     let playbooks = state.ch_storage
         .get_soar_playbooks_by_tenant(&tenant_id).await
         .unwrap_or_default();
 
-  let active_count = playbooks.iter()
-    .filter(|p| p["enabled"] == true)
-    .count();
+    let active_count = playbooks.iter()
+        .filter(|p| p["enabled"] == true)
+        .count();
 
-Json(json!({
-    "connected":    connected,
-    "webhook_url":  webhook_url,
-    "shuffle_url":  shuffle_url,
-    "playbooks":    playbooks,
-    "active_count": active_count,
-    "shuffle_connected": connected,
-    "ndr_playbooks_count": active_count
-}))
+    Json(json!({
+        "playbooks":    playbooks,
+        "active_count": active_count,
+        "ndr_playbooks_count": active_count
+    }))
 }
 
 
@@ -1719,305 +1626,6 @@ pub async fn create_playbook(
 
 
 
-pub async fn test_soar_webhook(
-    State(_state): State<AppState>
-) -> Json<Value> {
-    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
-        .unwrap_or_default();
-let call_url = shuffle_internal_url(&webhook_url);
-    if webhook_url.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "Webhook URL not configured"
-        }));
-    }
-
-    match reqwest::Client::new()
-        .post(&call_url)
-        .json(&json!({
-            "alert_type": "test",
-            "message":    "NDR test alert",
-            "score":      85,
-            "severity":   "HIGH",
-            "timestamp":  chrono::Utc::now().to_rfc3339()
-        }))
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-    {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "Test alert sent!"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-
-
-
-
-pub async fn setup_soar(
-    State(state): State<AppState>,
-    Json(payload): Json<SoarSetupPayload>,
-) -> Json<Value> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap();
-
-    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
-        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
-
-    tracing::info!("Connecting to Shuffle at: {}", internal_url);
-
-    // Step 1: Login to get session
-    let login_resp = match client
-        .post(&format!("{}/api/v1/login", internal_url))
-        .json(&serde_json::json!({
-            "username": payload.username,
-            "password": payload.password
-        }))
-        .send()
-        .await {
-            Ok(r) => r,
-            Err(e) => return Json(json!({
-                "status": "error",
-                "message": format!("Cannot connect to Shuffle: {}", e)
-            }))
-        };
-
-    // Get session from header
-    let session_header = login_resp.headers()
-        .get_all("set-cookie")
-        .iter()
-        .find_map(|v| {
-            let s = v.to_str().ok()?;
-            let part = s.split(';').next()?;
-            let mut kv = part.splitn(2, '=');
-            let key = kv.next()?.trim();
-            let val = kv.next()?.trim();
-            if key == "session_token" {
-                Some(val.to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default();
-
-    // Get session from body
-    let login_body: Value = login_resp.json().await
-        .unwrap_or(json!({}));
-
-    let session = if !session_header.is_empty() {
-        session_header
-    } else {
-        login_body["cookies"]
-            .as_array()
-            .and_then(|arr| arr.iter().find(|c| {
-                c["key"].as_str() == Some("session_token")
-            }))
-            .and_then(|c| c["value"].as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-
-    tracing::info!("Session: {}...", &session[..8.min(session.len())]);
-
-    if session.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "Login failed — check username and password"
-        }));
-    }
-
-    // Step 2: Generate new API key using session
-    let apikey_resp = client
-        .get(&format!("{}/api/v1/users/generateapikey", internal_url))
-        .header("Cookie", format!("session_token={}", session))
-        .send()
-        .await;
-
-    let api_key = match apikey_resp {
-        Ok(r) => {
-            let body: Value = r.json().await.unwrap_or(json!({}));
-            body["apikey"].as_str().unwrap_or("").to_string()
-        }
-        Err(_) => session.clone()
-    };
-
-    tracing::info!("API key: {}...", &api_key[..8.min(api_key.len())]);
-
-    // Step 3: Create workflow using API key
-    let workflow_resp = client
-        .post(&format!("{}/api/v1/workflows", internal_url))
-        .header("Cookie", format!("session_token={}", session))
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&serde_json::json!({
-            "name": "NDR Alert Response",
-            "description": "Auto-created by NDR Stack"
-        }))
-        .send()
-        .await; 
-
-    let workflow_data: Value = match workflow_resp {
-        Ok(r) => {
-            let text = r.text().await.unwrap_or_default();
-            tracing::info!("Workflow response: {}", &text[..200.min(text.len())]);
-            serde_json::from_str(&text).unwrap_or(json!({}))
-        }
-        Err(e) => return Json(json!({
-            "status": "error",
-            "message": format!("Workflow creation failed: {}", e)
-        }))
-    };
-
-    let workflow_id = workflow_data["id"]
-        .as_str().unwrap_or("").to_string();
-
-    if workflow_id.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": format!(
-                "Could not create workflow: {}",
-                workflow_data
-            )
-        }));
-    }
-
-    tracing::info!("Workflow created: {}", workflow_id);
-
-    // Step 4: Build webhook URL using external IP
-// Get real API key from Shuffle
-let apikey_resp = client
-    .get(&format!("{}/api/v1/users/generateapikey", internal_url))
-    .header("Cookie", format!("session_token={}", session))
-    .send()
-    .await;
-
-let real_api_key = match apikey_resp {
-    Ok(r) => {
-        let body: Value = r.json().await.unwrap_or(json!({}));
-        body["apikey"].as_str().unwrap_or("").to_string()
-    }
-    Err(_) => "".to_string()
-};
-
-tracing::info!("Real API key: {}...",
-    &real_api_key[..8.min(real_api_key.len())]);
-
-// Save real API key to runtime env
-if !real_api_key.is_empty() {
-    std::env::set_var("SHUFFLE_API_KEY", &real_api_key);
-}
-
-// Build webhook URL
-let webhook_url = format!(
-    "{}/api/v1/workflows/{}/run",
-    payload.shuffle_url,
-    workflow_id);
-    // Step 5: Save to .env file
-    let install_dir = std::env::var("INSTALL_DIR")
-        .unwrap_or_else(|_| ".".to_string());
-    let env_path = format!("{}/.env", install_dir);
-    let mut env_content = std::fs::read_to_string(&env_path)
-        .unwrap_or_default();
-
-   let vars = vec![
-    ("SHUFFLE_URL", payload.shuffle_url.clone()),
-    ("SHUFFLE_WEBHOOK_URL", webhook_url.clone()),
-    ("SHUFFLE_API_KEY", real_api_key.clone()),
-];
-
-    for (key, val) in &vars {
-        if env_content.contains(key) {
-            let re = regex::Regex::new(
-                &format!(r"{}=[^\n]*", key)
-            ).unwrap();
-            env_content = re.replace(
-                &env_content,
-                format!("{}={}", key, val).as_str()
-            ).to_string();
-        } else {
-            env_content.push_str(
-                &format!("\n{}={}", key, val)
-            );
-        }
-    }
-    // Save SOAR config to ClickHouse
-let _ = state.ch_storage.save_soar_config(
-    "webhook_url", &webhook_url).await;
-let _ = state.ch_storage.save_soar_config(
-    "workflow_id", &workflow_id).await;
-let _ = state.ch_storage.save_soar_config(
-    "api_key", &real_api_key).await;
-let _ = state.ch_storage.save_soar_config(
-    "shuffle_url", &payload.shuffle_url).await;
-
-    std::fs::write(&env_path, &env_content).ok();
-
-    // Step 6: Update runtime env
-    std::env::set_var("SHUFFLE_URL", &payload.shuffle_url);
-    std::env::set_var("SHUFFLE_WEBHOOK_URL", &webhook_url);
-
-    Json(json!({
-        "status":      "ok",
-        "webhook_url": webhook_url,
-        "workflow_id": workflow_id,
-        "message":     "SOAR configured successfully!"
-    }))
-}
-
-pub async fn update_soar_config(
-    State(_state): State<AppState>,
-    Json(payload): Json<serde_json::Value>,
-) -> Json<Value> {
-    let webhook_url = payload["webhook_url"]
-        .as_str().unwrap_or("").to_string();
-    let shuffle_url = payload["shuffle_url"]
-        .as_str().unwrap_or("").to_string();
-
-    if !webhook_url.is_empty() {
-        std::env::set_var("SHUFFLE_WEBHOOK_URL", &webhook_url);
-    }
-    if !shuffle_url.is_empty() {
-        std::env::set_var("SHUFFLE_URL", &shuffle_url);
-    }
-
-    // Update .env file
-    let install_dir = std::env::var("INSTALL_DIR")
-        .unwrap_or_else(|_| ".".to_string());
-    let env_path = format!("{}/.env", install_dir);
-    let mut env_content = std::fs::read_to_string(&env_path)
-        .unwrap_or_default();
-
-    if !webhook_url.is_empty() {
-        if env_content.contains("SHUFFLE_WEBHOOK_URL") {
-            let lines: Vec<String> = env_content.lines()
-                .map(|l| {
-                    if l.starts_with("SHUFFLE_WEBHOOK_URL=") {
-                        format!("SHUFFLE_WEBHOOK_URL={}", webhook_url)
-                    } else { l.to_string() }
-                }).collect();
-            env_content = lines.join("\n");
-        } else {
-            env_content.push_str(
-                &format!("\nSHUFFLE_WEBHOOK_URL={}", webhook_url)
-            );
-        }
-    }
-
-    std::fs::write(&env_path, env_content).ok();
-
-    Json(json!({
-        "status": "ok",
-        "message": "SOAR config updated"
-    }))
-}
 
 
 // ── SIGMA Rules CRUD ──────────────────────────────────────────────────────
@@ -2215,248 +1823,6 @@ pub async fn toggle_rule(
 
 
 //get the executions from the workflow
-pub async fn get_soar_executions(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    let config = state.ch_storage
-        .get_soar_config_by_tenant(&tenant_id).await
-        .unwrap_or(json!({}));
-
-    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
-        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
-    let api_key = config["api_key"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| std::env::var("SHUFFLE_API_KEY").unwrap_or_default());
-    let webhook_url = config["webhook_url"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| std::env::var("SHUFFLE_WEBHOOK_URL").unwrap_or_default());
-
-    // Extract workflow ID from webhook URL
-    let workflow_id = webhook_url
-        .split("/workflows/")
-        .nth(1)
-        .and_then(|s| s.split("/run").next())
-        .unwrap_or("")
-        .to_string();
-
-    if workflow_id.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "SOAR not configured yet"
-        }));
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap();
-
-    match client
-        .get(&format!(
-            "{}/api/v1/workflows/{}/executions",
-            internal_url, workflow_id
-        ))
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-    {
-        Ok(r) => {
-            let data: Value = r.json().await.unwrap_or(json!([]));
-            Json(json!({
-                "status": "ok",
-                "executions": data
-            }))
-        }
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-//get the actions from the workflow
-pub async fn get_soar_actions(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    let config = state.ch_storage
-        .get_soar_config_by_tenant(&tenant_id).await
-        .unwrap_or(json!({}));
-
-    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
-        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
-    let api_key = config["api_key"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| std::env::var("SHUFFLE_API_KEY").unwrap_or_default());
-    let webhook_url = config["webhook_url"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| std::env::var("SHUFFLE_WEBHOOK_URL").unwrap_or_default());
-
-    let workflow_id = webhook_url
-        .split("/workflows/")
-        .nth(1)
-        .and_then(|s| s.split("/run").next())
-        .unwrap_or("")
-        .to_string();
-
-    if workflow_id.is_empty() {
-        return Json(json!({ "status": "error", "actions": [] }));
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap();
-
-    match client
-        .get(&format!(
-            "{}/api/v1/workflows/{}",
-            internal_url, workflow_id
-        ))
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-    {
-        Ok(r) => {
-            let data: Value = r.json().await.unwrap_or(json!({}));
-            let actions = data["actions"].clone();
-            Json(json!({
-                "status":  "ok",
-                "actions": actions
-            }))
-        }
-        Err(e) => Json(json!({
-            "status":  "error",
-            "actions": [],
-            "message": e.to_string()
-        }))
-    }
-}
-
-//configure slack 
-pub async fn configure_slack(
-    State(_state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let slack_webhook = payload["webhook_url"]
-        .as_str().unwrap_or("").to_string();
-
-    if slack_webhook.is_empty() {
-        return Json(json!({
-            "status":  "error",
-            "message": "webhook_url is required"
-        }));
-    }
-
-    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
-        .unwrap_or_else(|_| "http://shuffle-backend:5001".to_string());
-    let api_key = std::env::var("SHUFFLE_API_KEY")
-        .unwrap_or_default();
-    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
-        .unwrap_or_default();
-
-    let workflow_id = webhook_url
-        .split("/workflows/")
-        .nth(1)
-        .and_then(|s| s.split("/run").next())
-        .unwrap_or("")
-        .to_string();
-
-    if workflow_id.is_empty() {
-        return Json(json!({
-            "status":  "error",
-            "message": "SOAR not configured yet"
-        }));
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap();
-
-    // Get current workflow
-    let wf_resp = client
-        .get(&format!(
-            "{}/api/v1/workflows/{}",
-            internal_url, workflow_id
-        ))
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await;
-
-    let mut workflow: Value = match wf_resp {
-        Ok(r) => r.json().await.unwrap_or(json!({})),
-        Err(e) => return Json(json!({
-            "status":  "error",
-            "message": format!("Cannot fetch workflow: {}", e)
-        }))
-    };
-
-    // Build Slack HTTP action
-    let slack_action = json!({
-        "app_name":    "Http",
-        "app_version": "1.0.0",
-        "name":        "send_slack_alert",
-        "label":       "Send Slack Alert",
-        "parameters": [
-            { "name": "url",     "value": slack_webhook },
-            { "name": "method",  "value": "POST" },
-            { "name": "headers", "value": "Content-Type=application/json" },
-            { "name": "body",    "value": "{\"text\": \"🚨 NDR Alert: $exec.severity - $exec.src_ip → $exec.dst_ip (score: $exec.score)\"}" }
-        ]
-    });
-
-    // Append action to workflow
-    let actions = workflow["actions"]
-        .as_array_mut()
-        .map(|a| {
-            a.push(slack_action.clone());
-            a.clone()
-        })
-        .unwrap_or_else(|| vec![slack_action.clone()]);
-
-    workflow["actions"] = json!(actions);
-
-    // Save updated workflow back to Shuffle
-    match client
-        .put(&format!(
-            "{}/api/v1/workflows/{}",
-            internal_url, workflow_id
-        ))
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&workflow)
-        .send()
-        .await
-    {
-        Ok(_) => {
-            // Save slack webhook to env
-            std::env::set_var("SLACK_WEBHOOK_URL", &slack_webhook);
-            Json(json!({
-                "status":  "ok",
-                "message": "Slack configured! Alerts will now be sent to Slack."
-            }))
-        }
-        Err(e) => Json(json!({
-            "status":  "error",
-            "message": format!("Failed to update workflow: {}", e)
-        }))
-    }
-}
-
 // Get settings
 pub async fn get_settings(
     State(state): State<AppState>,
@@ -2957,100 +2323,6 @@ pub async fn delete_integration(
 }
 
 
-
-
-//configure email action
-pub async fn configure_email(
-    State(_state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let email = payload["email"]
-        .as_str().unwrap_or("").to_string();
-
-    if email.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "email is required"
-        }));
-    }
-
-    let internal_url = std::env::var("SHUFFLE_INTERNAL_URL")
-        .unwrap_or_else(|_|
-            "http://shuffle-backend:5001".to_string());
-    let api_key = std::env::var("SHUFFLE_API_KEY")
-        .unwrap_or_default();
-    let webhook_url = std::env::var("SHUFFLE_WEBHOOK_URL")
-        .unwrap_or_default();
-
-    let workflow_id = webhook_url
-        .split("/workflows/")
-        .nth(1)
-        .and_then(|s| s.split("/run").next())
-        .unwrap_or("").to_string();
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
-        .build().unwrap();
-
-    // Get current workflow
-    let wf_resp = client
-        .get(&format!(
-            "{}/api/v1/workflows/{}",
-            internal_url, workflow_id
-        ))
-        .header("Authorization",
-            format!("Bearer {}", api_key))
-        .send().await;
-
-    let mut workflow: Value = match wf_resp {
-        Ok(r) => r.json().await.unwrap_or(json!({})),
-        Err(e) => return Json(json!({
-            "status": "error",
-            "message": format!("Cannot fetch workflow: {}", e)
-        }))
-    };
-
-    // Add email action
-    let email_action = json!({
-        "app_name":    "Email",
-        "app_version": "1.0.0",
-        "name":        "send_email_alert",
-        "label":       "Send Email Alert",
-        "parameters": [
-            { "name": "to",      "value": email },
-            { "name": "subject", "value": "🚨 NDR Alert: $exec.severity" },
-            { "name": "body",    "value": "Threat detected!\nSource: $exec.src_ip\nDestination: $exec.dst_ip\nScore: $exec.score\nSeverity: $exec.severity" }
-        ]
-    });
-
-    let actions = workflow["actions"]
-        .as_array_mut()
-        .map(|a| { a.push(email_action.clone()); a.clone() })
-        .unwrap_or_else(|| vec![email_action.clone()]);
-
-    workflow["actions"] = json!(actions);
-
-    match client
-        .put(&format!(
-            "{}/api/v1/workflows/{}",
-            internal_url, workflow_id
-        ))
-        .header("Authorization",
-            format!("Bearer {}", api_key))
-        .json(&workflow)
-        .send().await
-    {
-        Ok(_) => Json(json!({
-            "status":  "ok",
-            "message": "Email configured!"
-        })),
-        Err(e) => Json(json!({
-            "status":  "error",
-            "message": e.to_string()
-        }))
-    }
-}
 
 
 //severity
@@ -5226,7 +4498,6 @@ pub async fn arkime_sessions(
         None => return axum::Json(json!({"status":"error","message":"Unauthorized"})).into_response(),
     };
 
-    // Parse optional query params
     let params: std::collections::HashMap<String, String> = raw_query
         .as_deref()
         .unwrap_or("")
@@ -5237,184 +4508,126 @@ pub async fn arkime_sessions(
         })
         .collect();
 
-    let community_id = params.get("cid").map(|s| s.as_str());
-    let src_ip = params.get("ip").map(|s| s.as_str());
-    let limit = params.get("limit")
+    let community_id = params.get("cid").cloned();
+    let src_ip       = params.get("ip").cloned();
+    let limit        = params.get("limit")
         .and_then(|l| l.parse::<u32>().ok())
         .unwrap_or(50);
 
-    // Check ClickHouse cache first
-    let sessions = state.ch_storage
-        .get_pcap_sessions(&claims.tenant_id, community_id, src_ip, limit)
+    let (arkime_url, _) = state.ch_storage
+        .get_arkime_creds(&claims.tenant_id)
         .await
         .unwrap_or_default();
 
-    if !sessions.is_empty() {
-        return axum::Json(json!({
-            "status": "ok",
-            "sessions": sessions,
-            "source": "clickhouse"
-        })).into_response();
-    }
+    // ── ON-PREMISE PATH: query OpenSearch directly — always current, zero lag ──
+    if claims.tenant_id == "default" {
+        let es_url = std::env::var("OPENSEARCH_URL")
+            .unwrap_or_else(|_| "http://localhost:9200".to_string());
 
-    // Fallback: query Arkime directly with correct expression format
-    let (arkime_url, arkime_pass) = match get_tenant_arkime_creds(&state, &headers).await {
-        Ok(creds) => creds,
-        Err(_) => return axum::Json(json!({
-            "status": "ok",
-            "sessions": [],
-            "message": "No Arkime configured"
-        })).into_response(),
-    };
-
-    // Build Arkime expression query (Arkime uses expression=field==value, not custom params)
-    let mut expression_parts: Vec<String> = Vec::new();
-    if let Some(cid) = community_id {
-        expression_parts.push(format!("network.community_id=={}", cid));
-    }
-    if let Some(ip) = src_ip {
-        expression_parts.push(format!("ip=={}", ip));
-    }
-    let mut arkime_query = format!(
-        "{}/api/sessions?length={}&startTime=-7d&stopTime=now\
-&fields=id,network.community_id,\
-source.ip,source.port,\
-destination.ip,destination.port,\
-ipProtocol,network.bytes,\
-network.packets,firstPacket,\
-lastPacket,node",
-        arkime_url, limit
-    );
-    if !expression_parts.is_empty() {
-        let expr = expression_parts.join(" && ");
-        arkime_query.push_str(&format!("&expression={}", urlencoding_encode(&expr)));
-    }
-
-    match reqwest::Client::new()
-        .get(&arkime_query)
-        .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-    {
-        Ok(resp) => {
-            let arkime_data: serde_json::Value = resp.json().await.unwrap_or_default();
-            // Arkime returns {"data":[...], "recordsTotal":N} — map to our format
-            let raw_sessions: Vec<serde_json::Value> = arkime_data["data"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-
-            let tenant_id_clone = claims.tenant_id.clone();
-            let arkime_url_clone = arkime_url.clone();
-            let ch = state.ch_storage.clone();
-
-            // Cache sessions into ClickHouse for evidence retention
-            // (on-premise: Arkime is source of truth; cloud: sensor upload is source)
-            let sessions_to_cache = raw_sessions.clone();
-            tokio::spawn(async move {
-                for s in sessions_to_cache {
-                    // Arkime 5 returns flat dotted keys e.g. "source.ip"; fallback to nested
-                    let session_id = s["id"].as_str()
-                        .or_else(|| s["_id"].as_str())
-                        .unwrap_or("").to_string();
-                    if session_id.is_empty() { continue; }
-
-                    let community_id = s["network"]["community_id"].as_str()
-                        .unwrap_or("").to_string();
-
-                    let src_ip = s.get("source.ip").and_then(|v| v.as_str())
-                        .or_else(|| s["source"]["ip"].as_str())
-                        .or_else(|| s["srcIp"].as_str())
-                        .unwrap_or("").to_string();
-                    let dst_ip = s.get("destination.ip").and_then(|v| v.as_str())
-                        .or_else(|| s["destination"]["ip"].as_str())
-                        .or_else(|| s["dstIp"].as_str())
-                        .unwrap_or("").to_string();
-                    let src_port = s.get("source.port").and_then(|v| v.as_u64())
-                        .or_else(|| s["source"]["port"].as_u64())
-                        .or_else(|| s["srcPort"].as_u64())
-                        .unwrap_or(0) as u16;
-                    let dst_port = s.get("destination.port").and_then(|v| v.as_u64())
-                        .or_else(|| s["destination"]["port"].as_u64())
-                        .or_else(|| s["dstPort"].as_u64())
-                        .unwrap_or(0) as u16;
-                    let ip_proto = s["ipProtocol"].as_u64()
-                        .or_else(|| s.get("ipProtocol").and_then(|v| v.as_u64()))
-                        .unwrap_or(0);
-                    let proto = if ip_proto == 6 { "tcp" }
-                                else if ip_proto == 17 { "udp" }
-                                else { "other" };
-                    let bytes = s.get("network.bytes").and_then(|v| v.as_u64())
-                        .or_else(|| s["network"]["bytes"].as_u64())
-                        .or_else(|| s["totBytes"].as_u64())
-                        .unwrap_or(0);
-                    let sensor_host = s["node"].as_str().unwrap_or("").to_string();
-
-                    if let Err(e) = ch.save_pcap_session(
-                        &tenant_id_clone, &session_id, &community_id,
-                        &src_ip, &dst_ip, src_port, dst_port, proto,
-                        bytes, &arkime_url_clone, "", &sensor_host,
-                    ).await {
-                        tracing::warn!("pcap_sessions insert failed for {}: {}", session_id, e);
-                    }
-                }
-            });
-
-            let sessions: Vec<serde_json::Value> = raw_sessions.iter().map(|s| {
-                let src_ip = s.get("source.ip").cloned()
-                    .or_else(|| s["source"]["ip"].as_str().map(|v| json!(v)))
-                    .or_else(|| s.get("srcIp").cloned())
-                    .unwrap_or(json!(""));
-                let dst_ip = s.get("destination.ip").cloned()
-                    .or_else(|| s["destination"]["ip"].as_str().map(|v| json!(v)))
-                    .or_else(|| s.get("dstIp").cloned())
-                    .unwrap_or(json!(""));
-                let src_port = s.get("source.port").cloned()
-                    .or_else(|| s.get("srcPort").cloned())
-                    .unwrap_or(s["source"]["port"].clone());
-                let dst_port = s.get("destination.port").cloned()
-                    .or_else(|| s.get("dstPort").cloned())
-                    .unwrap_or(s["destination"]["port"].clone());
-                let bytes = s.get("network.bytes").cloned()
-                    .or_else(|| s.get("totBytes").cloned())
-                    .unwrap_or(s["network"]["bytes"].clone());
-                let packets = s.get("network.packets").cloned()
-                    .or_else(|| s.get("totPackets").cloned())
-                    .unwrap_or(s["network"]["packets"].clone());
-                let ip_proto = s["ipProtocol"].as_u64().unwrap_or(0);
-                let proto = if ip_proto == 6 { "tcp" } else if ip_proto == 17 { "udp" } else { "other" };
-                json!({
-                    "session_id":   s["id"],
-                    "community_id": s["network"]["community_id"].as_str()
-                        .map(|v| json!(v))
-                        .unwrap_or(json!("")),
-                    "src_ip":   src_ip,
-                    "dst_ip":   dst_ip,
-                    "src_port": src_port,
-                    "dst_port": dst_port,
-                    "proto":    proto,
-                    "start_time": s["firstPacket"],
-                    "end_time":   s["lastPacket"],
-                    "bytes":   bytes,
-                    "packets": packets,
-                    "arkime_url":  arkime_url,
-                    "sensor_host": s["node"]
-                })
-            }).collect();
-
-            axum::Json(json!({
-                "status": "ok",
-                "sessions": sessions,
-                "total": arkime_data["recordsTotal"],
-                "source": "arkime"
-            })).into_response()
+        let mut must_clauses: Vec<serde_json::Value> = vec![];
+        if let Some(ref cid) = community_id {
+            must_clauses.push(json!({"term": {"network.community_id": cid}}));
         }
-        Err(e) => axum::Json(json!({
-            "status": "error",
-            "message": format!("Failed to reach Arkime: {}", e)
-        })).into_response()
+        if let Some(ref ip) = src_ip {
+            must_clauses.push(json!({
+                "bool": {"should": [
+                    {"term": {"source.ip":      ip}},
+                    {"term": {"destination.ip": ip}}
+                ]}
+            }));
+        }
+
+        let es_query = json!({
+            "size": limit,
+            "sort": [{"firstPacket": {"order": "desc"}}],
+            "query": {
+                "bool": {
+                    "must": if must_clauses.is_empty() {
+                        vec![json!({"match_all": {}})]
+                    } else { must_clauses }
+                }
+            },
+            "_source": [
+                "id", "firstPacket", "lastPacket",
+                "source.ip", "source.port",
+                "destination.ip", "destination.port",
+                "ipProtocol", "network.bytes", "network.packets",
+                "network.community_id", "node"
+            ]
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        match client
+            .post(&format!("{}/arkime_sessions3-*/_search", es_url))
+            .json(&es_query)
+            .send()
+            .await
+        {
+            Ok(r) => {
+                let data: serde_json::Value = r.json().await.unwrap_or_default();
+                let hits = data["hits"]["hits"].as_array().cloned().unwrap_or_default();
+                let sessions: Vec<serde_json::Value> = hits.iter().map(|h| {
+                    let s = &h["_source"];
+                    let proto = match s["ipProtocol"].as_u64().unwrap_or(0) {
+                        6  => "tcp",
+                        17 => "udp",
+                        _  => "other",
+                    };
+                    json!({
+                        "session_id":   h["_id"].as_str().unwrap_or(""),
+                        "community_id": s["network"]["community_id"].as_str().unwrap_or(""),
+                        "src_ip":       s["source"]["ip"].as_str().unwrap_or(""),
+                        "dst_ip":       s["destination"]["ip"].as_str().unwrap_or(""),
+                        "src_port":     s["source"]["port"].as_u64().unwrap_or(0),
+                        "dst_port":     s["destination"]["port"].as_u64().unwrap_or(0),
+                        "proto":        proto,
+                        "bytes":        s["network"]["bytes"].as_u64().unwrap_or(0),
+                        "packets":      s["network"]["packets"].as_u64().unwrap_or(0),
+                        "start_time":   s["firstPacket"].as_u64().unwrap_or(0),
+                        "end_time":     s["lastPacket"].as_u64().unwrap_or(0),
+                        "sensor_host":  s["node"].as_str().unwrap_or(""),
+                        "arkime_url":   arkime_url,
+                        "file_path":    ""
+                    })
+                }).collect();
+                return axum::Json(json!({
+                    "status":  "ok",
+                    "sessions": sessions,
+                    "source":  "opensearch",
+                    "total":   data["hits"]["total"]["value"].as_u64().unwrap_or(0)
+                })).into_response();
+            }
+            Err(e) => {
+                tracing::warn!("OpenSearch query failed: {}", e);
+                return axum::Json(json!({
+                    "status":   "error",
+                    "message":  "OpenSearch unreachable",
+                    "sessions": []
+                })).into_response();
+            }
+        }
     }
+
+    // ── EXTERNAL SENSOR PATH: ClickHouse cache (populated via pcap-upload push) ──
+    let sessions = state.ch_storage
+        .get_pcap_sessions(
+            &claims.tenant_id,
+            community_id.as_deref(),
+            src_ip.as_deref(),
+            limit,
+        )
+        .await
+        .unwrap_or_default();
+
+    axum::Json(json!({
+        "status":   "ok",
+        "sessions": sessions,
+        "source":   "clickhouse"
+    })).into_response()
 }
 
 pub async fn arkime_pcap_download(
@@ -5711,6 +4924,21 @@ pub async fn pcap_download_stored(
             format!("Arkime unreachable: {}", e),
         ).into_response(),
     }
+}
+
+pub async fn pcap_pending(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::Json<serde_json::Value> {
+    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+        Some(t) => t,
+        None => return axum::Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let cids = state.ch_storage
+        .get_pending_pcap_requests(&tenant_id)
+        .await
+        .unwrap_or_default();
+    axum::Json(json!({"status":"ok","pending": cids}))
 }
 
 fn urlencoding_encode(s: &str) -> String {

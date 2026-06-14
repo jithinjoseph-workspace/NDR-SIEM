@@ -15,6 +15,7 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "3"
       KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
       KAFKA_LOG_RETENTION_MS: "3600000"
       KAFKA_LOG_RETENTION_BYTES: "536870912"
@@ -51,15 +52,13 @@ services:
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=1
       - REDIS_URL=redis://ndr-redis:6379
-      - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
-      - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
-      - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
       - ARKIME_URL=${ARKIME_URL}
       - ARKIME_PASS=${ARKIME_PASS}
+      - OPENSEARCH_URL=http://${HOST_IP}:9200
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -85,15 +84,13 @@ services:
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=2
       - REDIS_URL=redis://ndr-redis:6379
-      - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
-      - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
-      - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
       - ARKIME_URL=${ARKIME_URL}
       - ARKIME_PASS=${ARKIME_PASS}
+      - OPENSEARCH_URL=http://${HOST_IP}:9200
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -119,15 +116,13 @@ services:
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=3
       - REDIS_URL=redis://ndr-redis:6379
-      - SHUFFLE_WEBHOOK_URL=${SHUFFLE_WEBHOOK_URL}
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
-      - SHUFFLE_INTERNAL_URL=http://shuffle-backend:5001
-      - SHUFFLE_API_KEY=${SHUFFLE_API_KEY}
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
       - ARKIME_URL=${ARKIME_URL}
       - ARKIME_PASS=${ARKIME_PASS}
+      - OPENSEARCH_URL=http://${HOST_IP}:9200
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -162,80 +157,20 @@ services:
       - ndr-engine-3
     restart: unless-stopped
 
-  # shuffle setting for soar-integration
-
-  shuffle-backend:
-    image: ghcr.io/shuffle/shuffle-backend:latest
-    container_name: shuffle-backend
-    hostname: shuffle-backend
-    ports:
-      - "5001:5001"
-    environment:
-      - SHUFFLE_APP_HOTLOAD_FOLDER=/shuffle-apps
-      - SHUFFLE_FILE_LOCATION=/shuffle-files
-      - SHUFFLE_OPENSEARCH_URL=http://shuffle-opensearch:9200
-      - SHUFFLE_DEFAULT_USERNAME=admin
-      - SHUFFLE_DEFAULT_PASSWORD=shufflepassword
-      - SHUFFLE_DEFAULT_APIKEY=${SHUFFLE_API_KEY}
-      - JWT_SECRET=${JWT_SECRET}
-      - ORG_ID=default
-      - SHUFFLE_BASE_URL=http://shuffle-backend:5001
-      - SHUFFLE_CLOUD_SYNC=false
-      - SHUFFLE_PASS_WORKER_PROXY=false
-      - ENVIRONMENT_NAME=Shuffle
-      - SHUFFLE_WORKER_VERSION=latest
-      - SHUFFLE_SKIPSSL_VERIFY=true
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - shuffle-apps:/shuffle-apps
-      - shuffle-files:/shuffle-files
-    depends_on:
-      - shuffle-opensearch
-
-  shuffle-frontend:
-    image: ghcr.io/shuffle/shuffle-frontend:latest
-    container_name: shuffle-frontend
-    ports:
-      - "3002:80"
-    environment:
-      - BACKEND_HOSTNAME=shuffle-backend
-    depends_on:
-      - shuffle-backend
-
-  shuffle-opensearch:
+  opensearch:
     image: opensearchproject/opensearch:2.5.0
-    container_name: shuffle-opensearch
+    container_name: ndr-opensearch
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
       - "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx256m"
       - "bootstrap.memory_lock=false"
-      - "discovery.type=single-node"
     ports:
       - "9200:9200"
     volumes:
-      - shuffle-opensearch:/usr/share/opensearch/data
+      - opensearch-data:/usr/share/opensearch/data
 
-  shuffle-orborus:
-    image: ghcr.io/shuffle/shuffle-orborus:latest
-    container_name: shuffle-orborus
-    hostname: shuffle-orborus
-    environment:
-      - ENVIRONMENT_NAME=Shuffle
-      - BASE_URL=http://shuffle-backend:5001
-      - DOCKER_API_VERSION=1.40
-      - SHUFFLE_BASE_URL=http://shuffle-backend:5001
-      - SHUFFLE_PASS_WORKER_PROXY=false
-      - CLEANUP=false
-      - ORG_ID=default
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - shuffle-backend
-  
 
 volumes:
-  shuffle-apps:
-  shuffle-files:
-  shuffle-opensearch:
+  opensearch-data:
   redis:

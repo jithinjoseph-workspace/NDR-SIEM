@@ -205,22 +205,9 @@ export class Api {
       });
   }
 
-  getSoarStatus(): Observable<any> {
+  getPlaybooks(): Observable<any> {
     return this.http.get(`${this.baseUrl}/soar/status`);
   }
-
-  setupSoar(data: any): Observable<any> {
-    return this.http.post(`${this.baseUrl}/soar/setup`, data);
-  }
-
-  updateSoarConfig(data: any): Observable<any> {
-    return this.http.post(`${this.baseUrl}/soar/config`, data);
-  }
-
-  testSoarWebhook(): Observable<any> {
-    return this.http.post(`${this.baseUrl}/soar/test`, {});
-  }
-
 
   getSettings(): Observable<any> {
     return this.http.get(`${this.baseUrl}/settings`);
@@ -228,20 +215,6 @@ export class Api {
 
   updateSettings(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/settings`, data);
-  }
-
-  getSoarExecutions(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/soar/executions`);
-  }
-
-  configureSoarSlack(data: any): Observable<any> {
-    return this.http.post(
-      `${this.baseUrl}/soar/action/slack`, data);
-  }
-
-  configureSoarEmail(data: any): Observable<any> {
-    return this.http.post(
-      `${this.baseUrl}/soar/action/email`, data);
   }
 
   togglePlaybook(data: any): Observable<any> {
@@ -277,10 +250,6 @@ export class Api {
       `${this.baseUrl}/soar/integrations/delete`, data);
   }
 
-  getJiraTickets(config: any): Observable<any> {
-    return this.http.post(
-      `${this.baseUrl}/soar/jira/tickets`, config);
-  }
   // User management
   getUsers(): Observable<any> {
     return this.http.get(`${this.baseUrl}/auth/users`);

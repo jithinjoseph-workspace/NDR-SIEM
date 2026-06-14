@@ -134,37 +134,6 @@ async fn main() {
     }
 
 
-// Auto-restore SOAR config from ClickHouse
-let ch = state.ch_storage.clone();
-tokio::spawn(async move {
-    tokio::time::sleep(
-        std::time::Duration::from_secs(5)
-    ).await;
-    
-    if let Ok(config) = ch.get_soar_config().await {
-        if let Some(url) = config["webhook_url"]
-            .as_str() {
-            if !url.is_empty() {
-                std::env::set_var(
-                    "SHUFFLE_WEBHOOK_URL", url);
-                tracing::info!(
-                    "✅ SOAR webhook restored: {}", 
-                    &url[..30.min(url.len())]
-                );
-            }
-        }
-        if let Some(key) = config["api_key"]
-            .as_str() {
-            if !key.is_empty() {
-                std::env::set_var(
-                    "SHUFFLE_API_KEY", key);
-                tracing::info!(
-                    "✅ SOAR API key restored");
-            }
-        }
-    }
-});
-
     // ── Migrate rules to ClickHouse ──────────────────────────────────────────
     {
         let ch = state.ch_storage.clone();
@@ -272,14 +241,7 @@ tokio::spawn(async move {
         .route("/api/export", get(api::export_report))
         .route("/api/threat-intel/add", post(api::add_manual_ioc))
         .route("/api/soar/status",  get(api::get_soar_status))
-        .route("/api/soar/setup",   post(api::setup_soar))
-        .route("/api/soar/config",  post(api::update_soar_config))
-        .route("/api/soar/test",    post(api::test_soar_webhook))
-        .route("/api/soar/executions",    get(api::get_soar_executions))
-        .route("/api/soar/actions",       get(api::get_soar_actions))
-        .route("/api/soar/action/slack",  post(api::configure_slack))
         .route("/api/settings", get(api::get_settings).post(api::update_settings))
-        .route("/api/soar/action/email", post(api::configure_email))       
         .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
         .route("/api/soar/playbook/create",post(api::create_playbook))
         .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))
@@ -333,6 +295,7 @@ tokio::spawn(async move {
         .route("/api/arkime/status",             get(api::arkime_status))
         .route("/api/arkime/link/:community_id", get(api::arkime_session_link))
         .route("/api/pcap/upload",               post(api::pcap_upload))
+        .route("/api/pcap/pending",              get(api::pcap_pending))
         .route("/api/pcap/:session_id",          get(api::pcap_download_stored))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))

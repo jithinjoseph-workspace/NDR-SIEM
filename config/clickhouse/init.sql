@@ -255,6 +255,17 @@ ENGINE = ReplacingMergeTree(start_time)
 ORDER BY (tenant_id, session_id)
 TTL start_time + INTERVAL 30 DAY;
 
+CREATE TABLE IF NOT EXISTS ndr.pcap_pending
+(
+    community_id String,
+    tenant_id    String DEFAULT 'default',
+    requested_at DateTime DEFAULT now(),
+    fulfilled    UInt8 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(fulfilled)
+ORDER BY (tenant_id, community_id)
+TTL requested_at + INTERVAL 1 DAY;
+
 CREATE TABLE IF NOT EXISTS ndr.sensor_commands
 (
     id          String DEFAULT toString(generateUUIDv4()),

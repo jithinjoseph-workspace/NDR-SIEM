@@ -8,470 +8,274 @@
         SOAR — Automated Response
       </h2>
       <p class="text-on-surface-variant text-sm mt-1">
-        Powered by Shuffle — open source security automation
+        Notification integrations and automated playbooks
       </p>
     </div>
-    <div class="flex gap-2" *ngIf="view === 'connected'">
-      <button (click)="testWebhook()" class="bg-surface-container-low text-on-surface-variant
-        hover:text-white px-4 py-2 rounded-md border border-outline/10
-        text-xs font-bold transition-all">
-        🧪 Test Webhook
-      </button>
-      <button (click)="reconfigure()" class="bg-surface-container-low text-on-surface-variant
-        hover:text-white px-4 py-2 rounded-md border border-outline/10
-        text-xs font-bold transition-all">
-        ⚙️ Settings
-      </button>
-      <button (click)="openShuffle()" class="bg-primary text-black px-4 py-2 rounded-md
+    <div class="flex gap-2">
+      <button (click)="showNewAction=true" class="bg-primary text-black px-4 py-2 rounded-md
         text-xs font-bold hover:bg-primary/90 transition-all">
-        Open Shuffle UI ↗
+        ➕ Add Action
       </button>
     </div>
   </div>
 
-  <!-- Loading -->
-  <div *ngIf="loading" class="flex items-center justify-center py-20">
-    <div class="text-on-surface-variant animate-pulse text-sm">
-      Checking SOAR status...
+  <!-- Summary cards -->
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="bg-surface-container-highest rounded-xl border border-outline/10 p-5">
+      <div class="text-xs text-on-surface-variant uppercase mb-2">
+        Active Playbooks
+      </div>
+      <div class="text-white font-bold text-2xl">
+        {{ activeCount }}
+      </div>
+    </div>
+    <div class="bg-surface-container-highest rounded-xl border border-outline/10 p-5">
+      <div class="text-xs text-on-surface-variant uppercase mb-2">
+        Active Integrations
+      </div>
+      <div class="text-white font-bold text-2xl">
+        {{ activeIntegrations }}
+      </div>
+    </div>
+    <div class="bg-surface-container-highest rounded-xl border border-outline/10 p-5">
+      <div class="text-xs text-on-surface-variant uppercase mb-2">
+        Total Integrations
+      </div>
+      <div class="text-white font-bold text-2xl">
+        {{ totalIntegrations }}
+      </div>
     </div>
   </div>
 
-  <!-- SETUP WIZARD -->
-  <div *ngIf="!loading && view === 'setup'" class="max-w-lg mx-auto">
-    <div class="bg-surface-container-highest rounded-2xl
-      border border-outline/10 p-8">
-      <div class="flex justify-center mb-6">
-        <div class="w-16 h-16 bg-primary/10 rounded-full
-          flex items-center justify-center">
-          <lucide-icon [name]="ZapIcon" class="w-8 h-8 text-primary">
-          </lucide-icon>
+  <!-- Playbooks -->
+  <div class="bg-surface-container-highest rounded-xl border border-outline/10 mb-6">
+    <div class="px-6 py-4 border-b border-outline/10
+      flex items-center justify-between">
+      <div>
+        <h3 class="text-white font-bold text-sm uppercase">
+          ⚡ Response Playbooks
+        </h3>
+        <p class="text-on-surface-variant text-xs mt-0.5">
+          Automated actions triggered when alerts fire
+        </p>
+      </div>
+      <button (click)="showNewAction=true" class="flex items-center gap-2 bg-primary/10
+        text-primary text-xs font-bold px-4 py-2
+        rounded-lg hover:bg-primary/20 transition-all">
+        <lucide-icon [name]="PlusIcon" class="w-3 h-3">
+        </lucide-icon>
+        Add Action
+      </button>
+    </div>
+
+    <div class="divide-y divide-outline/5">
+      <div *ngFor="let pb of playbooks" class="px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-4">
+          <div [class]="'w-8 h-8 rounded-lg flex items-center justify-center ' +
+            (pb.enabled ? 'bg-primary/20' : 'bg-surface-container')">
+            <lucide-icon [name]="ZapIcon"
+              [class]="'w-4 h-4 ' + (pb.enabled ? 'text-primary' : 'text-on-surface-variant')">
+            </lucide-icon>
+          </div>
+          <div>
+            <div class="text-white text-sm font-bold">
+              {{ pb.name }}
+            </div>
+            <div class="text-on-surface-variant text-xs">
+              {{ pb.description }}
+            </div>
+            <div class="text-primary text-[10px] mt-0.5">
+              Trigger: {{ pb.trigger }}
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-on-surface-variant text-xs">
+            {{ pb.runs }} runs
+          </span>
+          <button (click)="togglePlaybook(pb)" [class]="'text-xs font-bold px-4 py-1.5 rounded-lg transition-all ' +
+            (pb.enabled ?
+              'bg-surface-container text-on-surface-variant hover:bg-red-500/20 hover:text-red-400' :
+              'bg-primary/20 text-primary hover:bg-primary/30')">
+            {{ pb.enabled ? 'Disable' : 'Enable' }}
+          </button>
         </div>
       </div>
-      <h3 class="text-white font-bold text-xl text-center mb-2">
-        Connect Shuffle SOAR
-      </h3>
-      <p class="text-on-surface-variant text-sm text-center mb-6">
-        Enter your Shuffle credentials to auto-create the NDR webhook
-      </p>
 
+      <div *ngIf="playbooks.length === 0" class="px-6 py-8 text-center text-on-surface-variant text-sm">
+        No playbooks yet — click "Add Action" to create one!
+      </div>
+    </div>
+  </div>
+
+  <!-- Integrations Section -->
+  <div class="bg-surface-container-highest rounded-xl border border-outline/10 mb-6">
+    <div class="px-6 py-4 border-b border-outline/10
+      flex items-center justify-between">
+      <div>
+        <h3 class="text-white font-bold text-sm uppercase">
+          🔔 Notification Integrations
+        </h3>
+        <p class="text-on-surface-variant text-xs mt-0.5">
+          Configure where alerts are sent when a threat is detected
+        </p>
+      </div>
+      <button (click)="showNewIntegration=true" class="flex items-center gap-2 bg-primary/10
+        text-primary text-xs font-bold px-4 py-2
+        rounded-lg hover:bg-primary/20 transition-all">
+        ➕ Add Integration
+      </button>
+    </div>
+    <div class="divide-y divide-outline/5">
+      <div *ngFor="let int of integrations" class="px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-4">
+          <div [class]="'w-10 h-10 rounded-lg flex items-center justify-center text-lg ' +
+            (int.enabled ? 'bg-primary/20' : 'bg-surface-container')">
+            {{ getIntIcon(int.type) }}
+          </div>
+          <div>
+            <div class="text-white text-sm font-bold">
+              {{ int.name }}
+            </div>
+            <div class="text-on-surface-variant text-xs">
+              {{ int.type }}
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded ' +
+            (int.enabled ?
+              'bg-primary/20 text-primary' :
+              'bg-surface-container text-on-surface-variant')">
+            {{ int.enabled ? 'ACTIVE' : 'DISABLED' }}
+          </span>
+          <button (click)="toggleIntegration(int)" class="text-xs px-3 py-1.5 rounded-lg
+            bg-surface-container text-on-surface-variant
+            hover:text-white transition-all">
+            {{ int.enabled ? 'Disable' : 'Enable' }}
+          </button>
+          <button (click)="deleteIntegration(int)" class="text-xs px-3 py-1.5 rounded-lg
+            bg-red-500/10 text-red-400
+            hover:bg-red-500/20 transition-all">
+            Delete
+          </button>
+        </div>
+      </div>
+      <div *ngIf="integrations.length === 0" class="px-6 py-8 text-center
+        text-on-surface-variant text-sm">
+        No integrations yet — click "Add Integration"!
+      </div>
+    </div>
+  </div>
+
+  <!-- Integration Status Dashboard -->
+  <div class="bg-surface-container-highest rounded-xl border border-outline/10 mb-6">
+    <div class="px-6 py-4 border-b border-outline/10
+      flex items-center justify-between">
+      <h3 class="text-white font-bold text-sm uppercase">
+        📊 Integration Status
+      </h3>
+      <button (click)="testAllIntegrations()" [disabled]="testingAll" class="text-xs px-3 py-1.5 rounded-lg
+          bg-primary/10 text-primary
+          hover:bg-primary/20 disabled:opacity-50">
+        {{ testingAll ? '⏳ Testing...' : '🧪 Test All' }}
+      </button>
+    </div>
+    <div class="p-6 grid grid-cols-2 gap-4">
+      <div *ngFor="let t of getIntegrationsByType()" class="bg-surface-container rounded-lg p-4
+          border border-outline/10">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-lg">{{ t.icon }}</span>
+          <span class="text-white font-bold text-sm">
+            {{ t.name }}
+          </span>
+        </div>
+        <div class="text-xs text-on-surface-variant">
+          {{ t.active }}/{{ t.count }} active
+        </div>
+      </div>
+      <div *ngIf="getIntegrationsByType().length === 0"
+        class="col-span-2 text-center text-on-surface-variant text-sm py-4">
+        No integrations configured yet
+      </div>
+    </div>
+    <!-- Test results -->
+    <div *ngIf="testAllResults.length > 0" class="px-6 pb-4 space-y-2">
+      <div *ngFor="let r of testAllResults" [class]="'flex items-center justify-between p-2 rounded ' +
+          (r.ok ? 'bg-primary/10' : 'bg-red-500/10')">
+        <span class="text-sm">
+          {{ r.name }}
+        </span>
+        <span [class]="r.ok ?
+              'text-primary text-xs' :
+              'text-red-400 text-xs'">
+          {{ r.result }}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Integration Modal -->
+  <div *ngIf="showNewIntegration" class="fixed inset-0 bg-black/60 z-50
+    flex items-center justify-center p-4">
+    <div class="bg-surface-container-highest rounded-2xl
+      border border-outline/20 p-6 w-full max-w-md">
+      <h3 class="text-white font-bold text-lg mb-4">
+        ➕ Add Integration
+      </h3>
       <div class="space-y-4">
         <div>
           <label class="text-xs text-on-surface-variant uppercase">
-            Shuffle API URL
+            Integration Type
           </label>
-          <input [(ngModel)]="shuffleUrl" placeholder="http://localhost:5001" class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-4 py-3
-            text-white text-sm focus:border-primary outline-none" />
-          <p class="text-[10px] text-on-surface-variant mt-1">
-            Backend API port (usually 5001)
-          </p>
-        </div>
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Username
-          </label>
-          <input [(ngModel)]="username" class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-4 py-3
-            text-white text-sm focus:border-primary outline-none" />
-        </div>
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Password
-          </label>
-          <input [(ngModel)]="password" type="password" class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-4 py-3
-            text-white text-sm focus:border-primary outline-none" />
-        </div>
-      </div>
-
-      <div *ngIf="setupError" class="mt-4 p-3 bg-red-500/10 border border-red-500/20
-        rounded-lg text-red-400 text-xs">
-        ❌ {{ setupError }}
-      </div>
-
-      <button (click)="setupSoar()" [disabled]="setting" class="w-full mt-6 bg-primary text-black font-bold
-        py-3 rounded-lg hover:bg-primary/90 disabled:opacity-50
-        transition-all text-sm">
-        {{ setting ? '⏳ Connecting...' : '🔌 Connect & Create Webhook' }}
-      </button>
-
-      <p class="text-center text-xs text-on-surface-variant mt-4">
-        Already have a webhook URL?
-        <button (click)="showSettings=true" class="text-primary underline ml-1">
-          Enter manually →
-        </button>
-      </p>
-    </div>
-  </div>
-
-  <!-- CONNECTED VIEW -->
-  <div *ngIf="!loading && view === 'connected'" class="space-y-6">
-
-    <!-- Status cards -->
-    <div class="grid grid-cols-3 gap-4">
-      <div class="bg-surface-container-highest rounded-xl
-        border border-outline/10 p-5">
-        <div class="text-xs text-on-surface-variant uppercase mb-2">
-          Shuffle SOAR
-        </div>
-        <div class="flex items-center gap-2">
-          <div class="w-2 h-2 rounded-full bg-primary
-            animate-pulse"></div>
-          <span class="text-primary font-bold text-sm">
-            CONNECTED
-          </span>
-        </div>
-      </div>
-
-      <div class="bg-surface-container-highest rounded-xl
-        border border-outline/10 p-5">
-        <div class="text-xs text-on-surface-variant uppercase mb-2">
-          Active Playbooks
-        </div>
-        <div class="text-white font-bold text-2xl">
-          {{ activeCount }}
-        </div>
-      </div>
-
-      <div class="bg-surface-container-highest rounded-xl
-        border border-outline/10 p-5">
-        <div class="text-xs text-on-surface-variant uppercase mb-2">
-          Webhook URL
-        </div>
-        <div class="text-primary text-xs truncate font-mono">
-          {{ webhookUrl }}
-        </div>
-      </div>
-    </div>
-
-    <!-- Playbooks + Add Action -->
-    <div class="bg-surface-container-highest rounded-xl
-      border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
-        <div>
-          <h3 class="text-white font-bold text-sm uppercase">
-            ⚡ Response Playbooks
-          </h3>
-          <p class="text-on-surface-variant text-xs mt-0.5">
-            Configure in Shuffle UI for full customization
-          </p>
-        </div>
-        <button (click)="showNewAction=true" class="flex items-center gap-2 bg-primary/10
-          text-primary text-xs font-bold px-4 py-2
-          rounded-lg hover:bg-primary/20 transition-all">
-          <lucide-icon [name]="PlusIcon" class="w-3 h-3">
-          </lucide-icon>
-          Add Action
-        </button>
-      </div>
-
-      <div class="divide-y divide-outline/5">
-        <div *ngFor="let pb of playbooks" class="px-6 py-4 flex items-center justify-between">
-          <div class="flex items-center gap-4">
-            <div [class]="'w-8 h-8 rounded-lg flex items-center justify-center ' +
-              (pb.enabled ? 'bg-primary/20' : 'bg-surface-container')">
-              <lucide-icon [name]="ZapIcon"
-                [class]="'w-4 h-4 ' + (pb.enabled ? 'text-primary' : 'text-on-surface-variant')">
-              </lucide-icon>
-            </div>
-            <div>
-              <div class="text-white text-sm font-bold">
-                {{ pb.name }}
-              </div>
-              <div class="text-on-surface-variant text-xs">
-                {{ pb.description }}
-              </div>
-              <div class="text-primary text-[10px] mt-0.5">
-                Trigger: {{ pb.trigger }}
-              </div>
-            </div>
-          </div>
-          <div class="flex items-center gap-3">
-            <span class="text-on-surface-variant text-xs">
-              {{ pb.runs }} runs
-            </span>
-            <button (click)="togglePlaybook(pb)" [class]="'text-xs font-bold px-4 py-1.5 rounded-lg transition-all ' +
-              (pb.enabled ?
-                'bg-surface-container text-on-surface-variant hover:bg-red-500/20 hover:text-red-400' :
-                'bg-primary/20 text-primary hover:bg-primary/30')">
-              {{ pb.enabled ? 'Disable' : 'Enable' }}
-            </button>
-          </div>
-        </div>
-
-        <div *ngIf="playbooks.length === 0" class="px-6 py-8 text-center text-on-surface-variant text-sm">
-          No playbooks yet — add an action above!
-        </div>
-      </div>
-    </div>
-
-    <!-- Integrations Section -->
-    <div class="bg-surface-container-highest rounded-xl
-      border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
-        <div>
-          <h3 class="text-white font-bold text-sm uppercase">
-            🔔 Notification Integrations
-          </h3>
-          <p class="text-on-surface-variant text-xs mt-0.5">
-            Configure where alerts are sent when threat detected
-          </p>
-        </div>
-        <button (click)="showNewIntegration=true" class="flex items-center gap-2 bg-primary/10
-          text-primary text-xs font-bold px-4 py-2
-          rounded-lg hover:bg-primary/20 transition-all">
-          ➕ Add Integration
-        </button>
-      </div>
-      <div class="divide-y divide-outline/5">
-        <div *ngFor="let int of integrations" class="px-6 py-4 flex items-center justify-between">
-          <div class="flex items-center gap-4">
-            <div [class]="'w-10 h-10 rounded-lg flex items-center justify-center text-lg ' +
-              (int.enabled ? 'bg-primary/20' : 'bg-surface-container')">
-              {{ getIntIcon(int.type) }}
-            </div>
-            <div>
-              <div class="text-white text-sm font-bold">
-                {{ int.name }}
-              </div>
-              <div class="text-on-surface-variant text-xs">
-                {{ int.type }}
-              </div>
-            </div>
-          </div>
-          <div class="flex items-center gap-3">
-            <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded ' +
-              (int.enabled ?
-                'bg-primary/20 text-primary' :
+          <div class="grid grid-cols-3 gap-2 mt-2">
+            <button *ngFor="let t of integrationTypes" (click)="intType=t.type; intConfig={}" [class]="'py-2 px-1 rounded-lg text-xs font-bold transition-all flex flex-col items-center gap-1 ' +
+              (intType === t.type ?
+                'bg-primary text-black' :
                 'bg-surface-container text-on-surface-variant')">
-              {{ int.enabled ? 'ACTIVE' : 'DISABLED' }}
-            </span>
-            <button (click)="toggleIntegration(int)" class="text-xs px-3 py-1.5 rounded-lg
-              bg-surface-container text-on-surface-variant
-              hover:text-white transition-all">
-              {{ int.enabled ? 'Disable' : 'Enable' }}
-            </button>
-            <button (click)="deleteIntegration(int)" class="text-xs px-3 py-1.5 rounded-lg
-              bg-red-500/10 text-red-400
-              hover:bg-red-500/20 transition-all">
-              Delete
+              <span>{{ t.icon }}</span>
+              <span>{{ t.name }}</span>
             </button>
           </div>
         </div>
-        <div *ngIf="integrations.length === 0" class="px-6 py-8 text-center
-          text-on-surface-variant text-sm">
-          No integrations yet — click "Add Integration"!
-        </div>
-      </div>
-    </div>
-
-    <!-- Jira Ticket Tracker -->
-    <div *ngIf="jiraTickets.length > 0 || loadingTickets" class="bg-surface-container-highest rounded-xl
-    border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
         <div>
-          <h3 class="text-white font-bold text-sm uppercase">
-            🎫 Jira Tickets
-          </h3>
-          <p class="text-on-surface-variant text-xs mt-0.5">
-            Auto-created NDR alerts in Jira
-          </p>
+          <label class="text-xs text-on-surface-variant uppercase">
+            Name (optional)
+          </label>
+          <input [(ngModel)]="intName" [placeholder]="selectedIntType?.name || ''" class="w-full mt-1 bg-surface-container
+            border border-outline/20 rounded-lg px-3 py-2.5
+            text-white text-sm outline-none focus:border-primary" />
         </div>
-        <button (click)="loadJiraTickets()" class="text-xs px-3 py-1.5 rounded-lg
-            bg-surface-container text-on-surface-variant
-            hover:text-white transition-all">
-          🔄 Refresh
+        <div *ngFor="let field of selectedIntType?.fields">
+          <label class="text-xs text-on-surface-variant uppercase">
+            {{ field.label }}
+          </label>
+          <input [(ngModel)]="intConfig[field.key]" [placeholder]="field.placeholder" class="w-full mt-1 bg-surface-container
+            border border-outline/20 rounded-lg px-3 py-2.5
+            text-white text-sm outline-none focus:border-primary" />
+        </div>
+        <div *ngIf="testResult" [class]="'text-xs font-bold p-2 rounded ' +
+          (testResult.includes('✅') ?
+            'bg-primary/10 text-primary' :
+            'bg-red-500/10 text-red-400')">
+          {{ testResult }}
+        </div>
+      </div>
+      <div class="flex gap-3 mt-6">
+        <button (click)="testIntegration()" [disabled]="testingInt" class="flex-1 bg-surface-container text-white
+          font-bold py-2.5 rounded-lg text-sm disabled:opacity-50">
+          {{ testingInt ? '⏳ Testing...' : '🧪 Test' }}
+        </button>
+        <button (click)="saveIntegration()" [disabled]="savingInt" class="flex-1 bg-primary text-black font-bold
+          py-2.5 rounded-lg text-sm disabled:opacity-50">
+          {{ savingInt ? '⏳ Saving...' : '💾 Save' }}
+        </button>
+        <button (click)="showNewIntegration=false" class="px-4 bg-surface-container text-white
+          py-2.5 rounded-lg text-sm">
+          ✕
         </button>
       </div>
-      <div *ngIf="loadingTickets" class="px-6 py-4 text-on-surface-variant
-        text-sm animate-pulse">
-        Loading tickets...
-      </div>
-      <div class="divide-y divide-outline/5">
-        <div *ngFor="let ticket of jiraTickets" class="px-6 py-3 flex items-center
-            justify-between hover:bg-surface-container/50">
-          <div class="flex items-center gap-3">
-            <span class="text-[10px] font-mono
-                    text-primary font-bold">
-              {{ ticket.key }}
-            </span>
-            <span class="text-sm text-white truncate
-                    max-w-xs">
-              {{ ticket.summary }}
-            </span>
-          </div>
-          <div class="flex items-center gap-3">
-            <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded ' +
-                    (ticket.status === 'Done' ?
-                        'bg-primary/20 text-primary' :
-                        ticket.status === 'In Progress' ?
-                        'bg-yellow-500/20 text-yellow-400' :
-                        'bg-surface-container text-on-surface-variant')">
-              {{ ticket.status }}
-            </span>
-            <a [href]="ticket.url" target="_blank" class="text-xs text-primary hover:underline">
-              Open ↗
-            </a>
-          </div>
-        </div>
-      </div>
     </div>
-
-    <!-- Integration Status Dashboard -->
-    <div class="bg-surface-container-highest rounded-xl
-    border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
-        <h3 class="text-white font-bold text-sm uppercase">
-          📊 Integration Status
-        </h3>
-        <button (click)="testAllIntegrations()" [disabled]="testingAll" class="text-xs px-3 py-1.5 rounded-lg
-            bg-primary/10 text-primary
-            hover:bg-primary/20 disabled:opacity-50">
-          {{ testingAll ? '⏳ Testing...' : '🧪 Test All' }}
-        </button>
-      </div>
-      <div class="p-6 grid grid-cols-2 gap-4">
-        <div *ngFor="let t of getIntegrationsByType()" class="bg-surface-container rounded-lg p-4
-            border border-outline/10">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="text-lg">{{ t.icon }}</span>
-            <span class="text-white font-bold text-sm">
-              {{ t.name }}
-            </span>
-          </div>
-          <div class="text-xs text-on-surface-variant">
-            {{ t.active }}/{{ t.count }} active
-          </div>
-        </div>
-      </div>
-      <!-- Test results -->
-      <div *ngIf="testAllResults.length > 0" class="px-6 pb-4 space-y-2">
-        <div *ngFor="let r of testAllResults" [class]="'flex items-center justify-between p-2 rounded ' +
-            (r.ok ? 'bg-primary/10' : 'bg-red-500/10')">
-          <span class="text-sm">
-            {{ r.name }}
-          </span>
-          <span [class]="r.ok ?
-                'text-primary text-xs' :
-                'text-red-400 text-xs'">
-            {{ r.result }}
-          </span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Add Integration Modal -->
-    <div *ngIf="showNewIntegration" class="fixed inset-0 bg-black/60 z-50
-      flex items-center justify-center p-4">
-      <div class="bg-surface-container-highest rounded-2xl
-        border border-outline/20 p-6 w-full max-w-md">
-        <h3 class="text-white font-bold text-lg mb-4">
-          ➕ Add Integration
-        </h3>
-        <div class="space-y-4">
-          <div>
-            <label class="text-xs text-on-surface-variant uppercase">
-              Integration Type
-            </label>
-            <div class="grid grid-cols-3 gap-2 mt-2">
-              <button *ngFor="let t of integrationTypes" (click)="intType=t.type; intConfig={}" [class]="'py-2 px-1 rounded-lg text-xs font-bold transition-all flex flex-col items-center gap-1 ' +
-                (intType === t.type ?
-                  'bg-primary text-black' :
-                  'bg-surface-container text-on-surface-variant')">
-                <span>{{ t.icon }}</span>
-                <span>{{ t.name }}</span>
-              </button>
-            </div>
-          </div>
-          <div>
-            <label class="text-xs text-on-surface-variant uppercase">
-              Name (optional)
-            </label>
-            <input [(ngModel)]="intName" [placeholder]="selectedIntType?.name || ''" class="w-full mt-1 bg-surface-container
-              border border-outline/20 rounded-lg px-3 py-2.5
-              text-white text-sm outline-none focus:border-primary" />
-          </div>
-          <div *ngFor="let field of selectedIntType?.fields">
-            <label class="text-xs text-on-surface-variant uppercase">
-              {{ field.label }}
-            </label>
-            <input [(ngModel)]="intConfig[field.key]" [placeholder]="field.placeholder" class="w-full mt-1 bg-surface-container
-              border border-outline/20 rounded-lg px-3 py-2.5
-              text-white text-sm outline-none focus:border-primary" />
-          </div>
-          <div *ngIf="testResult" [class]="'text-xs font-bold p-2 rounded ' +
-            (testResult.includes('✅') ?
-              'bg-primary/10 text-primary' :
-              'bg-red-500/10 text-red-400')">
-            {{ testResult }}
-          </div>
-        </div>
-        <div class="flex gap-3 mt-6">
-          <button (click)="testIntegration()" [disabled]="testingInt" class="flex-1 bg-surface-container text-white
-            font-bold py-2.5 rounded-lg text-sm disabled:opacity-50">
-            {{ testingInt ? '⏳ Testing...' : '🧪 Test' }}
-          </button>
-          <button (click)="saveIntegration()" [disabled]="savingInt" class="flex-1 bg-primary text-black font-bold
-            py-2.5 rounded-lg text-sm disabled:opacity-50">
-            {{ savingInt ? '⏳ Saving...' : '💾 Save' }}
-          </button>
-          <button (click)="showNewIntegration=false" class="px-4 bg-surface-container text-white
-            py-2.5 rounded-lg text-sm">
-            ✕
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-
-
-    <!-- Recent Automated Actions -->
-    <div class="bg-surface-container-highest rounded-xl
-      border border-outline/10">
-      <div class="px-6 py-4 border-b border-outline/10
-        flex items-center justify-between">
-        <h3 class="text-white font-bold text-sm uppercase">
-          🕐 Recent Automated Actions
-        </h3>
-        <button (click)="loadExecutions()" class="text-on-surface-variant hover:text-white
-          transition-all">
-          <lucide-icon [name]="RefreshIcon" class="w-4 h-4">
-          </lucide-icon>
-        </button>
-      </div>
-
-      <div class="divide-y divide-outline/5">
-        <div *ngFor="let action of recentActions" class="px-6 py-3 flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded ' +
-              statusBg(action.status)">
-              {{ action.status }}
-            </span>
-            <div>
-              <div class="text-white text-xs font-bold">
-                {{ action.name }}
-              </div>
-              <div class="text-[10px] text-on-surface-variant">
-                Score: {{ action.score }}
-              </div>
-            </div>
-          </div>
-          <div class="text-[10px] text-on-surface-variant">
-            {{ action.time }}
-          </div>
-        </div>
-
-        <div *ngIf="recentActions.length === 0" class="px-6 py-8 text-center text-on-surface-variant text-sm">
-          No automated actions yet — trigger an alert to test!
-        </div>
-      </div>
-    </div>
-
   </div>
 
   <!-- ADD ACTION MODAL -->
@@ -567,54 +371,6 @@
           {{ savingAction ? '⏳ Saving...' : '💾 Save Action' }}
         </button>
         <button (click)="showNewAction=false" class="flex-1 bg-surface-container text-white
-          py-2.5 rounded-lg text-sm">
-          Cancel
-        </button>
-      </div>
-
-      <div class="mt-4 pt-4 border-t border-outline/10">
-        <p class="text-xs text-on-surface-variant text-center">
-          For advanced workflows
-          <button (click)="openShuffle()" class="text-primary underline ml-1">
-            Open Shuffle UI ↗
-          </button>
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <!-- SETTINGS MODAL -->
-  <div *ngIf="showSettings" class="fixed inset-0 bg-black/60 z-50
-    flex items-center justify-center p-4">
-    <div class="bg-surface-container-highest rounded-2xl
-      border border-outline/20 p-6 w-full max-w-md">
-      <h3 class="text-white font-bold text-lg mb-4">
-        ⚙️ SOAR Settings
-      </h3>
-      <div class="space-y-4">
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Webhook URL
-          </label>
-          <input [(ngModel)]="manualWebhook" class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-3 py-2.5
-            text-white text-sm outline-none" />
-        </div>
-        <div>
-          <label class="text-xs text-on-surface-variant uppercase">
-            Shuffle UI URL
-          </label>
-          <input [(ngModel)]="manualShuffleUrl" class="w-full mt-1 bg-surface-container
-            border border-outline/20 rounded-lg px-3 py-2.5
-            text-white text-sm outline-none" />
-        </div>
-      </div>
-      <div class="flex gap-3 mt-6">
-        <button (click)="saveManualConfig()" class="flex-1 bg-primary text-black font-bold
-          py-2.5 rounded-lg text-sm">
-          Save
-        </button>
-        <button (click)="showSettings=false" class="flex-1 bg-surface-container text-white
           py-2.5 rounded-lg text-sm">
           Cancel
         </button>
