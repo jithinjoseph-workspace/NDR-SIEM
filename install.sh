@@ -639,8 +639,6 @@ if [ -z "$HOST_IP" ]; then
 fi
 log "Host IP detected: $HOST_IP"
 
-SHUFFLE_KEY=$(cat /proc/sys/kernel/random/uuid)
-
 # Preserve or generate JWT_SECRET before creating .env
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "JWT_SECRET" "$INSTALL_DIR/.env"; then
     JWT_SECRET=$(grep "JWT_SECRET" "$INSTALL_DIR/.env" | cut -d= -f2-)
@@ -658,28 +656,11 @@ CLICKHOUSE_URL=$CLICKHOUSE_URL
 CLICKHOUSE_USER=$CLOUD_CH_USER
 CLICKHOUSE_PASSWORD=$CLOUD_CH_PASS
 KAFKA_BROKERS=$CLOUD_KAFKA
-SHUFFLE_URL=http://${HOST_IP}:3002
-SHUFFLE_API_URL=http://${HOST_IP}:5001
-SHUFFLE_INTERNAL_URL=http://${HOST_IP}:5001
-SHUFFLE_WEBHOOK_URL=
-SHUFFLE_API_KEY=$SHUFFLE_KEY
 JWT_SECRET=$JWT_SECRET
 ARKIME_URL=http://${HOST_IP}:8005
 ARKIME_PASS=admin
 ENVEOF
 log "✅ .env generated with JWT_SECRET"
-
-# ── Fix Shuffle API key in docker-compose ─────
-log "Configuring Shuffle API key..."
-python3 -c "
-content = open('$INSTALL_DIR/docker-compose.yml').read()
-content = content.replace(
-    'SHUFFLE_DEFAULT_APIKEY=shuffleapikey123',
-    'SHUFFLE_DEFAULT_APIKEY=$SHUFFLE_KEY'
-)
-open('$INSTALL_DIR/docker-compose.yml', 'w').write(content)
-"
-log "✅ Shuffle API key: $SHUFFLE_KEY"
 
 # ── Set up sudoers ────────────────────────────
 log "Configuring sudo permissions..."
@@ -900,16 +881,10 @@ sudo service clickhouse-server restart
 sleep 5
 log "✅ ClickHouse configured"
 
-# ── Setup Shuffle SOAR ────────────────────────
-
-# ── Setup Shuffle SOAR ────────────────────────
-step "Setting up Shuffle SOAR"
-log "Starting Shuffle SOAR services..."
+# ── Setup OpenSearch (for Arkime PCAP) ───────────────────────────────────
+step "Setting up OpenSearch"
+log "Waiting for OpenSearch..."
 cd $INSTALL_DIR
-
-# Start opensearch first (needs most time)
-sudo docker compose up -d shuffle-opensearch
-log "  → Waiting for OpenSearch..."
 for i in {1..30}; do
     if curl -s http://localhost:9200 > /dev/null 2>&1; then
         log "✅ OpenSearch ready"
@@ -923,7 +898,6 @@ echo ""
 # Initialize Arkime DB and create admin user now that OpenSearch is up
 if [ -f /opt/arkime/bin/capture ]; then
     log "Initializing Arkime database..."
-    # Use 'init --ifneeded' to skip if already initialized; pipe 'yes' for the upgrade prompt
     echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init --ifneeded 2>&1 || \
         echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init 2>&1 || true
     log "✅ Arkime database initialized"
@@ -933,37 +907,10 @@ if [ -f /opt/arkime/bin/capture ]; then
         || warn "⚠️ Arkime admin user creation failed — run manually after install"
 fi
 
-# Start backend and frontend
-sudo docker compose up -d \
-    shuffle-backend \
-    shuffle-frontend
-log "  → Waiting for Shuffle backend..."
-
-# Wait properly for Shuffle
-SHUFFLE_READY=false
-for i in {1..40}; do
-    if curl -s http://localhost:5001/api/v1/health \
-        > /dev/null 2>&1; then
-        SHUFFLE_READY=true
-        log "✅ Shuffle backend ready"
-        break
-    fi
-    echo -n "."
-    sleep 5
-done
-echo ""
-
-if [ "$SHUFFLE_READY" = true ]; then
-    # Auto-configure webhook
-    bash $INSTALL_DIR/scripts/setup-shuffle.sh
-    log "✅ Shuffle SOAR ready!"
-    log "  UI:   http://localhost:3002"
-    log "  User: admin"
-    log "  Pass: shufflepassword"
-else
-    warn "⚠️ Shuffle not ready — configure manually later"
-    warn "  Run: bash $INSTALL_DIR/scripts/setup-shuffle.sh"
-fi
+# ── Native SOAR is built into the NDR engine ─────────────────────────────
+step "Setting up Native SOAR"
+log "✅ Native SOAR is built into the NDR engine — no extra services needed"
+log "  Configure playbooks, cases and integrations from the UI → SOAR page"
 
 # ── Create proxy config ─────────────────────────
 cat > $INSTALL_DIR/ndr-ui/proxy.conf.json << 'PROXYEOF'

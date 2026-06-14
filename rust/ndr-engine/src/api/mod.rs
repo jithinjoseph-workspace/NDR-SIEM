@@ -121,35 +121,26 @@ pub struct AppState {
     pub ch_storage:  Arc<ClickhouseStorage>,
     pub tx:         broadcast::Sender<String>, // broadcasts to all WS clients
     pub redis:      Arc<redis::Client>,
+    pub redis_mux:  redis::aio::MultiplexedConnection,
     pub kafka_producer: Arc<rdkafka::producer::FutureProducer>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
-    let redis = state.redis.clone();
+    let mut conn = state.redis_mux.clone();
     let msg_str = msg.to_string();
     let channel = format!("tenant:{}", tenant_id);
     let tx = state.tx.clone();
     let msg_fallback = msg_str.clone();
     tokio::spawn(async move {
-        match redis.get_async_connection().await {
-            Ok(mut conn) => {
-                // Redis available — it is the ONLY delivery path.
-                // The WebSocket handler in websocket.rs subscribes directly to
-                // this Redis channel, so exactly ONE message reaches the client.
-                let _: Result<(), _> = redis::cmd("PUBLISH")
-                    .arg(&channel)
-                    .arg(&msg_str)
-                    .query_async(&mut conn)
-                    .await;
-                // NOTE: Do NOT also call tx.send() here.
-                // websocket.rs uses Redis when available and tx only as fallback.
-                // Sending both causes duplicates with multiple engines.
-            }
-            Err(_) => {
-                // Redis unavailable — fall back to in-process broadcast
-                tracing::warn!("Redis unavailable, falling back to local broadcast");
-                let _ = tx.send(msg_fallback);
-            }
+        let result: Result<(), _> = redis::cmd("PUBLISH")
+            .arg(&channel)
+            .arg(&msg_str)
+            .query_async(&mut conn)
+            .await;
+        if result.is_err() {
+            // Redis unavailable — fall back to in-process broadcast
+            tracing::warn!("Redis publish failed, falling back to local broadcast");
+            let _ = tx.send(msg_fallback);
         }
     });
 }
@@ -587,7 +578,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 
 
     // Execute Native SOAR Playbooks
-    crate::soar::execute_native_playbooks(state, hit.clone(), risk.clone(), enrichment.clone()).await;
+    crate::soar::execute_native_playbooks(state, hit.clone(), risk.clone(), enrichment.clone(), &tenant_id).await;
 
 // ── Execute playbooks directly (gated on soar_threshold) ────────────────
 if risk.score >= soar_threshold {
@@ -5296,11 +5287,8 @@ pub async fn get_native_playbooks(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
 ) -> Json<Value> {
-    match state.ch_storage.get_native_playbooks().await {
-        Ok(pbs) => {
-            let filtered: Vec<_> = pbs.into_iter().filter(|p| p.tenant_id == claims.tenant_id).collect();
-            Json(json!({"status": "success", "data": filtered}))
-        },
+    match state.ch_storage.get_native_playbooks(&claims.tenant_id).await {
+        Ok(pbs) => Json(json!({"status": "success", "data": pbs})),
         Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
 }

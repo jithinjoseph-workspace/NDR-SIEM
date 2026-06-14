@@ -61,6 +61,12 @@ async fn main() {
         .unwrap_or_else(|_| "redis://localhost:6379".to_string());
     let redis_client = redis::Client::open(redis_url)
         .expect("Redis connection failed");
+    // Shared multiplexed connection for publishing — avoids opening a new
+    // TCP connection on every event (was causing per-event latency spikes)
+    let redis_mux = redis_client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("Redis multiplexed connection failed");
 
     let storage = storage::SqliteStorage::new("ndr.db")
         .expect("Failed to open SQLite database");
@@ -98,6 +104,7 @@ async fn main() {
         storage:    Arc::new(storage),
         tx:         tx.clone(),
         redis:      Arc::new(redis_client.clone()),
+        redis_mux:  redis_mux,
         kafka_producer: kafka_producer.clone(),
     };
 

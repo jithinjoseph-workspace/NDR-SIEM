@@ -124,7 +124,7 @@ pub async fn execute_action(
             // Need integration details. For email, config might reference an integration id
             // or contain the email directly, and we look up smtp config.
             // Simplified: we will look up the SMTP integration to send this.
-            let integrations = state.ch_storage.get_integrations().await.unwrap_or_default();
+            let integrations = state.ch_storage.get_integrations_by_tenant(&pb.tenant_id).await.unwrap_or_default();
             let mut smtp_config = None;
             for i in integrations {
                 if i["type"].as_str().unwrap_or("") == "smtp" && i["enabled"] == true {

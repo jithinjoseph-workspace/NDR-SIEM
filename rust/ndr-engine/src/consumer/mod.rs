@@ -89,10 +89,15 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     }
                 });
 
-                // Broadcast and correlate
+                // Broadcast immediately (non-blocking)
                 crate::api::broadcast_raw_event(&state, &event);
+                // Correlate and process hit in a background task so the
+                // consumer loop is never blocked waiting for ClickHouse/playbooks
                 if let Some(hit) = state.correlator.process(event) {
-                    crate::api::process_correlation_hit(&state, hit).await;
+                    let state_clone = state.as_ref().clone();
+                    tokio::spawn(async move {
+                        crate::api::process_correlation_hit(&state_clone, hit).await;
+                    });
                 }
             }
             Err(e) => {

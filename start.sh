@@ -19,16 +19,6 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     source "$INSTALL_DIR/.env"
 fi
 
-WEBHOOK=$(clickhouse-client --user=ndr \
-    --password=ndr123 \
-    --query "SELECT value FROM ndr.soar_config \
-    FINAL WHERE key='webhook_url'" 2>/dev/null)
-if [ -n "$WEBHOOK" ]; then
-    sed -i \
-        "s|SHUFFLE_WEBHOOK_URL=.*|SHUFFLE_WEBHOOK_URL=$WEBHOOK|" \
-        $INSTALL_DIR/.env
-    log "✅ SOAR webhook restored"
-fi
 
 IFACE=${IFACE:-$(ip -o -4 addr show 2>/dev/null | \
     grep -v "127.0.0.1\|docker\|br-\|veth" | \
@@ -116,56 +106,8 @@ sudo docker exec kafka \
     --group ndr-engine-group \
     --describe
 
-# ── Check Shuffle SOAR ────────────────────────
-echo "  → Checking Shuffle SOAR..."
-sleep 5
-if curl -s http://localhost:5001/api/v1/health \
-    > /dev/null 2>&1; then
-    echo "  ✅ Shuffle SOAR running"
-
-    source $INSTALL_DIR/.env 2>/dev/null || true
-    if [ -z "$SHUFFLE_WEBHOOK_URL" ]; then
-        echo "  ⚠️  Shuffle webhook not configured"
-        echo "      Open UI → SOAR page to configure"
-    else
-        echo "  ✅ Shuffle webhook configured"
-    fi
-else
-    echo "  ⚠️  Shuffle not running"
-fi
-
-# ── Refresh Shuffle API key ───────────────────
-log "Refreshing Shuffle API key..."
-SESSION=$(curl -s \
-    -X POST "http://localhost:5001/api/v1/login" \
-    -H "Content-Type: application/json" \
-    -d '{"username":"admin","password":"shufflepassword"}' \
-    2>/dev/null | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-for c in d.get('cookies',[]):
-    if c['key']=='session_token':
-        print(c['value'])
-" 2>/dev/null)
-
-if [ -n "$SESSION" ]; then
-    NEW_KEY=$(curl -s \
-        -b "session_token=$SESSION" \
-        "http://localhost:5001/api/v1/users/generateapikey" \
-        2>/dev/null | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-print(d.get('apikey',''))
-" 2>/dev/null)
-
-    if [ -n "$NEW_KEY" ]; then
-        sed -i \
-            "s|SHUFFLE_API_KEY=.*|SHUFFLE_API_KEY=$NEW_KEY|" \
-            $INSTALL_DIR/.env
-        log "✅ Shuffle API key refreshed"
-        sudo docker compose up -d ndr-engine-1
-    fi
-fi
+# ── Native SOAR ───────────────────────────────
+echo "  ✅ Native SOAR is built into the NDR engine (no external services needed)"
 
 # Start Angular UI
 echo "  → Starting Angular UI..."

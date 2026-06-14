@@ -43,8 +43,9 @@ pub async fn execute_native_playbooks(
     hit: CorrelationHit,
     risk: RiskResult,
     enrichment: EnrichmentData,
+    tenant_id: &str,
 ) {
-    let playbooks = match state.ch_storage.get_native_playbooks().await {
+    let playbooks = match state.ch_storage.get_native_playbooks(tenant_id).await {
         Ok(p) => p,
         Err(_) => return,
     };
