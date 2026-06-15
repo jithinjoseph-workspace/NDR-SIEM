@@ -1148,6 +1148,18 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(())
     }
 
+    pub async fn batch_insert_events_for_tenant(&self, events: Vec<NdrEvent>, tenant_id: &str) -> anyhow::Result<()> {
+        if events.is_empty() { return Ok(()); }
+        let db_name = tenant_db(tenant_id);
+        let table_name = format!("{}.ndr_events", db_name);
+        let mut insert = self.client.insert(&table_name)?;
+        for event in &events {
+            insert.write(event).await?;
+        }
+        insert.end().await?;
+        Ok(())
+    }
+
     pub async fn insert_hit(&self, hit: NdrHit) -> anyhow::Result<()> {
         let mut insert = self.client.insert("ndr_hits")?;
         insert.write(&hit).await?;

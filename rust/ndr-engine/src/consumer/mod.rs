@@ -14,10 +14,10 @@ use crate::storage::clickhouse::NdrEvent;
 pub async fn start_consumer(state: Arc<AppState>) {
     let brokers = std::env::var("KAFKA_BROKERS")
         .unwrap_or_else(|_| "kafka:9092".to_string());
-    
+
     let instance_id = std::env::var("INSTANCE_ID")
         .unwrap_or_else(|_| "1".to_string());
-    
+
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "ndr-engine-group")
         .set("bootstrap.servers", &brokers)
@@ -40,7 +40,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     Some(p) => p,
                     None => continue,
                 };
-                
+
                 let raw: serde_json::Value = match serde_json::from_slice(payload) {
                     Ok(v) => v,
                     Err(_) => continue,
@@ -91,11 +91,14 @@ pub async fn start_consumer(state: Arc<AppState>) {
 
                 // Broadcast immediately (non-blocking)
                 crate::api::broadcast_raw_event(&state, &event);
-                // Correlate and process hit in a background task so the
-                // consumer loop is never blocked waiting for ClickHouse/playbooks
+                // Correlate in a bounded background task — semaphore caps concurrent
+                // ClickHouse+SOAR calls at 16 so a burst of hits can't saturate the
+                // connection pool or starve the tokio runtime
                 if let Some(hit) = state.correlator.process(event) {
                     let state_clone = state.as_ref().clone();
+                    let sem = state.correlation_semaphore.clone();
                     tokio::spawn(async move {
+                        let _permit = sem.acquire_owned().await;
                         crate::api::process_correlation_hit(&state_clone, hit).await;
                     });
                 }

@@ -25,6 +25,16 @@ export class Live implements OnInit, OnDestroy {
 
   private subs: Subscription[] = [];
 
+  private updateScheduled = false;
+  private scheduleUpdate() {
+    if (this.updateScheduled) return;
+    this.updateScheduled = true;
+    requestAnimationFrame(() => {
+      this.cdr.detectChanges();
+      this.updateScheduled = false;
+    });
+  }
+
   constructor(
     private ws: Websocket,
     private cdr: ChangeDetectorRef
@@ -67,7 +77,7 @@ export class Live implements OnInit, OnDestroy {
 
         // Keep max 100 messages
         if (this.messages.length > 100) this.messages.pop();
-        this.cdr.detectChanges();
+        this.scheduleUpdate();
 
         // Auto scroll to top
         if (this.autoScroll && this.streamContainer) {

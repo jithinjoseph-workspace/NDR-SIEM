@@ -132,6 +132,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 f"{HOME_DIR}/.vector/data/suricata",
                 f"{HOME_DIR}/.vector/data/zeek"],
                 capture_output=True)            
+            os.makedirs(f"{HOME_DIR}/.vector/data/suricata", exist_ok=True)
+            os.makedirs(f"{HOME_DIR}/.vector/data/zeek", exist_ok=True)
             # Start Zeek
             subprocess.Popen(["sudo", "/opt/zeek/bin/zeek", "-i", iface, "local",f"Log::default_logdir={LOGDIR}/zeek"],
                             stdout=open("/tmp/zeek.log", "w"),
@@ -167,6 +169,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 f"{HOME_DIR}/.vector/data/suricata",
                 f"{HOME_DIR}/.vector/data/zeek"],
                 capture_output=True)
+            os.makedirs(f"{HOME_DIR}/.vector/data/suricata", exist_ok=True)
+            os.makedirs(f"{HOME_DIR}/.vector/data/zeek", exist_ok=True)
             # Stop Arkime
             stop_arkime()
             # Rotate logs

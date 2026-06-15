@@ -123,6 +123,7 @@ pub struct AppState {
     pub redis:      Arc<redis::Client>,
     pub redis_mux:  redis::aio::MultiplexedConnection,
     pub kafka_producer: Arc<rdkafka::producer::FutureProducer>,
+    pub correlation_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {

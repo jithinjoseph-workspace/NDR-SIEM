@@ -47,7 +47,8 @@ sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 log "Resetting Vector checkpoints..."
 sudo rm -rf $HOME_DIR/.vector/data/suricata \
     $HOME_DIR/.vector/data/zeek 2>/dev/null || true
-mkdir -p $HOME_DIR/.vector/data
+mkdir -p $HOME_DIR/.vector/data/suricata \
+         $HOME_DIR/.vector/data/zeek
 log "✅ Vector checkpoints cleared"
 
 # Start Docker stack

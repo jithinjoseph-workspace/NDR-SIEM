@@ -84,6 +84,16 @@ export class Dashboard implements OnInit, OnDestroy {
   // Tracks unique incidents to deduplicate live stat card increments
   private seenIncidents = new Set<string>();
 
+  private updateScheduled = false;
+  private scheduleUpdate() {
+    if (this.updateScheduled) return;
+    this.updateScheduled = true;
+    requestAnimationFrame(() => {
+      this.cdr.detectChanges();
+      this.updateScheduled = false;
+    });
+  }
+
   constructor(
     private api:          Api,
     private ws:           Websocket,
@@ -152,7 +162,7 @@ export class Dashboard implements OnInit, OnDestroy {
       this.ws.events$.subscribe(() => {
         this.eventsLastHour++;
         this.totalEvents++;
-        this.cdr.detectChanges();
+        this.scheduleUpdate();
       })
     );
 
@@ -189,7 +199,7 @@ export class Dashboard implements OnInit, OnDestroy {
             time:   new Date().toLocaleTimeString(),
           }, ...this.recentCriticalAlerts].slice(0, 5);
         }
-        this.cdr.detectChanges();
+        this.scheduleUpdate();
       })
     );
   }

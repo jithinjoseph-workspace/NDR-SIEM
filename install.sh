@@ -628,7 +628,8 @@ log "✅ Suricata log rotation configured"
 log "Creating directories..."
 mkdir -p $HOME_DIR/logs/suricata
 mkdir -p $HOME_DIR/logs/zeek
-mkdir -p $HOME_DIR/.vector/data
+mkdir -p $HOME_DIR/.vector/data/suricata \
+         $HOME_DIR/.vector/data/zeek
 mkdir -p $HOME_DIR/ndr-config
 
 # ── Detect host IP ────────────────────────────
@@ -849,9 +850,9 @@ sudo docker exec kafka \
     --bootstrap-server localhost:9092 \
     --alter --entity-type topics \
     --entity-name ndr-events \
-    --add-config retention.ms=3600000 \
+    --add-config retention.ms=86400000 \
     2>/dev/null || true
-log "✅ Kafka retention set to 1 hour"
+log "✅ Kafka retention set to 24 hours"
 
 # ── Create Kafka topic with 3 partitions ──────
 log "Creating Kafka topic with 3 partitions..."

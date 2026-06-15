@@ -106,6 +106,7 @@ async fn main() {
         redis:      Arc::new(redis_client.clone()),
         redis_mux:  redis_mux,
         kafka_producer: kafka_producer.clone(),
+        correlation_semaphore: Arc::new(tokio::sync::Semaphore::new(16)),
     };
 
     // ── Background: session reaper (every 30s) ────────────────────────────
