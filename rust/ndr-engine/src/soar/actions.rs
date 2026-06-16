@@ -12,6 +12,7 @@ use lettre::{Message, SmtpTransport, Transport};
 use lettre::transport::smtp::authentication::Credentials;
 use reqwest::Client;
 
+#[allow(unused_assignments)]
 pub async fn execute_action(
     state: &AppState,
     pb: &SoarNativePlaybook,
@@ -173,8 +174,7 @@ pub async fn execute_action(
             let case_id = Uuid::new_v4().to_string();
             let title = format!("Automated Case: {} -> {} ({})", src, dst, risk.severity.as_str());
             let description = format!("Playbook {} generated this case.", pb.name);
-            
-            // Note: In Phase 2 we are adding the ClickHouse method for insert_soar_case
+
             match state.ch_storage.insert_soar_case(
                 &case_id,
                 &title,
@@ -196,6 +196,96 @@ pub async fn execute_action(
                 }
             }
         }
+
+        "collect_evidence" => {
+            let cid = &hit.community_id;
+
+            // 1. Pull PCAP sessions — on-premise: OpenSearch directly
+            //                         cloud/remote sensor: ClickHouse cache (pushed by sensor agent)
+            let (pcap_sessions_json, pcap_count) = if pb.tenant_id == "default" {
+                let opensearch_url = std::env::var("OPENSEARCH_URL")
+                    .unwrap_or_else(|_| "http://localhost:9200".to_string());
+                let query = json!({
+                    "size": 5,
+                    "query": {"term": {"network.community_id": cid}},
+                    "_source": ["firstPacket","lastPacket","source.ip","source.port",
+                                "destination.ip","destination.port","ipProtocol",
+                                "network.bytes","network.packets","node"]
+                });
+                match Client::new()
+                    .post(format!("{}/arkime_sessions3-*/_search", opensearch_url))
+                    .json(&query)
+                    .timeout(Duration::from_secs(5))
+                    .send().await
+                {
+                    Ok(r) => {
+                        let data = r.json::<Value>().await.unwrap_or_default();
+                        let count = data["hits"]["total"]["value"].as_u64().unwrap_or(0);
+                        (data["hits"]["hits"].clone(), count)
+                    }
+                    Err(_) => (json!([]), 0),
+                }
+            } else {
+                // Cloud: PCAP sessions are synced from remote sensor into ClickHouse
+                let sessions = state.ch_storage
+                    .get_pcap_sessions(&pb.tenant_id, Some(cid), None, 5)
+                    .await
+                    .unwrap_or_default();
+                let count = sessions.len() as u64;
+                (json!(sessions), count)
+            };
+
+            let pcap_evidence = pcap_sessions_json;
+
+            // 2. Pull all ClickHouse events for this community_id
+            let ch_events = state.ch_storage
+                .get_events_by_community_id(cid, &pb.tenant_id)
+                .await
+                .unwrap_or_default();
+
+            // 3. Build evidence bundle
+            let evidence = json!({
+                "community_id": cid,
+                "collected_at": Utc::now().to_rfc3339(),
+                "flow": {"src": src, "dst": dst},
+                "risk": {"score": risk.score, "severity": risk.severity.as_str(), "tags": risk.tags},
+                "threat_intel": enrichment.is_malicious,
+                "pcap_sessions": pcap_evidence,
+                "pcap_total": pcap_count,
+                "ndr_events": ch_events,
+            });
+
+            // 4. Create case with evidence attached
+            let case_id = Uuid::new_v4().to_string();
+            let title = format!("Evidence: {} → {} [{}]", src, dst, risk.severity.as_str());
+            let description = evidence.to_string();
+
+            match state.ch_storage.insert_soar_case(
+                &case_id,
+                &title,
+                &description,
+                risk.severity.as_str(),
+                "Evidence Collected",
+                src,
+                dst,
+                cid,
+                &risk.tags,
+                &pb.tenant_id,
+            ).await {
+                Ok(_) => {
+                    let event_count = ch_events.as_array().map(|a| a.len()).unwrap_or(0);
+                    status = "success".to_string();
+                    detail = format!(
+                        "Evidence collected: {} PCAP sessions, {} NDR events → Case {}",
+                        pcap_count, event_count, case_id
+                    );
+                }
+                Err(e) => {
+                    detail = format!("Evidence collected but case insert failed: {}", e);
+                }
+            }
+        }
+
         _ => {
             detail = format!("Unknown action_type: {}", pb.action_type);
         }

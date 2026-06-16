@@ -370,3 +370,76 @@ CREATE TABLE IF NOT EXISTS ndr.soar_playbook_runs
 )
 ENGINE = MergeTree()
 ORDER BY (tenant_id, created_at);
+
+-- Evidence chain of custody log (per-tenant)
+CREATE TABLE IF NOT EXISTS ndr.evidence_log
+(
+    id              String DEFAULT generateUUIDv4(),
+    community_id    String,
+    bundle_id       String DEFAULT '',
+    action          String,
+    performed_by    String,
+    performed_at    DateTime DEFAULT now(),
+    severity        String DEFAULT '',
+    src_ip          String DEFAULT '',
+    dst_ip          String DEFAULT '',
+    case_id         String DEFAULT '',
+    notes           String DEFAULT '',
+    ip_address      String DEFAULT ''
+)
+ENGINE = MergeTree
+ORDER BY (community_id, performed_at);
+
+-- Evidence bundles (auto-captured or manual)
+CREATE TABLE IF NOT EXISTS ndr.evidence_bundles
+(
+    id              String DEFAULT generateUUIDv4(),
+    community_id    String,
+    file_path       String,
+    sha256          String,
+    size_bytes      UInt64 DEFAULT 0,
+    auto_captured   UInt8 DEFAULT 0,
+    captured_at     DateTime DEFAULT now(),
+    expires_at      DateTime DEFAULT now() + INTERVAL 90 DAY,
+    status          String DEFAULT 'ready',
+    legal_hold      UInt8 DEFAULT 0,
+    hold_reason     String DEFAULT '',
+    hold_set_by     String DEFAULT '',
+    src_ip          String DEFAULT '',
+    dst_ip          String DEFAULT '',
+    severity        String DEFAULT '',
+    alert_id        String DEFAULT ''
+)
+ENGINE = ReplacingMergeTree(captured_at)
+ORDER BY (community_id, id)
+TTL expires_at WHERE legal_hold = 0;
+
+-- Evidence annotations (analyst notes per evidence bundle)
+CREATE TABLE IF NOT EXISTS ndr.evidence_annotations
+(
+    id              String DEFAULT generateUUIDv4(),
+    bundle_id       String,
+    community_id    String,
+    author          String,
+    note            String,
+    tag             String DEFAULT '',
+    created_at      DateTime DEFAULT now()
+)
+ENGINE = MergeTree
+ORDER BY (bundle_id, created_at);
+
+-- Global shared IOC table (not per-tenant)
+CREATE TABLE IF NOT EXISTS ndr.shared_iocs
+(
+    id                  String DEFAULT generateUUIDv4(),
+    ioc_value           String,
+    ioc_type            String,
+    confidence          UInt8 DEFAULT 50,
+    first_seen          DateTime DEFAULT now(),
+    last_seen           DateTime DEFAULT now(),
+    tenant_hash         String DEFAULT '',
+    tags                String DEFAULT '',
+    description         String DEFAULT ''
+)
+ENGINE = ReplacingMergeTree(last_seen)
+ORDER BY (ioc_type, ioc_value);

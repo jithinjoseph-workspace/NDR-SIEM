@@ -10,6 +10,7 @@ mod enrichment;
 mod normalizer;
 mod scoring;
 mod storage;
+mod evidence;
 pub mod soar;
 
 use api::{websocket::ws_handler, AppState};
@@ -309,9 +310,22 @@ async fn main() {
         .route("/api/arkime/pcap/:id",           get(api::arkime_pcap_download))
         .route("/api/arkime/status",             get(api::arkime_status))
         .route("/api/arkime/link/:community_id", get(api::arkime_session_link))
+        .route("/api/events/by-cid",             get(api::get_events_by_cid))
         .route("/api/pcap/upload",               post(api::pcap_upload))
         .route("/api/pcap/pending",              get(api::pcap_pending))
         .route("/api/pcap/:session_id",          get(api::pcap_download_stored))
+        // Evidence routes
+.route("/api/evidence/bundles", get(api::list_evidence_bundles))
+.route("/api/evidence/bundle/:id", get(api::get_evidence_bundle))
+.route("/api/evidence/bundle/:id/verify", get(api::verify_evidence_bundle))
+.route("/api/evidence/bundle/:id/hold", post(api::set_evidence_legal_hold))
+.route("/api/evidence/bundle/:id/annotate", post(api::annotate_evidence_bundle))
+.route("/api/evidence/bundle/:id/annotations", get(api::get_evidence_annotations))
+.route("/api/evidence/:cid", get(api::download_evidence_bundle))
+.route("/api/evidence/:cid/log", get(api::get_evidence_log))
+.route("/api/evidence/:cid/timeline", get(api::get_evidence_timeline))
+.route("/api/evidence/iocs/check", get(api::check_shared_ioc))
+        
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
         .layer(RequestDecompressionLayer::new())

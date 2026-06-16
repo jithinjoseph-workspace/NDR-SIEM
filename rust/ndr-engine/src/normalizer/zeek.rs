@@ -13,10 +13,11 @@ fn now_ms() -> u64 {
 /// Normalise a raw Zeek JSON event from Vector into our canonical model.
 /// Zeek conn.log TSV is pre-parsed by Vector into JSON fields.
 pub fn normalize_zeek(raw: Value) -> Option<NormalizedEvent> {
-    // community_id is mandatory for correlation — drop without it
+    // community_id preferred; uid fallback for http/dns/ssl/files logs that don't carry it
     let community_id = raw.get("community_id")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty() && *s != "-")
+        .or_else(|| raw.get("uid").and_then(|v| v.as_str()))
         .map(String::from)?;
 
     // Malcolm maps id.orig_h → source.ip; Vector renames it to src_ip

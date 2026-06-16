@@ -23,6 +23,10 @@ export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: R
       const requiredRole = route.data?.['role'];
       const requiredPermission = route.data?.['permission'];
       if (!requiredRole) {
+        if (requiredPermission && !auth.hasPermission(requiredPermission)) {
+          router.navigate([auth.getDefaultRoute()]);
+          return false;
+        }
         return true;
       }
 

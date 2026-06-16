@@ -2,19 +2,20 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { NavigationEnd, Router, RouterModule } from '@angular/router';
 import { filter, Subscription } from 'rxjs';
-import { 
-  LayoutDashboard, 
-  Bell, 
-  FileText, 
-  Activity, 
-  ShieldAlert, 
-  Search, 
-  Database, 
+import {
+  LayoutDashboard,
+  Bell,
+  FileText,
+  Activity,
+  ShieldAlert,
+  Search,
+  Database,
   Settings,
   HelpCircle,
   Network,
   Zap,
   Users,
+  FolderSearch,
   LucideAngularModule
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
@@ -63,6 +64,8 @@ export class Sidebar implements OnInit, OnDestroy {
       if (user?.role === 'tenant_admin') {
         this.navItems.push({ label: 'Sensor Setup', route: '/setup', icon: Settings });
       }
+
+      this.navItems.push({ label: 'Evidence', route: '/evidence', icon: FolderSearch });
     } else {
       this.navItems = [
         { label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, permission: 'dashboard' },
@@ -81,6 +84,10 @@ export class Sidebar implements OnInit, OnDestroy {
 
       if (this.auth.hasPermission('soar')) {
         this.navItems.push({ label: 'SOAR', route: '/soar', icon: Zap, permission: 'soar' });
+      }
+
+      if (this.auth.hasPermission('alerts')) {
+        this.navItems.push({ label: 'Evidence', route: '/evidence', icon: FolderSearch, permission: 'alerts' });
       }
     }
 

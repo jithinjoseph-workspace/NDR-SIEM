@@ -6,7 +6,7 @@ pub fn evaluate_condition(
     cond_field: &str,
     cond_op: &str,
     cond_value: &str,
-    hit: &CorrelationHit,
+    _hit: &CorrelationHit,
     risk: &RiskResult,
     enrichment: &EnrichmentData,
 ) -> bool {

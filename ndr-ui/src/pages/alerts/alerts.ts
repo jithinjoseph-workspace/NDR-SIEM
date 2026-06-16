@@ -4,8 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
 import { ArkimeService } from '../../services/arkime/arkime';
+import { EvidenceService } from '../../services/evidence/evidence';
 import { Subscription } from 'rxjs';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import {
   LucideAngularModule,
   AlertTriangle,
@@ -53,8 +54,10 @@ export class Alerts implements OnInit, OnDestroy {
     private api: Api,
     private ws: Websocket,
     private route: ActivatedRoute,
+    private router: Router,
     private cdr: ChangeDetectorRef,
     private arkime: ArkimeService,
+    private evidenceService: EvidenceService,
   ) {}
 
   ngOnInit() {
@@ -76,7 +79,9 @@ export class Alerts implements OnInit, OnDestroy {
           severity: hit.severity?.toUpperCase() || 'LOW',
           source: `${hit.src || hit.suricata?.src || '-'} -> ${hit.dst || hit.suricata?.dst || '-'}`,
           description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
-          time: new Date().toLocaleTimeString(),
+          time: hit.ts
+            ? new Date(hit.ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
           score: hit.score,
           community_id: hit.cid || hit.community_id || '',
           src_country: this.formatOrigin(hit.src || hit.suricata?.src || hit.zeek?.src, hit.src_country),
@@ -253,6 +258,15 @@ export class Alerts implements OnInit, OnDestroy {
     const units = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+  }
+
+  downloadEvidence(communityId: string) {
+    this.evidenceService.downloadBundle(communityId);
+  }
+
+  viewTimeline(communityId: string) {
+    this.router.navigate(['/evidence'],
+      { queryParams: { cid: communityId } });
   }
 
   ngOnDestroy() {

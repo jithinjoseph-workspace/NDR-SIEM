@@ -104,6 +104,18 @@
                   (click)="openArkime(alert.community_id)">
                   <lucide-icon [name]="ExternalLinkIcon" class="w-4 h-4"></lucide-icon>
                 </button>
+                <button class="btn-evidence"
+                        (click)="downloadEvidence(alert.community_id)"
+                        title="Download Evidence Bundle"
+                        *ngIf="alert.community_id">
+                  📦 Evidence
+                </button>
+                <button class="btn-timeline"
+                        (click)="viewTimeline(alert.community_id)"
+                        title="View Attack Timeline"
+                        *ngIf="alert.community_id">
+                  ⏱ Timeline
+                </button>
               </div>
             </td>
           </tr>

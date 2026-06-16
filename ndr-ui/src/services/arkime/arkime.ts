@@ -8,7 +8,7 @@ export class ArkimeService {
 
   private headers(): HttpHeaders {
     return new HttpHeaders({
-      Authorization: `Bearer ${localStorage.getItem('token')}`,
+      Authorization: `Bearer ${localStorage.getItem('ndr_token')}`,
     });
   }
 
@@ -31,7 +31,7 @@ export class ArkimeService {
 
   // Unified download: tries stored file first (remote sensor), falls back to Arkime proxy (on-premise)
   downloadPcap(sessionId: string): void {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('ndr_token');
     window.open(`/api/pcap/${encodeURIComponent(sessionId)}?token=${token}`, '_blank');
   }
 }

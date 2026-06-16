@@ -103,5 +103,12 @@ export const routes: Routes = [
     loadComponent: () => import('../pages/support/support')
       .then(m => m.Support)
   },
+  {
+    path: 'evidence',
+    canActivate: [authGuard],
+    data: { permission: 'alerts' },
+    loadComponent: () => import('../pages/evidence/evidence')
+      .then(m => m.EvidenceComponent)
+  },
   { path: '**', redirectTo: 'login' }
 ];

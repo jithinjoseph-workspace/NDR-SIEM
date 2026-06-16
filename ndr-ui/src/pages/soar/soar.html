@@ -229,9 +229,91 @@
             <div class="text-sm font-mono text-white">{{ selectedCase.dst_ip }}</div>
           </div>
           <div class="col-span-2">
-            <div class="text-[10px] uppercase text-on-surface-variant mb-1">Description</div>
-            <div class="text-sm text-white">{{ selectedCase.description }}</div>
+            <div class="text-[10px] uppercase text-on-surface-variant mb-1">Community ID</div>
+            <div class="text-xs font-mono text-primary">{{ selectedCase.community_id }}</div>
           </div>
+        </div>
+
+        <!-- Evidence Panel — loads live for every case with a community_id -->
+        <div *ngIf="evidenceLoading" class="text-xs text-on-surface-variant animate-pulse py-2">Loading evidence...</div>
+        <ng-container *ngIf="liveEvidence && !evidenceLoading">
+
+          <!-- PCAP Sessions -->
+          <div class="bg-surface-container p-4 rounded-xl border border-outline/10">
+            <div class="text-[10px] uppercase text-on-surface-variant mb-3 font-bold flex justify-between">
+              <span>PCAP Sessions <span class="text-primary">({{ liveEvidence.pcap_total || 0 }})</span></span>
+            </div>
+            <div *ngIf="liveEvidence.pcap_sessions?.length > 0; else noPcap">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="text-on-surface-variant border-b border-outline/10">
+                    <th class="pb-2 text-left">Time</th>
+                    <th class="pb-2 text-left">Source</th>
+                    <th class="pb-2 text-left">Dest</th>
+                    <th class="pb-2 text-left">Proto</th>
+                    <th class="pb-2 text-right">Bytes</th>
+                    <th class="pb-2 text-right">Pkts</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-outline/5">
+                  <tr *ngFor="let s of liveEvidence.pcap_sessions" class="text-white">
+                    <td class="py-1.5 font-mono text-on-surface-variant">{{ formatPcapTime(s._source?.firstPacket) }}</td>
+                    <td class="py-1.5 font-mono">{{ s._source?.source?.ip }}:{{ s._source?.source?.port }}</td>
+                    <td class="py-1.5 font-mono">{{ s._source?.destination?.ip }}:{{ s._source?.destination?.port }}</td>
+                    <td class="py-1.5">{{ s._source?.ipProtocol === 6 ? 'TCP' : s._source?.ipProtocol === 17 ? 'UDP' : 'OTHER' }}</td>
+                    <td class="py-1.5 text-right text-on-surface-variant">{{ s._source?.['network']?.bytes || 0 }}</td>
+                    <td class="py-1.5 text-right text-on-surface-variant">{{ s._source?.['network']?.packets || 0 }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <ng-template #noPcap>
+              <p class="text-xs text-on-surface-variant">No PCAP sessions captured for this flow.</p>
+            </ng-template>
+          </div>
+
+          <!-- NDR Events -->
+          <div class="bg-surface-container p-4 rounded-xl border border-outline/10">
+            <div class="text-[10px] uppercase text-on-surface-variant mb-3 font-bold">
+              NDR Events <span class="text-primary">({{ liveEvidence.ndr_events?.length || 0 }})</span>
+            </div>
+            <div *ngIf="liveEvidence.ndr_events?.length > 0; else noEvents">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="text-on-surface-variant border-b border-outline/10">
+                    <th class="pb-2 text-left">Time</th>
+                    <th class="pb-2 text-left">Source</th>
+                    <th class="pb-2 text-left">Type</th>
+                    <th class="pb-2 text-left">Flow</th>
+                    <th class="pb-2 text-left">Proto</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-outline/5">
+                  <tr *ngFor="let e of liveEvidence.ndr_events" class="text-white">
+                    <td class="py-1.5 font-mono text-on-surface-variant">{{ formatTs(e.ts) }}</td>
+                    <td class="py-1.5">
+                      <span [class]="'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (e.source === 'zeek' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400')">
+                        {{ e.source | uppercase }}
+                      </span>
+                    </td>
+                    <td class="py-1.5 text-primary">{{ e.event_type || 'conn' }}</td>
+                    <td class="py-1.5 font-mono text-xs">{{ e.src_ip }}:{{ e.src_port }} → {{ e.dst_ip }}:{{ e.dst_port }}</td>
+                    <td class="py-1.5 uppercase text-on-surface-variant">{{ e.proto }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <ng-template #noEvents>
+              <p class="text-xs text-on-surface-variant">No NDR events found for this flow.</p>
+            </ng-template>
+          </div>
+
+        </ng-container>
+
+        <!-- Plain description always shown -->
+        <div class="bg-surface-container p-4 rounded-xl border border-outline/10">
+          <div class="text-[10px] uppercase text-on-surface-variant mb-1">Description</div>
+          <div class="text-sm text-white">{{ selectedCase.description }}</div>
         </div>
 
         <!-- Status Actions -->

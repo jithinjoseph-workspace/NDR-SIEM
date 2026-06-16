@@ -562,6 +562,11 @@ sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
 @load policy/frameworks/software/version-changes
 @load policy/protocols/conn/known-hosts
 @load policy/protocols/conn/known-services
+
+# Reduce inactivity timeouts so idle connections are logged quickly
+redef tcp_inactivity_timeout = 15 secs;
+redef udp_inactivity_timeout = 15 secs;
+redef icmp_inactivity_timeout = 10 secs;
 ZEEKCONF
 
 /opt/zeek/bin/zkg install zeek/corelight/zeek-community-id \

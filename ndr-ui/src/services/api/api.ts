@@ -446,4 +446,8 @@ export class Api {
   getSoarRuns(): Observable<any> {
     return this.http.get(`${this.baseUrl}/soar/runs`);
   }
+
+  getEventsByCid(cid: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/events/by-cid?cid=${encodeURIComponent(cid)}`);
+  }
 }

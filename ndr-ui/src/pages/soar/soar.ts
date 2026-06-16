@@ -2,6 +2,7 @@ import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
+import { ArkimeService } from '../../services/arkime/arkime';
 import {
     LucideAngularModule,
     Zap, Play, Pause, Settings,
@@ -104,7 +105,10 @@ export class Soar implements OnInit {
         }
     ];
 
-    constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+    evidenceLoading = false;
+    liveEvidence: any = null;
+
+    constructor(private api: Api, private arkime: ArkimeService, private cdr: ChangeDetectorRef) {}
 
     ngOnInit() {
         this.loadCases();
@@ -160,19 +164,52 @@ export class Soar implements OnInit {
     // --- Cases Logic ---
     openCase(c: any) {
         this.selectedCase = c;
+        this.liveEvidence = null;
         this.loadingCase = true;
+
         this.api.getSoarCaseComments(c.id).subscribe((res: any) => {
-            if (res.status === 'success') {
-                this.caseComments = res.data;
-            }
+            if (res.status === 'success') this.caseComments = res.data;
             this.loadingCase = false;
             this.cdr.detectChanges();
         });
+
+        // Auto-load live evidence for any case that has a community_id
+        if (c.community_id) {
+            this.evidenceLoading = true;
+            const cid = c.community_id;
+
+            // Fetch PCAP sessions + NDR events in parallel
+            this.arkime.getSessions({ cid, limit: 10 }).subscribe((pcap: any) => {
+                this.liveEvidence = this.liveEvidence || {};
+                this.liveEvidence.pcap_sessions = pcap.sessions || [];
+                this.liveEvidence.pcap_total = pcap.total || pcap.sessions?.length || 0;
+                this.evidenceLoading = false;
+                this.cdr.detectChanges();
+            });
+
+            this.api.getEventsByCid(cid).subscribe((res: any) => {
+                this.liveEvidence = this.liveEvidence || {};
+                this.liveEvidence.ndr_events = res.events || [];
+                this.cdr.detectChanges();
+            });
+        }
+    }
+
+    formatTs(ts: number): string {
+        if (!ts) return '-';
+        return new Date(ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    formatPcapTime(ms: number): string {
+        if (!ms) return '-';
+        return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
     closeCaseModal() {
         this.selectedCase = null;
         this.caseComments = [];
+        this.liveEvidence = null;
+        this.evidenceLoading = false;
     }
 
     updateCaseStatus(status: string) {

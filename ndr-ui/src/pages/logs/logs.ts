@@ -58,15 +58,21 @@ export class Logs implements OnInit, OnDestroy {
     // Real-time new events via WebSocket
     this.subs.push(
       this.ws.events$.subscribe((event: any) => {
+        const evtTime = event.ts
+          ? new Date(event.ts * 1000).toLocaleTimeString('en-US', {
+              hour: '2-digit', minute: '2-digit', second: '2-digit'
+            })
+          : new Date().toLocaleTimeString('en-US', {
+              hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
         const log = {
-          ts: new Date().toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit'
-          }),
+          ts: evtTime,
           proto: event.proto?.toUpperCase() || '-',
           src: event.src || '-',
           dst: event.dst || '-',
           source: event.type || '-',
           action: 'ALLOW',
+          event_type: event.event_type || '-',
         };
         this.logs.unshift(log);
         if (this.logs.length > 200) this.logs.pop();

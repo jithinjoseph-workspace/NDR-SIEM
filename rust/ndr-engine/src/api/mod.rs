@@ -27,7 +27,7 @@ use crate::normalizer::NormalizedEvent;
 use crate::scoring::{conn_state_description, RiskScorer};
 use crate::storage::SqliteStorage;
 use crate::storage::ClickhouseStorage;
-use axum::{extract::State, Json, http::StatusCode};
+use axum::{extract::{State, Query}, Json, http::StatusCode};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -36,7 +36,7 @@ use std::env;
 use std::time::Duration;
 use rdkafka::producer::Producer;
 use rdkafka::util::Timeout;
-
+use crate::evidence;
 use jsonwebtoken::{encode, decode, Header, 
     Validation, EncodingKey, DecodingKey};
 
@@ -82,6 +82,30 @@ static JIRA_DEDUP: std::sync::LazyLock<Mutex<HashMap<String, i64>>> =
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
         .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string())
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i+1..i+3]) {
+                if let Ok(b) = u8::from_str_radix(hex, 16) {
+                    out.push(b as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        } else if bytes[i] == b'+' {
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 fn kafka_health_status(state: &AppState) -> &'static str {
@@ -159,6 +183,7 @@ pub struct AuthClaims {
 }
 
 // Accepts token from Authorization header OR ?token= query param (needed for window.open downloads)
+#[allow(dead_code)]
 pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
     let secret = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "ndr-secret-key-2026".to_string());
@@ -387,11 +412,14 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
             let cs_desc  = conn_state_description(cs);
             let svc      = event.network_protocol.as_deref().unwrap_or("-");
             let proto    = event.proto.as_deref().unwrap_or("-");
+            let ts       = event.raw.get("ts").and_then(|v| v.as_f64()).unwrap_or(0.0);
             info!("🟢 Zeek {} | {}→{} [{}] {} | CID: {}",
                 svc, src, dst, proto, cs,
                 event.community_id.as_deref().unwrap_or("?"));
             json!({
                 "type": "zeek",
+                "ts":   ts,
+                "event_type": if svc != "-" { svc } else { cs },
                 "cid":  event.community_id,
                 "src":  src, "dst": dst,
                 "proto": event.proto,
@@ -403,10 +431,16 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
         }
         crate::normalizer::EventSource::Suricata => {
             let et = event.event_type.as_deref().unwrap_or("-");
+            let ts = event.raw.get("timestamp")
+                .and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.timestamp() as f64)
+                .unwrap_or(0.0);
             info!("🔵 Suricata {} | {}→{} | CID: {}",
                 et, src, dst, event.community_id.as_deref().unwrap_or("?"));
             json!({
                 "type": "suricata",
+                "ts":   ts,
                 "event_type": et,
                 "cid":  event.community_id,
                 "src":  src, "dst": dst,
@@ -491,6 +525,71 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         tags:     raw_risk.tags,
         reasons:  raw_risk.reasons,
     };
+
+    // Auto-capture evidence for HIGH and CRITICAL hits
+    let severity_str = risk.severity.as_str().to_string();
+    if matches!(severity_str.as_str(), "HIGH" | "CRITICAL") {
+        let cid = hit.community_id.clone();
+        let tenant = tenant_id.clone();
+        let ch = state.ch_storage.clone();
+        let opensearch_url = std::env::var("OPENSEARCH_URL")
+            .unwrap_or_else(|_| "http://localhost:9200".to_string());
+        let arkime_url = std::env::var("ARKIME_URL").unwrap_or_default();
+        let arkime_pass = std::env::var("ARKIME_PASS")
+            .unwrap_or_else(|_| "admin".to_string());
+        let alert_json = serde_json::json!({
+            "community_id": cid,
+            "tenant_id": tenant,
+            "severity": severity_str,
+            "auto_captured_at": chrono::Utc::now().to_rfc3339()
+        });
+
+        tokio::spawn(async move {
+            match crate::evidence::build_evidence_bundle(
+                &opensearch_url,
+                &arkime_url,
+                &arkime_pass,
+                &cid,
+                alert_json,
+                &tenant,
+                None,
+            ).await {
+                Ok((zip_bytes, sha256, _manifest)) => {
+                    // Save to disk
+                    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                    let dir = format!("/opt/ndr/evidence/{}/{}", tenant, date);
+                    let _ = tokio::fs::create_dir_all(&dir).await;
+                    let bundle_id = uuid::Uuid::new_v4().to_string();
+                    let file_path = format!("{}/{}.zip", dir, bundle_id);
+                    let size = zip_bytes.len() as u64;
+
+                    if tokio::fs::write(&file_path, &zip_bytes).await.is_ok() {
+                        let _ = ch.save_evidence_bundle(
+                            &tenant, &bundle_id, &cid,
+                            &file_path, &sha256, size,
+                            1, // auto_captured
+                            90, // expires in 90 days
+                            "", "", &severity_str, "",
+                        ).await;
+                        let _ = ch.log_evidence_action(
+                            &tenant, &cid, &bundle_id,
+                            "auto_captured", "auto",
+                            &severity_str, "", "",
+                            "Automatically captured on HIGH/CRITICAL alert",
+                            "",
+                        ).await;
+                        tracing::info!(
+                            "Auto-captured evidence bundle {} for cid {}",
+                            bundle_id, cid
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Auto-capture failed for {}: {}", cid, e);
+                }
+            }
+        });
+    }
 
     // SIGMA detection on both sides
     let mut detections = state.detection.read().await.check(&hit.zeek);
@@ -962,8 +1061,11 @@ for integration in &integrations {
 }
 } // end alert_threshold check
 
+    let hit_ts = hit.zeek.timestamp as f64 / 1000.0;
+
     let mut hit_msg = json!({
         "type":            "hit",
+        "ts":              hit_ts,
         "cid":             hit.community_id,
         "event_type":      hit.suricata.event_type,
         "score":           risk.score,
@@ -1158,6 +1260,36 @@ pub async fn get_recent_events(State(state): State<AppState>, headers: axum::htt
             tracing::warn!("Recent events query error: {}", e);
             Json(json!([]))
         }
+    }
+}
+
+pub async fn get_events_by_cid(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let cid = raw_query
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| {
+            let mut p = kv.splitn(2, '=');
+            let k = p.next()?;
+            let v = p.next().unwrap_or("");
+            if k == "cid" { Some(percent_decode(v)) } else { None }
+        })
+        .unwrap_or_default();
+
+    if cid.is_empty() {
+        return Json(json!({"status":"error","message":"cid required"}));
+    }
+    match state.ch_storage.get_events_by_community_id(&cid, &claims.tenant_id).await {
+        Ok(events) => Json(json!({"status":"ok","events":events})),
+        Err(_)     => Json(json!({"status":"ok","events":[]})),
     }
 }
 
@@ -4499,7 +4631,11 @@ pub async fn arkime_sessions(
         .split('&')
         .filter_map(|kv| {
             let mut parts = kv.splitn(2, '=');
-            Some((parts.next()?.to_string(), parts.next().unwrap_or("").to_string()))
+            let k = parts.next()?.to_string();
+            let raw_v = parts.next().unwrap_or("");
+            // percent-decode the value so community_id like "1:abc=" arrives intact
+            let v = percent_decode(raw_v);
+            Some((k, v))
         })
         .collect();
 
@@ -5361,5 +5497,478 @@ pub async fn get_soar_runs(
     match state.ch_storage.get_soar_playbook_runs(&claims.tenant_id).await {
         Ok(runs) => Json(json!({"status": "success", "data": runs})),
         Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+
+
+// ============================================================
+// EVIDENCE MODULE
+// ============================================================
+
+
+
+/// GET /api/evidence/:community_id
+/// Build and return a ZIP evidence bundle for a community_id.
+pub async fn download_evidence_bundle(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(community_id): axum::extract::Path<String>,
+) -> impl axum::response::IntoResponse {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::http::HeaderMap::new(),
+            axum::body::Bytes::new(),
+        ),
+    };
+
+    // Get alert context for this community_id
+    let alert_json = state.ch_storage
+        .get_hit_by_community_id(&claims.tenant_id, &community_id)
+        .await
+        .unwrap_or_default()
+        .unwrap_or(serde_json::json!({"community_id": community_id}));
+
+    // Determine PCAP source (on-premise vs remote)
+    let opensearch_url = if claims.tenant_id == "default" {
+        std::env::var("OPENSEARCH_URL")
+            .unwrap_or_else(|_| String::from("http://localhost:9200"))
+    } else {
+        String::new()
+    };
+
+    let arkime_url = std::env::var("ARKIME_URL").unwrap_or_default();
+    let arkime_pass = std::env::var("ARKIME_PASS")
+        .unwrap_or_else(|_| String::from("admin"));
+
+    // For remote tenants, check if we have an uploaded PCAP
+    let pcap_file_path = if claims.tenant_id != "default" {
+        state.ch_storage
+            .get_pcap_file_path_by_community_id(&claims.tenant_id, &community_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        None
+    };
+
+    match evidence::build_evidence_bundle(
+        &opensearch_url,
+        &arkime_url,
+        &arkime_pass,
+        &community_id,
+        alert_json,
+        &claims.tenant_id,
+        pcap_file_path,
+    ).await {
+        Ok((zip_bytes, bundle_sha256, _manifest)) => {
+            // Log to chain of custody
+            let _ = state.ch_storage.log_evidence_action(
+                &claims.tenant_id,
+                &community_id,
+                "",
+                "downloaded",
+                &claims.sub,
+                "",
+                "", "",
+                "Manual evidence download",
+                headers.get("x-forwarded-for")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("unknown"),
+            ).await;
+
+            let filename = format!(
+                "evidence_{}_{}.zip",
+                community_id.replace(':', "_").replace('/', "_"),
+                chrono::Utc::now().format("%Y%m%d_%H%M%S")
+            );
+
+            let mut resp_headers = axum::http::HeaderMap::new();
+            resp_headers.insert(
+                "Content-Type",
+                "application/zip".parse().unwrap()
+            );
+            resp_headers.insert(
+                "Content-Disposition",
+                format!("attachment; filename=\"{}\"", filename)
+                    .parse().unwrap()
+            );
+            resp_headers.insert(
+                "X-Evidence-SHA256",
+                bundle_sha256.parse().unwrap()
+            );
+
+            (
+                axum::http::StatusCode::OK,
+                resp_headers,
+                axum::body::Bytes::from(zip_bytes),
+            )
+        }
+        Err(e) => {
+            tracing::error!("Evidence bundle error: {}", e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::http::HeaderMap::new(),
+                axum::body::Bytes::new(),
+            )
+        }
+    }
+}
+
+/// GET /api/evidence/bundles
+/// List all evidence bundles for this tenant.
+pub async fn list_evidence_bundles(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let limit = params.get("limit")
+        .and_then(|l| l.parse::<u32>().ok())
+        .unwrap_or(50);
+    let bundles = state.ch_storage
+        .list_evidence_bundles(&claims.tenant_id, limit)
+        .await.unwrap_or_default();
+    Json(json!({"bundles": bundles, "count": bundles.len()}))
+}
+
+/// GET /api/evidence/bundle/:bundle_id
+/// Get a specific bundle by ID.
+pub async fn get_evidence_bundle(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(bundle_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    match state.ch_storage
+        .get_evidence_bundle(&claims.tenant_id, &bundle_id)
+        .await
+    {
+        Ok(Some(b)) => Json(json!({"bundle": b})),
+        Ok(None) => Json(json!({"error": "not found"})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+/// GET /api/evidence/:community_id/log
+/// Return full chain-of-custody log.
+pub async fn get_evidence_log(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(community_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let log = state.ch_storage
+        .get_evidence_log(&claims.tenant_id, &community_id)
+        .await.unwrap_or_default();
+    Json(json!({"community_id": community_id, "log": log}))
+}
+
+/// GET /api/evidence/bundle/:bundle_id/verify
+/// Re-hash the file and compare to stored hash.
+pub async fn verify_evidence_bundle(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(bundle_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let bundle = match state.ch_storage
+        .get_evidence_bundle(&claims.tenant_id, &bundle_id)
+        .await
+    {
+        Ok(Some(b)) => b,
+        _ => return Json(json!({"error": "bundle not found"})),
+    };
+
+    let file_path = bundle["file_path"].as_str().unwrap_or("");
+    let stored_sha256 = bundle["sha256"].as_str().unwrap_or("");
+
+    let (matches, computed_sha256) =
+        evidence::verify_bundle_integrity(file_path, stored_sha256)
+        .await;
+
+    let status = if matches { "VERIFIED" } else { "TAMPERED_OR_CORRUPTED" };
+
+    // Log the verification
+    let _ = state.ch_storage.log_evidence_action(
+        &claims.tenant_id,
+        bundle["community_id"].as_str().unwrap_or(""),
+        &bundle_id,
+        &format!("integrity_check:{}", status),
+        &claims.sub,
+        "", "", "",
+        &format!("stored_sha256={} computed_sha256={}", stored_sha256, computed_sha256),
+        "",
+    ).await;
+
+    Json(json!({
+        "bundle_id": bundle_id,
+        "status": status,
+        "stored_sha256": stored_sha256,
+        "computed_sha256": computed_sha256,
+        "verified_at": chrono::Utc::now().to_rfc3339(),
+        "verified_by": claims.sub
+    }))
+}
+
+/// POST /api/evidence/bundle/:bundle_id/hold
+/// Set or clear legal hold on a bundle.
+/// Body: { "hold": true, "reason": "Active criminal investigation case #1234" }
+pub async fn set_evidence_legal_hold(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(bundle_id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let hold = payload["hold"].as_bool().unwrap_or(true);
+    let reason = payload["reason"].as_str().unwrap_or("").to_string();
+
+    if hold && reason.is_empty() {
+        return Json(json!({
+            "error": "reason required when setting legal hold"
+        }));
+    }
+
+    let _ = state.ch_storage.set_legal_hold(
+        &claims.tenant_id,
+        &bundle_id,
+        if hold { 1 } else { 0 },
+        &reason,
+        &claims.sub,
+    ).await;
+
+    let action = if hold {
+        "legal_hold_set"
+    } else {
+        "legal_hold_cleared"
+    };
+    let _ = state.ch_storage.log_evidence_action(
+        &claims.tenant_id, "", &bundle_id,
+        action, &claims.sub,
+        "", "", "", &reason, "",
+    ).await;
+
+    Json(json!({
+        "bundle_id": bundle_id,
+        "legal_hold": hold,
+        "reason": reason,
+        "set_by": claims.sub,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    }))
+}
+
+/// POST /api/evidence/bundle/:bundle_id/annotate
+/// Add analyst note/tag to a bundle.
+/// Body: { "note": "Confirmed C2 callback", "tag": "confirmed_malicious" }
+pub async fn annotate_evidence_bundle(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(bundle_id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let note = payload["note"].as_str().unwrap_or("").to_string();
+    let tag = payload["tag"].as_str().unwrap_or("").to_string();
+    let community_id = payload["community_id"]
+        .as_str().unwrap_or("").to_string();
+
+    let _ = state.ch_storage.add_evidence_annotation(
+        &claims.tenant_id,
+        &bundle_id,
+        &community_id,
+        &claims.sub,
+        &note,
+        &tag,
+    ).await;
+
+    let _ = state.ch_storage.log_evidence_action(
+        &claims.tenant_id, &community_id, &bundle_id,
+        "annotated", &claims.sub,
+        "", "", "", &note, "",
+    ).await;
+
+    Json(json!({"status": "ok", "bundle_id": bundle_id}))
+}
+
+/// GET /api/evidence/bundle/:bundle_id/annotations
+pub async fn get_evidence_annotations(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(bundle_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let annotations = state.ch_storage
+        .get_annotations(&claims.tenant_id, &bundle_id)
+        .await.unwrap_or_default();
+    Json(json!({"bundle_id": bundle_id, "annotations": annotations}))
+}
+
+/// GET /api/evidence/:community_id/timeline
+/// Attack story reconstruction — stitch together events in time order.
+pub async fn get_evidence_timeline(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(community_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+
+    // 1. Get the primary alert/hit
+    let hit = state.ch_storage
+        .get_hit_by_community_id(&claims.tenant_id, &community_id)
+        .await.unwrap_or_default()
+        .unwrap_or(json!({}));
+
+    let src_ip = hit["src_ip"].as_str().unwrap_or("").to_string();
+    let dst_ip = hit["dst_ip"].as_str().unwrap_or("").to_string();
+    let alert_time = hit["timestamp"].as_str().unwrap_or("").to_string();
+    let severity = hit["severity"].as_str().unwrap_or("").to_string();
+    let rule_name = hit["rule_name"].as_str().unwrap_or("").to_string();
+
+    // 2. Get related hits for same src_ip in ±5min window
+    let related = state.ch_storage
+        .get_related_hits_by_ip(&claims.tenant_id, &src_ip, &alert_time, 5)
+        .await.unwrap_or_default();
+
+    // 3. Get OpenSearch session info (on-premise)
+    let session_info = if claims.tenant_id == "default" {
+        let opensearch_url = std::env::var("OPENSEARCH_URL")
+            .unwrap_or_else(|_| "http://localhost:9200".to_string());
+        let http = reqwest::Client::new();
+        match http.post(format!(
+            "{}/arkime_sessions3-*/_search", opensearch_url
+        ))
+        .json(&json!({
+            "query": {"term": {"network.community_id": community_id}},
+            "size": 1
+        }))
+        .send().await {
+            Ok(r) => r.json::<Value>().await.unwrap_or(json!({})),
+            Err(_) => json!({})
+        }
+    } else {
+        json!({})
+    };
+
+    let session_src = &session_info["hits"]["hits"][0]["_source"];
+    let src_bytes = session_src["network"]["bytes_toserver"]
+        .as_u64().unwrap_or(0);
+    let dst_bytes = session_src["network"]["bytes_toclient"]
+        .as_u64().unwrap_or(0);
+    let protocol = session_src["network"]["protocol"]
+        .as_str().unwrap_or("unknown");
+
+    // 4. Build ordered event timeline
+    let mut events: Vec<Value> = vec![
+        json!({
+            "time": alert_time,
+            "type": "connection",
+            "description": format!(
+                "{} → {} established {} connection",
+                src_ip, dst_ip, protocol
+            ),
+            "community_id": community_id,
+            "bytes_sent": src_bytes,
+            "bytes_received": dst_bytes
+        }),
+        json!({
+            "time": alert_time,
+            "type": "alert",
+            "description": format!(
+                "NDR rule triggered: '{}' — severity {}",
+                rule_name, severity
+            ),
+            "rule": rule_name,
+            "severity": severity
+        }),
+    ];
+
+    // Add related events
+    for rel in &related {
+        if rel["community_id"].as_str() != Some(&community_id) {
+            events.push(json!({
+                "time": rel["timestamp"],
+                "type": "related_alert",
+                "description": format!(
+                    "Related activity: {} → {} ({})",
+                    rel["src_ip"].as_str().unwrap_or(""),
+                    rel["dst_ip"].as_str().unwrap_or(""),
+                    rel["rule_name"].as_str().unwrap_or("")
+                ),
+                "community_id": rel["community_id"]
+            }));
+        }
+    }
+
+    // 5. Build attack narrative
+    let narrative = format!(
+        "At {}, host {} established a {} connection to {}. \
+        NDR engine triggered rule '{}' with {} severity. \
+        {} related activity events were detected for the same \
+        source host within a 5-minute window, suggesting {}.",
+        alert_time, src_ip, protocol, dst_ip,
+        rule_name, severity,
+        related.len(),
+        if related.len() > 3 {
+            "possible lateral movement or automated attack pattern"
+        } else {
+            "isolated activity"
+        }
+    );
+
+    Json(json!({
+        "community_id": community_id,
+        "narrative": narrative,
+        "primary_alert": hit,
+        "events": events,
+        "related_sessions_count": related.len(),
+        "src_ip": src_ip,
+        "dst_ip": dst_ip,
+        "protocol": protocol,
+        "generated_at": chrono::Utc::now().to_rfc3339()
+    }))
+}
+
+/// GET /api/evidence/iocs/check?value=<ip_or_domain>
+/// Check a value against the shared IOC database.
+pub async fn check_shared_ioc(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let _ = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let value = params.get("value").map(String::as_str).unwrap_or("");
+    match state.ch_storage.check_shared_ioc(value).await {
+        Ok(Some(ioc)) => Json(json!({"found": true, "ioc": ioc})),
+        Ok(None) => Json(json!({"found": false})),
+        Err(e) => Json(json!({"error": e.to_string()})),
     }
 }

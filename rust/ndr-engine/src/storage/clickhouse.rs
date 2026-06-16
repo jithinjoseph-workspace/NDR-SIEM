@@ -664,13 +664,14 @@ pub async fn create_tenant(
                 continue;
             }
 
-            // Skip main tables and other configurations not needed inside individual tenant databases
-            if stmt.contains("CREATE DATABASE IF NOT EXISTS ndr") 
-                || stmt.contains("ndr.users") 
-                || stmt.contains("ndr.tenants") 
+            // Skip global-only tables not needed inside individual tenant databases
+            if stmt.contains("CREATE DATABASE IF NOT EXISTS ndr")
+                || stmt.contains("ndr.users")
+                || stmt.contains("ndr.tenants")
                 || stmt.contains("ndr.announcements")
                 || stmt.contains("ndr.announcement_reads")
                 || stmt.contains("ndr.rules_state")
+                || stmt.contains("ndr.shared_iocs")
             {
                 continue;
             }
@@ -1820,6 +1821,37 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         })).collect())
     }
 
+    pub async fn get_events_by_community_id(
+        &self, community_id: &str, tenant_id: &str
+    ) -> anyhow::Result<serde_json::Value> {
+        let db_name = tenant_db(tenant_id);
+        let cid = sql_escape(community_id);
+        let rows = self.client
+            .query(&format!(
+                "SELECT source, event_type, src_ip, dst_ip, \
+                        src_port, dst_port, proto, \
+                        toUnixTimestamp(toDateTime(timestamp)) AS ts \
+                 FROM {}.ndr_events \
+                 WHERE community_id = '{}' \
+                 ORDER BY timestamp DESC LIMIT 50",
+                db_name, cid
+            ))
+            .fetch_all::<(String, String, String, String, u16, u16, String, u32)>()
+            .await
+            .unwrap_or_default();
+
+        Ok(serde_json::json!(rows.iter().map(|r| serde_json::json!({
+            "source":     r.0,
+            "event_type": r.1,
+            "src_ip":     r.2,
+            "dst_ip":     r.3,
+            "src_port":   r.4,
+            "dst_port":   r.5,
+            "proto":      r.6,
+            "ts":         r.7,
+        })).collect::<Vec<_>>()))
+    }
+
     pub async fn get_severity_by_tenant(
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
@@ -2800,4 +2832,384 @@ pub async fn clear_sensor_command(
             "status": r.4, "detail": r.5, "created_at": r.6
         })).collect())
     }
+
+
+
+
+
+// ---- EVIDENCE LOG ----
+
+pub async fn log_evidence_action(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+    bundle_id: &str,
+    action: &str,
+    performed_by: &str,
+    severity: &str,
+    src_ip: &str,
+    dst_ip: &str,
+    notes: &str,
+    requester_ip: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "INSERT INTO {}.evidence_log
+         (community_id,bundle_id,action,performed_by,
+          severity,src_ip,dst_ip,notes,ip_address)
+         VALUES ('{}','{}','{}','{}','{}','{}','{}','{}','{}')",
+        db, community_id, bundle_id, action,
+        performed_by, severity, src_ip, dst_ip,
+        notes, requester_ip
+    )).execute().await?;
+    Ok(())
+}
+
+pub async fn get_evidence_log(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct EvidenceLogRow {
+        id:           String,
+        community_id: String,
+        bundle_id:    String,
+        action:       String,
+        performed_by: String,
+        performed_at: String,
+        severity:     String,
+        src_ip:       String,
+        dst_ip:       String,
+        notes:        String,
+        ip_address:   String,
+    }
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT id, community_id, bundle_id, action,
+         performed_by, toString(performed_at) as performed_at,
+         severity, src_ip, dst_ip, notes, ip_address
+         FROM {}.evidence_log
+         WHERE community_id = '{}'
+         ORDER BY performed_at DESC",
+        db, community_id
+    )).fetch_all::<EvidenceLogRow>().await?;
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "id": r.id, "community_id": r.community_id, "bundle_id": r.bundle_id,
+        "action": r.action, "performed_by": r.performed_by,
+        "performed_at": r.performed_at, "severity": r.severity,
+        "src_ip": r.src_ip, "dst_ip": r.dst_ip,
+        "notes": r.notes, "ip_address": r.ip_address
+    })).collect())
+}
+
+// ---- EVIDENCE BUNDLES ----
+
+pub async fn save_evidence_bundle(
+    &self,
+    tenant_id: &str,
+    id: &str,
+    community_id: &str,
+    file_path: &str,
+    sha256: &str,
+    size_bytes: u64,
+    auto_captured: u8,
+    expires_days: u32,
+    src_ip: &str,
+    dst_ip: &str,
+    severity: &str,
+    alert_id: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "INSERT INTO {}.evidence_bundles
+         (id,community_id,file_path,sha256,size_bytes,
+          auto_captured,expires_at,src_ip,dst_ip,
+          severity,alert_id)
+         VALUES ('{}','{}','{}','{}',{},
+          {},now() + INTERVAL {} DAY,'{}','{}','{}','{}')",
+        db, id, community_id, file_path, sha256,
+        size_bytes, auto_captured, expires_days,
+        src_ip, dst_ip, severity, alert_id
+    )).execute().await?;
+    Ok(())
+}
+
+pub async fn get_evidence_bundle(
+    &self,
+    tenant_id: &str,
+    bundle_id: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct EvidenceBundleRow {
+        id:             String,
+        community_id:   String,
+        file_path:      String,
+        sha256:         String,
+        size_bytes:     u64,
+        auto_captured:  u8,
+        captured_at:    String,
+        expires_at:     String,
+        status:         String,
+        legal_hold:     u8,
+        hold_reason:    String,
+        src_ip:         String,
+        dst_ip:         String,
+        severity:       String,
+    }
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT id, community_id, file_path, sha256,
+         size_bytes, auto_captured,
+         toString(captured_at) as captured_at,
+         toString(expires_at) as expires_at,
+         status, legal_hold, hold_reason,
+         src_ip, dst_ip, severity
+         FROM {}.evidence_bundles FINAL
+         WHERE id = '{}' LIMIT 1",
+        db, bundle_id
+    )).fetch_all::<EvidenceBundleRow>().await?;
+    Ok(rows.first().map(|r| serde_json::json!({
+        "id": r.id, "community_id": r.community_id, "file_path": r.file_path,
+        "sha256": r.sha256, "size_bytes": r.size_bytes,
+        "auto_captured": r.auto_captured == 1,
+        "captured_at": r.captured_at, "expires_at": r.expires_at,
+        "status": r.status, "legal_hold": r.legal_hold == 1,
+        "hold_reason": r.hold_reason,
+        "src_ip": r.src_ip, "dst_ip": r.dst_ip, "severity": r.severity
+    })))
+}
+
+pub async fn list_evidence_bundles(
+    &self,
+    tenant_id: &str,
+    limit: u32,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct EvidenceBundleListRow {
+        id:            String,
+        community_id:  String,
+        sha256:        String,
+        size_bytes:    u64,
+        auto_captured: u8,
+        captured_at:   String,
+        expires_at:    String,
+        status:        String,
+        legal_hold:    u8,
+        src_ip:        String,
+        dst_ip:        String,
+        severity:      String,
+    }
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT id, community_id, sha256, size_bytes,
+         auto_captured, toString(captured_at) as captured_at,
+         toString(expires_at) as expires_at,
+         status, legal_hold, src_ip, dst_ip, severity
+         FROM {}.evidence_bundles FINAL
+         ORDER BY captured_at DESC LIMIT {}",
+        db, limit
+    )).fetch_all::<EvidenceBundleListRow>().await?;
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "id": r.id, "community_id": r.community_id, "sha256": r.sha256,
+        "size_bytes": r.size_bytes, "auto_captured": r.auto_captured == 1,
+        "captured_at": r.captured_at, "expires_at": r.expires_at,
+        "status": r.status, "legal_hold": r.legal_hold == 1,
+        "src_ip": r.src_ip, "dst_ip": r.dst_ip, "severity": r.severity
+    })).collect())
+}
+
+pub async fn set_legal_hold(
+    &self,
+    tenant_id: &str,
+    bundle_id: &str,
+    hold: u8,
+    reason: &str,
+    set_by: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "ALTER TABLE {}.evidence_bundles
+         UPDATE legal_hold={}, hold_reason='{}',
+         hold_set_by='{}'
+         WHERE id='{}'",
+        db, hold, reason, set_by, bundle_id
+    )).execute().await?;
+    Ok(())
+}
+
+pub async fn add_evidence_annotation(
+    &self,
+    tenant_id: &str,
+    bundle_id: &str,
+    community_id: &str,
+    author: &str,
+    note: &str,
+    tag: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "INSERT INTO {}.evidence_annotations
+         (bundle_id,community_id,author,note,tag)
+         VALUES ('{}','{}','{}','{}','{}')",
+        db, bundle_id, community_id, author, note, tag
+    )).execute().await?;
+    Ok(())
+}
+
+pub async fn get_annotations(
+    &self,
+    tenant_id: &str,
+    bundle_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT id, author, note, tag,
+         toString(created_at) as created_at
+         FROM {}.evidence_annotations
+         WHERE bundle_id='{}'
+         ORDER BY created_at DESC",
+        db, bundle_id
+    )).fetch_all::<(String,String,String,String,String)>().await?;
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "id": r.0, "author": r.1, "note": r.2,
+        "tag": r.3, "created_at": r.4
+    })).collect())
+}
+
+// ---- SHARED IOCs ----
+
+pub async fn upsert_shared_ioc(
+    &self,
+    ioc_value: &str,
+    ioc_type: &str,
+    confidence: u8,
+    tenant_hash: &str,
+    tags: &str,
+    description: &str,
+) -> anyhow::Result<()> {
+    self.client.query(&format!(
+        "INSERT INTO ndr.shared_iocs
+         (ioc_value,ioc_type,confidence,
+          tenant_hash,tags,description)
+         VALUES ('{}','{}',{},'{}','{}','{}')",
+        ioc_value, ioc_type, confidence,
+        tenant_hash, tags, description
+    )).execute().await?;
+    Ok(())
+}
+
+pub async fn check_shared_ioc(
+    &self,
+    ioc_value: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let rows = self.client.query(&format!(
+        "SELECT ioc_value, ioc_type, confidence,
+         toString(first_seen) as first_seen,
+         toString(last_seen) as last_seen,
+         tags, description
+         FROM ndr.shared_iocs FINAL
+         WHERE ioc_value='{}' LIMIT 1",
+        ioc_value
+    )).fetch_all::<(String,String,u8,String,
+        String,String,String)>().await?;
+    Ok(rows.first().map(|r| serde_json::json!({
+        "ioc_value": r.0, "ioc_type": r.1,
+        "confidence": r.2, "first_seen": r.3,
+        "last_seen": r.4, "tags": r.5,
+        "description": r.6
+    })))
+}
+
+
+
+pub async fn get_hit_by_community_id(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct HitByCidRow {
+        community_id: String,
+        src_ip:       String,
+        dst_ip:       String,
+        src_port:     u16,
+        dst_port:     u16,
+        proto:        String,
+        timestamp:    String,
+        severity:     String,
+        rule_name:    String,
+        alert_msg:    String,
+    }
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT community_id, src_ip, dst_ip,
+         src_port, dst_port, proto,
+         toString(timestamp) as timestamp,
+         severity, rule_name, alert_msg
+         FROM {}.ndr_hits
+         WHERE community_id = '{}'
+         ORDER BY timestamp DESC LIMIT 1",
+        db, community_id
+    )).fetch_all::<HitByCidRow>().await?;
+    Ok(rows.first().map(|r| serde_json::json!({
+        "community_id": r.community_id, "src_ip": r.src_ip, "dst_ip": r.dst_ip,
+        "src_port": r.src_port, "dst_port": r.dst_port, "proto": r.proto,
+        "timestamp": r.timestamp, "severity": r.severity,
+        "rule_name": r.rule_name, "alert_msg": r.alert_msg
+    })))
+}
+
+pub async fn get_related_hits_by_ip(
+    &self,
+    tenant_id: &str,
+    src_ip: &str,
+    around_time: &str,
+    window_minutes: i64,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT community_id, src_ip, dst_ip,
+         toString(timestamp) as timestamp,
+         severity, rule_name
+         FROM {}.ndr_hits
+         WHERE src_ip = '{}'
+         AND timestamp BETWEEN
+             toDateTime('{}') - INTERVAL {} MINUTE
+             AND toDateTime('{}') + INTERVAL {} MINUTE
+         ORDER BY timestamp ASC
+         LIMIT 20",
+        db, src_ip, around_time, window_minutes,
+        around_time, window_minutes
+    )).fetch_all::<(String,String,String,String,String,String)>()
+    .await?;
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "community_id": r.0, "src_ip": r.1, "dst_ip": r.2,
+        "timestamp": r.3, "severity": r.4, "rule_name": r.5
+    })).collect())
+}
+
+pub async fn get_pcap_file_path_by_community_id(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<Option<String>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct PcapPathRow {
+        file_path: String,
+    }
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT file_path FROM {}.pcap_sessions
+         WHERE community_id = '{}'
+         AND file_path != ''
+         ORDER BY start_time DESC LIMIT 1",
+        db, community_id
+    )).fetch_all::<PcapPathRow>().await?;
+    Ok(rows.first().map(|r| r.file_path.clone()).filter(|s| !s.is_empty()))
+}
+
+
+
+
 }

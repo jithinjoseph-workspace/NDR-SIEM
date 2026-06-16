@@ -1,0 +1,212 @@
+<div class="evidence-page">
+  <div class="page-header">
+    <h2>🔍 Evidence & Forensics</h2>
+    <span class="badge">{{ bundles.length }} bundles</span>
+  </div>
+
+  <div class="evidence-layout">
+
+    <!-- Left: Bundle list -->
+    <div class="bundle-list">
+      <div *ngFor="let b of bundles"
+           class="bundle-card"
+           [class.selected]="selectedBundle?.id === b.id"
+           (click)="selectBundle(b)">
+
+        <div class="bundle-header">
+          <span class="severity-badge" [class]="'sev-' + b.severity?.toLowerCase()">
+            {{ b.severity }}
+          </span>
+          <span class="hold-badge" *ngIf="b.legal_hold">🔒 LEGAL HOLD</span>
+          <span class="auto-badge" *ngIf="b.auto_captured">⚡ AUTO</span>
+        </div>
+
+        <div class="bundle-ips">
+          <span>{{ b.src_ip }}</span>
+          <span class="arrow">→</span>
+          <span>{{ b.dst_ip }}</span>
+        </div>
+
+        <div class="bundle-meta">
+          <span>{{ b.captured_at | date:'short' }}</span>
+          <span>{{ (b.size_bytes / 1024).toFixed(1) }} KB</span>
+        </div>
+
+        <div class="bundle-cid" title="{{ b.community_id }}">
+          CID: {{ b.community_id | slice:0:20 }}...
+        </div>
+      </div>
+
+      <div *ngIf="loading" class="loading">Loading bundles...</div>
+      <div *ngIf="!loading && bundles.length === 0" class="empty">
+        No evidence bundles yet.<br>HIGH/CRITICAL alerts auto-capture.
+      </div>
+    </div>
+
+    <!-- Right: Bundle detail -->
+    <div class="bundle-detail" *ngIf="selectedBundle">
+      <div class="detail-header">
+        <h3>Evidence Bundle</h3>
+        <div class="actions">
+          <button class="btn-primary" (click)="download(selectedBundle)">
+            ⬇ Download ZIP
+          </button>
+          <button class="btn-secondary" (click)="verify(selectedBundle)">
+            ✓ Verify Integrity
+          </button>
+          <button *ngIf="!selectedBundle.legal_hold"
+                  class="btn-hold"
+                  (click)="setHold(selectedBundle, true)">
+            🔒 Legal Hold
+          </button>
+          <button *ngIf="selectedBundle.legal_hold"
+                  class="btn-release"
+                  (click)="setHold(selectedBundle, false)">
+            🔓 Release Hold
+          </button>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button [class.active]="activeTab==='bundles'"
+                (click)="activeTab='bundles'">Overview</button>
+        <button [class.active]="activeTab==='timeline'"
+                (click)="activeTab='timeline'">⏱ Attack Timeline</button>
+        <button [class.active]="activeTab==='log'"
+                (click)="activeTab='log'">📋 Chain of Custody</button>
+        <button [class.active]="activeTab==='notes'"
+                (click)="activeTab='notes'">📝 Analyst Notes</button>
+        <button [class.active]="activeTab==='verify'"
+                (click)="verify(selectedBundle)">🔐 Integrity</button>
+      </div>
+
+      <!-- Overview tab -->
+      <div *ngIf="activeTab==='bundles'" class="tab-content">
+        <table class="info-table">
+          <tr><td>Bundle ID</td><td>{{ selectedBundle.id }}</td></tr>
+          <tr><td>Community ID</td><td>{{ selectedBundle.community_id }}</td></tr>
+          <tr><td>SHA-256</td><td class="monospace">{{ selectedBundle.sha256 }}</td></tr>
+          <tr><td>Size</td><td>{{ (selectedBundle.size_bytes/1024).toFixed(1) }} KB</td></tr>
+          <tr><td>Captured</td><td>{{ selectedBundle.captured_at }}</td></tr>
+          <tr><td>Expires</td><td>{{ selectedBundle.expires_at }}</td></tr>
+          <tr><td>Source</td><td>{{ selectedBundle.src_ip }}</td></tr>
+          <tr><td>Destination</td><td>{{ selectedBundle.dst_ip }}</td></tr>
+          <tr><td>Severity</td><td>{{ selectedBundle.severity }}</td></tr>
+          <tr><td>Auto-Captured</td><td>{{ selectedBundle.auto_captured ? 'Yes ⚡' : 'Manual' }}</td></tr>
+          <tr><td>Legal Hold</td>
+              <td>{{ selectedBundle.legal_hold ? '🔒 Yes' : 'No' }}</td></tr>
+        </table>
+
+        <!-- Legal hold form -->
+        <div *ngIf="!selectedBundle.legal_hold" class="hold-form">
+          <input [(ngModel)]="holdReason"
+                 placeholder="Reason for legal hold (required)"
+                 class="hold-input"/>
+          <button (click)="setHold(selectedBundle, true)"
+                  [disabled]="!holdReason">
+            🔒 Place Legal Hold
+          </button>
+        </div>
+      </div>
+
+      <!-- Timeline tab -->
+      <div *ngIf="activeTab==='timeline'" class="tab-content">
+        <div *ngIf="timeline" class="timeline">
+          <div class="narrative">
+            <h4>Attack Narrative</h4>
+            <p>{{ timeline.narrative }}</p>
+          </div>
+          <div class="events">
+            <div *ngFor="let e of timeline.events"
+                 class="event-row"
+                 [class]="'event-' + e.type">
+              <span class="event-time">{{ e.time | date:'HH:mm:ss' }}</span>
+              <span class="event-type-badge">{{ e.type }}</span>
+              <span class="event-desc">{{ e.description }}</span>
+            </div>
+          </div>
+          <div class="related-count">
+            {{ timeline.related_sessions_count }} related sessions in ±5min window
+          </div>
+        </div>
+      </div>
+
+      <!-- Chain of custody tab -->
+      <div *ngIf="activeTab==='log'" class="tab-content">
+        <table class="custody-table">
+          <thead>
+            <tr>
+              <th>Time</th><th>Action</th>
+              <th>By</th><th>Notes</th><th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let l of log">
+              <td>{{ l.performed_at }}</td>
+              <td><span class="action-badge">{{ l.action }}</span></td>
+              <td>{{ l.performed_by }}</td>
+              <td>{{ l.notes }}</td>
+              <td>{{ l.ip_address }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div *ngIf="log.length === 0" class="empty">No custody log entries yet.</div>
+      </div>
+
+      <!-- Notes tab -->
+      <div *ngIf="activeTab==='notes'" class="tab-content">
+        <div class="add-note">
+          <textarea [(ngModel)]="newNote"
+                    placeholder="Add analyst note..."
+                    rows="3"></textarea>
+          <input [(ngModel)]="newTag"
+                 placeholder="Tag (e.g. confirmed_malicious)"/>
+          <button (click)="addNote(selectedBundle)"
+                  [disabled]="!newNote">Add Note</button>
+        </div>
+        <div class="notes-list">
+          <div *ngFor="let a of annotations" class="note-card">
+            <div class="note-header">
+              <span class="note-author">{{ a.author }}</span>
+              <span class="note-time">{{ a.created_at }}</span>
+              <span *ngIf="a.tag" class="note-tag">{{ a.tag }}</span>
+            </div>
+            <p>{{ a.note }}</p>
+          </div>
+          <div *ngIf="annotations.length === 0" class="empty">No notes yet.</div>
+        </div>
+      </div>
+
+      <!-- Integrity tab -->
+      <div *ngIf="activeTab==='verify'" class="tab-content">
+        <div *ngIf="!verifyResult" class="verifying">
+          Verifying bundle integrity...
+        </div>
+        <div *ngIf="verifyResult" class="verify-result"
+             [class.verified]="verifyResult.status === 'VERIFIED'"
+             [class.tampered]="verifyResult.status !== 'VERIFIED'">
+          <div class="verify-status">
+            {{ verifyResult.status === 'VERIFIED' ? '✅ VERIFIED' : '❌ TAMPERED OR CORRUPTED' }}
+          </div>
+          <table class="info-table">
+            <tr><td>Status</td><td>{{ verifyResult.status }}</td></tr>
+            <tr><td>Stored Hash</td>
+                <td class="monospace">{{ verifyResult.stored_sha256 }}</td></tr>
+            <tr><td>Computed Hash</td>
+                <td class="monospace">{{ verifyResult.computed_sha256 }}</td></tr>
+            <tr><td>Verified At</td><td>{{ verifyResult.verified_at }}</td></tr>
+            <tr><td>Verified By</td><td>{{ verifyResult.verified_by }}</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- No selection -->
+    <div class="bundle-detail empty-state" *ngIf="!selectedBundle">
+      <div class="empty-icon">🔍</div>
+      <p>Select an evidence bundle to view details, timeline, and chain of custody.</p>
+      <p>HIGH and CRITICAL alerts are automatically captured. Manual download available for all alerts via the Alerts page.</p>
+    </div>
+  </div>
+</div>
