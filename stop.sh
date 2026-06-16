@@ -33,7 +33,7 @@ if [ -n "$DYNAMIC_ENGINES" ]; then
     echo "$DYNAMIC_ENGINES" | xargs sudo docker rm -f         2>/dev/null || true
 fi
 
-sudo docker compose down
+sudo docker compose --profile onpremise down
 
 # Stop ClickHouse
 echo "  → Stopping ClickHouse..."

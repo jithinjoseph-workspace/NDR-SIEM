@@ -839,7 +839,7 @@ step "Building Docker stack"
 log "Building Docker stack (this takes a few minutes)..."
 cd $INSTALL_DIR
 
-sudo docker compose down 2>/dev/null || true
+sudo docker compose --profile onpremise down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
 if [ "$DEPLOY_MODE" = "hybrid" ]; then
