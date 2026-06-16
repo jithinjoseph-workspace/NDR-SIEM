@@ -637,6 +637,13 @@ mkdir -p $HOME_DIR/.vector/data/suricata \
          $HOME_DIR/.vector/data/zeek
 mkdir -p $HOME_DIR/ndr-config
 
+# NDR data directories (PCAP uploads + evidence bundles)
+sudo mkdir -p /opt/ndr/pcap
+sudo mkdir -p /opt/ndr/evidence
+sudo chmod -R 755 /opt/ndr
+sudo chown -R $USER:$USER /opt/ndr
+echo "✅ Created /opt/ndr/pcap and /opt/ndr/evidence"
+
 # ── Detect host IP ────────────────────────────
 HOST_IP=$(ip -o -4 addr show $IFACE 2>/dev/null | \
     awk '{print $4}' | cut -d/ -f1)
@@ -837,9 +844,9 @@ sudo docker rm -f vector 2>/dev/null || true
 
 if [ "$DEPLOY_MODE" = "hybrid" ]; then
     log "Hybrid mode — using cloud: $CLOUD_KAFKA"
-    sudo docker compose up -d --build vector ndr-engine-1 nginx
+    sudo docker compose --profile onpremise up -d --build vector ndr-engine-1 nginx
 else
-    sudo docker compose up -d --build
+    sudo docker compose --profile onpremise up -d --build
 fi
 
 log "✅ Docker stack started"

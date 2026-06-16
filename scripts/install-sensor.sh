@@ -517,6 +517,7 @@ fi
 # ── Create directories ────────────────────────────
 log "Creating directories..."
 mkdir -p /opt/ndr-sensor
+mkdir -p /opt/ndr-sensor/pcap-tmp
 mkdir -p /var/log/ndr/zeek
 mkdir -p /var/log/ndr/suricata
 mkdir -p /etc/ndr
@@ -678,7 +679,7 @@ log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
 """NDR Sensor Agent - monitors and auto-restarts services"""
-import os, time, subprocess, requests
+import os, time, subprocess, requests, json
 from datetime import datetime
 
 config = {}
@@ -902,6 +903,44 @@ def execute_command(cmd):
         time.sleep(3)
         execute_command('start')
 
+def get_pending_pcap_requests(cloud_url, api_key):
+    """Poll cloud for community_ids needing PCAP upload"""
+    try:
+        resp = requests.get(
+            f"{cloud_url}/api/pcap/pending",
+            headers={"X-Sensor-Key": api_key},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            return resp.json().get('pending', [])
+    except Exception as e:
+        print(f"[NDR] pcap pending poll error: {e}")
+    return []
+
+def process_pcap_uploads(cloud_url, api_key):
+    """Upload PCAPs for all pending requests"""
+    pending = get_pending_pcap_requests(cloud_url, api_key)
+    if not pending:
+        return
+    print(f"[NDR] Found {len(pending)} pending PCAP requests")
+    for cid in pending[:5]:  # max 5 per cycle
+        if not cid:
+            continue
+        print(f"[NDR] Uploading PCAP for CID: {cid}")
+        try:
+            result = subprocess.run(
+                ['python3', '/opt/ndr-sensor/pcap-uploader.py', cid],
+                capture_output=True, text=True, timeout=120
+            )
+            if result.stdout.strip():
+                print(result.stdout.strip())
+            if result.returncode != 0 and result.stderr.strip():
+                print(f"[NDR] Uploader error: {result.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            print(f"[NDR] PCAP upload timeout for {cid}")
+        except Exception as e:
+            print(f"[NDR] PCAP upload error for {cid}: {e}")
+
 if __name__ == '__main__':
     print(f"[NDR] Agent starting for tenant: {TENANT_ID}")
     print(f"[NDR] Cloud: {CLOUD_URL}")
@@ -930,132 +969,165 @@ if __name__ == '__main__':
         # Report status to cloud
         report_status(services)
 
+        # Upload any pending PCAPs the cloud has queued for this sensor
+        process_pcap_uploads(CLOUD_URL, API_KEY)
+
         time.sleep(30)
 AGENT
 chmod +x /opt/ndr-sensor/agent.py
 
 # ── Write pcap-uploader.py ────────────────────────
-cat > /opt/ndr-sensor/pcap-uploader.py << 'PCAP_UPLOADER'
+# Create temp PCAP directory
+mkdir -p /opt/ndr-sensor/pcap-tmp
+chmod 755 /opt/ndr-sensor/pcap-tmp
+
+cat > /opt/ndr-sensor/pcap-uploader.py << 'UPLOADER_EOF'
 #!/usr/bin/env python3
 """
-Upload a PCAP for a given community_id from local Arkime to the NDR cloud.
-Usage: pcap-uploader.py <community_id>
+NDR PCAP Uploader
+Extracts PCAP for a community_id from local Arkime
+and uploads to NDR cloud engine.
+Called by agent.py for each pending CID.
 """
-import sys, os, subprocess, tempfile, json
+import os
+import sys
+import subprocess
+import requests
+import hashlib
+import json
+import tempfile
 
-CONF = "/etc/ndr/sensor.conf"
-ARKIME = "http://localhost:8005"
-
-def derive_arkime_pass(api_key):
-    import hashlib
-    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
-
-def read_conf():
-    cfg = {}
+def load_config():
+    config = {}
     try:
-        with open(CONF) as f:
+        with open('/etc/ndr/sensor.conf') as f:
             for line in f:
                 line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    k, v = line.split("=", 1)
-                    cfg[k.strip()] = v.strip()
+                if '=' in line and not line.startswith('#'):
+                    k, v = line.split('=', 1)
+                    config[k.strip()] = v.strip()
     except Exception as e:
-        print(f"[pcap-uploader] Cannot read {CONF}: {e}", file=sys.stderr)
+        print(f"[PCAP-UPLOADER] Config error: {e}")
         sys.exit(1)
-    return cfg
+    return config
 
-def arkime_get(path, auth):
-    r = subprocess.run(
-        ["curl", "-s", "-u", auth, f"{ARKIME}{path}"],
-        capture_output=True, text=True, timeout=30
-    )
-    return r.stdout
+def get_arkime_pass(api_key):
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
 
-def main():
+def get_session_meta(community_id, arkime_pass):
+    """Fetch session metadata (IPs, ports, proto) from Arkime"""
+    try:
+        expr = f"communityId=={community_id}"
+        resp = requests.get(
+            f"http://localhost:8005/api/sessions"
+            f"?expression={expr}&startTime=-24h&stopTime=now&length=1",
+            auth=("admin", arkime_pass),
+            timeout=15
+        )
+        if resp.status_code == 200:
+            sessions = resp.json().get("data", [])
+            if sessions:
+                s = sessions[0]
+                return {
+                    "src_ip":      s.get("source.ip", s.get("srcIp", "")),
+                    "dst_ip":      s.get("destination.ip", s.get("dstIp", "")),
+                    "src_port":    str(s.get("source.port", s.get("srcPort", 0))),
+                    "dst_port":    str(s.get("destination.port", s.get("dstPort", 0))),
+                    "proto":       s.get("network.transport", s.get("protocol", "")),
+                    "sensor_host": s.get("node", os.uname().nodename),
+                }
+    except Exception as e:
+        print(f"[PCAP-UPLOADER] Meta fetch error: {e}")
+    return {"src_ip": "", "dst_ip": "", "src_port": "0",
+            "dst_port": "0", "proto": "", "sensor_host": os.uname().nodename}
+
+def extract_pcap(community_id, output_file, arkime_pass):
+    """Download PCAP from local Arkime for a CID"""
+    try:
+        expr = f"communityId=={community_id}"
+        resp = requests.get(
+            f"http://localhost:8005/api/sessions/pcap"
+            f"?expression={expr}&startTime=-24h&stopTime=now",
+            auth=("admin", arkime_pass),
+            timeout=30,
+            stream=True
+        )
+        if resp.status_code != 200:
+            print(f"[PCAP-UPLOADER] Arkime returned {resp.status_code} for {community_id}")
+            return False
+        with open(output_file, 'wb') as f:
+            for chunk in resp.iter_content(8192):
+                f.write(chunk)
+        size = os.path.getsize(output_file)
+        if size < 24:
+            print(f"[PCAP-UPLOADER] PCAP too small ({size} bytes) — session not found")
+            return False
+        print(f"[PCAP-UPLOADER] Extracted {size} bytes for {community_id}")
+        return True
+    except Exception as e:
+        print(f"[PCAP-UPLOADER] Extract error: {e}")
+        return False
+
+def upload_pcap(community_id, pcap_file, cloud_url, api_key, meta):
+    """Upload extracted PCAP to NDR cloud"""
+    try:
+        with open(pcap_file, 'rb') as f:
+            resp = requests.post(
+                f"{cloud_url}/api/pcap/upload",
+                headers={"X-Sensor-Key": api_key},
+                files={"pcap": ("session.pcap", f, "application/octet-stream")},
+                data={
+                    "community_id": community_id,
+                    "src_ip":       meta["src_ip"],
+                    "dst_ip":       meta["dst_ip"],
+                    "src_port":     meta["src_port"],
+                    "dst_port":     meta["dst_port"],
+                    "proto":        meta["proto"],
+                    "sensor_host":  meta["sensor_host"],
+                },
+                timeout=120
+            )
+        if resp.status_code == 200:
+            print(f"[PCAP-UPLOADER] ✅ Uploaded {community_id} → cloud")
+            return True
+        else:
+            print(f"[PCAP-UPLOADER] ❌ Upload failed HTTP {resp.status_code}: {resp.text}")
+            return False
+    except Exception as e:
+        print(f"[PCAP-UPLOADER] Upload error: {e}")
+        return False
+
+if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: pcap-uploader.py <community_id>", file=sys.stderr)
+        print("Usage: pcap-uploader.py <community_id>")
         sys.exit(1)
 
     community_id = sys.argv[1]
-    cfg = read_conf()
-    cloud_url    = cfg.get("CLOUD_URL", "").rstrip("/")
-    api_key      = cfg.get("API_KEY", "")
-    arkime_pass  = derive_arkime_pass(api_key)
-    arkime_auth  = f"admin:{arkime_pass}"
+    config   = load_config()
+    cloud_url = config.get('CLOUD_URL', '').rstrip('/')
+    api_key   = config.get('API_KEY', '')
 
     if not cloud_url or not api_key:
-        print("[pcap-uploader] CLOUD_URL or API_KEY missing in sensor.conf", file=sys.stderr)
+        print("[PCAP-UPLOADER] Missing CLOUD_URL or API_KEY")
         sys.exit(1)
 
-    # Get session metadata from Arkime
-    expr = f"communityId=={community_id}"
-    meta_json = arkime_get(
-        f"/api/sessions?expression={expr}&startTime=-7d&stopTime=now&length=1",
-        arkime_auth
-    )
-    try:
-        meta = json.loads(meta_json)
-        sessions = meta.get("data", [])
-    except Exception:
-        sessions = []
-
-    src_ip = dst_ip = proto = sensor_host = ""
-    src_port = dst_port = 0
-    if sessions:
-        s = sessions[0]
-        src_ip      = s.get("srcIp",   "")
-        dst_ip      = s.get("dstIp",   "")
-        src_port    = int(s.get("srcPort", 0))
-        dst_port    = int(s.get("dstPort", 0))
-        proto       = s.get("protocol", "")
-        sensor_host = s.get("node", os.uname().nodename)
-
-    # Download PCAP from Arkime
-    with tempfile.NamedTemporaryFile(suffix=".pcap", delete=False) as tmp:
-        tmp_path = tmp.name
+    arkime_pass = get_arkime_pass(api_key)
+    safe_cid    = community_id.replace('/', '_').replace(':', '_')
+    tmp_file    = f"/opt/ndr-sensor/pcap-tmp/pcap_{safe_cid}.pcap"
 
     try:
-        r = subprocess.run(
-            ["curl", "-s", "-u", arkime_auth,
-             f"{ARKIME}/api/sessions/pcap?expression={expr}&startTime=-7d&stopTime=now",
-             "-o", tmp_path],
-            capture_output=True, timeout=120
-        )
-        if r.returncode != 0:
-            print("[pcap-uploader] curl download failed", file=sys.stderr)
-            sys.exit(1)
-
-        file_size = os.path.getsize(tmp_path)
-        if file_size < 24:
-            print(f"[pcap-uploader] PCAP too small ({file_size} bytes) — skipping", file=sys.stderr)
-            sys.exit(0)
-
-        # Upload to NDR cloud
-        result = subprocess.run(
-            ["curl", "-s", "-X", "POST",
-             f"{cloud_url}/api/pcap/upload",
-             "-H", f"X-Sensor-Key: {api_key}",
-             "-F", f"pcap=@{tmp_path};type=application/vnd.tcpdump.pcap",
-             "-F", f"community_id={community_id}",
-             "-F", f"src_ip={src_ip}",
-             "-F", f"dst_ip={dst_ip}",
-             "-F", f"src_port={src_port}",
-             "-F", f"dst_port={dst_port}",
-             "-F", f"proto={proto}",
-             "-F", f"sensor_host={sensor_host}"],
-            capture_output=True, text=True, timeout=300
-        )
-        print(f"[pcap-uploader] Upload result: {result.stdout}")
+        meta = get_session_meta(community_id, arkime_pass)
+        if extract_pcap(community_id, tmp_file, arkime_pass):
+            upload_pcap(community_id, tmp_file, cloud_url, api_key, meta)
+        else:
+            print(f"[PCAP-UPLOADER] No PCAP found for {community_id}")
     finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+UPLOADER_EOF
 
-if __name__ == "__main__":
-    main()
-PCAP_UPLOADER
 chmod +x /opt/ndr-sensor/pcap-uploader.py
+echo "✅ pcap-uploader.py installed"
 
 # ── Create systemd services ───────────────────────
 log "Creating systemd services..."

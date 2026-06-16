@@ -36,6 +36,13 @@ async fn main() {
 
     info!("🚀 NDR Engine starting on 172.25.86.150:3000");
 
+    // ── Ensure required storage directories exist ─────────────────────────
+    for dir in &["/opt/ndr/pcap", "/opt/ndr/evidence"] {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!("Could not create storage dir {}: {}", dir, e);
+        }
+    }
+
     // ── GeoIP / ASN (optional — engine works without them) ───────────────
     let geoip = GeoIpLookup::open("data/GeoLite2-City.mmdb")
         .map_err(|e| info!("GeoIP unavailable ({}). Place GeoLite2-City.mmdb in data/", e))

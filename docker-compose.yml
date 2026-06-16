@@ -30,6 +30,7 @@ services:
   vector:
     image: timberio/vector:0.32.1-alpine
     container_name: ndr-vector
+    profiles: ["onpremise"]
     volumes:
       - ${HOME_DIR}/.vector/vector.toml:/etc/vector/vector.toml:ro
       - ${HOME_DIR}/.vector/data:/etc/vector/data
@@ -67,6 +68,8 @@ services:
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
       - ${INSTALL_DIR}/config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/ndr/pcap:/opt/ndr/pcap
+      - /opt/ndr/evidence:/opt/ndr/evidence
     depends_on:
       - kafka
       - redis
@@ -99,6 +102,8 @@ services:
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
       - ${INSTALL_DIR}/config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/ndr/pcap:/opt/ndr/pcap
+      - /opt/ndr/evidence:/opt/ndr/evidence
     depends_on:
       - kafka
       - redis
@@ -131,6 +136,8 @@ services:
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
       - ${INSTALL_DIR}/config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/ndr/pcap:/opt/ndr/pcap
+      - /opt/ndr/evidence:/opt/ndr/evidence
     depends_on:
       - kafka
       - redis
@@ -160,6 +167,7 @@ services:
   opensearch:
     image: opensearchproject/opensearch:2.5.0
     container_name: ndr-opensearch
+    profiles: ["onpremise"]
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
