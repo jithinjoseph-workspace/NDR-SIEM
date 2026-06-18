@@ -69,6 +69,8 @@
 
       <!-- Tabs -->
       <div class="tabs">
+        <button [class.active]="activeTab==='investigation'"
+                (click)="activeTab='investigation'">🔬 Investigation</button>
         <button [class.active]="activeTab==='bundles'"
                 (click)="activeTab='bundles'">Overview</button>
         <button [class.active]="activeTab==='timeline'"
@@ -83,28 +85,55 @@
 
       <!-- Overview tab -->
       <div *ngIf="activeTab==='bundles'" class="tab-content">
-        <table class="info-table">
-          <tr><td>Bundle ID</td><td>{{ selectedBundle.id }}</td></tr>
-          <tr><td>Community ID</td><td>{{ selectedBundle.community_id }}</td></tr>
-          <tr><td>SHA-256</td><td class="monospace">{{ selectedBundle.sha256 }}</td></tr>
-          <tr><td>Size</td><td>{{ (selectedBundle.size_bytes/1024).toFixed(1) }} KB</td></tr>
-          <tr><td>Captured</td><td>{{ selectedBundle.captured_at }}</td></tr>
-          <tr><td>Expires</td><td>{{ selectedBundle.expires_at }}</td></tr>
-          <tr><td>Source</td><td>{{ selectedBundle.src_ip }}</td></tr>
-          <tr><td>Destination</td><td>{{ selectedBundle.dst_ip }}</td></tr>
-          <tr><td>Severity</td><td>{{ selectedBundle.severity }}</td></tr>
-          <tr><td>Auto-Captured</td><td>{{ selectedBundle.auto_captured ? 'Yes ⚡' : 'Manual' }}</td></tr>
-          <tr><td>Legal Hold</td>
-              <td>{{ selectedBundle.legal_hold ? '🔒 Yes' : 'No' }}</td></tr>
-        </table>
+        <div class="overview-grid">
+          <!-- Incident summary card -->
+          <div class="overview-card" [class]="'sev-card-' + (selectedBundle.severity || 'unknown').toLowerCase()">
+            <div class="overview-card-title">Incident</div>
+            <div class="overview-sev">{{ selectedBundle.severity }}</div>
+            <div class="overview-ips">
+              <span class="ip src-ip">{{ selectedBundle.src_ip || '-' }}</span>
+              <span class="arrow-sep">→</span>
+              <span class="ip dst-ip">{{ selectedBundle.dst_ip || '-' }}</span>
+            </div>
+            <div class="overview-meta-row">Captured: {{ selectedBundle.captured_at }}</div>
+            <div class="overview-meta-row" *ngIf="selectedBundle.auto_captured">⚡ Auto-captured</div>
+          </div>
+
+          <!-- Bundle integrity card -->
+          <div class="overview-card">
+            <div class="overview-card-title">Bundle Integrity</div>
+            <table class="info-table">
+              <tr><td>Bundle ID</td><td>{{ selectedBundle.id }}</td></tr>
+              <tr><td>Community ID</td><td class="monospace small">{{ selectedBundle.community_id }}</td></tr>
+              <tr><td>SHA-256</td><td class="monospace small break-all">{{ selectedBundle.sha256 }}</td></tr>
+              <tr><td>Size</td><td>{{ (selectedBundle.size_bytes/1024).toFixed(1) }} KB</td></tr>
+              <tr><td>Expires</td><td>{{ selectedBundle.expires_at }}</td></tr>
+              <tr><td>Legal Hold</td><td>{{ selectedBundle.legal_hold ? '🔒 Yes' : 'No' }}</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <!-- Summary from investigation if loaded -->
+        <div *ngIf="bundleContents?.attack_summary" class="overview-narrative">
+          <div class="overview-card-title">Summary</div>
+          <p>{{ bundleContents.attack_summary.summary }}</p>
+          <div class="overview-stats">
+            <span class="stat-chip">{{ bundleContents.attack_summary.rules_fired?.length || 0 }} rules</span>
+            <span class="stat-chip">{{ bundleContents.attack_summary.threat_intel_hits || 0 }} threat intel hits</span>
+            <span class="stat-chip">{{ bundleContents.attack_summary.files_transferred || 0 }} files</span>
+            <span *ngIf="bundleContents.attack_summary.http_user_agent" class="stat-chip">UA: {{ bundleContents.attack_summary.http_user_agent }}</span>
+          </div>
+          <div *ngIf="bundleContents.attack_summary.recommended_action" class="recommended-action-mini">
+            ⚡ {{ bundleContents.attack_summary.recommended_action }}
+          </div>
+        </div>
 
         <!-- Legal hold form -->
         <div *ngIf="!selectedBundle.legal_hold" class="hold-form">
           <input [(ngModel)]="holdReason"
                  placeholder="Reason for legal hold (required)"
                  class="hold-input"/>
-          <button (click)="setHold(selectedBundle, true)"
-                  [disabled]="!holdReason">
+          <button (click)="setHold(selectedBundle, true)" [disabled]="!holdReason">
             🔒 Place Legal Hold
           </button>
         </div>
@@ -175,6 +204,501 @@
             <p>{{ a.note }}</p>
           </div>
           <div *ngIf="annotations.length === 0" class="empty">No notes yet.</div>
+        </div>
+      </div>
+
+      <!-- Investigation tab -->
+      <div *ngIf="activeTab==='investigation'" class="tab-content investigation-tab">
+
+        <div *ngIf="contentsLoading" class="loading">Loading bundle contents...</div>
+        <div *ngIf="contentsError" class="error-msg">{{ contentsError }}</div>
+
+        <div *ngIf="bundleContents && !contentsLoading">
+
+          <!-- Section nav -->
+          <div class="section-nav">
+            <button [class.active]="activeContentSection==='attack_summary'"
+                    (click)="activeContentSection='attack_summary'">📋 Attack Summary</button>
+            <button [class.active]="activeContentSection==='connection'"
+                    (click)="activeContentSection='connection'">🔌 Connection</button>
+            <button [class.active]="activeContentSection==='dns'"
+                    (click)="activeContentSection='dns'">🌐 DNS</button>
+            <button [class.active]="activeContentSection==='http'"
+                    (click)="activeContentSection='http'">📡 HTTP</button>
+            <button [class.active]="activeContentSection==='ssl'"
+                    (click)="activeContentSection='ssl'">🔐 TLS/SSL</button>
+            <button [class.active]="activeContentSection==='files'"
+                    (click)="activeContentSection='files'">📁 Files</button>
+            <button [class.active]="activeContentSection==='weird'"
+                    (click)="activeContentSection='weird'">⚠️ Anomalies</button>
+            <button [class.active]="activeContentSection==='alerts'"
+                    (click)="activeContentSection='alerts'">🚨 All Alerts</button>
+            <button [class.active]="activeContentSection==='intel'"
+                    (click)="activeContentSection='intel'">🕵️ Threat Intel</button>
+            <button [class.active]="activeContentSection==='related'"
+                    (click)="activeContentSection='related'">🕸 Related Activity</button>
+            <button [class.active]="activeContentSection==='pcap'"
+                    (click)="activeContentSection='pcap'">📦 PCAP</button>
+          </div>
+
+          <!-- ATTACK SUMMARY -->
+          <div *ngIf="activeContentSection==='attack_summary'" class="content-section">
+            <div *ngIf="bundleContents.attack_summary" class="attack-summary">
+
+              <div class="summary-severity"
+                   [class]="'sev-' + bundleContents.attack_summary.severity?.toLowerCase()">
+                {{ bundleContents.attack_summary.severity }} — {{ bundleContents.attack_summary.title }}
+              </div>
+
+              <div class="summary-narrative">{{ bundleContents.attack_summary.summary }}</div>
+
+              <div class="summary-grid">
+                <div class="summary-card">
+                  <label>Victim IP</label>
+                  <span class="ip">{{
+                    bundleContents.attack_summary.victim_ip ||
+                    bundleContents.zeek_conn?.record?.src_ip || 'N/A'
+                  }}</span>
+                </div>
+                <div class="summary-card">
+                  <label>Attacker / Dest IP</label>
+                  <span class="ip threat">{{
+                    bundleContents.attack_summary.attacker_ip ||
+                    bundleContents.zeek_conn?.record?.dst_ip || 'N/A'
+                  }}</span>
+                </div>
+                <div class="summary-card">
+                  <label>Rules Fired</label>
+                  <span class="count">{{ bundleContents.attack_summary.rules_fired?.length || 0 }}</span>
+                </div>
+                <div class="summary-card">
+                  <label>Threat Intel Hits</label>
+                  <span class="count" [class.threat]="bundleContents.attack_summary.threat_intel_hits > 0">
+                    {{ bundleContents.attack_summary.threat_intel_hits || 0 }}
+                  </span>
+                </div>
+                <div class="summary-card">
+                  <label>Related Alerts</label>
+                  <span class="count">{{ bundleContents.attack_summary.related_alerts || 0 }}</span>
+                </div>
+                <div class="summary-card">
+                  <label>PCAP</label>
+                  <span [class.ok]="bundleContents.pcap_available">
+                    {{ bundleContents.pcap_available ? '✅ Captured' : '⚠️ Not available' }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="recommended-action" *ngIf="bundleContents.attack_summary.recommended_action">
+                <h4>⚡ Recommended Action</h4>
+                <p>{{ bundleContents.attack_summary.recommended_action }}</p>
+              </div>
+
+              <div *ngIf="bundleContents.attack_summary.rules_fired?.length">
+                <h4>Rules Fired</h4>
+                <div *ngFor="let r of bundleContents.attack_summary.rules_fired"
+                     class="rule-row" [class]="'sev-' + r.severity?.toLowerCase()">
+                  <span class="rule-sev">{{ r.severity }}</span>
+                  <span class="rule-name">{{ r.name }}</span>
+                </div>
+              </div>
+            </div>
+            <div *ngIf="!bundleContents.attack_summary" class="empty">No attack summary in this bundle.</div>
+          </div>
+
+          <!-- CONNECTION DETAILS -->
+          <div *ngIf="activeContentSection==='connection'" class="content-section">
+            <h4>Connection Record
+              <span *ngIf="bundleContents.zeek_conn?.record?.source"
+                    class="source-badge"
+                    [class.zeek-badge]="bundleContents.zeek_conn.record.source === 'zeek'"
+                    [class.suri-badge]="bundleContents.zeek_conn.record.source === 'suricata'">
+                {{ bundleContents.zeek_conn.record.source | titlecase }}
+              </span>
+            </h4>
+            <div *ngIf="bundleContents.zeek_conn?.record" class="conn-details">
+              <table class="info-table">
+                <tr><td>Source</td>
+                    <td class="ip">{{ bundleContents.zeek_conn.record.src_ip }}:{{ bundleContents.zeek_conn.record.src_port }}</td></tr>
+                <tr><td>Destination</td>
+                    <td class="ip">{{ bundleContents.zeek_conn.record.dst_ip }}:{{ bundleContents.zeek_conn.record.dst_port }}</td></tr>
+                <tr><td>Protocol</td><td>{{ bundleContents.zeek_conn.record.proto }}</td></tr>
+                <tr><td>Event Type</td><td>{{ bundleContents.zeek_conn.record.event_type || '-' }}</td></tr>
+                <tr><td>Timestamp</td><td>{{ bundleContents.zeek_conn.record.timestamp }}</td></tr>
+                <tr><td>Community ID</td><td class="monospace small">{{ bundleContents.zeek_conn.community_id }}</td></tr>
+              </table>
+            </div>
+            <div *ngIf="!bundleContents.zeek_conn?.record" class="empty">
+              No connection record found for this community_id.
+            </div>
+
+            <h4 style="margin-top:20px">Alert Connection Info</h4>
+            <div class="conn-details">
+              <table class="info-table">
+                <tr><td>Source IP</td><td class="ip">{{
+                  bundleContents.alert?.src_ip || bundleContents.zeek_conn?.record?.src_ip || '-'
+                }}</td></tr>
+                <tr><td>Dest IP</td><td class="ip">{{
+                  bundleContents.alert?.dst_ip || bundleContents.zeek_conn?.record?.dst_ip || '-'
+                }}</td></tr>
+                <tr><td>Src Port</td><td>{{
+                  bundleContents.alert?.src_port || bundleContents.zeek_conn?.record?.src_port || '-'
+                }}</td></tr>
+                <tr><td>Dst Port</td><td>{{
+                  bundleContents.alert?.dst_port || bundleContents.zeek_conn?.record?.dst_port || '-'
+                }}</td></tr>
+                <tr><td>Protocol</td><td>{{
+                  bundleContents.alert?.proto || bundleContents.zeek_conn?.record?.proto || '-'
+                }}</td></tr>
+                <tr><td>App Protocol</td><td>{{ bundleContents.alert?.app_proto || '-' }}</td></tr>
+                <tr><td>User Agent</td><td>{{ bundleContents.alert?.user_agent || '-' }}</td></tr>
+                <tr><td>Total Bytes</td><td>{{ bundleContents.alert?.bytes_total ?? '-' }}</td></tr>
+                <tr><td>↑ To Server</td><td>{{ bundleContents.alert?.bytes_toserver ?? '-' }}</td></tr>
+                <tr><td>↓ To Client</td><td>{{ bundleContents.alert?.bytes_toclient ?? '-' }}</td></tr>
+                <tr><td>Total Packets</td><td>{{ bundleContents.alert?.packets_total ?? '-' }}</td></tr>
+                <tr><td>Flow Start</td><td>{{ bundleContents.alert?.flow_start || '-' }}</td></tr>
+                <tr><td>Flow End</td><td>{{ bundleContents.alert?.flow_end || '-' }}</td></tr>
+                <tr><td>Flow State</td><td>{{ bundleContents.alert?.flow_state || '-' }}</td></tr>
+                <tr><td>Severity</td><td>{{ bundleContents.alert?.severity || '-' }}</td></tr>
+              </table>
+            </div>
+
+            <h4 style="margin-top:20px">Arkime Session Metadata</h4>
+            <div *ngIf="bundleContents.session_metadata" class="conn-details">
+              <table class="info-table">
+                <tr><td>Session ID</td>
+                    <td class="monospace small">{{ bundleContents.session_metadata.arkime_session_id }}</td></tr>
+                <tr><td>Index</td><td>{{ bundleContents.session_metadata.index }}</td></tr>
+                <tr><td>Source</td><td>{{ bundleContents.session_metadata.query_source }}</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <!-- DNS LOOKUPS -->
+          <div *ngIf="activeContentSection==='dns'" class="content-section">
+            <!-- Zeek DNS -->
+            <div class="source-section">
+              <div class="source-label zeek-label">Zeek DNS Lookups ({{ bundleContents.zeek_dns?.total || 0 }})</div>
+              <div *ngIf="bundleContents.zeek_dns?.resolves_to_target_ip" class="intel-hit warning-row">
+                ⚠️ DNS query resolved to target IP — consistent with C2 domain lookup.
+              </div>
+              <div *ngFor="let d of bundleContents.zeek_dns?.queries || []" class="dns-row">
+                <div class="dns-header">
+                  <span class="dns-time">{{ d.timestamp }}</span>
+                  <span class="dns-query">{{ d.query }}</span>
+                  <span class="dns-rcode" [class.ok]="d.rcode==='NOERROR'">{{ d.rcode }}</span>
+                </div>
+                <div class="dns-answers" *ngIf="d.answers?.length">
+                  Answers: <span *ngFor="let a of d.answers" class="ip-tag">{{ a }}</span>
+                </div>
+                <div class="dns-meta">
+                  {{ d.src_ip }} → {{ d.dns_server }} | Proto: {{ d.proto }}
+                  <span *ngIf="d.rejected" class="warn-badge">REJECTED</span>
+                </div>
+              </div>
+              <div *ngIf="!bundleContents.zeek_dns?.total" class="empty">No Zeek DNS logs for this session uid.</div>
+            </div>
+
+            <!-- Suricata DNS -->
+            <div class="source-section">
+              <div class="source-label suri-label">Suricata DNS Events ({{ bundleContents.suricata_dns?.total || 0 }})</div>
+              <div *ngIf="bundleContents.suricata_dns?.resolves_to_target_ip" class="intel-hit warning-row">
+                ⚠️ DNS query resolved to target IP — consistent with C2 domain lookup.
+              </div>
+              <div *ngFor="let d of bundleContents.suricata_dns?.queries || []" class="dns-row">
+                <div class="dns-header">
+                  <span class="dns-time">{{ d.timestamp }}</span>
+                  <span class="dns-query">{{ d.query }}</span>
+                  <span class="dns-rcode" [class.ok]="d.rcode==='NOERROR'">{{ d.rcode }}</span>
+                  <span class="dns-type">{{ d.type }}</span>
+                </div>
+                <div class="dns-meta">{{ d.src_ip }} → {{ d.dns_server }} | Proto: {{ d.proto }}</div>
+              </div>
+              <div *ngIf="!bundleContents.suricata_dns?.total" class="empty">No Suricata DNS events for this community_id.</div>
+            </div>
+          </div>
+
+          <!-- HTTP REQUESTS -->
+          <div *ngIf="activeContentSection==='http'" class="content-section">
+            <!-- Zeek HTTP -->
+            <div class="source-section">
+              <div class="source-label zeek-label">Zeek HTTP ({{ bundleContents.zeek_http?.total || 0 }})</div>
+              <div *ngFor="let h of bundleContents.zeek_http?.requests || []" class="http-row">
+                <div class="http-header">
+                  <span class="http-method" [class.post]="h.method==='POST'" [class.get]="h.method==='GET'">{{ h.method }}</span>
+                  <span class="http-url">{{ h.full_url }}</span>
+                  <span class="http-status" [class.ok]="h.status_code < 400">{{ h.status_code }}</span>
+                </div>
+                <div class="http-meta">
+                  <span *ngIf="h.user_agent" class="ua-tag">UA: {{ h.user_agent }}</span>
+                  <span>↑ {{ h.bytes_uploaded || 0 }}B ↓ {{ h.bytes_downloaded || 0 }}B</span>
+                </div>
+                <div class="http-time">{{ h.timestamp }}</div>
+              </div>
+              <div *ngIf="!bundleContents.zeek_http?.total" class="empty">No Zeek HTTP logs for this session uid.</div>
+            </div>
+
+            <!-- Suricata HTTP -->
+            <div class="source-section">
+              <div class="source-label suri-label">Suricata HTTP ({{ bundleContents.suricata_http?.total || 0 }})</div>
+              <div *ngFor="let h of bundleContents.suricata_http?.requests || []" class="http-row">
+                <div class="http-header">
+                  <span class="http-method" [class.post]="h.method==='POST'" [class.get]="h.method==='GET'">{{ h.method }}</span>
+                  <span class="http-url">{{ h.full_url }}</span>
+                  <span class="http-status" [class.ok]="h.status_code < 400">{{ h.status_code }}</span>
+                </div>
+                <div class="http-meta">
+                  <span *ngIf="h.user_agent" class="ua-tag">UA: {{ h.user_agent }}</span>
+                  <span *ngIf="h.content_type">Type: {{ h.content_type }}</span>
+                  <span>↓ {{ h.bytes_downloaded || 0 }}B</span>
+                  <span class="src-tag">{{ h.src_ip }} → {{ h.dest_ip }}</span>
+                </div>
+                <div class="http-time">{{ h.timestamp }} | Proto: {{ h.protocol }}</div>
+              </div>
+              <div *ngIf="!bundleContents.suricata_http?.total" class="empty">No Suricata HTTP events for this community_id.</div>
+            </div>
+          </div>
+
+          <!-- TLS/SSL -->
+          <div *ngIf="activeContentSection==='ssl'" class="content-section">
+            <!-- Zeek SSL -->
+            <div class="source-section">
+              <div class="source-label zeek-label">Zeek TLS/SSL ({{ bundleContents.zeek_ssl?.total || 0 }})</div>
+              <div *ngIf="bundleContents.zeek_ssl?.any_self_signed" class="intel-hit warning-row">
+                ⚠️ Self-signed certificate detected — typical of attacker-controlled infrastructure.
+              </div>
+              <div *ngFor="let s of bundleContents.zeek_ssl?.connections || []" class="ssl-row" [class.self-signed]="s.self_signed">
+                <div class="ssl-header">
+                  <span class="ssl-sni">{{ s.server_name || '(no SNI)' }}</span>
+                  <span class="ssl-version">{{ s.tls_version }}</span>
+                  <span *ngIf="s.self_signed" class="warn-badge">SELF-SIGNED</span>
+                  <span *ngIf="s.is_valid" class="ok-badge">✓ Valid</span>
+                </div>
+                <div class="ssl-cert">
+                  <div *ngIf="s.subject">Subject: {{ s.subject }}</div>
+                  <div *ngIf="s.issuer">Issuer: {{ s.issuer }}</div>
+                  <div *ngIf="s.cipher">Cipher: {{ s.cipher }}</div>
+                </div>
+                <div class="ssl-fingerprints">
+                  <div *ngIf="s.ja3">JA3: <code class="monospace small">{{ s.ja3 }}</code></div>
+                  <div *ngIf="s.ja3s">JA3S: <code class="monospace small">{{ s.ja3s }}</code></div>
+                </div>
+                <div class="ssl-meta">{{ s.timestamp }}</div>
+              </div>
+              <div *ngIf="!bundleContents.zeek_ssl?.total" class="empty">No Zeek TLS/SSL logs for this session uid.</div>
+            </div>
+
+            <!-- Suricata TLS -->
+            <div class="source-section">
+              <div class="source-label suri-label">Suricata TLS ({{ bundleContents.suricata_tls?.total || 0 }})</div>
+              <div *ngIf="bundleContents.suricata_tls?.any_self_signed" class="intel-hit warning-row">
+                ⚠️ Self-signed certificate detected.
+              </div>
+              <div *ngFor="let s of bundleContents.suricata_tls?.sessions || []" class="ssl-row" [class.self-signed]="s.self_signed">
+                <div class="ssl-header">
+                  <span class="ssl-sni">{{ s.server_name || '(no SNI)' }}</span>
+                  <span class="ssl-version">{{ s.tls_version }}</span>
+                  <span *ngIf="s.self_signed" class="warn-badge">SELF-SIGNED</span>
+                </div>
+                <div class="ssl-cert">
+                  <div *ngIf="s.subject">Subject: {{ s.subject }}</div>
+                  <div *ngIf="s.issuer">Issuer: {{ s.issuer }}</div>
+                  <div *ngIf="s.fingerprint">Fingerprint: <code class="monospace small">{{ s.fingerprint }}</code></div>
+                  <div *ngIf="s.not_before || s.not_after">Valid: {{ s.not_before }} → {{ s.not_after }}</div>
+                </div>
+                <div class="ssl-fingerprints">
+                  <div *ngIf="s.ja3">JA3: <code class="monospace small">{{ s.ja3 }}</code></div>
+                  <div *ngIf="s.ja3s">JA3S: <code class="monospace small">{{ s.ja3s }}</code></div>
+                </div>
+                <div class="ssl-meta">{{ s.timestamp }} | {{ s.src_ip }} → {{ s.dest_ip }}</div>
+              </div>
+              <div *ngIf="!bundleContents.suricata_tls?.total" class="empty">No Suricata TLS events for this community_id.</div>
+            </div>
+          </div>
+
+          <!-- FILE TRANSFERS -->
+          <div *ngIf="activeContentSection==='files'" class="content-section">
+            <!-- Zeek Files -->
+            <div class="source-section">
+              <div class="source-label zeek-label">Zeek File Transfers ({{ bundleContents.zeek_files?.total || 0 }})</div>
+              <div *ngFor="let f of bundleContents.zeek_files?.files || []" class="file-row">
+                <div class="file-header">
+                  <span class="file-name">{{ f.filename || '(unnamed)' }}</span>
+                  <span class="file-mime">{{ f.mime_type }}</span>
+                  <span class="file-dir" [class.upload]="f.direction==='upload'">{{ f.direction }}</span>
+                </div>
+                <div class="file-size">{{ f.seen_bytes }} / {{ f.total_bytes }} bytes</div>
+                <div class="file-hashes">
+                  <div *ngIf="f.md5">MD5: <code class="monospace small">{{ f.md5 }}</code></div>
+                  <div *ngIf="f.sha1">SHA1: <code class="monospace small">{{ f.sha1 }}</code></div>
+                  <div *ngIf="f.sha256">SHA256: <code class="monospace small">{{ f.sha256 }}</code></div>
+                </div>
+                <div *ngIf="f.virustotal_link" class="vt-link">
+                  <a [href]="f.virustotal_link" target="_blank" rel="noopener noreferrer">🔍 Check on VirusTotal</a>
+                </div>
+                <div class="file-meta">{{ f.timestamp }}</div>
+              </div>
+              <div *ngIf="!bundleContents.zeek_files?.total" class="empty">No Zeek file logs for this session uid.</div>
+            </div>
+
+            <!-- Suricata File Info -->
+            <div class="source-section">
+              <div class="source-label suri-label">Suricata File Info ({{ bundleContents.suricata_files?.total || 0 }})</div>
+              <div *ngFor="let f of bundleContents.suricata_files?.files || []" class="file-row">
+                <div class="file-header">
+                  <span class="file-name">{{ f.filename || '(unnamed)' }}</span>
+                  <span class="file-mime">{{ f.mime_type }}</span>
+                  <span class="file-dir">{{ f.direction }}</span>
+                </div>
+                <div class="file-size">{{ f.size }} bytes | {{ f.state }}</div>
+                <div *ngIf="f.http_url" class="http-url-ref">URL: {{ f.http_url }}</div>
+                <div *ngIf="f.user_agent" class="ua-tag">UA: {{ f.user_agent }}</div>
+                <div class="file-meta">{{ f.timestamp }} | {{ f.src_ip }} → {{ f.dest_ip }}</div>
+              </div>
+              <div *ngIf="!bundleContents.suricata_files?.total" class="empty">No Suricata fileinfo events for this community_id.</div>
+            </div>
+          </div>
+
+          <!-- ANOMALIES -->
+          <div *ngIf="activeContentSection==='weird'" class="content-section">
+            <!-- Zeek Weird -->
+            <div class="source-section">
+              <div class="source-label zeek-label">Zeek Protocol Anomalies ({{ bundleContents.zeek_weird?.total || 0 }})</div>
+              <div *ngFor="let w of bundleContents.zeek_weird?.events || []" class="weird-row">
+                <div class="weird-header">
+                  <span class="weird-type">{{ w.weird_type }}</span>
+                  <span class="weird-time">{{ w.timestamp }}</span>
+                </div>
+                <div *ngIf="w.detail" class="weird-detail">{{ w.detail }}</div>
+                <div class="weird-ips">{{ w.src_ip }} → {{ w.dst_ip }}</div>
+              </div>
+              <div *ngIf="!bundleContents.zeek_weird?.total" class="empty">No Zeek protocol anomalies for this session uid.</div>
+            </div>
+
+            <!-- Suricata Anomaly -->
+            <div class="source-section">
+              <div class="source-label suri-label">Suricata Anomalies ({{ bundleContents.suricata_anomaly?.total || 0 }})</div>
+              <div *ngFor="let w of bundleContents.suricata_anomaly?.events || []" class="weird-row">
+                <div class="weird-header">
+                  <span class="weird-type">{{ w.type }}</span>
+                  <span class="weird-time">{{ w.timestamp }}</span>
+                  <span *ngIf="w.layer" class="layer-badge">{{ w.layer }}</span>
+                </div>
+                <div *ngIf="w.event" class="weird-detail">{{ w.event }}</div>
+                <div class="weird-ips">{{ w.src_ip }} → {{ w.dest_ip }} | Proto: {{ w.proto }}</div>
+              </div>
+              <div *ngIf="!bundleContents.suricata_anomaly?.total" class="empty">No Suricata anomaly events for this community_id.</div>
+            </div>
+          </div>
+
+          <!-- ALL ALERTS -->
+          <div *ngIf="activeContentSection==='alerts'" class="content-section">
+            <h4>Suricata / NDR Alerts ({{ bundleContents.suricata_alerts?.alerts?.length || 0 }})</h4>
+            <div *ngFor="let a of bundleContents.suricata_alerts?.alerts || []"
+                 class="alert-row" [class]="'sev-' + a.severity?.toLowerCase()">
+              <div class="alert-header">
+                <span class="sev-badge">{{ a.severity }}</span>
+                <span class="alert-name">{{ a.rule_name || a.tags }}</span>
+                <span class="alert-time">{{ a.timestamp }}</span>
+              </div>
+              <div class="alert-meta">
+                {{ a.src_ip }} → {{ a.dst_ip }}
+                | Score: {{ a.score }}
+                | {{ a.src_country }} → {{ a.dst_country }}
+              </div>
+            </div>
+            <div *ngIf="!bundleContents.suricata_alerts?.alerts?.length" class="empty">
+              No alerts for this session in ndr_hits.
+            </div>
+
+            <h4 style="margin-top:20px">SIGMA Matches ({{ bundleContents.sigma_matches?.matches?.length || 0 }})</h4>
+            <div *ngFor="let s of bundleContents.sigma_matches?.matches || []"
+                 class="alert-row sigma">
+              <div class="alert-header">
+                <span class="sev-badge">{{ s.severity }}</span>
+                <span class="alert-name">{{ s.sigma_hits }}</span>
+                <span class="alert-time">{{ s.timestamp }}</span>
+              </div>
+              <div *ngIf="s.tags" class="alert-tags">Tags: {{ s.tags }}</div>
+            </div>
+            <div *ngIf="!bundleContents.sigma_matches?.matches?.length" class="empty">
+              No SIGMA matches for this session.
+            </div>
+          </div>
+
+          <!-- THREAT INTEL -->
+          <div *ngIf="activeContentSection==='intel'" class="content-section">
+            <h4>Threat Intelligence Check</h4>
+            <div *ngIf="bundleContents.threat_intel">
+              <div class="intel-checked">
+                <span class="intel-label">IPs checked:</span>
+                <ng-container *ngFor="let ip of bundleContents.threat_intel.checked_ips || []; let last = last">
+                  <span class="ip-tag">{{ ip }}</span><span *ngIf="!last" class="ip-sep">,</span>
+                </ng-container>
+                <span *ngIf="!bundleContents.threat_intel.checked_ips?.length" class="empty-inline">none (src/dst IP unknown at capture time)</span>
+              </div>
+              <div *ngIf="!(bundleContents.threat_intel.matches?.length)" class="intel-clean">
+                ✅ No threat intel matches found for these IPs.
+              </div>
+              <div *ngFor="let m of bundleContents.threat_intel.matches || []" class="intel-hit">
+                <div class="intel-header">
+                  <span class="intel-type">{{ m.ioc_type || m.threat_type }}</span>
+                  <span class="intel-value ip">{{ m.ioc_value || m.indicator }}</span>
+                  <span class="intel-confidence" [class.high]="m.confidence >= 70">
+                    Confidence: {{ m.confidence }}%
+                  </span>
+                </div>
+                <div class="intel-desc">{{ m.description }}</div>
+                <div class="intel-tags">{{ m.tags }}</div>
+                <div class="intel-dates" *ngIf="m.first_seen">
+                  First seen: {{ m.first_seen }} | Last seen: {{ m.last_seen }}
+                </div>
+              </div>
+            </div>
+            <div *ngIf="!bundleContents.threat_intel" class="empty">Threat intel data not available.</div>
+          </div>
+
+          <!-- RELATED ACTIVITY -->
+          <div *ngIf="activeContentSection==='related'" class="content-section">
+            <h4>Related Alerts from Same Source (±30 min window)</h4>
+            <div *ngIf="!bundleContents.related_alerts?.alerts?.length" class="empty">
+              No related alerts in ±30 minute window. (Isolated incident)
+            </div>
+            <div *ngFor="let r of bundleContents.related_alerts?.alerts || []"
+                 class="related-row" [class]="'sev-' + r.severity?.toLowerCase()">
+              <div class="related-header">
+                <span class="sev-badge">{{ r.severity }}</span>
+                <span class="related-time">{{ r.timestamp }}</span>
+              </div>
+              <div class="related-ips">{{ r.src_ip }} → {{ r.dst_ip }}</div>
+              <div class="related-tags">{{ r.tags }}</div>
+              <div class="related-cid monospace small">CID: {{ r.community_id }}</div>
+            </div>
+          </div>
+
+          <!-- PCAP -->
+          <div *ngIf="activeContentSection==='pcap'" class="content-section">
+            <div *ngIf="bundleContents.pcap_available" class="pcap-available">
+              <h4>✅ PCAP Captured</h4>
+              <p>Size: {{ (bundleContents.pcap_size_bytes / 1024).toFixed(1) }} KB</p>
+              <p>Contains raw packets for this session. Open in Wireshark for deep packet inspection.</p>
+              <button class="btn-primary" (click)="download(selectedBundle)">
+                ⬇ Download Full ZIP (includes session.pcap)
+              </button>
+              <p class="pcap-note">PCAP is inside the ZIP as <code>session.pcap</code>. Open with Wireshark.</p>
+            </div>
+            <div *ngIf="!bundleContents.pcap_available" class="pcap-missing">
+              <h4>⚠️ PCAP Not Available</h4>
+              <p>Possible reasons:</p>
+              <ul>
+                <li>Session rotated out of Arkime storage before capture</li>
+                <li>Arkime not running at capture time</li>
+                <li>OpenSearch session not indexed yet</li>
+              </ul>
+              <p>All other evidence files (alerts, connection, threat intel) are still available above.</p>
+            </div>
+          </div>
+
         </div>
       </div>
 

@@ -7,11 +7,12 @@ import { Websocket } from '../services/websocket/websocket';
 import { AuthService } from '../services/auth/auth';
 import { filter } from 'rxjs/operators';
 import { ToastContainer } from '../components/toast-container/toast-container';
+import { AriaBot } from '../components/aria-bot/aria-bot';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterOutlet, Sidebar, Navbar, ToastContainer],
+  imports: [CommonModule, RouterOutlet, Sidebar, Navbar, ToastContainer, AriaBot],
   templateUrl: './app.html',
   styleUrl: './app.css',
   encapsulation: ViewEncapsulation.None

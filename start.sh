@@ -51,13 +51,16 @@ mkdir -p $HOME_DIR/.vector/data/suricata \
          $HOME_DIR/.vector/data/zeek
 log "✅ Vector checkpoints cleared"
 
-# Start Docker stack
+# Start Docker stack (--profile onpremise includes OpenSearch)
 echo "  → Starting Docker stack..."
 cd $INSTALL_DIR
 sudo docker rm -f vector 2>/dev/null || true
-sudo docker compose up -d
+sudo docker compose --profile onpremise up -d
 
-# Arkime capture is started only via the NDR UI (Start Agent button)
+# Arkime viewer — always running so PCAP download works even when not recording
+echo "  → Starting Arkime viewer..."
+sudo systemctl start arkimeviewer 2>/dev/null || true
+# Arkime capture starts/stops via NDR UI Agent button
 
 # ── Set Kafka retention and ensure 3-partition topic ─────────────
 # Wait for Kafka to be healthy before touching topics
@@ -144,10 +147,12 @@ echo ""
 
 echo ""
 echo "📊 Status:"
-echo "  ClickHouse: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
-echo "  Docker: $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ')"
-echo "  Agent:  $(curl -s http://localhost:3001/agent/status 2>/dev/null)"
-echo "  Arkime: start via NDR UI → Agent → Start"
+echo "  ClickHouse:  $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
+echo "  OpenSearch:  $(curl -s http://localhost:9200 2>/dev/null | grep -o '"tagline":".*"' || echo 'starting...')"
+echo "  Docker:      $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ')"
+echo "  Agent:       $(curl -s http://localhost:3001/agent/status 2>/dev/null || echo 'not running')"
+echo "  Arkime viewer:  $(systemctl is-active arkimeviewer 2>/dev/null || echo 'not running')"
+echo "  Arkime capture: start via NDR UI → Agent → Start"
 
 echo ""
 echo "✅ NDR Stack started"

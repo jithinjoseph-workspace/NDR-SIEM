@@ -3210,6 +3210,77 @@ pub async fn get_pcap_file_path_by_community_id(
 }
 
 
+/// Get recent hits for ARIA context
+pub async fn get_recent_hits_for_aria(
+    &self,
+    tenant_id: &str,
+    limit: u32,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    // Use a struct to avoid tuple field limit
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct HitRow {
+        community_id: String,
+        src_ip: String,
+        dst_ip: String,
+        severity: String,
+        score: f64,
+        tags: String,
+        timestamp: String,
+    }
+    let rows = self.client.query(&format!(
+        "SELECT community_id, src_ip, dst_ip,
+         severity, score, tags,
+         toString(timestamp) as timestamp
+         FROM {}.ndr_hits
+         ORDER BY timestamp DESC LIMIT {}",
+        db, limit
+    )).fetch_all::<HitRow>().await?;
 
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "community_id": r.community_id,
+        "src_ip": r.src_ip,
+        "dst_ip": r.dst_ip,
+        "severity": r.severity,
+        "score": r.score,
+        "tags": r.tags,
+        "timestamp": r.timestamp
+    })).collect())
+}
+
+/// Count hits by severity last 24h
+pub async fn count_hits_by_severity_aria(
+    &self,
+    tenant_id: &str,
+    severity: &str,
+) -> anyhow::Result<u64> {
+    let db = tenant_db(tenant_id);
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct CountRow { cnt: u64 }
+    let rows = self.client.query(&format!(
+        "SELECT count() as cnt
+         FROM {}.ndr_hits
+         WHERE severity = '{}'
+         AND timestamp >= now() - INTERVAL 24 HOUR",
+        db, severity
+    )).fetch_all::<CountRow>().await?;
+    Ok(rows.first().map(|r| r.cnt).unwrap_or(0))
+}
+
+/// Count evidence bundles for tenant
+pub async fn count_evidence_bundles_aria(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<u64> {
+    let db = tenant_db(tenant_id);
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct CountRow { cnt: u64 }
+    let rows = self.client.query(&format!(
+        "SELECT count() as cnt
+         FROM {}.evidence_bundles",
+        db
+    )).fetch_all::<CountRow>().await?;
+    Ok(rows.first().map(|r| r.cnt).unwrap_or(0))
+}
 
 }

@@ -12,14 +12,24 @@ export class EvidenceService {
     });
   }
 
-  // Download ZIP bundle — triggers browser download
+  // Download ZIP bundle — fetches with Authorization header then triggers browser download
   downloadBundle(communityId: string): void {
-    const token = localStorage.getItem('ndr_token');
-    const url = `/api/evidence/${encodeURIComponent(communityId)}?token=${token}`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `evidence_${communityId}.zip`;
-    a.click();
+    this.http.get(`/api/evidence/${encodeURIComponent(communityId)}`, {
+      headers: this.headers(),
+      responseType: 'blob'
+    }).subscribe({
+      next: (blob) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `evidence_${communityId.replace(/[:/+]/g, '_')}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      },
+      error: (err) => console.error('Evidence download failed:', err)
+    });
   }
 
   listBundles(limit = 50): Observable<any> {
@@ -64,6 +74,11 @@ export class EvidenceService {
 
   checkIoc(value: string): Observable<any> {
     return this.http.get(`/api/evidence/iocs/check?value=${encodeURIComponent(value)}`,
+      { headers: this.headers() });
+  }
+
+  getBundleContents(bundleId: string): Observable<any> {
+    return this.http.get(`/api/evidence/bundle/${bundleId}/contents`,
       { headers: this.headers() });
   }
 }

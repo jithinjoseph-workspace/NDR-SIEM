@@ -17,6 +17,15 @@ fn sha256_of(data: &[u8]) -> String {
     format!("{:x}", h.finalize())
 }
 
+fn unix_to_iso(ts: f64) -> String {
+    if ts == 0.0 { return String::new(); }
+    let secs = ts as i64;
+    let nanos = (ts.fract() * 1_000_000_000.0) as u32;
+    chrono::DateTime::from_timestamp(secs, nanos)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| ts.to_string())
+}
+
 /// Query ClickHouse HTTP API; returns the `data` array of row objects.
 async fn query_ch(
     http: &reqwest::Client,
@@ -40,6 +49,67 @@ async fn query_ch(
     }
 }
 
+/// Query Suricata events from ndr_events by community_id and event_type.
+/// All Suricata log types carry community_id directly — no uid join needed.
+async fn query_suricata_events(
+    http: &reqwest::Client,
+    ch_url: &str,
+    ch_user: &str,
+    ch_pass: &str,
+    db: &str,
+    community_id: &str,
+    event_type: &str,
+    limit: usize,
+) -> Vec<Value> {
+    let sql = format!(
+        "SELECT raw FROM {}.ndr_events \
+         WHERE community_id = '{}' AND source = 'suricata' \
+         AND JSONExtractString(raw, 'event_type') = '{}' \
+         ORDER BY timestamp ASC LIMIT {}",
+        db, community_id, event_type, limit
+    );
+    let rows = query_ch(http, ch_url, ch_user, ch_pass, &sql).await;
+    rows.as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|row| {
+            let raw_str = row["raw"].as_str()?;
+            serde_json::from_str(raw_str).ok()
+        })
+        .collect()
+}
+
+/// Query ndr_events WHERE community_id = uid AND JSONExtractString(raw,'log_type') = log_type.
+/// Parses each row's `raw` JSON string and returns the parsed events.
+async fn query_raw_events(
+    http: &reqwest::Client,
+    ch_url: &str,
+    ch_user: &str,
+    ch_pass: &str,
+    db: &str,
+    uid: &str,
+    log_type: &str,
+    limit: usize,
+) -> Vec<Value> {
+    let sql = format!(
+        "SELECT raw FROM {}.ndr_events \
+         WHERE community_id = '{}' \
+         AND JSONExtractString(raw, 'log_type') = '{}' \
+         ORDER BY timestamp ASC LIMIT {}",
+        db, uid, log_type, limit
+    );
+    let rows = query_ch(http, ch_url, ch_user, ch_pass, &sql).await;
+    rows.as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|row| {
+            let raw_str = row["raw"].as_str()?;
+            serde_json::from_str(raw_str).ok()
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_attack_summary(
     community_id: &str,
     alert: &Value,
@@ -48,34 +118,33 @@ fn build_attack_summary(
     related_alerts: &Value,
     pcap_captured: bool,
     generated_at: &str,
+    dns_preceded: bool,
+    ssl_self_signed: bool,
+    files_transferred: usize,
+    http_user_agent: &str,
+    zeek_anomalies: usize,
 ) -> Value {
-    let src_ip  = alert["src_ip"].as_str().unwrap_or("unknown");
-    let dst_ip  = alert["dst_ip"].as_str().unwrap_or("unknown");
+    let src_ip   = alert["src_ip"].as_str().unwrap_or("unknown");
+    let dst_ip   = alert["dst_ip"].as_str().unwrap_or("unknown");
     let severity = alert["severity"].as_str().unwrap_or("UNKNOWN");
 
     let rules_fired: Vec<Value> = suricata_alerts
         .as_array()
         .unwrap_or(&vec![])
         .iter()
-        .map(|r| json!({
-            "name": r["rule_name"],
-            "severity": r["severity"]
-        }))
+        .map(|r| json!({ "name": r["rule_name"], "severity": r["severity"] }))
         .collect();
 
     let empty_vec: Vec<Value> = vec![];
-    let threat_matches: Vec<&Value> = threat_intel
+    let intel_count = threat_intel
         .as_array()
         .unwrap_or(&empty_vec)
-        .iter()
-        .collect();
+        .len();
 
     let related_count = related_alerts
         .as_array()
         .map(|a| a.len())
         .unwrap_or(0);
-
-    let intel_count = threat_matches.len();
 
     let rules_desc: Vec<String> = rules_fired.iter()
         .map(|r| format!("'{}' ({})",
@@ -88,23 +157,55 @@ fn build_attack_summary(
         rules_desc.join(", ")
     };
 
-    let intel_note = if intel_count > 0 {
-        format!("Threat intel confirms {} IP(s) are known malicious (confidence: high).", intel_count)
-    } else {
-        "No threat intel matches found for observed IPs.".to_string()
-    };
-
-    let related_note = if related_count > 0 {
-        format!("{} related alert(s) from the same source in a 30-minute window suggest active compromise.",
-            related_count)
-    } else {
-        "No related alerts in the 30-minute window.".to_string()
-    };
-
-    let summary = format!(
-        "Host {} made suspicious connection to {}. NDR engine fired {} rule(s) including {}. {} {}",
-        src_ip, dst_ip, rules_fired.len(), rules_str, intel_note, related_note
+    let mut narrative = format!(
+        "Host {} made suspicious connection to {}. NDR engine fired {} rule(s) including {}.",
+        src_ip, dst_ip, rules_fired.len(), rules_str
     );
+
+    if intel_count > 0 {
+        narrative.push_str(&format!(
+            " Threat intel confirms {} IP(s) are known malicious.", intel_count
+        ));
+    } else {
+        narrative.push_str(" No threat intel matches found for observed IPs.");
+    }
+
+    if related_count > 0 {
+        narrative.push_str(&format!(
+            " {} related alert(s) from the same source in a 30-minute window suggest active compromise.",
+            related_count
+        ));
+    }
+
+    if dns_preceded {
+        narrative.push_str(
+            " DNS resolution for the destination was observed immediately before the connection \
+             — consistent with C2 domain lookup."
+        );
+    }
+
+    if ssl_self_signed {
+        narrative.push_str(
+            " WARNING: TLS certificate is self-signed — typical of attacker-controlled infrastructure."
+        );
+    }
+
+    if files_transferred > 0 {
+        narrative.push_str(&format!(
+            " {} file(s) transferred during session — hashes available in zeek_files.json for VirusTotal lookup.",
+            files_transferred
+        ));
+    }
+
+    if !http_user_agent.is_empty() {
+        narrative.push_str(&format!(" HTTP user agent: '{}'.", http_user_agent));
+    }
+
+    if zeek_anomalies > 0 {
+        narrative.push_str(&format!(
+            " Zeek detected {} protocol anomaly/anomalies — see zeek_weird.json.", zeek_anomalies
+        ));
+    }
 
     let recommended_action = format!(
         "Isolate host {}. Block {} at firewall. Review all connections from {} in the last 24 hours.",
@@ -116,14 +217,591 @@ fn build_attack_summary(
         "community_id": community_id,
         "generated_at": generated_at,
         "severity": severity,
-        "summary": summary,
+        "summary": narrative,
         "attacker_ip": dst_ip,
         "victim_ip": src_ip,
         "rules_fired": rules_fired,
         "threat_intel_hits": intel_count,
         "related_alerts": related_count,
         "pcap_captured": pcap_captured,
+        "dns_lookup_before_connection": dns_preceded,
+        "ssl_self_signed_cert": ssl_self_signed,
+        "files_transferred": files_transferred,
+        "http_user_agent": http_user_agent,
+        "zeek_anomalies": zeek_anomalies,
         "recommended_action": recommended_action
+    })
+}
+
+/// Query ClickHouse live and return a full investigation data object.
+/// Used by get_bundle_contents to always show current data (avoids stale ZIP data).
+pub async fn fetch_live_investigation(
+    community_id: &str,
+    tenant_id: &str,
+    alert_from_zip: &Value,
+    session_from_zip: &Value,
+) -> Value {
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_default();
+
+    let ch_url  = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "ndr".to_string());
+    let ch_pass = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| "ndr123".to_string());
+    let db = tenant_db(tenant_id);
+
+    // ── Connection record — best available from either sensor ────────────────
+    // Zeek misses short UDP flows (DNS); Suricata always records them.
+    // Query both and pick: Zeek conn > Suricata flow > Suricata alert > any event.
+    let conn_record = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+        "SELECT src_ip, dst_ip, src_port, dst_port, \
+         lower(proto) as proto, event_type, \
+         toString(timestamp) as timestamp, community_id, source, raw \
+         FROM {}.ndr_events \
+         WHERE community_id = '{}' AND src_ip != '' \
+         ORDER BY \
+           multiIf(source='zeek', 0, \
+                   JSONExtractString(raw,'event_type')='flow', 1, \
+                   JSONExtractString(raw,'event_type')='alert', 2, 3) ASC, \
+           timestamp ASC \
+         LIMIT 1",
+        db, community_id
+    )).await
+        .as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    // Get ALL distinct Zeek uids for this community_id (one conn may have multiple sessions)
+    let all_uids: Vec<String> = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+        "SELECT DISTINCT JSONExtractString(raw,'uid') as uid \
+         FROM {}.ndr_events \
+         WHERE community_id = '{}' AND source = 'zeek' \
+         AND JSONExtractString(raw,'uid') != ''",
+        db, community_id
+    )).await
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|r| r["uid"].as_str().map(String::from))
+        .collect();
+
+    // Primary uid for display (first one); all uids used for log joins
+    let uid: String = all_uids.first()
+        .cloned()
+        .unwrap_or_else(|| community_id.to_string());
+
+    // Resolve src_ip/dst_ip from conn record, then ZIP alert, then ZIP session
+    let src_ip = {
+        let from_conn  = conn_record["src_ip"].as_str().unwrap_or("").to_string();
+        let from_alert = alert_from_zip["src_ip"].as_str().unwrap_or("").to_string();
+        let from_sess  = session_from_zip["source"]["source"]["ip"].as_str().unwrap_or("").to_string();
+        if !from_conn.is_empty() { from_conn }
+        else if !from_alert.is_empty() { from_alert }
+        else { from_sess }
+    };
+    let dst_ip = {
+        let from_conn  = conn_record["dst_ip"].as_str().unwrap_or("").to_string();
+        let from_alert = alert_from_zip["dst_ip"].as_str().unwrap_or("").to_string();
+        let from_sess  = session_from_zip["source"]["destination"]["ip"].as_str().unwrap_or("").to_string();
+        if !from_conn.is_empty() { from_conn }
+        else if !from_alert.is_empty() { from_alert }
+        else { from_sess }
+    };
+    let alert_time = alert_from_zip["timestamp"].as_str()
+        .or_else(|| alert_from_zip["auto_captured_at"].as_str())
+        .unwrap_or("1970-01-01T00:00:00Z")
+        .to_string();
+
+    // Build enriched alert object
+    let mut alert_obj = alert_from_zip.clone();
+    if let Some(obj) = alert_obj.as_object_mut() {
+        obj.insert("src_ip".into(), json!(src_ip));
+        obj.insert("dst_ip".into(), json!(dst_ip));
+    }
+
+    let zeek_conn_json = json!({
+        "source": "zeek_conn",
+        "community_id": community_id,
+        "uid": uid,
+        "record": conn_record
+    });
+
+    // ── Zeek per-type events — collect across ALL uids for this community_id ─
+    let mut raw_dns:   Vec<Value> = vec![];
+    let mut raw_http:  Vec<Value> = vec![];
+    let mut raw_ssl:   Vec<Value> = vec![];
+    let mut raw_files: Vec<Value> = vec![];
+    let mut raw_weird: Vec<Value> = vec![];
+
+    for u in &all_uids {
+        raw_dns  .extend(query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, u, "dns",   20).await);
+        raw_http .extend(query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, u, "http",  20).await);
+        raw_ssl  .extend(query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, u, "ssl",   10).await);
+        raw_files.extend(query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, u, "files", 20).await);
+        raw_weird.extend(query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, u, "weird", 20).await);
+    }
+
+    let zeek_dns_events: Vec<Value> = raw_dns.iter().map(|raw| {
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "uid": raw["uid"], "timestamp": unix_to_iso(ts),
+            "src_ip": raw["id.orig_h"], "dns_server": raw["id.resp_h"],
+            "query": raw["query"], "answers": raw["answers"],
+            "rcode": raw["rcode_name"], "proto": raw["proto"], "rejected": raw["rejected"]
+        })
+    }).collect();
+
+    let resolves_to_target = zeek_dns_events.iter().any(|e| {
+        e["answers"].as_array()
+            .map(|a| a.iter().any(|ans| ans.as_str() == Some(dst_ip.as_str())))
+            .unwrap_or(false)
+    });
+
+    let zeek_dns_json = json!({
+        "queries": zeek_dns_events,
+        "total": raw_dns.len(),
+        "resolves_to_target_ip": resolves_to_target,
+        "uid": uid
+    });
+
+    let zeek_http_requests: Vec<Value> = raw_http.iter().map(|raw| {
+        let ts   = raw["ts"].as_f64().unwrap_or(0.0);
+        let host = raw["host"].as_str().unwrap_or("");
+        let uri  = raw["uri"].as_str().unwrap_or("/");
+        // Fall back to dst IP:port when Zeek didn't capture the Host header
+        let dst  = raw["id.resp_h"].as_str().unwrap_or(&dst_ip);
+        let port = raw["id.resp_p"].as_u64().unwrap_or(80);
+        let display_host = if host.is_empty() {
+            if port == 80 { dst.to_string() } else { format!("{}:{}", dst, port) }
+        } else {
+            host.to_string()
+        };
+        let display_uri = if uri == "/" && raw["uri"].is_null() { String::new() } else { uri.to_string() };
+        json!({
+            "timestamp": unix_to_iso(ts),
+            "method":    raw["method"],
+            "host":      display_host,
+            "uri":       display_uri,
+            "full_url":  format!("http://{}{}", display_host, display_uri),
+            "user_agent":        raw["user_agent"],
+            "status_code":       raw["status_code"],
+            "bytes_uploaded":    raw["request_body_len"],
+            "bytes_downloaded":  raw["response_body_len"]
+        })
+    }).collect();
+
+    let zeek_http_json = json!({
+        "requests": zeek_http_requests,
+        "total": raw_http.len(),
+        "uid": uid
+    });
+
+    let zeek_ssl_connections: Vec<Value> = raw_ssl.iter().map(|raw| {
+        let issuer  = raw["issuer"].as_str().unwrap_or("");
+        let subject = raw["subject"].as_str().unwrap_or("");
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "timestamp": unix_to_iso(ts),
+            "server_name": raw["server_name"], "subject": subject, "issuer": issuer,
+            "validation_status": raw["validation_status"],
+            "is_valid": raw["validation_status"].as_str() == Some("ok"),
+            "self_signed": !issuer.is_empty() && issuer == subject,
+            "cipher": raw["cipher"], "tls_version": raw["version"],
+            "ja3": raw["ja3"], "ja3s": raw["ja3s"]
+        })
+    }).collect();
+
+    let ssl_self_signed = zeek_ssl_connections.iter().any(|c| c["self_signed"].as_bool().unwrap_or(false));
+
+    let zeek_ssl_json = json!({
+        "connections": zeek_ssl_connections,
+        "total": raw_ssl.len(),
+        "any_self_signed": ssl_self_signed,
+        "uid": uid
+    });
+
+    let zeek_files_list: Vec<Value> = raw_files.iter().map(|raw| {
+        let sha256 = raw["sha256"].as_str().unwrap_or("");
+        let vt_link = if !sha256.is_empty() {
+            format!("https://www.virustotal.com/gui/file/{}", sha256)
+        } else { String::new() };
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "timestamp": unix_to_iso(ts), "filename": raw["filename"],
+            "mime_type": raw["mime_type"], "sha256": sha256,
+            "md5": raw["md5"], "sha1": raw["sha1"],
+            "total_bytes": raw["total_bytes"], "seen_bytes": raw["seen_bytes"],
+            "direction": if raw["is_orig"].as_bool().unwrap_or(false) { "upload" } else { "download" },
+            "source_protocol": raw["source"], "virustotal_link": vt_link
+        })
+    }).collect();
+
+    let zeek_files_json = json!({
+        "files": zeek_files_list,
+        "total": raw_files.len(),
+        "uid": uid
+    });
+
+    let zeek_weird_events: Vec<Value> = raw_weird.iter().map(|raw| {
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "timestamp": unix_to_iso(ts), "weird_type": raw["name"],
+            "detail": raw["addl"], "src_ip": raw["id.orig_h"], "dst_ip": raw["id.resp_h"]
+        })
+    }).collect();
+
+    let zeek_weird_json = json!({
+        "events": zeek_weird_events,
+        "total": raw_weird.len(),
+        "uid": uid
+    });
+
+    // ── Suricata raw events (separate from Zeek, shown as own sub-sections) ──
+    let (suri_dns_raw, suri_http_raw, suri_tls_raw, suri_files_raw, suri_anomaly_raw, suri_flow_raw) = tokio::join!(
+        query_suricata_events(&http, &ch_url, &ch_user, &ch_pass, &db, community_id, "dns",      20),
+        query_suricata_events(&http, &ch_url, &ch_user, &ch_pass, &db, community_id, "http",     20),
+        query_suricata_events(&http, &ch_url, &ch_user, &ch_pass, &db, community_id, "tls",      10),
+        query_suricata_events(&http, &ch_url, &ch_user, &ch_pass, &db, community_id, "fileinfo", 20),
+        query_suricata_events(&http, &ch_url, &ch_user, &ch_pass, &db, community_id, "anomaly",  20),
+        query_suricata_events(&http, &ch_url, &ch_user, &ch_pass, &db, community_id, "flow",      1),
+    );
+
+    // Enrich alert_obj with connection details from Zeek conn + Suricata flow
+    if let Some(obj) = alert_obj.as_object_mut() {
+        // Ports and protocol from Zeek conn if not already in alert
+        if obj.get("src_port").and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+            if let Some(p) = conn_record["src_port"].as_u64() { obj.insert("src_port".into(), json!(p)); }
+        }
+        if obj.get("dst_port").and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+            if let Some(p) = conn_record["dst_port"].as_u64() { obj.insert("dst_port".into(), json!(p)); }
+        }
+        if obj.get("proto").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            if let Some(p) = conn_record["proto"].as_str() { obj.insert("proto".into(), json!(p)); }
+        }
+        // Bytes/packets from Suricata flow event
+        if let Some(flow_ev) = suri_flow_raw.first() {
+            let fl = &flow_ev["flow"];
+            let bytes_tc = fl["bytes_toclient"].as_u64().unwrap_or(0);
+            let bytes_ts = fl["bytes_toserver"].as_u64().unwrap_or(0);
+            let pkts_tc  = fl["pkts_toclient"].as_u64().unwrap_or(0);
+            let pkts_ts  = fl["pkts_toserver"].as_u64().unwrap_or(0);
+            obj.insert("bytes_total".into(),   json!(bytes_tc + bytes_ts));
+            obj.insert("bytes_toclient".into(), json!(bytes_tc));
+            obj.insert("bytes_toserver".into(), json!(bytes_ts));
+            obj.insert("packets_total".into(),  json!(pkts_tc + pkts_ts));
+            obj.insert("pkts_toclient".into(),  json!(pkts_tc));
+            obj.insert("pkts_toserver".into(),  json!(pkts_ts));
+            obj.insert("flow_start".into(),     fl["start"].clone());
+            obj.insert("flow_end".into(),       fl["end"].clone());
+            obj.insert("flow_state".into(),     fl["state"].clone());
+            obj.insert("app_proto".into(),      flow_ev["app_proto"].clone());
+        }
+        // User agent from Suricata HTTP
+        if obj.get("user_agent").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            let ua = suri_http_raw.first()
+                .and_then(|r| r["http"]["http_user_agent"].as_str())
+                .unwrap_or("");
+            if !ua.is_empty() { obj.insert("user_agent".into(), json!(ua)); }
+        }
+    }
+
+    let suricata_dns_queries: Vec<Value> = suri_dns_raw.iter().map(|r| {
+        let dns = &r["dns"];
+        json!({
+            "timestamp":   r["timestamp"],
+            "src_ip":      r["src_ip"],
+            "dns_server":  r["dest_ip"],
+            "query":       dns["rrname"],
+            "type":        dns["type"],
+            "rcode":       dns["rcode"],
+            "answers":     dns["grouped"],
+            "proto":       r["proto"]
+        })
+    }).collect();
+
+    let suri_resolves_to_target = suricata_dns_queries.iter().any(|e| {
+        e["answers"].as_object()
+            .map(|obj| obj.values().any(|v| {
+                v.as_array().map(|a| a.iter().any(|s| s.as_str() == Some(dst_ip.as_str()))).unwrap_or(false)
+            }))
+            .unwrap_or(false)
+    });
+
+    let suricata_dns_json = json!({
+        "source": "suricata",
+        "queries": suricata_dns_queries,
+        "total":   suri_dns_raw.len(),
+        "resolves_to_target_ip": suri_resolves_to_target
+    });
+
+    let suricata_http_requests: Vec<Value> = suri_http_raw.iter().map(|r| {
+        let h = &r["http"];
+        let host = h["hostname"].as_str().unwrap_or(dst_ip.as_str());
+        let uri  = h["url"].as_str().unwrap_or("/");
+        let port = r["dest_port"].as_u64().unwrap_or(80);
+        let scheme = if port == 443 { "https" } else { "http" };
+        json!({
+            "timestamp":        r["timestamp"],
+            "method":           h["http_method"],
+            "host":             host,
+            "uri":              uri,
+            "full_url":         format!("{}://{}{}", scheme, host, uri),
+            "user_agent":       h["http_user_agent"],
+            "status_code":      h["status"],
+            "content_type":     h["http_content_type"],
+            "bytes_downloaded": h["length"],
+            "protocol":         h["protocol"],
+            "src_ip":           r["src_ip"],
+            "dest_ip":          r["dest_ip"]
+        })
+    }).collect();
+
+    let suri_http_ua: String = suricata_http_requests.first()
+        .and_then(|r| r["user_agent"].as_str())
+        .unwrap_or("").to_string();
+
+    let suricata_http_json = json!({
+        "source":   "suricata",
+        "requests": suricata_http_requests,
+        "total":    suri_http_raw.len()
+    });
+
+    let suricata_tls_sessions: Vec<Value> = suri_tls_raw.iter().map(|r| {
+        let tls = &r["tls"];
+        let issuer  = tls["issuerdn"].as_str().unwrap_or("");
+        let subject = tls["subject"].as_str().unwrap_or("");
+        json!({
+            "timestamp":   r["timestamp"],
+            "server_name": tls["sni"],
+            "subject":     subject,
+            "issuer":      issuer,
+            "tls_version": tls["version"],
+            "ja3":         tls["ja3"],
+            "ja3s":        tls["ja3s"],
+            "fingerprint": tls["fingerprint"],
+            "not_after":   tls["notafter"],
+            "not_before":  tls["notbefore"],
+            "self_signed": !issuer.is_empty() && issuer == subject,
+            "src_ip":      r["src_ip"],
+            "dest_ip":     r["dest_ip"]
+        })
+    }).collect();
+
+    let suri_ssl_self_signed = suricata_tls_sessions.iter()
+        .any(|c| c["self_signed"].as_bool().unwrap_or(false));
+
+    let suricata_tls_json = json!({
+        "source":      "suricata",
+        "sessions":    suricata_tls_sessions,
+        "total":       suri_tls_raw.len(),
+        "any_self_signed": suri_ssl_self_signed
+    });
+
+    let suricata_files_list: Vec<Value> = suri_files_raw.iter().map(|r| {
+        let fi       = &r["fileinfo"];
+        let http_ctx = &r["http"];
+        let filename = fi["filename"].as_str()
+            .filter(|s| !s.is_empty() && *s != "/")
+            .or_else(|| http_ctx["url"].as_str())
+            .unwrap_or("(unnamed)");
+        let mime = http_ctx["http_content_type"].as_str()
+            .or_else(|| fi["mimetype"].as_str())
+            .unwrap_or("");
+        json!({
+            "timestamp":   r["timestamp"],
+            "filename":    filename,
+            "mime_type":   mime,
+            "size":        fi["size"],
+            "state":       fi["state"],
+            "stored":      fi["stored"],
+            "http_url":    format!("http://{}{}",
+                http_ctx["hostname"].as_str().unwrap_or(""),
+                http_ctx["url"].as_str().unwrap_or("")),
+            "user_agent":  http_ctx["http_user_agent"],
+            "src_ip":      r["src_ip"],
+            "dest_ip":     r["dest_ip"]
+        })
+    }).collect();
+
+    let suricata_files_json = json!({
+        "source": "suricata",
+        "files":  suricata_files_list,
+        "total":  suri_files_raw.len()
+    });
+
+    let suricata_anomaly_events: Vec<Value> = suri_anomaly_raw.iter().map(|r| {
+        let an = &r["anomaly"];
+        json!({
+            "timestamp":  r["timestamp"],
+            "type":       an["type"],
+            "event":      an["event"],
+            "layer":      an["layer"],
+            "src_ip":     r["src_ip"],
+            "dest_ip":    r["dest_ip"],
+            "proto":      r["proto"]
+        })
+    }).collect();
+
+    let suricata_anomaly_json = json!({
+        "source": "suricata",
+        "events": suricata_anomaly_events,
+        "total":  suri_anomaly_raw.len()
+    });
+
+    // Combined flags for attack summary
+    let resolves_to_target = !raw_dns.is_empty() && zeek_dns_events.iter().any(|e| {
+        e["answers"].as_array()
+            .map(|a| a.iter().any(|ans| ans.as_str() == Some(dst_ip.as_str())))
+            .unwrap_or(false)
+    }) || suri_resolves_to_target;
+
+    let ssl_self_signed = zeek_ssl_connections.iter().any(|c| c["self_signed"].as_bool().unwrap_or(false))
+        || suri_ssl_self_signed;
+
+    let total_files = raw_files.len() + suri_files_raw.len();
+    let total_anomalies = raw_weird.len() + suri_anomaly_raw.len();
+    let http_user_agent = if !suri_http_ua.is_empty() { suri_http_ua }
+        else {
+            zeek_http_requests.first()
+                .and_then(|r| r["user_agent"].as_str())
+                .unwrap_or("").to_string()
+        };
+
+    // ── Suricata / NDR alerts ────────────────────────────────────────────────
+    let suricata_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+        "SELECT src_ip, dst_ip, severity, score, \
+         toString(tags) as tags, toString(sigma_hits) as sigma_hits, \
+         arrayElement(sigma_hits, 1) as rule_name, \
+         src_country, dst_country, toString(timestamp) as timestamp \
+         FROM {}.ndr_hits WHERE community_id = '{}' ORDER BY timestamp DESC",
+        db, community_id
+    )).await;
+
+    let suricata_json = json!({
+        "source": "suricata_alerts",
+        "community_id": community_id,
+        "alerts": suricata_rows
+    });
+
+    let sigma_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+        "SELECT severity, toString(tags) as tags, toString(sigma_hits) as sigma_hits, \
+         toString(timestamp) as timestamp \
+         FROM {}.ndr_hits WHERE community_id = '{}' AND notEmpty(sigma_hits)",
+        db, community_id
+    )).await;
+
+    let sigma_json = json!({
+        "source": "sigma",
+        "community_id": community_id,
+        "matches": sigma_rows
+    });
+
+    // ── Threat intel ─────────────────────────────────────────────────────────
+    let checked_ips: Vec<&str> = [src_ip.as_str(), dst_ip.as_str()]
+        .into_iter().filter(|s| !s.is_empty()).collect();
+
+    let ioc_rows = if !checked_ips.is_empty() {
+        let ip_list = checked_ips.iter()
+            .map(|ip| format!("'{}'", ip.replace('\'', "")))
+            .collect::<Vec<_>>().join(", ");
+        query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+            "SELECT ioc_value, ioc_type, confidence, tags, description, \
+             toString(first_seen) as first_seen, toString(last_seen) as last_seen \
+             FROM ndr.shared_iocs WHERE ioc_value IN ({}) LIMIT 20", ip_list
+        )).await
+    } else { json!([]) };
+
+    let ti_rows = if !checked_ips.is_empty() {
+        let ip_list = checked_ips.iter()
+            .map(|ip| format!("'{}'", ip.replace('\'', "")))
+            .collect::<Vec<_>>().join(", ");
+        query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+            "SELECT indicator, threat_type, confidence, source, tags \
+             FROM ndr.threat_intel WHERE indicator IN ({}) LIMIT 10", ip_list
+        )).await
+    } else { json!([]) };
+
+    let all_intel: Vec<Value> = {
+        let mut v: Vec<Value> = vec![];
+        if let Some(arr) = ioc_rows.as_array() { v.extend(arr.clone()); }
+        if let Some(arr) = ti_rows.as_array()  { v.extend(arr.clone()); }
+        v
+    };
+
+    let threat_intel_json = json!({
+        "matches": all_intel,
+        "checked_ips": checked_ips
+    });
+
+    // ── Related alerts (same src_ip ±30 min) ─────────────────────────────────
+    let related_rows = if !src_ip.is_empty() {
+        query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+            "SELECT community_id, severity, src_ip, dst_ip, \
+             toString(tags) as tags, toString(timestamp) as timestamp \
+             FROM {}.ndr_hits \
+             WHERE src_ip = '{}' AND community_id != '{}' \
+             AND timestamp BETWEEN \
+                 parseDateTimeBestEffort('{}') - INTERVAL 30 MINUTE \
+                 AND parseDateTimeBestEffort('{}') + INTERVAL 30 MINUTE \
+             ORDER BY timestamp ASC LIMIT 20",
+            db, src_ip, community_id, alert_time, alert_time
+        )).await
+    } else { json!([]) };
+
+    let related_json = json!({
+        "community_id": community_id,
+        "src_ip": src_ip,
+        "window_minutes": 30,
+        "alerts": related_rows
+    });
+
+    // ── Derive highest severity from suricata rows + sigma rows ──────────────
+    // alert_obj["severity"] may be "UNKNOWN" (set before IDS data arrived);
+    // always elevate to the highest confirmed severity across all sources.
+    fn sev_rank(s: &str) -> u8 {
+        match s { "CRITICAL" => 4, "HIGH" => 3, "MEDIUM" => 2, "LOW" => 1, _ => 0 }
+    }
+    let mut best_sev = alert_obj["severity"].as_str().unwrap_or("UNKNOWN").to_string();
+    for row in suricata_rows.as_array().unwrap_or(&vec![]) {
+        let s = row["severity"].as_str().unwrap_or("");
+        if sev_rank(s) > sev_rank(&best_sev) { best_sev = s.to_string(); }
+    }
+    for row in sigma_rows.as_array().unwrap_or(&vec![]) {
+        let s = row["severity"].as_str().unwrap_or("");
+        if sev_rank(s) > sev_rank(&best_sev) { best_sev = s.to_string(); }
+    }
+    if let Some(obj) = alert_obj.as_object_mut() {
+        obj.insert("severity".to_string(), json!(best_sev));
+    }
+
+    // ── Attack summary ────────────────────────────────────────────────────────
+    let now = chrono::Utc::now().to_rfc3339();
+    let attack_summary = build_attack_summary(
+        community_id, &alert_obj, &suricata_rows, &Value::Array(all_intel),
+        &related_rows, false, &now, resolves_to_target, ssl_self_signed,
+        total_files, &http_user_agent, total_anomalies,
+    );
+
+    json!({
+        "attack_summary":    attack_summary,
+        "alert":             alert_obj,
+        "zeek_conn":         zeek_conn_json,
+        "zeek_dns":          zeek_dns_json,
+        "zeek_http":         zeek_http_json,
+        "zeek_ssl":          zeek_ssl_json,
+        "zeek_files":        zeek_files_json,
+        "zeek_weird":        zeek_weird_json,
+        "suricata_dns":      suricata_dns_json,
+        "suricata_http":     suricata_http_json,
+        "suricata_tls":      suricata_tls_json,
+        "suricata_files":    suricata_files_json,
+        "suricata_anomaly":  suricata_anomaly_json,
+        "suricata_alerts":   suricata_json,
+        "sigma_matches":     sigma_json,
+        "threat_intel":      threat_intel_json,
+        "related_alerts":    related_json
     })
 }
 
@@ -142,7 +820,6 @@ pub async fn build_evidence_bundle(
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    // ClickHouse connection from env
     let ch_url  = std::env::var("CLICKHOUSE_URL")
         .unwrap_or_else(|_| "http://localhost:8123".to_string());
     let ch_user = std::env::var("CLICKHOUSE_USER")
@@ -152,8 +829,6 @@ pub async fn build_evidence_bundle(
 
     let db = tenant_db(tenant_id);
 
-    let src_ip = alert_json["src_ip"].as_str().unwrap_or("").to_string();
-    let dst_ip = alert_json["dst_ip"].as_str().unwrap_or("").to_string();
     let alert_time = alert_json["timestamp"]
         .as_str()
         .or_else(|| alert_json["auto_captured_at"].as_str())
@@ -162,19 +837,20 @@ pub async fn build_evidence_bundle(
 
     // ── 1. Session metadata from OpenSearch ──────────────────────────────────
     let session_meta: Value = if !opensearch_url.is_empty() {
-        let resp = http.post(format!(
-            "{}/arkime_sessions3-*/_search",
-            opensearch_url
-        ))
-        .json(&json!({
-            "query": { "term": { "network.community_id": community_id } },
-            "size": 1
-        }))
-        .send().await?
-        .json::<Value>().await?;
+        let os_result: Option<Value> = async {
+            let resp = http.post(format!("{}/arkime_sessions3-*/_search", opensearch_url))
+                .json(&json!({
+                    "query": { "term": { "network.community_id": community_id } },
+                    "size": 1
+                }))
+                .send().await.ok()?
+                .json::<Value>().await.ok()?;
+            Some(resp)
+        }.await;
 
-        let hit = resp["hits"]["hits"]
-            .as_array()
+        let hit = os_result
+            .as_ref()
+            .and_then(|v| v["hits"]["hits"].as_array())
             .and_then(|a| a.first())
             .cloned()
             .unwrap_or(json!({}));
@@ -194,46 +870,270 @@ pub async fn build_evidence_bundle(
         })
     };
 
+    // Extract src/dst IPs — prefer alert_json, fall back to session_metadata
+    let src_ip = {
+        let from_alert = alert_json["src_ip"].as_str().unwrap_or("").to_string();
+        if !from_alert.is_empty() { from_alert }
+        else { session_meta["source"]["source"]["ip"].as_str().unwrap_or("").to_string() }
+    };
+    let dst_ip = {
+        let from_alert = alert_json["dst_ip"].as_str().unwrap_or("").to_string();
+        if !from_alert.is_empty() { from_alert }
+        else { session_meta["source"]["destination"]["ip"].as_str().unwrap_or("").to_string() }
+    };
+    let src_port = alert_json["src_port"]
+        .as_u64()
+        .unwrap_or_else(|| session_meta["source"]["source"]["port"].as_u64().unwrap_or(0));
+    let dst_port = alert_json["dst_port"]
+        .as_u64()
+        .unwrap_or_else(|| session_meta["source"]["destination"]["port"].as_u64().unwrap_or(0));
+    let proto = session_meta["source"]["protocol"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .unwrap_or("tcp")
+        .to_string();
+
+    let mut alert_json = {
+        let mut v = alert_json.clone();
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("src_ip".into(), json!(src_ip));
+            obj.insert("dst_ip".into(), json!(dst_ip));
+            obj.insert("src_port".into(), json!(src_port));
+            obj.insert("dst_port".into(), json!(dst_port));
+            obj.insert("proto".into(), json!(proto));
+            if !session_meta["source"].is_null() {
+                let s = &session_meta["source"];
+                obj.insert("user_agent".into(), json!(
+                    s["http"]["useragent"].as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                ));
+                obj.insert("bytes_total".into(),   json!(s["network"]["bytes"]));
+                obj.insert("packets_total".into(), json!(s["network"]["packets"]));
+            }
+        }
+        v
+    };
+
     // ── 2. PCAP bytes ─────────────────────────────────────────────────────────
-    let arkime_session_id = session_meta["arkime_session_id"]
-        .as_str()
-        .unwrap_or("");
+    let arkime_session_id = session_meta["arkime_session_id"].as_str().unwrap_or("");
 
     let pcap_bytes: Vec<u8> = if let Some(ref path) = pcap_file_path {
         tokio::fs::read(path).await.unwrap_or_default()
     } else if !arkime_session_id.is_empty() && !arkime_url.is_empty() {
-        http.get(format!("{}/api/session/{}/pcap", arkime_url, arkime_session_id))
-            .basic_auth("admin", Some(arkime_pass))
-            .send().await?
-            .bytes().await?
-            .to_vec()
+        async {
+            let bytes = http.get(format!("{}/api/session/{}/pcap", arkime_url, arkime_session_id))
+                .basic_auth("admin", Some(arkime_pass))
+                .send().await.ok()?
+                .bytes().await.ok()?;
+            Some(bytes.to_vec())
+        }.await.unwrap_or_default()
     } else {
         vec![]
     };
 
     // ── 3. Zeek conn.log record ───────────────────────────────────────────────
     let zeek_conn_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-        "SELECT src_ip, dst_ip, src_port, dst_port, \
-         proto, service, duration, orig_bytes, resp_bytes, \
-         conn_state, history, toString(ts) as timestamp, \
-         community_id, uid \
+        "SELECT src_ip, dst_ip, src_port, dst_port, proto, event_type, \
+         toString(timestamp) as timestamp, community_id, source, raw \
          FROM {}.ndr_events \
-         WHERE community_id = '{}' AND source = 'zeek_conn' \
-         ORDER BY ts DESC LIMIT 1",
+         WHERE community_id = '{}' AND source = 'zeek' \
+         ORDER BY timestamp DESC LIMIT 1",
         db, community_id
     )).await;
+
+    // Extract Zeek uid from conn record — used to join dns/http/ssl/files/weird logs
+    let uid: String = zeek_conn_rows.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r["raw"].as_str())
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .and_then(|v| v["uid"].as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| community_id.to_string());
 
     let zeek_conn_json = json!({
         "source": "zeek_conn",
         "community_id": community_id,
+        "uid": uid,
         "record": zeek_conn_rows.as_array().and_then(|a| a.first()).cloned().unwrap_or(json!(null))
     });
 
-    // ── 4. Suricata alerts ────────────────────────────────────────────────────
+    // ── 3a. Zeek DNS (uid join) ───────────────────────────────────────────────
+    let raw_dns = query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, &uid, "dns", 20).await;
+
+    let zeek_dns_events: Vec<Value> = raw_dns.iter().map(|raw| {
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "uid":        raw["uid"],
+            "timestamp":  unix_to_iso(ts),
+            "src_ip":     raw["id.orig_h"],
+            "dns_server": raw["id.resp_h"],
+            "query":      raw["query"],
+            "answers":    raw["answers"],
+            "ttls":       raw["TTLs"],
+            "rcode":      raw["rcode_name"],
+            "opcode":     raw["opcode_name"],
+            "trans_id":   raw["trans_id"],
+            "proto":      raw["proto"],
+            "rejected":   raw["rejected"],
+            "flags": {
+                "AA": raw["AA"],
+                "RA": raw["RA"],
+                "RD": raw["RD"],
+                "TC": raw["TC"]
+            }
+        })
+    }).collect();
+
+    let resolves_to_target = zeek_dns_events.iter().any(|e| {
+        e["answers"].as_array()
+            .map(|a| a.iter().any(|ans| ans.as_str() == Some(dst_ip.as_str())))
+            .unwrap_or(false)
+    });
+
+    let zeek_dns_json = json!({
+        "queries": zeek_dns_events,
+        "total": zeek_dns_events.len(),
+        "resolves_to_target_ip": resolves_to_target,
+        "uid": uid
+    });
+
+    // ── 3b. Zeek HTTP (uid join) ──────────────────────────────────────────────
+    let raw_http = query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, &uid, "http", 20).await;
+
+    let zeek_http_requests: Vec<Value> = raw_http.iter().map(|raw| {
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        let host = raw["host"].as_str().unwrap_or("");
+        let uri  = raw["uri"].as_str().unwrap_or("/");
+        json!({
+            "timestamp":      unix_to_iso(ts),
+            "method":         raw["method"],
+            "host":           host,
+            "uri":            uri,
+            "full_url":       format!("http://{}{}", host, uri),
+            "user_agent":     raw["user_agent"],
+            "status_code":    raw["status_code"],
+            "content_type":   raw["resp_mime_types"],
+            "bytes_uploaded":   raw["request_body_len"],
+            "bytes_downloaded": raw["response_body_len"],
+            "referrer":       raw["referrer"],
+            "http_version":   raw["version"],
+            "src_ip":         raw["id.orig_h"],
+            "dst_ip":         raw["id.resp_h"],
+            "dst_port":       raw["id.resp_p"]
+        })
+    }).collect();
+
+    let http_user_agent = zeek_http_requests.first()
+        .and_then(|r| r["user_agent"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let zeek_http_json = json!({
+        "requests": zeek_http_requests,
+        "total": zeek_http_requests.len(),
+        "uid": uid
+    });
+
+    // ── 3c. Zeek SSL (uid join) ───────────────────────────────────────────────
+    let raw_ssl = query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, &uid, "ssl", 10).await;
+
+    let zeek_ssl_connections: Vec<Value> = raw_ssl.iter().map(|raw| {
+        let issuer  = raw["issuer"].as_str().unwrap_or("");
+        let subject = raw["subject"].as_str().unwrap_or("");
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "timestamp":         unix_to_iso(ts),
+            "server_name":       raw["server_name"],
+            "subject":           subject,
+            "issuer":            issuer,
+            "validation_status": raw["validation_status"],
+            "is_valid":          raw["validation_status"].as_str() == Some("ok"),
+            "self_signed":       !issuer.is_empty() && issuer == subject,
+            "cipher":            raw["cipher"],
+            "tls_version":       raw["version"],
+            "resumed":           raw["resumed"],
+            "established":       raw["established"],
+            "ja3":               raw["ja3"],
+            "ja3s":              raw["ja3s"]
+        })
+    }).collect();
+
+    let ssl_self_signed = zeek_ssl_connections.iter()
+        .any(|c| c["self_signed"].as_bool().unwrap_or(false));
+
+    let zeek_ssl_json = json!({
+        "connections": zeek_ssl_connections,
+        "total": zeek_ssl_connections.len(),
+        "any_self_signed": ssl_self_signed,
+        "uid": uid
+    });
+
+    // ── 3d. Zeek Files (uid join) ─────────────────────────────────────────────
+    let raw_files = query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, &uid, "files", 20).await;
+
+    let zeek_files_list: Vec<Value> = raw_files.iter().map(|raw| {
+        let sha256 = raw["sha256"].as_str().unwrap_or("");
+        let vt_link = if !sha256.is_empty() {
+            format!("https://www.virustotal.com/gui/file/{}", sha256)
+        } else {
+            String::new()
+        };
+        let is_orig = raw["is_orig"].as_bool().unwrap_or(false);
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "timestamp":        unix_to_iso(ts),
+            "fuid":             raw["fuid"],
+            "filename":         raw["filename"],
+            "mime_type":        raw["mime_type"],
+            "md5":              raw["md5"],
+            "sha1":             raw["sha1"],
+            "sha256":           sha256,
+            "total_bytes":      raw["total_bytes"],
+            "seen_bytes":       raw["seen_bytes"],
+            "direction":        if is_orig { "upload" } else { "download" },
+            "source_protocol":  raw["source"],
+            "extracted":        raw["extracted"],
+            "virustotal_link":  vt_link
+        })
+    }).collect();
+
+    let zeek_files_json = json!({
+        "files": zeek_files_list,
+        "total": zeek_files_list.len(),
+        "uid": uid
+    });
+
+    // ── 3e. Zeek Weird / anomalies (uid join) ─────────────────────────────────
+    let raw_weird = query_raw_events(&http, &ch_url, &ch_user, &ch_pass, &db, &uid, "weird", 20).await;
+
+    let zeek_weird_events: Vec<Value> = raw_weird.iter().map(|raw| {
+        let ts = raw["ts"].as_f64().unwrap_or(0.0);
+        json!({
+            "timestamp":  unix_to_iso(ts),
+            "weird_type": raw["name"],
+            "detail":     raw["addl"],
+            "src_ip":     raw["id.orig_h"],
+            "dst_ip":     raw["id.resp_h"],
+            "notice":     raw["notice"],
+            "peer":       raw["peer"]
+        })
+    }).collect();
+
+    let zeek_weird_json = json!({
+        "events": zeek_weird_events,
+        "total": zeek_weird_events.len(),
+        "uid": uid
+    });
+
+    // ── 4. Suricata / NDR alerts ──────────────────────────────────────────────
     let suricata_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-        "SELECT rule_name, alert_msg, severity, \
-         src_ip, dst_ip, src_port, dst_port, \
-         proto, category, signature_id, \
+        "SELECT src_ip, dst_ip, severity, score, \
+         toString(tags) as tags, \
+         toString(sigma_hits) as sigma_hits, \
+         arrayElement(sigma_hits, 1) as rule_name, \
+         src_country, dst_country, \
          toString(timestamp) as timestamp \
          FROM {}.ndr_hits \
          WHERE community_id = '{}' \
@@ -247,12 +1147,14 @@ pub async fn build_evidence_bundle(
         "alerts": suricata_rows
     });
 
-    // ── 5. SIGMA rule matches ─────────────────────────────────────────────────
+    // ── 5. SIGMA matches ──────────────────────────────────────────────────────
     let sigma_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-        "SELECT rule_name, severity, tags, \
-         toString(timestamp) as timestamp, alert_msg \
+        "SELECT severity, toString(tags) as tags, \
+         toString(sigma_hits) as sigma_hits, \
+         toString(timestamp) as timestamp \
          FROM {}.ndr_hits \
-         WHERE community_id = '{}' AND source = 'sigma' \
+         WHERE community_id = '{}' \
+         AND notEmpty(sigma_hits) \
          ORDER BY timestamp DESC",
         db, community_id
     )).await;
@@ -263,7 +1165,7 @@ pub async fn build_evidence_bundle(
         "matches": sigma_rows
     });
 
-    // ── 6. Threat intel (shared_iocs + threat_intel) ──────────────────────────
+    // ── 6. Threat intel ───────────────────────────────────────────────────────
     let checked_ips: Vec<&str> = [src_ip.as_str(), dst_ip.as_str()]
         .into_iter()
         .filter(|s| !s.is_empty())
@@ -272,36 +1174,23 @@ pub async fn build_evidence_bundle(
     let ioc_rows = if !checked_ips.is_empty() {
         let ip_list = checked_ips.iter()
             .map(|ip| format!("'{}'", ip.replace('\'', "")))
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect::<Vec<_>>().join(", ");
         query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
             "SELECT ioc_value, ioc_type, confidence, tags, description, \
-             toString(first_seen) as first_seen, \
-             toString(last_seen) as last_seen \
-             FROM ndr.shared_iocs \
-             WHERE ioc_value IN ({}) \
-             LIMIT 20",
-            ip_list
+             toString(first_seen) as first_seen, toString(last_seen) as last_seen \
+             FROM ndr.shared_iocs WHERE ioc_value IN ({}) LIMIT 20", ip_list
         )).await
-    } else {
-        json!([])
-    };
+    } else { json!([]) };
 
     let ti_rows = if !checked_ips.is_empty() {
         let ip_list = checked_ips.iter()
             .map(|ip| format!("'{}'", ip.replace('\'', "")))
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect::<Vec<_>>().join(", ");
         query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
             "SELECT indicator, threat_type, confidence, source, tags \
-             FROM ndr.threat_intel \
-             WHERE indicator IN ({}) \
-             LIMIT 10",
-            ip_list
+             FROM ndr.threat_intel WHERE indicator IN ({}) LIMIT 10", ip_list
         )).await
-    } else {
-        json!([])
-    };
+    } else { json!([]) };
 
     let all_intel: Vec<Value> = {
         let mut v: Vec<Value> = vec![];
@@ -310,37 +1199,26 @@ pub async fn build_evidence_bundle(
         v
     };
 
-    let threat_intel_json = if all_intel.is_empty() {
-        json!({
-            "matches": [],
-            "checked_ips": checked_ips
-        })
-    } else {
-        json!({
-            "matches": all_intel,
-            "checked_ips": checked_ips
-        })
-    };
+    let threat_intel_json = json!({
+        "matches": all_intel,
+        "checked_ips": checked_ips
+    });
 
-    // ── 7. Related alerts (same src_ip, ±30 min window) ──────────────────────
+    // ── 7. Related alerts (same src_ip ±30 min) ───────────────────────────────
     let related_rows = if !src_ip.is_empty() {
         query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-            "SELECT community_id, rule_name, severity, \
-             src_ip, dst_ip, src_port, dst_port, \
-             toString(timestamp) as timestamp, alert_msg \
+            "SELECT community_id, severity, src_ip, dst_ip, \
+             toString(tags) as tags, toString(timestamp) as timestamp \
              FROM {}.ndr_hits \
              WHERE src_ip = '{}' \
              AND timestamp BETWEEN \
                  parseDateTimeBestEffort('{}') - INTERVAL 30 MINUTE \
                  AND parseDateTimeBestEffort('{}') + INTERVAL 30 MINUTE \
              AND community_id != '{}' \
-             ORDER BY timestamp ASC \
-             LIMIT 20",
+             ORDER BY timestamp ASC LIMIT 20",
             db, src_ip, alert_time, alert_time, community_id
         )).await
-    } else {
-        json!([])
-    };
+    } else { json!([]) };
 
     let related_json = json!({
         "community_id": community_id,
@@ -353,6 +1231,23 @@ pub async fn build_evidence_bundle(
     let now = chrono::Utc::now().to_rfc3339();
     let pcap_captured = !pcap_bytes.is_empty();
 
+    // Elevate severity to highest confirmed across suricata rows + sigma rows
+    fn sev_rank2(s: &str) -> u8 {
+        match s { "CRITICAL" => 4, "HIGH" => 3, "MEDIUM" => 2, "LOW" => 1, _ => 0 }
+    }
+    let mut best_sev2 = alert_json["severity"].as_str().unwrap_or("UNKNOWN").to_string();
+    for row in suricata_rows.as_array().unwrap_or(&vec![]) {
+        let s = row["severity"].as_str().unwrap_or("");
+        if sev_rank2(s) > sev_rank2(&best_sev2) { best_sev2 = s.to_string(); }
+    }
+    for row in sigma_rows.as_array().unwrap_or(&vec![]) {
+        let s = row["severity"].as_str().unwrap_or("");
+        if sev_rank2(s) > sev_rank2(&best_sev2) { best_sev2 = s.to_string(); }
+    }
+    if let Some(obj) = alert_json.as_object_mut() {
+        obj.insert("severity".to_string(), json!(best_sev2));
+    }
+
     let attack_summary = build_attack_summary(
         community_id,
         &alert_json,
@@ -361,12 +1256,22 @@ pub async fn build_evidence_bundle(
         &related_rows,
         pcap_captured,
         &now,
+        resolves_to_target,
+        ssl_self_signed,
+        zeek_files_list.len(),
+        &http_user_agent,
+        zeek_weird_events.len(),
     );
 
     // ── 9. Serialise all files ────────────────────────────────────────────────
     let alert_str        = serde_json::to_string_pretty(&alert_json).unwrap_or_default();
     let session_str      = serde_json::to_string_pretty(&session_meta).unwrap_or_default();
-    let zeek_str         = serde_json::to_string_pretty(&zeek_conn_json).unwrap_or_default();
+    let zeek_conn_str    = serde_json::to_string_pretty(&zeek_conn_json).unwrap_or_default();
+    let zeek_dns_str     = serde_json::to_string_pretty(&zeek_dns_json).unwrap_or_default();
+    let zeek_http_str    = serde_json::to_string_pretty(&zeek_http_json).unwrap_or_default();
+    let zeek_ssl_str     = serde_json::to_string_pretty(&zeek_ssl_json).unwrap_or_default();
+    let zeek_files_str   = serde_json::to_string_pretty(&zeek_files_json).unwrap_or_default();
+    let zeek_weird_str   = serde_json::to_string_pretty(&zeek_weird_json).unwrap_or_default();
     let suricata_str     = serde_json::to_string_pretty(&suricata_json).unwrap_or_default();
     let sigma_str        = serde_json::to_string_pretty(&sigma_json).unwrap_or_default();
     let intel_str        = serde_json::to_string_pretty(&threat_intel_json).unwrap_or_default();
@@ -393,15 +1298,23 @@ pub async fn build_evidence_bundle(
         "ndr_instance": format!("ndr-{}", tenant_id),
         "files": {
             "manifest.json":         { "sha256": "self", "size_bytes": 0 },
-            "attack_summary.json":   { "sha256": sha256_of(attack_str.as_bytes()),   "size_bytes": attack_str.len() },
-            "alert.json":            { "sha256": sha256_of(alert_str.as_bytes()),     "size_bytes": alert_str.len() },
-            "zeek_conn.json":        { "sha256": sha256_of(zeek_str.as_bytes()),      "size_bytes": zeek_str.len() },
-            "suricata_alerts.json":  { "sha256": sha256_of(suricata_str.as_bytes()), "size_bytes": suricata_str.len() },
-            "sigma_matches.json":    { "sha256": sha256_of(sigma_str.as_bytes()),     "size_bytes": sigma_str.len() },
-            "threat_intel.json":     { "sha256": sha256_of(intel_str.as_bytes()),     "size_bytes": intel_str.len() },
-            "related_alerts.json":   { "sha256": sha256_of(related_str.as_bytes()),   "size_bytes": related_str.len() },
-            "session_metadata.json": { "sha256": sha256_of(session_str.as_bytes()),   "size_bytes": session_str.len() },
-            "session.pcap":          { "sha256": if pcap_captured { sha256_of(&pcap_bytes) } else { "no_pcap_available".to_string() }, "size_bytes": pcap_bytes.len() }
+            "attack_summary.json":   { "sha256": sha256_of(attack_str.as_bytes()),     "size_bytes": attack_str.len() },
+            "alert.json":            { "sha256": sha256_of(alert_str.as_bytes()),       "size_bytes": alert_str.len() },
+            "zeek_conn.json":        { "sha256": sha256_of(zeek_conn_str.as_bytes()),   "size_bytes": zeek_conn_str.len() },
+            "zeek_dns.json":         { "sha256": sha256_of(zeek_dns_str.as_bytes()),    "size_bytes": zeek_dns_str.len() },
+            "zeek_http.json":        { "sha256": sha256_of(zeek_http_str.as_bytes()),   "size_bytes": zeek_http_str.len() },
+            "zeek_ssl.json":         { "sha256": sha256_of(zeek_ssl_str.as_bytes()),    "size_bytes": zeek_ssl_str.len() },
+            "zeek_files.json":       { "sha256": sha256_of(zeek_files_str.as_bytes()), "size_bytes": zeek_files_str.len() },
+            "zeek_weird.json":       { "sha256": sha256_of(zeek_weird_str.as_bytes()), "size_bytes": zeek_weird_str.len() },
+            "suricata_alerts.json":  { "sha256": sha256_of(suricata_str.as_bytes()),   "size_bytes": suricata_str.len() },
+            "sigma_matches.json":    { "sha256": sha256_of(sigma_str.as_bytes()),      "size_bytes": sigma_str.len() },
+            "threat_intel.json":     { "sha256": sha256_of(intel_str.as_bytes()),      "size_bytes": intel_str.len() },
+            "related_alerts.json":   { "sha256": sha256_of(related_str.as_bytes()),    "size_bytes": related_str.len() },
+            "session_metadata.json": { "sha256": sha256_of(session_str.as_bytes()),    "size_bytes": session_str.len() },
+            "session.pcap":          {
+                "sha256": if pcap_captured { sha256_of(&pcap_bytes) } else { "no_pcap_available".to_string() },
+                "size_bytes": pcap_bytes.len()
+            }
         },
         "summary": {
             "src_ip": src_ip,
@@ -411,14 +1324,20 @@ pub async fn build_evidence_bundle(
             "highest_severity": highest_severity,
             "threat_intel_matches": all_intel.len(),
             "related_alerts_count": related_rows.as_array().map(|a| a.len()).unwrap_or(0),
+            "dns_lookup_before_connection": resolves_to_target,
+            "ssl_self_signed_cert": ssl_self_signed,
+            "files_transferred": zeek_files_list.len(),
+            "http_requests": zeek_http_requests.len(),
+            "zeek_anomalies": zeek_weird_events.len(),
             "pcap_size_bytes": pcap_bytes.len(),
+            "pcap_available": pcap_captured,
             "collection_complete": true
         },
         "chain_of_custody": "This bundle was generated automatically by NDR-Engine. Contents are SHA256 verified. Manifest hash covers all included files."
     });
     let manifest_str = serde_json::to_string_pretty(&manifest).unwrap_or_default();
 
-    // ── 11. Build ZIP ─────────────────────────────────────────────────────────
+    // ── 11. Build ZIP (15 files) ──────────────────────────────────────────────
     let mut buf = Vec::new();
     {
         let cursor = std::io::Cursor::new(&mut buf);
@@ -436,7 +1355,22 @@ pub async fn build_evidence_bundle(
         zip.write_all(alert_str.as_bytes())?;
 
         zip.start_file("zeek_conn.json", opts)?;
-        zip.write_all(zeek_str.as_bytes())?;
+        zip.write_all(zeek_conn_str.as_bytes())?;
+
+        zip.start_file("zeek_dns.json", opts)?;
+        zip.write_all(zeek_dns_str.as_bytes())?;
+
+        zip.start_file("zeek_http.json", opts)?;
+        zip.write_all(zeek_http_str.as_bytes())?;
+
+        zip.start_file("zeek_ssl.json", opts)?;
+        zip.write_all(zeek_ssl_str.as_bytes())?;
+
+        zip.start_file("zeek_files.json", opts)?;
+        zip.write_all(zeek_files_str.as_bytes())?;
+
+        zip.start_file("zeek_weird.json", opts)?;
+        zip.write_all(zeek_weird_str.as_bytes())?;
 
         zip.start_file("suricata_alerts.json", opts)?;
         zip.write_all(suricata_str.as_bytes())?;

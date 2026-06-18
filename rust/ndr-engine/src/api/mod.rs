@@ -537,11 +537,22 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         let arkime_url = std::env::var("ARKIME_URL").unwrap_or_default();
         let arkime_pass = std::env::var("ARKIME_PASS")
             .unwrap_or_else(|_| "admin".to_string());
+        let src_ip_str = src.to_string();
+        let dst_ip_str = dst.to_string();
+        let rule_name_str = hit.suricata.alert
+            .as_ref().map(|a| a.signature.clone())
+            .or_else(|| hit.zeek.raw.get("rule_name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .unwrap_or_default();
+        let now_str = chrono::Utc::now().to_rfc3339();
         let alert_json = serde_json::json!({
             "community_id": cid,
             "tenant_id": tenant,
             "severity": severity_str,
-            "auto_captured_at": chrono::Utc::now().to_rfc3339()
+            "src_ip": src_ip_str,
+            "dst_ip": dst_ip_str,
+            "rule_name": rule_name_str,
+            "timestamp": now_str,
+            "auto_captured_at": now_str
         });
 
         tokio::spawn(async move {
@@ -5657,6 +5668,125 @@ pub async fn get_evidence_bundle(
     }
 }
 
+/// GET /api/evidence/bundle/:id/contents
+/// Returns live ClickHouse data augmented with PCAP/session info from the stored ZIP.
+/// Always queries live to avoid stale data from bundles captured before Zeek data arrived.
+pub async fn get_bundle_contents(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(bundle_id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+
+    let bundle = match state.ch_storage
+        .get_evidence_bundle(&claims.tenant_id, &bundle_id)
+        .await
+    {
+        Ok(Some(b)) => b,
+        _ => return Json(json!({"error": "bundle not found"})),
+    };
+
+    let community_id = bundle["community_id"].as_str().unwrap_or("").to_string();
+    if community_id.is_empty() {
+        return Json(json!({"error": "bundle has no community_id"}));
+    }
+
+    // Read ZIP only to extract PCAP size and session_metadata
+    let mut pcap_size: u64 = 0;
+    let mut session_metadata = json!({});
+    let mut alert_from_zip = json!({});
+
+    if let Some(file_path) = bundle["file_path"].as_str().filter(|p| !p.is_empty()) {
+        if let Ok(zip_bytes) = tokio::fs::read(file_path).await {
+            let cursor = std::io::Cursor::new(&zip_bytes);
+            if let Ok(mut archive) = zip::ZipArchive::new(cursor) {
+                for i in 0..archive.len() {
+                    let mut file = match archive.by_index(i) {
+                        Ok(f) => f,
+                        Err(_) => continue,
+                    };
+                    let name = file.name().to_string();
+                    if name == "session_metadata.json" {
+                        let mut text = String::new();
+                        use std::io::Read;
+                        let _ = file.read_to_string(&mut text);
+                        session_metadata = serde_json::from_str(&text).unwrap_or(json!({}));
+                    } else if name == "alert.json" {
+                        let mut text = String::new();
+                        use std::io::Read;
+                        let _ = file.read_to_string(&mut text);
+                        alert_from_zip = serde_json::from_str(&text).unwrap_or(json!({}));
+                    } else if name.ends_with(".pcap") {
+                        pcap_size = file.size();
+                    }
+                }
+            }
+        }
+    }
+
+    // Fetch all investigation data live from ClickHouse
+    let mut live = evidence::fetch_live_investigation(
+        &community_id,
+        &claims.tenant_id,
+        &alert_from_zip,
+        &session_metadata,
+    ).await;
+
+    // Live OpenSearch check — same pattern as arkime_sessions endpoint.
+    // ZIP pcap_size is stale (built before Arkime ran); always check current state.
+    let es_url = std::env::var("OPENSEARCH_URL").unwrap_or_default();
+    let http_cli = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    let os_hit: Option<serde_json::Value> = if !es_url.is_empty() {
+        async {
+            let resp = http_cli
+                .post(format!("{}/arkime_sessions3-*/_search", es_url))
+                .json(&json!({
+                    "size": 1,
+                    "query": { "term": { "network.community_id": community_id } },
+                    "_source": ["node","firstPacket","lastPacket",
+                                "source.ip","source.port",
+                                "destination.ip","destination.port"]
+                }))
+                .send().await.ok()?
+                .json::<serde_json::Value>().await.ok()?;
+            resp["hits"]["hits"].as_array()?.first().cloned()
+        }.await
+    } else { None };
+
+    let (pcap_available, resolved_session_meta) = match os_hit {
+        Some(hit) => {
+            let sid = hit["_id"].as_str().unwrap_or("").to_string();
+            let meta = json!({
+                "arkime_session_id": sid,
+                "index":        hit["_index"],
+                "node":         hit["_source"]["node"],
+                "first_packet": hit["_source"]["firstPacket"],
+                "last_packet":  hit["_source"]["lastPacket"],
+                "community_id": community_id,
+                "query_source": "opensearch"
+            });
+            (!sid.is_empty(), meta)
+        }
+        None => (pcap_size > 0, session_metadata),
+    };
+
+    if let Some(obj) = live.as_object_mut() {
+        obj.insert("pcap_size_bytes".to_string(),  json!(pcap_size));
+        obj.insert("pcap_available".to_string(),   json!(pcap_available));
+        obj.insert("session_metadata".to_string(), resolved_session_meta);
+        obj.insert("bundle_id".to_string(),        json!(bundle_id));
+    }
+
+    Json(live)
+}
+
 /// GET /api/evidence/:community_id/log
 /// Return full chain-of-custody log.
 pub async fn get_evidence_log(
@@ -5971,4 +6101,168 @@ pub async fn check_shared_ioc(
         Ok(None) => Json(json!({"found": false})),
         Err(e) => Json(json!({"error": e.to_string()})),
     }
+}
+
+// ═══════════════════════════════════════════
+// ARIA SOC ASSISTANT CHAT ENDPOINT
+// ═══════════════════════════════════════════
+
+/// POST /api/aria/chat
+/// Body: { "message": "...", "history": [...] }
+/// Returns: { "reply": "...", "emotion": "..." }
+pub async fn aria_chat(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+
+    // Auth
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({
+            "reply": "Unauthorized.",
+            "emotion": "alert"
+        })),
+    };
+
+    let user_message = match payload["message"]
+        .as_str()
+    {
+        Some(m) if !m.is_empty() => m.to_string(),
+        _ => return Json(json!({
+            "reply": "Empty message.",
+            "emotion": "idle"
+        })),
+    };
+
+    let history = payload["history"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    // Fetch live NDR context
+    let critical = state.ch_storage
+        .count_hits_by_severity_aria(
+            &claims.tenant_id, "CRITICAL")
+        .await.unwrap_or(0);
+
+    let high = state.ch_storage
+        .count_hits_by_severity_aria(
+            &claims.tenant_id, "HIGH")
+        .await.unwrap_or(0);
+
+    let bundles = state.ch_storage
+        .count_evidence_bundles_aria(
+            &claims.tenant_id)
+        .await.unwrap_or(0);
+
+    let recent = state.ch_storage
+        .get_recent_hits_for_aria(
+            &claims.tenant_id, 5)
+        .await.unwrap_or_default();
+
+    // Build system prompt with live data
+    let system = crate::ai::build_system_prompt(
+        &claims.sub,
+        &claims.tenant_id,
+        critical,
+        high,
+        bundles,
+        &recent,
+    );
+
+    // Call OpenAI API
+    let api_key = std::env::var("OPENAI_API_KEY")
+        .unwrap_or_default();
+
+    match crate::ai::call_openai(
+        &api_key,
+        &system,
+        &history,
+        &user_message,
+    ).await {
+        Ok((reply, emotion)) => Json(json!({
+            "reply": reply,
+            "emotion": emotion
+        })),
+        Err(e) => {
+            tracing::error!(
+                "ARIA OpenAI API error: {}", e);
+            Json(json!({
+                "reply": "I'm having trouble \
+                    connecting to my AI brain. \
+                    Check OPENAI_API_KEY.",
+                "emotion": "sad"
+            }))
+        }
+    }
+}
+
+/// GET /api/aria/status
+/// Returns live counts for bot status bar
+pub async fn aria_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({
+            "error": "unauthorized"
+        })),
+    };
+
+    let critical = state.ch_storage
+        .count_hits_by_severity_aria(
+            &claims.tenant_id, "CRITICAL")
+        .await.unwrap_or(0);
+
+    let high = state.ch_storage
+        .count_hits_by_severity_aria(
+            &claims.tenant_id, "HIGH")
+        .await.unwrap_or(0);
+
+    let recent = state.ch_storage
+        .get_recent_hits_for_aria(
+            &claims.tenant_id, 1)
+        .await.unwrap_or_default();
+
+    let latest_severity = recent
+        .first()
+        .and_then(|h| h["severity"].as_str())
+        .unwrap_or("none")
+        .to_string();
+
+    let latest_src = recent
+        .first()
+        .and_then(|h| h["src_ip"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let latest_dst = recent
+        .first()
+        .and_then(|h| h["dst_ip"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let latest_cid = recent
+        .first()
+        .and_then(|h| h["community_id"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Json(json!({
+        "critical_count": critical,
+        "high_count": high,
+        "latest_severity": latest_severity,
+        "latest_src_ip": latest_src,
+        "latest_dst_ip": latest_dst,
+        "latest_community_id": latest_cid,
+        "emotion": if critical > 0 {
+            "alert"
+        } else if high > 0 {
+            "alert"
+        } else {
+            "idle"
+        }
+    }))
 }

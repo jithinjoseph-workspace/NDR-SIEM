@@ -659,6 +659,16 @@ else
     JWT_SECRET=$(openssl rand -hex 32)
 fi
 
+# Preserve OPENAI_API_KEY if already set (re-install should not wipe existing key)
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "OPENAI_API_KEY" "$INSTALL_DIR/.env"; then
+    OPENAI_API_KEY=$(grep "OPENAI_API_KEY" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$OPENAI_API_KEY" ]; then
+    echo ""
+    echo -n "  Enter OpenAI API key (for ARIA bot — press Enter to skip): "
+    read -r OPENAI_API_KEY
+fi
+
 cat > $INSTALL_DIR/.env << ENVEOF
 HOST_IP=$HOST_IP
 HOME_DIR=$HOME_DIR
@@ -672,8 +682,10 @@ KAFKA_BROKERS=$CLOUD_KAFKA
 JWT_SECRET=$JWT_SECRET
 ARKIME_URL=http://${HOST_IP}:8005
 ARKIME_PASS=admin
+OPENSEARCH_URL=http://${HOST_IP}:9200
+OPENAI_API_KEY=$OPENAI_API_KEY
 ENVEOF
-log "✅ .env generated with JWT_SECRET"
+log "✅ .env generated with JWT_SECRET, OPENSEARCH_URL, OPENAI_API_KEY"
 
 # ── Set up sudoers ────────────────────────────
 log "Configuring sudo permissions..."

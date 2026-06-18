@@ -11,6 +11,7 @@ mod normalizer;
 mod scoring;
 mod storage;
 mod evidence;
+mod ai;
 pub mod soar;
 
 use api::{websocket::ws_handler, AppState};
@@ -328,11 +329,13 @@ async fn main() {
 .route("/api/evidence/bundle/:id/hold", post(api::set_evidence_legal_hold))
 .route("/api/evidence/bundle/:id/annotate", post(api::annotate_evidence_bundle))
 .route("/api/evidence/bundle/:id/annotations", get(api::get_evidence_annotations))
+.route("/api/evidence/bundle/:id/contents", get(api::get_bundle_contents))
 .route("/api/evidence/:cid", get(api::download_evidence_bundle))
 .route("/api/evidence/:cid/log", get(api::get_evidence_log))
 .route("/api/evidence/:cid/timeline", get(api::get_evidence_timeline))
 .route("/api/evidence/iocs/check", get(api::check_shared_ioc))
-        
+ .route("/api/aria/chat",   post(api::aria_chat))
+.route("/api/aria/status", get(api::aria_status))   
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
         .layer(RequestDecompressionLayer::new())

@@ -25,11 +25,9 @@ def start_arkime():
 
 
 def stop_arkime():
+    # Stop capture only — viewer stays running so old PCAP data remains downloadable
     subprocess.run(
         ["sudo", "systemctl", "stop", "arkime-capture"],
-        capture_output=True)
-    subprocess.run(
-        ["sudo", "systemctl", "stop", "arkime-viewer"],
         capture_output=True)
 
 

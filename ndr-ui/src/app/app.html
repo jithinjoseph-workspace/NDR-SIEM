@@ -16,3 +16,6 @@
 
 <!-- Global toast overlay — always in DOM, persists across route changes -->
 <app-toast-container></app-toast-container>
+
+<!-- ARIA floating bot — always in DOM when shell is shown -->
+<app-aria-bot *ngIf="showShell"></app-aria-bot>
