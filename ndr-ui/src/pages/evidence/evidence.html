@@ -638,7 +638,10 @@
                 <span *ngIf="!bundleContents.threat_intel.checked_ips?.length" class="empty-inline">none (src/dst IP unknown at capture time)</span>
               </div>
               <div *ngIf="!(bundleContents.threat_intel.matches?.length)" class="intel-clean">
-                ✅ No threat intel matches found for these IPs.
+                ✅ Not found in any known malicious IP feed (Feodo Tracker, URLhaus, MalwareBazaar).
+                <span class="intel-note">
+                  Alert severity is from IDS behavioral rules, not IP reputation — this IP may be legitimate.
+                </span>
               </div>
               <div *ngFor="let m of bundleContents.threat_intel.matches || []" class="intel-hit">
                 <div class="intel-header">

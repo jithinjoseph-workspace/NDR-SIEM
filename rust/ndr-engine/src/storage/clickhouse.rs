@@ -206,10 +206,10 @@ fn support_message_to_json(row: SupportMessageRow) -> serde_json::Value {
 }
 
 pub struct ClickhouseStorage {
-    client: Client,
+    pub(crate) client: Client,
 }
 
-fn sql_escape(value: &str) -> String {
+pub(crate) fn sql_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
@@ -2285,6 +2285,19 @@ pub async fn queue_pcap_request(
     tenant_id: &str,
     community_id: &str,
 ) -> anyhow::Result<()> {
+    // BUG 4 FIX: skip if already pending or fulfilled in last 24h
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct CntRow { cnt: u64 }
+    let rows = self.client.query(&format!(
+        "SELECT count() as cnt FROM ndr.pcap_pending \
+         WHERE community_id = '{}' AND tenant_id = '{}' \
+         AND requested_at > now() - INTERVAL 24 HOUR",
+        sql_escape(community_id), sql_escape(tenant_id)
+    )).fetch_all::<CntRow>().await.unwrap_or_default();
+    if rows.first().map(|r| r.cnt).unwrap_or(0) > 0 {
+        return Ok(()); // already queued — skip duplicate
+    }
+
     self.client
         .query(&format!(
             "INSERT INTO ndr.pcap_pending \
@@ -2322,7 +2335,7 @@ pub async fn mark_pcap_fulfilled(
     self.client
         .query(&format!(
             "ALTER TABLE ndr.pcap_pending \
-             UPDATE fulfilled = 1 \
+             UPDATE fulfilled = 1, fulfilled_at = now() \
              WHERE tenant_id = '{}' AND community_id = '{}'",
             sql_escape(tenant_id), sql_escape(community_id)
         ))
@@ -3281,6 +3294,71 @@ pub async fn count_evidence_bundles_aria(
         db
     )).fetch_all::<CountRow>().await?;
     Ok(rows.first().map(|r| r.cnt).unwrap_or(0))
+}
+
+/// Write a permanent IOC hit record — immutable, never updated or deleted.
+/// Called at detection time so the match is preserved even if the feed changes later.
+pub async fn write_ioc_hit(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+    src_ip: &str,
+    dst_ip: &str,
+    matched_ip: &str,
+    feed_source: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "INSERT INTO {}.ioc_hits \
+         (timestamp, community_id, src_ip, dst_ip, matched_ip, ioc_type, feed_source) \
+         VALUES (now(), '{}', '{}', '{}', '{}', 'ip', '{}')",
+        db,
+        community_id.replace('\'', "\\'"),
+        src_ip.replace('\'', "\\'"),
+        dst_ip.replace('\'', "\\'"),
+        matched_ip.replace('\'', "\\'"),
+        feed_source.replace('\'', "\\'"),
+    )).execute().await?;
+    Ok(())
+}
+
+/// Query permanent IOC hits for a community_id (for evidence investigation).
+pub async fn get_ioc_hits(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct IocHitRow {
+        timestamp:    String,
+        community_id: String,
+        src_ip:       String,
+        dst_ip:       String,
+        matched_ip:   String,
+        ioc_type:     String,
+        feed_source:  String,
+    }
+    let rows = self.client.query(&format!(
+        "SELECT toString(timestamp) as timestamp, community_id, \
+         src_ip, dst_ip, matched_ip, ioc_type, feed_source \
+         FROM {}.ioc_hits \
+         WHERE community_id = '{}' \
+         ORDER BY timestamp ASC",
+        db,
+        community_id.replace('\'', "\\'"),
+    ))
+    .fetch_all::<IocHitRow>().await.unwrap_or_default();
+
+    Ok(rows.into_iter().map(|r| serde_json::json!({
+        "timestamp":    r.timestamp,
+        "community_id": r.community_id,
+        "src_ip":       r.src_ip,
+        "dst_ip":       r.dst_ip,
+        "matched_ip":   r.matched_ip,
+        "ioc_type":     r.ioc_type,
+        "feed_source":  r.feed_source,
+    })).collect())
 }
 
 }

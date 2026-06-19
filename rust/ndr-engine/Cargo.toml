@@ -34,5 +34,6 @@ redis = { version = "0.23", features = ["tokio-comp"] }
 futures-util = "0.3"
 sysinfo = "0.30"
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
-sha2 = "0.10"
-zip  = "0.6"
+sha2   = "0.10"
+zip    = "0.6"
+flate2 = "1"

@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Subscription } from 'rxjs';
-import { LucideAngularModule, Search, ShieldCheck, AlertCircle, RefreshCw, Hash, Bell } from 'lucide-angular';
+import { LucideAngularModule, Search, ShieldCheck, CircleAlert, RefreshCw, Hash, Bell } from 'lucide-angular';
 
 @Component({
   selector: 'app-intel',
@@ -29,7 +29,7 @@ export class Intel implements OnInit, OnDestroy {
 
   SearchIcon      = Search;
   ShieldCheckIcon = ShieldCheck;
-  AlertIcon       = AlertCircle;
+  AlertIcon       = CircleAlert;
   RefreshIcon     = RefreshCw;
   HashIcon        = Hash;
   BellIcon        = Bell;
@@ -69,7 +69,9 @@ export class Intel implements OnInit, OnDestroy {
         this.totalMaliciousIps = data.total_malicious_ips || 0;
         this.source            = data.source || 'abuse.ch';
         this.detectedInNetwork = data.detected_in_network || [];
-        this.lastRefresh       = data.last_refresh || '';
+        this.lastRefresh       = data.last_refresh
+          ? `Last updated: ${data.last_refresh} · ${data.refresh_interval || 'Every 60 min'}`
+          : (data.refresh_interval || 'Every 60 minutes');
         this.syncDetectedNetworkAlerts(this.liveAlerts);
         this.loading = false;
         this.cdr.detectChanges();

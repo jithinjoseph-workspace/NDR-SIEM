@@ -1477,6 +1477,7 @@ dependencies = [
  "chrono",
  "clickhouse",
  "dashmap",
+ "flate2",
  "futures-util",
  "ipnetwork",
  "jsonwebtoken",

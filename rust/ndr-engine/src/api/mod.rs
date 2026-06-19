@@ -27,6 +27,7 @@ use crate::normalizer::NormalizedEvent;
 use crate::scoring::{conn_state_description, RiskScorer};
 use crate::storage::SqliteStorage;
 use crate::storage::ClickhouseStorage;
+use crate::storage::clickhouse::sql_escape;
 use axum::{extract::{State, Query}, Json, http::StatusCode};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -508,6 +509,29 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     };
     // Enrich
     let enrichment = state.enrichment.enrich(src, dst);
+
+    // Write permanent IOC hit records for any malicious IP match
+    if enrichment.is_malicious {
+        let ti = &state.enrichment.threat_intel;
+        let mut ioc_matches: Vec<(String, String)> = vec![]; // (matched_ip, feed_source)
+        for ip in [src, dst] {
+            if !ip.is_empty() && ip != "-" && ti.is_malicious_ip(ip) {
+                ioc_matches.push((ip.to_string(), "feodo".to_string()));
+            }
+        }
+        if !ioc_matches.is_empty() {
+            let ch = state.ch_storage.clone();
+            let cid  = hit.community_id.clone();
+            let tid  = tenant_id.clone();
+            let s = src.to_string();
+            let d = dst.to_string();
+            tokio::spawn(async move {
+                for (matched_ip, feed) in ioc_matches {
+                    let _ = ch.write_ioc_hit(&tid, &cid, &s, &d, &matched_ip, &feed).await;
+                }
+            });
+        }
+    }
 
     // Score — use tenant-configured severity thresholds so critical_threshold
     // and alert_threshold bands from the Settings page are respected.
@@ -1549,7 +1573,8 @@ pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http
         "total_malicious_hashes":  ti.hash_count(),
         "total_malicious_domains": ti.domain_count(),
         "detected_in_network":     detected,
-        "last_refresh": "Every 60 minutes",
+        "last_refresh": ti.last_refresh_iso(),
+        "refresh_interval": "Every 60 minutes",
         "sources": [
             {
                 "name": "Feodo Tracker",
@@ -4945,6 +4970,42 @@ pub async fn pcap_upload(
         return axum::Json(json!({"status":"error","message":"No pcap data received"}));
     }
 
+    // BUG 2 FIX: dedup check — if PCAP for this community_id already stored,
+    // just mark fulfilled and return early so sensor stops re-uploading
+    if !community_id.is_empty() {
+        if let Ok(Some(_)) = state.ch_storage
+            .get_pcap_file_path_by_community_id(&tenant_id, &community_id).await
+        {
+            let _ = state.ch_storage.mark_pcap_fulfilled(&tenant_id, &community_id).await;
+            return axum::Json(json!({
+                "status": "already_exists",
+                "message": "PCAP already stored",
+                "community_id": community_id
+            }));
+        }
+    }
+
+    // Decompress if sensor sent gzip-compressed PCAP (Content-Encoding: gzip)
+    let is_gzip = headers.get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("gzip"))
+        .unwrap_or(false)
+        || pcap_bytes.starts_with(&[0x1f, 0x8b]); // gzip magic bytes
+    if is_gzip {
+        match {
+            use std::io::Read;
+            let mut decoder = flate2::read::GzDecoder::new(pcap_bytes.as_slice());
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).map(|_| decompressed)
+        } {
+            Ok(raw) => { pcap_bytes = raw; }
+            Err(e) => return axum::Json(json!({
+                "status": "error",
+                "message": format!("Failed to decompress pcap: {}", e)
+            })),
+        }
+    }
+
     let session_id = uuid::Uuid::new_v4().to_string();
     let date_str = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let file_dir = format!("/opt/ndr/pcap/{}/{}", tenant_id, date_str);
@@ -4971,6 +5032,12 @@ pub async fn pcap_upload(
         bytes_count, "", &file_path, &sensor_host,
     ).await {
         tracing::warn!("Failed to index pcap session in ClickHouse: {}", e);
+    }
+
+    // BUG 1 FIX: mark pcap_pending fulfilled so sensor stops re-uploading
+    if !community_id.is_empty() {
+        let _ = state.ch_storage.mark_pcap_fulfilled(&tenant_id, &community_id).await;
+        tracing::info!("PCAP fulfilled for cid={} tenant={}", community_id, tenant_id);
     }
 
     axum::Json(json!({
@@ -5076,11 +5143,88 @@ pub async fn pcap_pending(
         Some(t) => t,
         None => return axum::Json(json!({"status":"error","message":"Unauthorized"})),
     };
-    let cids = state.ch_storage
-        .get_pending_pcap_requests(&tenant_id)
-        .await
+
+    // Priority queue: CRITICAL first, then HIGH, then MEDIUM
+    // Retry limit: max 3 attempts — stops infinite retry loops
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct PendingRow {
+        community_id: String,
+        severity:     String,
+        requested_at: String,
+        retry_count:  u8,
+    }
+    let rows = state.ch_storage.client
+        .query(&format!(
+            "SELECT community_id, \
+             severity, \
+             toString(requested_at) as requested_at, \
+             retry_count \
+             FROM ndr.pcap_pending FINAL \
+             WHERE tenant_id = '{}' \
+             AND fulfilled = 0 \
+             AND retry_count < 3 \
+             AND requested_at > now() - INTERVAL 24 HOUR \
+             ORDER BY \
+               multiIf(severity='CRITICAL',1, severity='HIGH',2, 3) ASC, \
+               requested_at ASC \
+             LIMIT 10",
+            sql_escape(&tenant_id)
+        ))
+        .fetch_all::<PendingRow>().await
         .unwrap_or_default();
-    axum::Json(json!({"status":"ok","pending": cids}))
+
+    let pending: Vec<serde_json::Value> = rows.iter().map(|r| json!({
+        "community_id": r.community_id,
+        "severity":     r.severity,
+        "requested_at": r.requested_at,
+        "retry_count":  r.retry_count,
+        "priority": match r.severity.as_str() {
+            "CRITICAL" => 1, "HIGH" => 2, _ => 3
+        }
+    })).collect();
+
+    // Also return plain list for backward-compatible agent.py
+    let plain: Vec<&str> = rows.iter().map(|r| r.community_id.as_str()).collect();
+
+    axum::Json(json!({
+        "status":  "ok",
+        "pending": plain,
+        "details": pending,
+        "count":   plain.len()
+    }))
+}
+
+pub async fn pcap_upload_failed(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+        Some(t) => t,
+        None => return axum::Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let community_id = payload["community_id"].as_str().unwrap_or("");
+    let error_msg    = payload["error"].as_str().unwrap_or("unknown").replace('\'', "\\'");
+    if community_id.is_empty() {
+        return axum::Json(json!({"status":"error","message":"missing community_id"}));
+    }
+    // Increment retry_count; if >= 3, mark fulfilled=2 (failed) so sensor stops
+    let _ = state.ch_storage.client
+        .query(&format!(
+            "ALTER TABLE ndr.pcap_pending \
+             UPDATE \
+               retry_count = retry_count + 1, \
+               error_message = '{}', \
+               last_retry = now(), \
+               fulfilled = if(retry_count >= 2, 2, 0) \
+             WHERE community_id = '{}' AND tenant_id = '{}' AND fulfilled = 0",
+            error_msg,
+            sql_escape(community_id),
+            sql_escape(&tenant_id)
+        ))
+        .execute().await;
+    tracing::warn!("PCAP upload failed cid={} tenant={} err={}", community_id, tenant_id, error_msg);
+    axum::Json(json!({"status":"recorded"}))
 }
 
 fn urlencoding_encode(s: &str) -> String {
@@ -5776,6 +5920,44 @@ pub async fn get_bundle_contents(
         }
         None => (pcap_size > 0, session_metadata),
     };
+
+    // Override threat_intel using the live in-memory feed (same as Intel page).
+    // The evidence module queries empty ClickHouse tables; this is the correct source.
+    {
+        let ti = &state.enrichment.threat_intel;
+        let src_ip = alert_from_zip["src_ip"].as_str()
+            .or_else(|| live["alert"]["src_ip"].as_str())
+            .unwrap_or("");
+        let dst_ip = alert_from_zip["dst_ip"].as_str()
+            .or_else(|| live["alert"]["dst_ip"].as_str())
+            .unwrap_or("");
+
+        let mut checked: Vec<&str> = vec![];
+        let mut matches: Vec<serde_json::Value> = vec![];
+
+        for ip in [src_ip, dst_ip].iter().filter(|s| !s.is_empty()) {
+            checked.push(ip);
+            if ti.is_malicious_ip(ip) {
+                matches.push(json!({
+                    "ioc_type":   "ip",
+                    "ioc_value":  ip,
+                    "source":     "abuse.ch",
+                    "confidence": 90,
+                    "description": format!("{} is listed in the abuse.ch malicious IP feed (Feodo Tracker)", ip)
+                }));
+            }
+        }
+
+        let live_threat_intel = json!({
+            "checked_ips": checked,
+            "matches":     matches,
+            "source":      "in-memory (Feodo Tracker / abuse.ch)"
+        });
+
+        if let Some(obj) = live.as_object_mut() {
+            obj.insert("threat_intel".to_string(), live_threat_intel);
+        }
+    }
 
     if let Some(obj) = live.as_object_mut() {
         obj.insert("pcap_size_bytes".to_string(),  json!(pcap_size));

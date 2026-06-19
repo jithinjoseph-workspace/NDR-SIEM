@@ -698,40 +698,23 @@ pub async fn fetch_live_investigation(
         "matches": sigma_rows
     });
 
-    // ── Threat intel ─────────────────────────────────────────────────────────
+    // ── Threat intel — permanent IOC hit log (per-tenant ioc_hits) ──────────
+    // Querying the immutable table written at detection time by the engine.
     let checked_ips: Vec<&str> = [src_ip.as_str(), dst_ip.as_str()]
         .into_iter().filter(|s| !s.is_empty()).collect();
 
-    let ioc_rows = if !checked_ips.is_empty() {
-        let ip_list = checked_ips.iter()
-            .map(|ip| format!("'{}'", ip.replace('\'', "")))
-            .collect::<Vec<_>>().join(", ");
-        query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-            "SELECT ioc_value, ioc_type, confidence, tags, description, \
-             toString(first_seen) as first_seen, toString(last_seen) as last_seen \
-             FROM ndr.shared_iocs WHERE ioc_value IN ({}) LIMIT 20", ip_list
-        )).await
-    } else { json!([]) };
-
-    let ti_rows = if !checked_ips.is_empty() {
-        let ip_list = checked_ips.iter()
-            .map(|ip| format!("'{}'", ip.replace('\'', "")))
-            .collect::<Vec<_>>().join(", ");
-        query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-            "SELECT indicator, threat_type, confidence, source, tags \
-             FROM ndr.threat_intel WHERE indicator IN ({}) LIMIT 10", ip_list
-        )).await
-    } else { json!([]) };
-
-    let all_intel: Vec<Value> = {
-        let mut v: Vec<Value> = vec![];
-        if let Some(arr) = ioc_rows.as_array() { v.extend(arr.clone()); }
-        if let Some(arr) = ti_rows.as_array()  { v.extend(arr.clone()); }
-        v
-    };
+    // Historical matches for this specific flow (community_id) — per-tenant DB
+    let ioc_hits_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+        "SELECT toString(timestamp) as timestamp, src_ip, dst_ip, \
+         matched_ip, ioc_type, feed_source \
+         FROM {}.ioc_hits \
+         WHERE community_id = '{}' \
+         ORDER BY timestamp ASC LIMIT 50",
+        db, community_id.replace('\'', "\\'")
+    )).await;
 
     let threat_intel_json = json!({
-        "matches": all_intel,
+        "matches": ioc_hits_rows,
         "checked_ips": checked_ips
     });
 
@@ -778,8 +761,9 @@ pub async fn fetch_live_investigation(
 
     // ── Attack summary ────────────────────────────────────────────────────────
     let now = chrono::Utc::now().to_rfc3339();
+    let ioc_hits_arr = ioc_hits_rows.as_array().cloned().unwrap_or_default();
     let attack_summary = build_attack_summary(
-        community_id, &alert_obj, &suricata_rows, &Value::Array(all_intel),
+        community_id, &alert_obj, &suricata_rows, &Value::Array(ioc_hits_arr),
         &related_rows, false, &now, resolves_to_target, ssl_self_signed,
         total_files, &http_user_agent, total_anomalies,
     );

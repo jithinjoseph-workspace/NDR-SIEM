@@ -257,14 +257,20 @@ TTL start_time + INTERVAL 30 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.pcap_pending
 (
-    community_id String,
-    tenant_id    String DEFAULT 'default',
-    requested_at DateTime DEFAULT now(),
-    fulfilled    UInt8 DEFAULT 0
+    community_id      String,
+    tenant_id         String   DEFAULT 'default',
+    requested_at      DateTime DEFAULT now(),
+    fulfilled         UInt8    DEFAULT 0,
+    fulfilled_at      DateTime DEFAULT toDateTime(0),
+    retry_count       UInt8    DEFAULT 0,
+    last_retry        DateTime DEFAULT toDateTime(0),
+    error_message     String   DEFAULT '',
+    upload_size_bytes UInt64   DEFAULT 0,
+    severity          String   DEFAULT 'MEDIUM'
 )
-ENGINE = ReplacingMergeTree(fulfilled)
+ENGINE = ReplacingMergeTree(requested_at)
 ORDER BY (tenant_id, community_id)
-TTL requested_at + INTERVAL 1 DAY;
+TTL requested_at + INTERVAL 2 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.sensor_commands
 (
@@ -427,6 +433,23 @@ CREATE TABLE IF NOT EXISTS ndr.evidence_annotations
 )
 ENGINE = MergeTree
 ORDER BY (bundle_id, created_at);
+
+-- Permanent immutable IOC hit log — per-tenant, written at detection time, never deleted or updated.
+-- create_tenant() replaces ndr. → ndr_<tenant>. so each tenant gets their own isolated table.
+CREATE TABLE IF NOT EXISTS ndr.ioc_hits
+(
+    timestamp    DateTime DEFAULT now(),
+    community_id String,
+    src_ip       String,
+    dst_ip       String,
+    matched_ip   String,
+    ioc_type     String   DEFAULT 'ip',
+    feed_source  String   DEFAULT 'feodo'
+)
+ENGINE = MergeTree()
+ORDER BY (timestamp, community_id, matched_ip)
+SETTINGS non_replicated_deduplication_window = 0
+COMMENT 'Immutable IOC hit log — never delete or update these records';
 
 -- Global shared IOC table (not per-tenant)
 CREATE TABLE IF NOT EXISTS ndr.shared_iocs

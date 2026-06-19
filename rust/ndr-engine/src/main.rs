@@ -320,6 +320,7 @@ async fn main() {
         .route("/api/arkime/link/:community_id", get(api::arkime_session_link))
         .route("/api/events/by-cid",             get(api::get_events_by_cid))
         .route("/api/pcap/upload",               post(api::pcap_upload))
+        .route("/api/pcap/upload-failed",        post(api::pcap_upload_failed))
         .route("/api/pcap/pending",              get(api::pcap_pending))
         .route("/api/pcap/:session_id",          get(api::pcap_download_stored))
         // Evidence routes
@@ -382,14 +383,75 @@ async fn main() {
         });
     }
 
+    // ── Background: daily PCAP file cleanup (30-day retention) ───────────────
+    {
+        let ch_cleanup = state.ch_storage.clone();
+        tokio::spawn(async move {
+            // First run after 1 hour, then every 24 hours
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            loop {
+                cleanup_expired_pcaps(&ch_cleanup).await;
+                tokio::time::sleep(
+                    std::time::Duration::from_secs(86400)
+                ).await;
+            }
+        });
+    }
+
     // ── THIS MUST BE LAST — blocks forever ───────────────────────────────
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
-
 }
 
+/// Delete PCAP files older than 30 days from disk and remove their pcap_sessions rows.
+/// Runs once per day. Queries every tenant DB for expired sessions.
+async fn cleanup_expired_pcaps(ch: &storage::clickhouse::ClickhouseStorage) {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct ExpiredRow { file_path: String, session_id: String, #[allow(dead_code)] tenant_id: String }
 
+    // Get all tenant DBs from the tenants table
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct TenantRow { id: String }
+    let tenants = ch.client
+        .query("SELECT id FROM ndr.tenants WHERE active = 1")
+        .fetch_all::<TenantRow>().await
+        .unwrap_or_default();
 
+    let mut total_deleted = 0usize;
+
+    for t in &tenants {
+        let db = if t.id == "default" {
+            "ndr".to_string()
+        } else {
+            format!("ndr_{}", t.id.replace('-', "_"))
+        };
+
+        let rows = ch.client.query(&format!(
+            "SELECT file_path, session_id, tenant_id \
+             FROM {}.pcap_sessions \
+             WHERE start_time < now() - INTERVAL 30 DAY \
+             AND file_path != '' LIMIT 500",
+            db
+        )).fetch_all::<ExpiredRow>().await.unwrap_or_default();
+
+        for row in &rows {
+            // Delete file from disk
+            if std::fs::remove_file(&row.file_path).is_ok() {
+                total_deleted += 1;
+            }
+            // Remove row from pcap_sessions
+            let _ = ch.client.query(&format!(
+                "ALTER TABLE {}.pcap_sessions DELETE \
+                 WHERE session_id = '{}'",
+                db, row.session_id
+            )).execute().await;
+        }
+    }
+
+    if total_deleted > 0 {
+        tracing::info!("PCAP cleanup: deleted {} expired files", total_deleted);
+    }
+}
 
 
 

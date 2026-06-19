@@ -2,6 +2,7 @@ use dashmap::DashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, warn};
 
 #[derive(Clone)]
@@ -10,6 +11,8 @@ pub struct ThreatIntel {
     pub malicious_hashes:  Arc<DashSet<String>>,
     pub malicious_domains: Arc<DashSet<String>>,
     pub malicious_urls:    Arc<DashSet<String>>,
+    // Unix timestamp (seconds) of the last completed refresh
+    pub last_refreshed_at: Arc<AtomicU64>,
 }
 
 impl ThreatIntel {
@@ -19,7 +22,16 @@ impl ThreatIntel {
             malicious_hashes:  Arc::new(DashSet::new()),
             malicious_domains: Arc::new(DashSet::new()),
             malicious_urls:    Arc::new(DashSet::new()),
+            last_refreshed_at: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub fn last_refresh_iso(&self) -> String {
+        let ts = self.last_refreshed_at.load(Ordering::Relaxed);
+        if ts == 0 { return "never".to_string(); }
+        chrono::DateTime::from_timestamp(ts as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
     pub fn is_malicious_ip(&self, ip: &str) -> bool {
@@ -87,6 +99,13 @@ impl ThreatIntel {
         self.refresh_feodo().await;
         self.refresh_urlhaus().await;
         self.refresh_malware_bazaar().await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_refreshed_at.store(now, Ordering::Relaxed);
+        info!("Threat intel refresh complete — {} IPs, {} hashes, {} domains",
+            self.ip_count(), self.hash_count(), self.domain_count());
     }
 
     /// Refresh with per-feed toggle support from settings.
@@ -115,6 +134,11 @@ impl ThreatIntel {
         if !custom_feed_url.is_empty() {
             self.refresh_custom_feed(custom_feed_url).await;
         }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_refreshed_at.store(now, Ordering::Relaxed);
     }
 
     /// Refresh from a custom IOC feed (plain text, one IOC per line).
