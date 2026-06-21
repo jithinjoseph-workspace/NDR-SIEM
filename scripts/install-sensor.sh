@@ -1115,7 +1115,7 @@ def check_and_execute_command():
 def do_checkin():
     """Single combined check-in — replaces the old 3 separate polls
     (heartbeat, command, pcap pending) with one request.
-    Cuts per-sensor HTTP volume by ~3x."""
+    Returns the server-requested interval in seconds (default 30)."""
     import socket
     try:
         sensor_ip = socket.gethostbyname(socket.gethostname())
@@ -1145,7 +1145,7 @@ def do_checkin():
         )
         if resp.status_code != 200:
             print(f"[NDR] Checkin HTTP {resp.status_code}")
-            return
+            return 30
 
         data = resp.json()
         print(f"[NDR] Checkin ok — "
@@ -1182,8 +1182,11 @@ def do_checkin():
                 except Exception as e:
                     print(f"[NDR] PCAP upload error: {e}")
 
+        return int(data.get('checkin_interval_secs', 30))
+
     except Exception as e:
         print(f"[NDR] Checkin failed: {e}")
+        return 30
 
 if __name__ == '__main__':
     print(f"[NDR] Agent starting — "
@@ -1203,9 +1206,10 @@ if __name__ == '__main__':
     start_capture()
     time.sleep(10)  # wait for capture to init
 
+    checkin_interval = 30  # server will update this on first response
     while True:
-        do_checkin()   # heartbeat + command + pcap pending in one call
-        time.sleep(10)
+        checkin_interval = do_checkin() or checkin_interval
+        time.sleep(checkin_interval)
 AGENT
 chmod +x /opt/ndr-sensor/agent.py
 

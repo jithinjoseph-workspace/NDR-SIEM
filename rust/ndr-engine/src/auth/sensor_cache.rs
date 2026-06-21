@@ -128,6 +128,34 @@ impl SensorKeyCache {
             key_prefix
         );
     }
+
+    /// Returns `true` if a heartbeat DB write is needed for this sensor.
+    ///
+    /// Writes are triggered when status changes OR every 5 minutes (cache TTL
+    /// expiry), so `last_seen` stays accurate within 5 minutes even under
+    /// stable conditions — without a ClickHouse write on every checkin.
+    pub async fn needs_heartbeat_write(&self, sensor_id: &str, status_sig: &str) -> bool {
+        let mut conn = match self.redis
+            .get_multiplexed_async_connection()
+            .await
+        {
+            Ok(c) => c,
+            Err(_) => return true, // Redis unavailable → always write
+        };
+
+        let key = format!("sensor_hb:{}", sensor_id);
+        let cached = conn
+            .get::<_, Option<String>>(&key)
+            .await
+            .unwrap_or(None);
+
+        // Refresh TTL: if status stays the same, cache expires in 5 min and
+        // the next checkin after expiry writes to DB — keeping last_seen fresh.
+        let _: Result<(), _> = conn.set_ex(&key, status_sig, 300usize).await;
+
+        // Write if first time seen OR status changed
+        cached.as_deref() != Some(status_sig)
+    }
 }
 
 /// Spawn a background health-check loop that logs DB active key count

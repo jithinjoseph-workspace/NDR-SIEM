@@ -4810,19 +4810,28 @@ pub async fn sensor_checkin(
         None => return Json(json!({"status": "error", "message": "invalid sensor key prefix"})),
     };
 
-    // ── 1. Heartbeat / status update ─────────────────────────────────────
+    // ── 1. Heartbeat / status update (throttled via Redis) ───────────────
+    // Only write to ClickHouse when status changes or every 5 minutes —
+    // avoids a SELECT FINAL + INSERT on every checkin under stable conditions.
+    let zeek_s     = payload.zeek.as_deref().unwrap_or("unknown");
+    let suricata_s = payload.suricata.as_deref().unwrap_or("unknown");
+    let vector_s   = payload.vector.as_deref().unwrap_or("unknown");
     let arkime_status = payload.arkime_capture.as_deref()
         .or(payload.arkime_viewer.as_deref())
         .unwrap_or("unknown");
-    let _ = state.ch_storage.update_sensor_heartbeat(
-        &sensor_id,
-        payload.zeek.as_deref().unwrap_or("unknown"),
-        payload.suricata.as_deref().unwrap_or("unknown"),
-        payload.vector.as_deref().unwrap_or("unknown"),
-        arkime_status,
-        payload.arkime_url.as_deref().unwrap_or(""),
-        payload.arkime_pass.as_deref().unwrap_or(""),
-    ).await;
+    let arkime_url  = payload.arkime_url.as_deref().unwrap_or("");
+    let arkime_pass = payload.arkime_pass.as_deref().unwrap_or("");
+
+    let status_sig = format!("{}|{}|{}|{}", zeek_s, suricata_s, vector_s, arkime_status);
+    if state.sensor_key_cache
+        .needs_heartbeat_write(&sensor_id, &status_sig)
+        .await
+    {
+        let _ = state.ch_storage.update_sensor_heartbeat(
+            &sensor_id, zeek_s, suricata_s, vector_s,
+            arkime_status, arkime_url, arkime_pass,
+        ).await;
+    }
 
     // ── 2. Pending command ────────────────────────────────────────────────
     let (command, command_sensor_id) = state.ch_storage
@@ -4870,10 +4879,7 @@ pub async fn sensor_checkin(
 
     tracing::info!(
         "Checkin tenant={} sensor={} zeek={} suricata={} pending_pcap={}",
-        tenant_id, sensor_id,
-        payload.zeek.as_deref().unwrap_or("?"),
-        payload.suricata.as_deref().unwrap_or("?"),
-        pending_cids.len()
+        tenant_id, sensor_id, zeek_s, suricata_s, pending_cids.len()
     );
 
     Json(json!({
