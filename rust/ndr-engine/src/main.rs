@@ -3,6 +3,7 @@
 // License: Apache-2.0
 
 mod api;
+mod auth;
 mod consumer;
 mod correlator;
 mod detection;
@@ -17,6 +18,7 @@ pub mod soar;
 use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
 use axum::{routing::{get, post, put, delete}, Router};
+use axum::extract::DefaultBodyLimit;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
@@ -96,6 +98,78 @@ async fn main() {
 
     let kafka_producer = Arc::new(kafka_producer);
 
+    // ── Sensor key auth cache (Redis-backed, shared across all engine instances)
+    let sensor_key_cache = Arc::new(
+        auth::sensor_cache::SensorKeyCache::new(Arc::new(redis_client.clone()))
+    );
+
+    // ── Async ingest channel (50k event headroom before backpressure) ─────
+    let (ingest_tx, mut ingest_rx) =
+        tokio::sync::mpsc::channel::<(String, String)>(50_000);
+
+    // Background drain: flushes channel to Kafka in micro-batches of ≤200
+    // events every 100ms. /api/ingest returns immediately without waiting.
+    {
+        use rdkafka::producer::FutureRecord;
+        let producer = kafka_producer.clone();
+        tokio::spawn(async move {
+            let mut batch: Vec<(String, String)> = Vec::with_capacity(200);
+            let mut ticker = tokio::time::interval(
+                std::time::Duration::from_millis(100)
+            );
+            loop {
+                tokio::select! {
+                    maybe = ingest_rx.recv() => {
+                        match maybe {
+                            Some(ev) => {
+                                batch.push(ev);
+                                if batch.len() >= 200 {
+                                    for (_, payload) in batch.drain(..) {
+                                        let rec = FutureRecord::<str, str>::to("ndr-events")
+                                            .payload(&payload);
+                                        if let Err((e, _)) = producer
+                                            .send(rec, std::time::Duration::from_secs(5))
+                                            .await
+                                        {
+                                            tracing::error!("Kafka publish error: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = ticker.tick() => {
+                        if !batch.is_empty() {
+                            for (_, payload) in batch.drain(..) {
+                                let rec = FutureRecord::<str, str>::to("ndr-events")
+                                    .payload(&payload);
+                                if let Err((e, _)) = producer
+                                    .send(rec, std::time::Duration::from_secs(5))
+                                    .await
+                                {
+                                    tracing::error!("Kafka publish error: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    let ch_storage_arc = {
+        let ch = Arc::new(storage::ClickhouseStorage::new());
+        ch.init_tables().await;
+        ch
+    };
+
+    // Start sensor key cache refresh loop (after ch_storage is ready)
+    auth::sensor_cache::spawn_refresh_loop(
+        sensor_key_cache.clone(),
+        ch_storage_arc.clone(),
+    );
+
     let state = AppState {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
         enrichment: Arc::new(EnrichmentPipeline {
@@ -105,17 +179,15 @@ async fn main() {
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
         detection:  Arc::new(tokio::sync::RwLock::new(detection::DetectionEngine::new("rules"))),
-        ch_storage: {
-            let ch = Arc::new(storage::ClickhouseStorage::new());
-            ch.init_tables().await;
-            ch
-        },
+        ch_storage: ch_storage_arc,
         storage:    Arc::new(storage),
         tx:         tx.clone(),
         redis:      Arc::new(redis_client.clone()),
         redis_mux:  redis_mux,
         kafka_producer: kafka_producer.clone(),
         correlation_semaphore: Arc::new(tokio::sync::Semaphore::new(16)),
+        sensor_key_cache,
+        ingest_tx,
     };
 
     // ── Background: session reaper (every 30s) ────────────────────────────
@@ -302,6 +374,7 @@ async fn main() {
         .route("/api/admin/engines/scale", post(api::scale_engines))
         .route("/api/admin/telemetry", get(api::get_telemetry))
         .route("/api/install-sensor.sh", get(api::install_sensor_script))
+        .route("/api/uninstall-sensor.sh", get(api::uninstall_sensor_script))
         .route("/api/sensor-keys", 
             get(api::get_sensor_keys)
             .post(api::create_sensor_key_api))
@@ -311,6 +384,7 @@ async fn main() {
             post(api::reactivate_sensor_key_api))
         .route("/api/sensor/register",  post(api::sensor_register))
         .route("/api/sensor/heartbeat", post(api::sensor_heartbeat))
+        .route("/api/sensor/checkin",   post(api::sensor_checkin))
         .route("/api/ingest",           post(api::ingest_events))
         .route("/api/sensor/command",   get(api::get_sensor_command_api))
         .route("/api/sensor/control",   post(api::sensor_control_api))
@@ -339,6 +413,7 @@ async fn main() {
 .route("/api/aria/status", get(api::aria_status))   
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB for PCAP uploads
         .layer(RequestDecompressionLayer::new())
         .layer(cors);
 

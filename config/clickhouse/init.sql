@@ -272,6 +272,27 @@ ENGINE = ReplacingMergeTree(requested_at)
 ORDER BY (tenant_id, community_id)
 TTL requested_at + INTERVAL 2 DAY;
 
+CREATE TABLE IF NOT EXISTS ndr.ai_suppressions
+(
+    id             String   DEFAULT toString(generateUUIDv4()),
+    tenant_id      String   DEFAULT 'default',
+    signature_id   UInt64   DEFAULT 0,
+    signature_name String   DEFAULT '',
+    suppress_type  String   DEFAULT 'by_dst',
+    suppress_ip    String   DEFAULT '',
+    src_ip         String   DEFAULT '',
+    dst_ip         String   DEFAULT '',
+    community_id   String   DEFAULT '',
+    ai_reason      String   DEFAULT '',
+    ai_confidence  UInt8    DEFAULT 0,
+    sensor_id      String   DEFAULT '',
+    active         UInt8    DEFAULT 1,
+    created_at     DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(created_at)
+ORDER BY (tenant_id, signature_id, suppress_type, suppress_ip)
+TTL created_at + INTERVAL 90 DAY;
+
 CREATE TABLE IF NOT EXISTS ndr.sensor_commands
 (
     id          String DEFAULT toString(generateUUIDv4()),

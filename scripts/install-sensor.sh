@@ -112,7 +112,6 @@ pkill -f agent.py       2>/dev/null || true
 systemctl stop ndr-vector   2>/dev/null || true
 systemctl stop ndr-agent    2>/dev/null || true
 systemctl stop arkime-capture 2>/dev/null || true
-systemctl stop arkime-viewer  2>/dev/null || true
 pkill -9 -f suricata    2>/dev/null || true
 pkill -9 -f "zeek"      2>/dev/null || true
 pkill -9 -f vector      2>/dev/null || true
@@ -130,6 +129,56 @@ apt-get install -y -qq \
   software-properties-common \
   libpcre3 libpcre3-dev \
   ethtool docker.io > /dev/null 2>&1 || true
+
+log "Installing tshark (>= 3.4 required for community-id filter) and zstd..."
+# communityid.id dissector requires tshark >= 3.4.0 AND --enable-protocol communityid.
+# Distro default apt is often frozen on 3.2.x.
+# Check existing version first — upgrade only if needed.
+
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+  software-properties-common zstd > /dev/null 2>&1 || true
+
+# Helper: returns tshark major.minor as integers
+tshark_ver_ok() {
+  local MAJOR MINOR
+  MAJOR=$(tshark --version 2>/dev/null | grep -oP '(?<=TShark \(Wireshark\) )\d+' || echo 0)
+  MINOR=$(tshark --version 2>/dev/null | grep -oP '(?<=TShark \(Wireshark\) \d\.)\d+' || echo 0)
+  # returns 0 (true) if >= 3.4
+  [ "${MAJOR:-0}" -gt 3 ] || \
+    { [ "${MAJOR:-0}" -eq 3 ] && [ "${MINOR:-0}" -ge 4 ]; }
+}
+
+if tshark_ver_ok; then
+  log "  ✅ tshark already >= 3.4: $(tshark --version 2>/dev/null | head -1) — skipping upgrade"
+else
+  log "  tshark too old ($(tshark --version 2>/dev/null | head -1 || echo 'not installed')) — upgrading..."
+
+  # ── Option A: Wireshark PPA ─────────────────────────────────────────────
+  log "  Trying Wireshark PPA (Option A)..."
+  if add-apt-repository -y ppa:wireshark-dev/stable > /dev/null 2>&1; then
+    apt-get update -qq > /dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive \
+      apt-get install -y -qq tshark wireshark-common > /dev/null 2>&1 || true
+  fi
+
+  if tshark_ver_ok; then
+    log "  ✅ tshark upgraded via PPA: $(tshark --version 2>/dev/null | head -1)"
+  else
+    # ── Option B: snap fallback ──────────────────────────────────────────
+    log "  PPA insufficient — installing via snap (Option B)..."
+    apt-get install -y -qq snapd > /dev/null 2>&1 || true
+    snap install wireshark > /dev/null 2>&1 || true
+    ln -sf /snap/bin/tshark /usr/local/bin/tshark 2>/dev/null || true
+    if tshark_ver_ok; then
+      log "  ✅ tshark upgraded via snap: $(tshark --version 2>/dev/null | head -1)"
+    else
+      warn "  tshark upgrade failed — communityid filter unavailable, will use raw copy"
+    fi
+  fi
+fi
+
+log "tshark: $(tshark --version 2>/dev/null | head -1 || echo 'not installed')"
+log "zstd:   $(zstd --version 2>/dev/null | head -1 || echo 'not installed')"
 
 pip3 install requests --quiet 2>/dev/null || true
 
@@ -334,6 +383,7 @@ pcapDir=/opt/arkime/raw
 maxFileSizeG=4
 maxFileTimeM=60
 pcapWriteMethod=simple
+simpleCompression=none
 pcapWriteSize=262143
 logLevel=warn
 maxDays=7
@@ -382,28 +432,6 @@ Restart=always
 RestartSec=15
 LimitCORE=infinity
 LimitMEMLOCK=infinity
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# ── FIX: Create Arkime VIEWER service ────────────
-# THIS WAS MISSING — viewer is what pcap-uploader
-# calls on port 8005 to extract PCAP bytes
-cat > /etc/systemd/system/arkime-viewer.service \
-  << EOF
-[Unit]
-Description=Arkime Session Viewer
-After=network.target arkime-capture.service
-[Service]
-Type=simple
-WorkingDirectory=/opt/arkime
-ExecStartPre=/bin/sleep 10
-ExecStart=/usr/bin/node \
-  /opt/arkime/viewer/viewer.js \
-  -c /opt/arkime/etc/config.ini
-Restart=always
-RestartSec=15
-Environment=NODE_ENV=production
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -489,9 +517,40 @@ PYFIX
   log "✅ Suricata configured on $IFACE"
 fi
 
-# ── FIX: Configure Vector with ALL log sources
-# and KAFKA sink (not HTTP) ────────────────────────
-log "Configuring Vector → Kafka @ $KAFKA_BOOTSTRAP"
+# ── Suppress known false-positive Suricata SIDs ───────
+# These rules fire on legitimate NDR sensor traffic and
+# would otherwise generate constant noise.
+log "Writing Suricata false-positive suppressions..."
+THRESHOLD_FILE="/etc/suricata/threshold.conf"
+touch "$THRESHOLD_FILE"
+
+# Known false positives — add new SIDs here as needed
+SUPPRESS_SIDS=(
+  2066052   # ET INFO ngrok-free.dev in TLS SNI — sensor heartbeat to cloud
+  2066057   # Related ngrok tunneling rule
+)
+
+for SID in "${SUPPRESS_SIDS[@]}"; do
+  LINE="suppress gen_id 1, sig_id ${SID}"
+  if ! grep -qF "$LINE" "$THRESHOLD_FILE" 2>/dev/null; then
+    echo "$LINE" >> "$THRESHOLD_FILE"
+    log "  ✅ Suppressed SID $SID"
+  else
+    log "  SID $SID already suppressed"
+  fi
+done
+
+# Configure Suricata to load the threshold file
+if grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
+  sed -i "s|threshold-file:.*|threshold-file: $THRESHOLD_FILE|g" \
+    /etc/suricata/suricata.yaml
+else
+  echo "threshold-file: $THRESHOLD_FILE" >> /etc/suricata/suricata.yaml
+fi
+log "✅ Suricata suppressions written to $THRESHOLD_FILE"
+
+# ── Configure Vector with ALL log sources + HTTP sink ─
+log "Configuring Vector → HTTP @ $CLOUD_URL/api/ingest"
 HOSTNAME_VAL=$(hostname)
 
 cat > /etc/ndr/vector.toml << EOF
@@ -678,12 +737,11 @@ if err == null {
 } else { abort }
 '''
 
-# ── SINK: Kafka on cloud server ───────────────────
-# FIX: Use Kafka not HTTP
-# Key by community_id so same flow always
-# hits same engine partition
-[sinks.kafka]
-type = "kafka"
+# ── SINK: HTTP POST to cloud /api/ingest ─────────
+# Works through ngrok, reverse proxy, or direct IP.
+# Sends NDJSON batches; ingest endpoint handles it.
+[sinks.cloud_http]
+type = "http"
 inputs = [
   "suricata_json",
   "zeek_conn_json",
@@ -695,19 +753,27 @@ inputs = [
   "zeek_dhcp_json",
   "zeek_quic_json"
 ]
-bootstrap_servers = "${KAFKA_BOOTSTRAP}"
-topic = "ndr-events"
+uri = "${CLOUD_URL}/api/ingest"
+method = "post"
 encoding.codec = "json"
-key_field = "community_id"
+framing.method = "newline_delimited"
 
-[sinks.kafka.batch]
-timeout_secs = 0.1
+[sinks.cloud_http.batch]
 max_events = 100
+timeout_secs = 1
 
-[sinks.kafka.buffer]
+[sinks.cloud_http.request]
+retry_attempts = 5
+retry_initial_backoff_secs = 1
+retry_max_duration_secs = 30
+timeout_secs = 10
+headers.X-Sensor-Key = "${API_KEY}"
+headers.Content-Type = "application/x-ndjson"
+
+[sinks.cloud_http.buffer]
 type = "disk"
 max_size = 536870912
-when_full = "block"
+when_full = "drop_newest"
 EOF
 
 # ── FIX: agent.py with correct Arkime check ───────
@@ -729,6 +795,9 @@ CLOUD_URL = config.get('CLOUD_URL', '').rstrip('/')
 TENANT_ID = config.get('TENANT_ID', '')
 API_KEY   = config.get('API_KEY', '')
 IFACE     = config.get('IFACE', 'eth0')
+
+# Prevents check_and_restart from undoing an intentional stop command
+MANUALLY_STOPPED = False
 
 def derive_arkime_pass(key):
     return hashlib.sha256(key.encode())\
@@ -756,10 +825,6 @@ def is_port_open(port):
 
 def is_capture_running():
     return is_running('arkime/bin/capture')
-
-def is_viewer_running():
-    # FIX: check viewer by port, not process name
-    return is_port_open(8005)
 
 def start_zeek():
     try:
@@ -831,20 +896,16 @@ def start_capture():
         print(f"[NDR] Arkime capture failed: {e}")
         return False
 
-def start_viewer():
-    # FIX: start viewer separately
-    try:
-        subprocess.run(['systemctl', 'start',
-            'arkime-viewer'],
-            capture_output=True, timeout=30)
-        print("[NDR] ✅ Arkime viewer started")
-        return True
-    except Exception as e:
-        print(f"[NDR] Arkime viewer failed: {e}")
-        return False
-
 def check_and_restart():
     statuses = {}
+
+    if MANUALLY_STOPPED:
+        # Services were intentionally stopped — report stopped, do not restart
+        statuses['zeek']          = 'stopped'
+        statuses['suricata']      = 'stopped'
+        statuses['vector']        = 'stopped'
+        statuses['arkime_capture'] = 'stopped'
+        return statuses
 
     if not is_running('zeek'):
         print("[NDR] Zeek down — restarting")
@@ -874,14 +935,6 @@ def check_and_restart():
     else:
         statuses['arkime_capture'] = 'running'
 
-    # FIX: check viewer separately
-    if not is_viewer_running():
-        print("[NDR] Arkime viewer down — restarting")
-        start_viewer()
-        statuses['arkime_viewer'] = 'restarting'
-    else:
-        statuses['arkime_viewer'] = 'running'
-
     return statuses
 
 def report_status(statuses):
@@ -896,8 +949,6 @@ def report_status(statuses):
         'tenant_id':   TENANT_ID,
         'timestamp':   datetime.utcnow().isoformat(),
         'sensor_ip':   sensor_ip,
-        'arkime_url':  f'http://{sensor_ip}:8005',
-        'arkime_pass': ARKIME_PASS,
         **statuses
     }
     try:
@@ -910,7 +961,7 @@ def report_status(statuses):
         print(f"[NDR] Heartbeat sent: "
               f"zeek={statuses.get('zeek')} "
               f"suricata={statuses.get('suricata')} "
-              f"viewer={statuses.get('arkime_viewer')}")
+              f"capture={statuses.get('arkime_capture')}")
     except Exception as e:
         print(f"[NDR] Heartbeat failed: {e}")
 
@@ -928,19 +979,19 @@ def get_pending_pcap():
             # new: {"pending":[{"community_id":"..."}]}
             if isinstance(data, list):
                 return data
-            return [p.get('community_id', p)
-                    for p in data.get('pending', [])]
+            items = data.get('pending', [])
+            result = []
+            for p in items:
+                if isinstance(p, str):
+                    result.append(p)
+                elif isinstance(p, dict):
+                    result.append(p.get('community_id', ''))
+            return [x for x in result if x]
     except Exception as e:
         print(f"[NDR] pending poll error: {e}")
     return []
 
 def process_pcap_uploads():
-    # Only upload if viewer is running
-    if not is_viewer_running():
-        print("[NDR] Viewer not ready — "
-              "skipping PCAP uploads this cycle")
-        return
-
     pending = get_pending_pcap()
     if not pending:
         return
@@ -968,6 +1019,172 @@ def process_pcap_uploads():
         except Exception as e:
             print(f"[NDR] Upload error: {e}")
 
+def execute_command(cmd):
+    """Execute a received command string. Called by do_checkin() and
+    the legacy check_and_execute_command() for backward compat."""
+    global MANUALLY_STOPPED
+    print(f"[NDR] *** COMMAND RECEIVED: {cmd} ***")
+    if cmd == 'stop':
+        MANUALLY_STOPPED = True
+        subprocess.run(['pkill', '-9', '-f', 'zeek'], capture_output=True)
+        subprocess.run(['pkill', '-9', '-f', 'suricata'], capture_output=True)
+        subprocess.run(['systemctl', 'stop', 'ndr-vector'], capture_output=True)
+        subprocess.run(['pkill', '-9', '-f', 'vector --config'], capture_output=True)
+        subprocess.run(['pkill', '-9', '-f', '/usr/local/bin/vector'], capture_output=True)
+        subprocess.run(['systemctl', 'stop', 'arkime-capture'], capture_output=True)
+        subprocess.run(['pkill', '-9', '-f', 'arkime-capture'], capture_output=True)
+        print("[NDR] All services stopped")
+    elif cmd == 'start':
+        MANUALLY_STOPPED = False
+        start_zeek()
+        start_suricata()
+        start_vector()
+        start_capture()
+        print("[NDR] All services started")
+    elif cmd == 'restart':
+        MANUALLY_STOPPED = False
+        subprocess.run(['systemctl', 'restart', 'zeek'], capture_output=True)
+        subprocess.run(['systemctl', 'restart', 'suricata'], capture_output=True)
+        subprocess.run(['pkill', '-f', 'vector'], capture_output=True)
+        time.sleep(2)
+        start_vector()
+        subprocess.run(['pkill', '-f', 'arkime-capture'], capture_output=True)
+        time.sleep(2)
+        start_capture()
+        print("[NDR] All services restarted")
+    elif cmd.startswith('suppress_sid:'):
+        # Formats:
+        #   suppress_sid:2066052               → blanket SID suppress
+        #   suppress_sid:2066052:by_dst:1.2.3.4 → suppress SID to specific dst IP
+        #   suppress_sid:2066052:by_src:1.2.3.4 → suppress SID from specific src IP
+        parts = cmd.split(':')
+        sid = parts[1].strip()
+        threshold_file = '/etc/suricata/threshold.conf'
+        if len(parts) >= 4:
+            track_type = parts[2].strip()
+            track_ip   = parts[3].strip()
+            track_kw   = 'by_dst' if track_type == 'by_dst' else 'by_src'
+            suppress_line = (
+                f'suppress gen_id 1, sig_id {sid}, '
+                f'track {track_kw}, ip {track_ip}\n'
+            )
+        else:
+            suppress_line = f'suppress gen_id 1, sig_id {sid}\n'
+        try:
+            with open(threshold_file, 'r') as f:
+                existing = f.read()
+        except FileNotFoundError:
+            existing = ''
+        if suppress_line.strip() not in existing:
+            with open(threshold_file, 'a') as f:
+                f.write(suppress_line)
+            print(f"[NDR] Suppressed SID {sid} ({suppress_line.strip()})")
+            reloaded = False
+            try:
+                pid_out = subprocess.run(['pidof', 'suricata'], capture_output=True, text=True)
+                pid = pid_out.stdout.strip().split()[0]
+                subprocess.run(['kill', '-USR2', pid], check=True)
+                reloaded = True
+            except Exception:
+                pass
+            if not reloaded:
+                subprocess.run(['suricatasc', '-c', 'reload-rules'], capture_output=True)
+        else:
+            print(f"[NDR] SID {sid} already suppressed")
+    else:
+        print(f"[NDR] Unknown command ignored: {cmd}")
+
+def check_and_execute_command():
+    """Legacy single-poll command handler — kept for backward compat.
+    New sensors use do_checkin() which combines this with heartbeat
+    and pcap pending into one request."""
+    try:
+        resp = requests.get(
+            f'{CLOUD_URL}/api/sensor/command',
+            headers={'X-Sensor-Key': API_KEY},
+            timeout=5
+        )
+        if resp.status_code != 200:
+            return
+        cmd = resp.json().get('command', '').strip()
+        if cmd:
+            execute_command(cmd)
+    except Exception as e:
+        print(f"[NDR] Command poll error: {e}")
+
+def do_checkin():
+    """Single combined check-in — replaces the old 3 separate polls
+    (heartbeat, command, pcap pending) with one request.
+    Cuts per-sensor HTTP volume by ~3x."""
+    import socket
+    try:
+        sensor_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        sensor_ip = '127.0.0.1'
+
+    statuses = check_and_restart()
+
+    payload = {
+        'tenant_id':      TENANT_ID,
+        'sensor_ip':      sensor_ip,
+        'arkime_url':     f'http://{sensor_ip}:8005',
+        'arkime_pass':    ARKIME_PASS,
+        'zeek':           statuses.get('zeek', 'unknown'),
+        'suricata':       statuses.get('suricata', 'unknown'),
+        'vector':         statuses.get('vector', 'unknown'),
+        'arkime_capture': statuses.get('arkime_capture', 'unknown'),
+        'arkime_viewer':  statuses.get('arkime_viewer', 'unknown'),
+    }
+
+    try:
+        resp = requests.post(
+            f'{CLOUD_URL}/api/sensor/checkin',
+            json=payload,
+            headers={'X-Sensor-Key': API_KEY},
+            timeout=10
+        )
+        if resp.status_code != 200:
+            print(f"[NDR] Checkin HTTP {resp.status_code}")
+            return
+
+        data = resp.json()
+        print(f"[NDR] Checkin ok — "
+              f"zeek={payload['zeek']} "
+              f"suricata={payload['suricata']} "
+              f"arkime={payload['arkime_capture']}")
+
+        cmd = data.get('command', '').strip()
+        if cmd:
+            execute_command(cmd)
+
+        pending = data.get('pcap_pending', [])
+        if pending:
+            print(f"[NDR] {len(pending)} PCAP uploads pending")
+            for cid in pending[:5]:
+                if not cid:
+                    continue
+                try:
+                    result = subprocess.run(
+                        ['python3',
+                         '/opt/ndr-sensor/pcap-uploader.py',
+                         str(cid)],
+                        capture_output=True,
+                        text=True, timeout=120
+                    )
+                    if result.stdout.strip():
+                        print(result.stdout.strip())
+                    if result.returncode != 0:
+                        print(f"[NDR] Upload failed for "
+                              f"{cid[:20]}: "
+                              f"{result.stderr.strip()}")
+                except subprocess.TimeoutExpired:
+                    print(f"[NDR] Upload timeout: {cid[:20]}")
+                except Exception as e:
+                    print(f"[NDR] PCAP upload error: {e}")
+
+    except Exception as e:
+        print(f"[NDR] Checkin failed: {e}")
+
 if __name__ == '__main__':
     print(f"[NDR] Agent starting — "
           f"tenant={TENANT_ID}")
@@ -985,24 +1202,27 @@ if __name__ == '__main__':
     start_vector()
     start_capture()
     time.sleep(10)  # wait for capture to init
-    start_viewer()  # FIX: start viewer too
-    time.sleep(5)
 
     while True:
-        statuses = check_and_restart()
-        report_status(statuses)
-        process_pcap_uploads()
-        time.sleep(30)
+        do_checkin()   # heartbeat + command + pcap pending in one call
+        time.sleep(10)
 AGENT
 chmod +x /opt/ndr-sensor/agent.py
 
-# ── FIX: pcap-uploader.py with retry + report ────
+# ── pcap-uploader.py v3 — OpenSearch direct + tshark ─
 cat > /opt/ndr-sensor/pcap-uploader.py \
   << 'UPLOADER'
 #!/usr/bin/env python3
-"""NDR PCAP Uploader v2 — with retry + fulfilled"""
-import os, sys, gzip, shutil, time
-import requests, hashlib
+"""
+NDR PCAP Uploader v3
+- Queries OpenSearch directly (no viewer needed)
+- Extracts from raw Arkime .pcap files using tshark
+- Falls back to mergecap / raw copy
+- Gzip compressed upload with 3 retries
+"""
+import os, sys, gzip, shutil, time, json
+import requests, hashlib, subprocess
+from datetime import datetime
 
 def load_config():
     cfg = {}
@@ -1010,125 +1230,292 @@ def load_config():
         for line in f:
             if '=' in line and \
                not line.startswith('#'):
-                k, v = line.strip().split('=',1)
+                k,v = line.strip().split('=',1)
                 cfg[k.strip()] = v.strip()
     return cfg
 
-def arkime_pass(key):
+def sha16(key):
     return hashlib.sha256(
         key.encode()).hexdigest()[:16]
 
-def get_meta(cid, pwd):
+def find_session_in_opensearch(cid):
     try:
-        r = requests.get(
-            f"http://localhost:8005/api/sessions"
-            f"?expression=communityId%3D%3D{cid}"
-            f"&startTime=-24h&stopTime=now&length=1",
-            auth=("admin", pwd), timeout=15)
-        if r.status_code == 200:
-            data = r.json().get("data", [])
-            if data:
-                s = data[0]
-                return {
-                    "src_ip":   s.get(
-                        "source.ip", ""),
-                    "dst_ip":   s.get(
-                        "destination.ip", ""),
-                    "src_port": str(s.get(
-                        "source.port", 0)),
-                    "dst_port": str(s.get(
-                        "destination.port", 0)),
-                    "proto":    s.get(
-                        "network.transport", ""),
-                    "sensor_host":
-                        os.uname().nodename,
+        url = "http://localhost:9200/" \
+              "arkime_sessions3-*/_search"
+        query = {
+            "query": {
+                "term": {
+                    "network.community_id": cid
                 }
-    except Exception as e:
-        print(f"[UPLOADER] meta error: {e}")
-    return {"src_ip":"","dst_ip":"",
-            "src_port":"0","dst_port":"0",
-            "proto":"",
-            "sensor_host":os.uname().nodename}
-
-def extract(cid, out, pwd):
-    try:
-        r = requests.get(
-            f"http://localhost:8005"
-            f"/api/sessions/pcap"
-            f"?expression=communityId%3D%3D{cid}"
-            f"&startTime=-24h&stopTime=now",
-            auth=("admin", pwd),
-            timeout=30, stream=True)
+            },
+            "_source": [
+                "rootId","packetPos","packetLen",
+                "fileId","source.ip",
+                "destination.ip","source.port",
+                "destination.port",
+                "network.transport"
+            ],
+            "size": 10
+        }
+        r = requests.post(url,
+            json=query, timeout=15)
         if r.status_code != 200:
-            print(f"[UPLOADER] Arkime "
+            print(f"[UPLOADER] OpenSearch "
                   f"HTTP {r.status_code}")
-            return False
-        with open(out, 'wb') as f:
-            for chunk in r.iter_content(8192):
-                f.write(chunk)
-        size = os.path.getsize(out)
-        if size < 24:
-            print(f"[UPLOADER] PCAP too "
-                  f"small ({size}B)")
-            return False
-        print(f"[UPLOADER] Extracted {size}B")
-        return True
+            return None, None
+        hits = r.json().get(
+            'hits',{}).get('hits',[])
+        if not hits:
+            print(f"[UPLOADER] No session "
+                  f"for {cid[:20]}")
+            return None, None
+        src = hits[0].get('_source', {})
+        file_ids = src.get('fileId',
+            src.get('fileIds', []))
+        # OpenSearch returns ECS nested objects:
+        # {"source":{"ip":"x"},"destination":{...}}
+        # Use .get(key,{}).get(subkey) not dotted str
+        meta = {
+            "src_ip":    src.get('source',{}).get(
+                             'ip',''),
+            "dst_ip":    src.get('destination',{}).get(
+                             'ip',''),
+            "src_port":  str(src.get('source',{}).get(
+                             'port', 0)),
+            "dst_port":  str(src.get('destination',{}).get(
+                             'port', 0)),
+            "proto":     src.get('network',{}).get(
+                             'transport',''),
+            "sensor_host": os.uname().nodename,
+            "file_ids":  file_ids,
+            "root_id":   src.get('rootId',''),
+        }
+        print(f"[UPLOADER] Found session: "
+              f"{meta['src_ip']}→"
+              f"{meta['dst_ip']} "
+              f"files={file_ids}")
+        return meta, hits
     except Exception as e:
-        print(f"[UPLOADER] Extract: {e}")
+        print(f"[UPLOADER] OpenSearch error: {e}")
+        return None, None
+
+def get_arkime_files(file_ids):
+    if not file_ids:
+        return []
+    try:
+        url = "http://localhost:9200/" \
+              "arkime_files/_search"
+        query = {
+            "query": {"terms": {"num": file_ids}},
+            "_source": ["name","num"],
+            "size": 20
+        }
+        r = requests.post(url,
+            json=query, timeout=10)
+        if r.status_code != 200:
+            return []
+        hits = r.json().get(
+            'hits',{}).get('hits',[])
+        files = []
+        for h in hits:
+            path = h.get('_source',{}).get(
+                'name','')
+            if path and os.path.exists(path):
+                files.append(path)
+                print(f"[UPLOADER] "
+                      f"pcap file: {path}")
+        return files
+    except Exception as e:
+        print(f"[UPLOADER] File lookup: {e}")
+        return []
+
+def decompress_if_needed(path, tmp_dir):
+    """Decompress .pcap.zst to plain .pcap for tshark.
+    Skips files modified in the last 30s (still being written by Arkime)."""
+    if path.endswith('.pcap.zst') or path.endswith('.zst'):
+        # Skip active files Arkime is still writing
+        age = time.time() - os.path.getmtime(path)
+        if age < 30:
+            print(f"[UPLOADER] skipping active file "
+                  f"(modified {age:.0f}s ago): "
+                  f"{os.path.basename(path)}")
+            return None
+        out = os.path.join(tmp_dir,
+            os.path.basename(path).replace('.zst',''))
+        if not os.path.exists(out):
+            result = subprocess.run(
+                ['zstd', '-d', path, '-o', out, '-f'],
+                capture_output=True, timeout=60)
+            if result.returncode != 0:
+                print(f"[UPLOADER] zstd failed: "
+                      f"{result.stderr.decode()[:100]}")
+                return None
+        return out
+    return path
+
+def extract_with_tshark(pcap_files, cid, output):
+    if not pcap_files:
         return False
+    tmp_dir = os.path.dirname(output)
+    decompressed = []
+    for f in pcap_files:
+        d = decompress_if_needed(f, tmp_dir)
+        if d:
+            decompressed.append(d)
+    if not decompressed:
+        return False
+    input_args = []
+    for f in decompressed:
+        input_args += ['-r', f]
+    # --enable-protocol communityid is required even on tshark >= 3.4
+    # because the dissector ships disabled by default
+    cmd = (['tshark',
+            '--enable-protocol', 'communityid']
+           + input_args +
+           ['-Y',
+            f'communityid.id == "{cid}"',
+            '-w', output, '-F', 'pcap'])
+    try:
+        subprocess.run(cmd,
+            capture_output=True, timeout=60)
+        if (os.path.exists(output) and
+                os.path.getsize(output) >= 24):
+            print(f"[UPLOADER] tshark "
+                  f"{os.path.getsize(output)}B")
+            return True
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[UPLOADER] tshark: {e}")
+    return False
 
-def upload(cid, pcap, gz, url, key, meta):
-    # Compress
-    with open(pcap,'rb') as fi, \
-         gzip.open(gz,'wb',compresslevel=6) as fo:
-        shutil.copyfileobj(fi, fo)
-    orig = os.path.getsize(pcap)
-    comp = os.path.getsize(gz)
-    pct  = (1-comp/orig)*100 if orig else 0
-    print(f"[UPLOADER] {orig}B→{comp}B "
-          f"({pct:.0f}% smaller)")
+def extract_with_mergecap(pcap_files, output):
+    if not pcap_files:
+        return False
+    tmp_dir = os.path.dirname(output)
+    decompressed = []
+    for f in pcap_files:
+        d = decompress_if_needed(f, tmp_dir)
+        if d:
+            decompressed.append(d)
+    if not decompressed:
+        return False
+    if len(decompressed) == 1:
+        shutil.copy2(decompressed[0], output)
+        return os.path.getsize(output) >= 24
+    try:
+        cmd = (['mergecap', '-w', output]
+               + decompressed)
+        subprocess.run(cmd,
+            capture_output=True, timeout=60)
+        if (os.path.exists(output) and
+                os.path.getsize(output) >= 24):
+            print(f"[UPLOADER] mergecap "
+                  f"{os.path.getsize(output)}B")
+            return True
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[UPLOADER] mergecap: {e}")
+    return False
 
-    # Upload with retry
-    for attempt in range(3):
-        try:
+def extract_raw_copy(pcap_files, output):
+    if not pcap_files:
+        return False
+    shutil.copy2(pcap_files[0], output)
+    size = os.path.getsize(output) \
+        if os.path.exists(output) else 0
+    if size >= 24:
+        print(f"[UPLOADER] raw copy {size}B")
+        return True
+    return False
+
+def compress_and_upload(
+        cid, pcap, url, key, meta):
+    gz = pcap + '.gz'
+    try:
+        with open(pcap,'rb') as fi, \
+             gzip.open(gz,'wb',
+                       compresslevel=6) as fo:
+            shutil.copyfileobj(fi, fo)
+        orig = os.path.getsize(pcap)
+        comp = os.path.getsize(gz)
+        pct = (1-comp/orig)*100 if orig else 0
+        print(f"[UPLOADER] compressed "
+              f"{orig}→{comp}B "
+              f"({pct:.0f}% smaller)")
+        for attempt in range(3):
             if attempt > 0:
                 time.sleep(5 * attempt)
-                print(f"[UPLOADER] Retry {attempt}")
-            with open(gz,'rb') as f:
-                r = requests.post(
-                    f"{url}/api/pcap/upload",
-                    headers={
-                        "X-Sensor-Key": key,
-                        "Content-Encoding":"gzip"
-                    },
-                    files={"pcap":(
-                        "session.pcap.gz",
-                        f,
-                        "application/gzip"
-                    )},
-                    data={
-                        "community_id": cid,
-                        **meta
-                    },
-                    timeout=120
-                )
-            if r.status_code in (200, 409):
-                print(f"[UPLOADER] ✅ Uploaded")
-                return True
-            print(f"[UPLOADER] HTTP "
-                  f"{r.status_code}: {r.text}")
-        except Exception as e:
-            print(f"[UPLOADER] attempt "
-                  f"{attempt} error: {e}")
-    return False
+                print(f"[UPLOADER] retry "
+                      f"{attempt}/2")
+            try:
+                with open(gz,'rb') as f:
+                    r = requests.post(
+                        f"{url}/api/pcap/upload",
+                        headers={
+                            "X-Sensor-Key": key,
+                        },
+                        files={"pcap":(
+                            "session.pcap.gz",
+                            f,
+                            "application/gzip"
+                        )},
+                        data={
+                            "community_id": cid,
+                            "src_ip":   meta.get(
+                                "src_ip",""),
+                            "dst_ip":   meta.get(
+                                "dst_ip",""),
+                            "src_port": meta.get(
+                                "src_port","0"),
+                            "dst_port": meta.get(
+                                "dst_port","0"),
+                            "proto":    meta.get(
+                                "proto",""),
+                            "sensor_host": meta.get(
+                                "sensor_host",""),
+                        },
+                        timeout=120
+                    )
+                if r.status_code == 409:
+                    print("[UPLOADER] ✅ uploaded "
+                          "(already exists)")
+                    return True
+                if r.status_code == 200:
+                    try:
+                        body = r.json()
+                    except Exception:
+                        body = {}
+                    if body.get('status') \
+                            == 'error':
+                        print(f"[UPLOADER] "
+                              f"server rejected:"
+                              f" {body.get('message','?')}")
+                        continue
+                    sid = body.get(
+                        'session_id','?')
+                    print(f"[UPLOADER] "
+                          f"✅ uploaded "
+                          f"sid={sid[:8]}")
+                    return True
+                print(f"[UPLOADER] HTTP "
+                      f"{r.status_code}: "
+                      f"{r.text[:100]}")
+            except Exception as e:
+                print(f"[UPLOADER] upload: {e}")
+        return False
+    finally:
+        try: os.remove(gz)
+        except: pass
 
 def report_failure(cid, url, key, err):
     try:
         requests.post(
             f"{url}/api/pcap/upload-failed",
             headers={"X-Sensor-Key": key},
-            json={"community_id":cid,
-                  "error":str(err)},
+            json={"community_id": cid,
+                  "error": str(err)},
             timeout=10
         )
     except:
@@ -1143,31 +1530,63 @@ if __name__ == '__main__':
     cfg = load_config()
     url = cfg.get('CLOUD_URL','').rstrip('/')
     key = cfg.get('API_KEY','')
+    pwd = sha16(key)
 
-    pwd  = arkime_pass(key)
-    safe = cid.replace('/','_').replace(':','_')
+    safe = cid.replace(
+        '/','_').replace(':','_')
     tmp  = "/opt/ndr-sensor/pcap-tmp"
-    pcap = f"{tmp}/raw_{safe}.pcap"
-    gz   = f"{tmp}/gz_{safe}.pcap.gz"
-
     os.makedirs(tmp, exist_ok=True)
+    raw_out = f"{tmp}/raw_{safe}.pcap"
+
     try:
-        meta = get_meta(cid, pwd)
-        if extract(cid, pcap, pwd):
-            ok = upload(cid, pcap, gz,
-                        url, key, meta)
-            if not ok:
-                report_failure(cid, url, key,
-                    "upload failed after 3 attempts")
-                sys.exit(1)
-        else:
+        print(f"[UPLOADER] Processing: "
+              f"{cid[:30]}")
+
+        meta, os_hits = \
+            find_session_in_opensearch(cid)
+
+        if not meta:
+            # Arkime hasn't indexed this session
+            # yet — exit silently so pcap_pending
+            # stays unfulfilled and retries later
+            print(f"[UPLOADER] not in Arkime "
+                  f"yet, will retry: "
+                  f"{cid[:20]}")
+            sys.exit(0)
+
+        extracted = False
+        pcap_files = get_arkime_files(
+            meta.get('file_ids', []))
+        if pcap_files:
+            extracted = extract_with_tshark(
+                pcap_files, cid, raw_out)
+            if not extracted:
+                extracted = \
+                    extract_with_mergecap(
+                        pcap_files, raw_out)
+            if not extracted:
+                extracted = extract_raw_copy(
+                    pcap_files, raw_out)
+
+        if not extracted:
+            print(f"[UPLOADER] ❌ all methods "
+                  f"failed for {cid[:20]}")
             report_failure(cid, url, key,
-                "arkime session not found")
+                "all extraction methods failed")
             sys.exit(1)
+
+        ok = compress_and_upload(
+            cid, raw_out, url, key, meta or {})
+        if not ok:
+            report_failure(cid, url, key,
+                "upload failed after 3 retries")
+            sys.exit(1)
+
+        print(f"[UPLOADER] ✅ Done: {cid[:20]}")
+
     finally:
-        for f in [pcap, gz]:
-            try: os.remove(f)
-            except: pass
+        try: os.remove(raw_out)
+        except: pass
 UPLOADER
 chmod +x /opt/ndr-sensor/pcap-uploader.py
 
@@ -1195,12 +1614,13 @@ cat > /etc/systemd/system/ndr-agent.service \
 Description=NDR Sensor Agent
 After=network.target
 [Service]
-ExecStart=/usr/bin/python3 \
+ExecStart=/usr/bin/python3 -u \
   /opt/ndr-sensor/agent.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+Environment=PYTHONUNBUFFERED=1
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -1210,30 +1630,17 @@ systemctl enable \
   ndr-vector \
   ndr-agent \
   arkime-capture \
-  arkime-viewer \
   2>/dev/null || true
 
 # ── Start services ────────────────────────────────
 log "Starting Arkime services..."
 systemctl start arkime-capture 2>/dev/null || true
-sleep 5
-systemctl start arkime-viewer 2>/dev/null || true
+
+log "Starting Vector..."
+systemctl start ndr-vector 2>/dev/null || true
 
 log "Starting NDR agent..."
 systemctl start ndr-agent 2>/dev/null || true
-
-# ── Wait for viewer to be ready ───────────────────
-log "Waiting for Arkime viewer on :8005..."
-for i in {1..20}; do
-  if curl -s http://localhost:8005 \
-      > /dev/null 2>&1; then
-    log "✅ Arkime viewer ready on :8005"
-    break
-  fi
-  echo -n "."
-  sleep 3
-done
-echo ""
 
 # ── Register with cloud ───────────────────────────
 log "Registering sensor with cloud..."
@@ -1273,19 +1680,11 @@ V=$(pgrep -f "vector" > /dev/null 2>&1 && \
     echo "✅" || echo "❌")
 AC=$(pgrep -f "arkime/bin/capture" \
     > /dev/null 2>&1 && echo "✅" || echo "❌")
-AV=$(curl -s http://localhost:8005 \
-    > /dev/null 2>&1 && echo "✅" || echo "❌")
 
 printf "║  Zeek:         %s                           ║\n" "$Z"
 printf "║  Suricata:     %s                           ║\n" "$S"
-printf "║  Vector:       %s → Kafka                   ║\n" "$V"
+printf "║  Vector:       %s → HTTP                    ║\n" "$V"
 printf "║  Arkime cap:   %s                           ║\n" "$AC"
-printf "║  Arkime view:  %s :8005                     ║\n" "$AV"
-echo "╠══════════════════════════════════════════╣"
-printf "║  Arkime UI: http://%-20s ║\n" \
-  "$(hostname -I | awk '{print $1}'):8005"
-printf "║  Arkime pass:  %-24s ║\n" \
-  "$ARKIME_PASS"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 log "Config:  /etc/ndr/sensor.conf"

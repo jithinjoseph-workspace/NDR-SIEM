@@ -38,9 +38,22 @@ pub fn normalize_suricata(raw: Value) -> Option<NormalizedEvent> {
         .filter(|s| !s.is_empty() && *s != "unknown" && *s != "failed")
         .map(|s| s.to_lowercase());
 
+    // SIDs suppressed cloud-side — sensor heartbeat / infrastructure noise
+    const SUPPRESSED_SIDS: &[u64] = &[
+        2066052, // ET INFO ngrok-free.dev TLS SNI — sensor tunnel to cloud
+        2066057, // ET INFO ngrok tunneling protocol
+    ];
+
     // Parse Suricata alert sub-object only when event_type == "alert"
     let alert = if event_type.as_deref() == Some("alert") {
-        raw.get("alert").and_then(|a| parse_alert(a))
+        let parsed = raw.get("alert").and_then(|a| parse_alert(a));
+        // Drop suppressed SIDs before they reach scoring/hits
+        if let Some(ref a) = parsed {
+            if SUPPRESSED_SIDS.contains(&a.signature_id) {
+                return None;
+            }
+        }
+        parsed
     } else {
         None
     };

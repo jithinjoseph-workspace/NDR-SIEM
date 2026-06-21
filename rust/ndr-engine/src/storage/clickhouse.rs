@@ -252,6 +252,10 @@ fn tenant_db(tenant_id: &str) -> String {
     }
 }
 
+pub fn tenant_db_pub(tenant_id: &str) -> String {
+    tenant_db(tenant_id)
+}
+
 #[allow(dead_code)]
 impl ClickhouseStorage {
 
@@ -1267,12 +1271,38 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(result)
     }
 
-    pub async fn get_all_enabled_sigma_rules(&self) -> anyhow::Result<Vec<(String, String)>> {
-        let result = self.client
-            .query("SELECT id, content FROM ndr.sigma_rules FINAL WHERE enabled = 1")
-            .fetch_all::<(String, String)>()
-            .await?;
-        Ok(result)
+    /// Returns (id, content, tenant_id) for all enabled rules across all active tenants.
+    pub async fn get_all_enabled_sigma_rules(&self) -> anyhow::Result<Vec<(String, String, String)>> {
+        let mut all: Vec<(String, String, String)> = Vec::new();
+
+        // Always include default tenant
+        let tenants_to_query: Vec<String> = {
+            let mut ids: Vec<String> = self.client
+                .query("SELECT id FROM ndr.tenants FINAL WHERE active = 1")
+                .fetch_all::<String>()
+                .await
+                .unwrap_or_default();
+            ids.insert(0, "default".to_string());
+            ids.dedup();
+            ids
+        };
+
+        for tid in &tenants_to_query {
+            let db = tenant_db(tid);
+            let rows: Vec<(String, String)> = self.client
+                .query(&format!(
+                    "SELECT id, content FROM {}.sigma_rules FINAL WHERE enabled = 1",
+                    db
+                ))
+                .fetch_all::<(String, String)>()
+                .await
+                .unwrap_or_default();
+            for (id, content) in rows {
+                all.push((id, content, tid.clone()));
+            }
+        }
+
+        Ok(all)
     }
 
     pub async fn save_sigma_rule(&self, id: &str, name: &str, content: &str, tenant_id: &str) -> anyhow::Result<()> {
@@ -2285,14 +2315,14 @@ pub async fn queue_pcap_request(
     tenant_id: &str,
     community_id: &str,
 ) -> anyhow::Result<()> {
-    // BUG 4 FIX: skip if already pending or fulfilled in last 24h
+    let db = tenant_db(tenant_id);
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct CntRow { cnt: u64 }
     let rows = self.client.query(&format!(
-        "SELECT count() as cnt FROM ndr.pcap_pending \
+        "SELECT count() as cnt FROM {}.pcap_pending \
          WHERE community_id = '{}' AND tenant_id = '{}' \
          AND requested_at > now() - INTERVAL 24 HOUR",
-        sql_escape(community_id), sql_escape(tenant_id)
+        db, sql_escape(community_id), sql_escape(tenant_id)
     )).fetch_all::<CntRow>().await.unwrap_or_default();
     if rows.first().map(|r| r.cnt).unwrap_or(0) > 0 {
         return Ok(()); // already queued — skip duplicate
@@ -2300,10 +2330,10 @@ pub async fn queue_pcap_request(
 
     self.client
         .query(&format!(
-            "INSERT INTO ndr.pcap_pending \
+            "INSERT INTO {}.pcap_pending \
              (community_id, tenant_id, fulfilled) VALUES \
              ('{}', '{}', 0)",
-            sql_escape(community_id), sql_escape(tenant_id)
+            db, sql_escape(community_id), sql_escape(tenant_id)
         ))
         .execute()
         .await?;
@@ -2314,12 +2344,13 @@ pub async fn get_pending_pcap_requests(
     &self,
     tenant_id: &str,
 ) -> anyhow::Result<Vec<String>> {
+    let db = tenant_db(tenant_id);
     let rows = self.client
         .query(&format!(
-            "SELECT community_id FROM ndr.pcap_pending FINAL \
+            "SELECT community_id FROM {}.pcap_pending FINAL \
              WHERE tenant_id = '{}' AND fulfilled = 0 \
              AND requested_at > now() - INTERVAL 1 DAY",
-            sql_escape(tenant_id)
+            db, sql_escape(tenant_id)
         ))
         .fetch_all::<String>()
         .await
@@ -2332,12 +2363,13 @@ pub async fn mark_pcap_fulfilled(
     tenant_id: &str,
     community_id: &str,
 ) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
     self.client
         .query(&format!(
-            "ALTER TABLE ndr.pcap_pending \
+            "ALTER TABLE {}.pcap_pending \
              UPDATE fulfilled = 1, fulfilled_at = now() \
              WHERE tenant_id = '{}' AND community_id = '{}'",
-            sql_escape(tenant_id), sql_escape(community_id)
+            db, sql_escape(tenant_id), sql_escape(community_id)
         ))
         .execute()
         .await?;
@@ -2356,6 +2388,28 @@ pub async fn revoke_sensor_key(
         ))
         .execute().await?;
     Ok(())
+}
+
+/// Fetch the key_prefix for a sensor key by its UUID id.
+/// Used to invalidate the Redis cache immediately on revocation,
+/// since plain api_keys are never stored (only bcrypt hashes).
+pub async fn get_sensor_key_prefix_by_id(
+    &self,
+    id: &str,
+) -> anyhow::Result<Option<String>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row { key_prefix: String }
+
+    let rows = self.client
+        .query(&format!(
+            "SELECT key_prefix FROM ndr.sensor_keys FINAL \
+             WHERE id = '{}' LIMIT 1",
+            id.replace('\'', "\\'")
+        ))
+        .fetch_all::<Row>()
+        .await?;
+
+    Ok(rows.into_iter().next().map(|r| r.key_prefix))
 }
 
 pub async fn reactivate_sensor_key(
@@ -2400,15 +2454,16 @@ pub async fn set_sensor_command(
     sensor_id: &str,
     command: &str,
 ) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
     let id = uuid::Uuid::new_v4().to_string();
     let tenant_id = sql_escape(tenant_id);
     let sensor_id = sql_escape(sensor_id);
     let command = sql_escape(command);
     let query = format!(
-        "INSERT INTO ndr.sensor_commands \
+        "INSERT INTO {}.sensor_commands \
          (id, tenant_id, sensor_id, command, status) \
          VALUES ('{}', '{}', '{}', '{}', 'pending')",
-        id, tenant_id, sensor_id, command
+        db, id, tenant_id, sensor_id, command
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -2419,21 +2474,22 @@ pub async fn get_sensor_command(
     tenant_id: &str,
     sensor_id: &str,
 ) -> anyhow::Result<(String, String)> {
+    let db = tenant_db(tenant_id);
     let tenant_id = sql_escape(tenant_id);
     let sensor_id = sql_escape(sensor_id);
     let result = self.client
         .query(&format!(
-            "SELECT command, sensor_id FROM ndr.sensor_commands FINAL \
+            "SELECT command, sensor_id FROM {}.sensor_commands FINAL \
              WHERE tenant_id = '{}' \
              AND (sensor_id = '{}' OR sensor_id = '') \
              AND status = 'pending' \
              ORDER BY if(sensor_id = '{}', 0, 1), created_at DESC \
              LIMIT 1",
-            tenant_id, sensor_id, sensor_id
+            db, tenant_id, sensor_id, sensor_id
         ))
         .fetch_all::<(String, String)>()
         .await?;
-    
+
     Ok(result.first()
         .map(|r| (r.0.clone(), r.1.clone()))
         .unwrap_or_default())
@@ -2444,20 +2500,114 @@ pub async fn clear_sensor_command(
     tenant_id: &str,
     sensor_id: &str,
 ) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
     let tenant_id = sql_escape(tenant_id);
     let sensor_id = sql_escape(sensor_id);
     self.client
         .query(&format!(
-            "ALTER TABLE ndr.sensor_commands \
+            "ALTER TABLE {}.sensor_commands \
              UPDATE status = 'done' \
              WHERE tenant_id = '{}' \
              AND sensor_id = '{}' \
              AND status = 'pending'",
-            tenant_id, sensor_id
+            db, tenant_id, sensor_id
         ))
         .execute().await?;
     Ok(())
 }
+
+    // ── AI suppressions ──────────────────────────────────────────────────
+
+    pub async fn save_ai_suppression(
+        &self,
+        tenant_id:      &str,
+        sig_id:         u64,
+        sig_name:       &str,
+        suppress_type:  &str,   // "by_dst" | "by_src" | "by_sid"
+        suppress_ip:    &str,
+        src_ip:         &str,
+        dst_ip:         &str,
+        community_id:   &str,
+        ai_reason:      &str,
+        ai_confidence:  u8,
+        sensor_id:      &str,
+    ) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        self.client.query(&format!(
+            "INSERT INTO {}.ai_suppressions \
+             (id, tenant_id, signature_id, signature_name, suppress_type, suppress_ip, \
+              src_ip, dst_ip, community_id, ai_reason, ai_confidence, sensor_id, active) \
+             VALUES ('{}','{}',{},  '{}','{}','{}','{}','{}','{}','{}',{}, '{}', 1)",
+            db,
+            uuid::Uuid::new_v4(),
+            sql_escape(tenant_id),
+            sig_id,
+            sql_escape(sig_name),
+            sql_escape(suppress_type),
+            sql_escape(suppress_ip),
+            sql_escape(src_ip),
+            sql_escape(dst_ip),
+            sql_escape(community_id),
+            sql_escape(ai_reason),
+            ai_confidence,
+            sql_escape(sensor_id),
+        )).execute().await?;
+        Ok(())
+    }
+
+    pub async fn is_ai_suppressed(
+        &self,
+        tenant_id: &str,
+        sig_id:    u64,
+        src_ip:    &str,
+        dst_ip:    &str,
+    ) -> bool {
+        let db = tenant_db(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Cnt { cnt: u64 }
+        let r = self.client.query(&format!(
+            "SELECT count() as cnt FROM {}.ai_suppressions FINAL \
+             WHERE tenant_id = '{}' AND active = 1 \
+             AND signature_id = {} \
+             AND (suppress_type = 'by_sid' \
+               OR (suppress_type = 'by_dst' AND suppress_ip = '{}') \
+               OR (suppress_type = 'by_src' AND suppress_ip = '{}'))",
+            db, sql_escape(tenant_id), sig_id,
+            sql_escape(dst_ip), sql_escape(src_ip)
+        )).fetch_all::<Cnt>().await.unwrap_or_default();
+        r.first().map(|x| x.cnt > 0).unwrap_or(false)
+    }
+
+    pub async fn list_ai_suppressions(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db = tenant_db(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            id: String, sig_id: u64, sig_name: String,
+            suppress_type: String, suppress_ip: String,
+            src_ip: String, dst_ip: String,
+            ai_reason: String, ai_confidence: u8,
+            active: u8, created_at: String,
+        }
+        let rows = self.client.query(&format!(
+            "SELECT id, signature_id as sig_id, signature_name as sig_name, \
+             suppress_type, suppress_ip, src_ip, dst_ip, \
+             ai_reason, ai_confidence, active, toString(created_at) as created_at \
+             FROM {}.ai_suppressions FINAL \
+             WHERE tenant_id = '{}' \
+             ORDER BY created_at DESC LIMIT 100",
+            db, sql_escape(tenant_id)
+        )).fetch_all::<Row>().await.unwrap_or_default();
+        Ok(rows.iter().map(|r| json!({
+            "id": r.id, "signature_id": r.sig_id, "signature_name": r.sig_name,
+            "suppress_type": r.suppress_type, "suppress_ip": r.suppress_ip,
+            "src_ip": r.src_ip, "dst_ip": r.dst_ip,
+            "ai_reason": r.ai_reason, "ai_confidence": r.ai_confidence,
+            "active": r.active == 1, "created_at": r.created_at
+        })).collect())
+    }
 
     //support messages
     pub async fn create_support_message(
@@ -3142,34 +3292,52 @@ pub async fn get_hit_by_community_id(
     community_id: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     #[derive(clickhouse::Row, serde::Deserialize)]
-    struct HitByCidRow {
+    struct HitRow {
         community_id: String,
         src_ip:       String,
         dst_ip:       String,
-        src_port:     u16,
-        dst_port:     u16,
-        proto:        String,
         timestamp:    String,
         severity:     String,
-        rule_name:    String,
-        alert_msg:    String,
+    }
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct EventRow {
+        src_port: u16,
+        dst_port: u16,
+        proto:    String,
     }
     let db = tenant_db(tenant_id);
-    let rows = self.client.query(&format!(
+    let hits = self.client.query(&format!(
         "SELECT community_id, src_ip, dst_ip,
-         src_port, dst_port, proto,
-         toString(timestamp) as timestamp,
-         severity, rule_name, alert_msg
+         toString(timestamp) as timestamp, severity
          FROM {}.ndr_hits
          WHERE community_id = '{}'
          ORDER BY timestamp DESC LIMIT 1",
         db, community_id
-    )).fetch_all::<HitByCidRow>().await?;
-    Ok(rows.first().map(|r| serde_json::json!({
-        "community_id": r.community_id, "src_ip": r.src_ip, "dst_ip": r.dst_ip,
-        "src_port": r.src_port, "dst_port": r.dst_port, "proto": r.proto,
-        "timestamp": r.timestamp, "severity": r.severity,
-        "rule_name": r.rule_name, "alert_msg": r.alert_msg
+    )).fetch_all::<HitRow>().await?;
+
+    let Some(hit) = hits.first() else { return Ok(None); };
+
+    // Pull ports and proto from ndr_events (ndr_hits doesn't store them)
+    let events = self.client.query(&format!(
+        "SELECT src_port, dst_port, proto
+         FROM {}.ndr_events
+         WHERE community_id = '{}' AND src_port > 0
+         ORDER BY timestamp DESC LIMIT 1",
+        db, community_id
+    )).fetch_all::<EventRow>().await.unwrap_or_default();
+    let (src_port, dst_port, proto) = events.first()
+        .map(|e| (e.src_port, e.dst_port, e.proto.clone()))
+        .unwrap_or((0, 0, "tcp".to_string()));
+
+    Ok(Some(serde_json::json!({
+        "community_id": hit.community_id,
+        "src_ip":       hit.src_ip,
+        "dst_ip":       hit.dst_ip,
+        "src_port":     src_port,
+        "dst_port":     dst_port,
+        "proto":        proto,
+        "timestamp":    hit.timestamp,
+        "severity":     hit.severity,
     })))
 }
 

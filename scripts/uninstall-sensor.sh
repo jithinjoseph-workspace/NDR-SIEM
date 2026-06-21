@@ -1,11 +1,8 @@
 #!/bin/bash
 # NDR Sensor Uninstall / Cleanup Script
-# Handles both legacy installs (ndr-agent) and current installs (ndr-sensor-agent)
 # Usage:
-#   sudo bash uninstall-sensor.sh                         # removes sensor for all tenants
-#   sudo bash uninstall-sensor.sh --tenant-id <ID>       # removes only one tenant's data
-#   sudo bash uninstall-sensor.sh --purge-packages        # also removes zeek/suricata/vector binaries
-#   sudo bash uninstall-sensor.sh --dry-run               # show what would be removed without doing it
+#   sudo bash uninstall-sensor.sh
+#   sudo bash uninstall-sensor.sh --purge-packages   # also removes zeek/suricata/vector/arkime binaries
 
 set -euo pipefail
 
@@ -89,9 +86,9 @@ echo ""
 # ══════════════════════════════════════════════════════
 # STEP 1 — Stop & disable current services (ndr-sensor-*)
 # ══════════════════════════════════════════════════════
-log "Step 1: Stopping current sensor services (ndr-sensor-agent, ndr-sensor-vector)..."
+log "Step 1: Stopping all NDR sensor services..."
 
-for SVC in ndr-sensor-agent ndr-sensor-vector; do
+for SVC in ndr-agent ndr-vector ndr-sensor-agent ndr-sensor-vector arkime-capture arkime-viewer; do
     if systemctl list-unit-files --no-pager | grep -q "^${SVC}.service"; then
         run "systemctl stop $SVC"
         run "systemctl disable $SVC"
@@ -100,6 +97,28 @@ for SVC in ndr-sensor-agent ndr-sensor-vector; do
         info "  $SVC not found (skip)"
     fi
 done
+
+log "  Killing remaining processes..."
+run "pkill -9 -f agent.py"
+run "pkill -9 -f suricata"
+run "pkill -9 -f zeek"
+run "pkill -9 -f pcap-uploader"
+run "pkill -9 -f 'vector --config'"
+run "pkill -9 -f '/usr/local/bin/vector'"
+run "pkill -9 -f '/usr/bin/vector'"
+run "killall -9 vector"
+run "sleep 2"
+if pgrep -f vector > /dev/null 2>&1; then
+    warn "  Vector still alive — hard killing..."
+    kill -9 $(pgrep -f vector 2>/dev/null) 2>/dev/null || true
+fi
+pgrep -f vector > /dev/null 2>&1 \
+    && warn "  ⚠️  Vector could not be killed" \
+    || log "  ✅ Vector dead"
+
+log "  Removing OpenSearch container..."
+run "docker stop opensearch-arkime"
+run "docker rm   opensearch-arkime"
 
 # ══════════════════════════════════════════════════════
 # STEP 2 — Stop & disable LEGACY service (ndr-agent)
@@ -160,9 +179,12 @@ run "rm -rf /run/ndr-sensor"
 log "Step 4: Removing systemd unit files..."
 
 for UNIT_FILE in \
+    /etc/systemd/system/ndr-agent.service \
+    /etc/systemd/system/ndr-vector.service \
     /etc/systemd/system/ndr-sensor-agent.service \
     /etc/systemd/system/ndr-sensor-vector.service \
-    /etc/systemd/system/ndr-agent.service; do
+    /etc/systemd/system/arkime-capture.service \
+    /etc/systemd/system/arkime-viewer.service; do
     if [ -f "$UNIT_FILE" ]; then
         run "rm -f $UNIT_FILE"
         log "  ✅ Removed: $UNIT_FILE"
@@ -179,6 +201,11 @@ log "Step 5: Removing sensor agent files..."
 
 run "rm -rf /opt/ndr-sensor"
 log "  ✅ Removed /opt/ndr-sensor"
+
+run "rm -rf /opt/arkime/raw"
+run "rm -rf /opt/arkime/logs"
+run "rm -f  /opt/arkime/etc/config.ini"
+log "  ✅ Removed Arkime data"
 
 run "rm -f /etc/ndr/vector.toml"
 run "rm -f /etc/ndr/sensor.conf"

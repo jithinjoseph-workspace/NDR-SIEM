@@ -25,6 +25,14 @@ impl DetectionEngine {
             .collect()
     }
 
+    /// Check only rules belonging to `tenant_id`.
+    pub fn check_for_tenant(&self, event: &NormalizedEvent, tenant_id: &str) -> Vec<DetectionMatch> {
+        self.rules.iter()
+            .filter(|rule| rule.tenant_id == tenant_id)
+            .filter_map(|rule| self.eval(rule, event))
+            .collect()
+    }
+
     fn eval(&self, rule: &SigmaRule, event: &NormalizedEvent) -> Option<DetectionMatch> {
         let matched = match rule.logic {
             Logic::And => rule.conditions.iter().all(|c| c.matches(event)),
@@ -39,20 +47,21 @@ impl DetectionEngine {
     }
 
     pub fn rule_count(&self) -> usize { self.rules.len() }
-   pub fn get_rules(&self) -> Vec<serde_json::Value> {
-    self.rules.iter().map(|r| serde_json::json!({
-        "id":       r.id,
-        "title":    r.title,
-        "severity": r.severity,
-        "tags":     r.tags,
-        "logsource": {
-            "product":  r.logsource.product,
-            "category": r.logsource.category,
-            "service":  r.logsource.service,
-        },
-        "conditions": r.conditions.len(),
-    })).collect()
-}
+    pub fn get_rules(&self) -> Vec<serde_json::Value> {
+        self.rules.iter().map(|r| serde_json::json!({
+            "id":        r.id,
+            "title":     r.title,
+            "severity":  r.severity,
+            "tags":      r.tags,
+            "tenant_id": r.tenant_id,
+            "logsource": {
+                "product":  r.logsource.product,
+                "category": r.logsource.category,
+                "service":  r.logsource.service,
+            },
+            "conditions": r.conditions.len(),
+        })).collect()
+    }
 
 pub fn set_rules(&mut self, rules: Vec<SigmaRule>) {
     tracing::info!("Rules updated: {} loaded", rules.len());

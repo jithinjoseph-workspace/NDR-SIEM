@@ -149,6 +149,8 @@ pub struct AppState {
     pub redis_mux:  redis::aio::MultiplexedConnection,
     pub kafka_producer: Arc<rdkafka::producer::FutureProducer>,
     pub correlation_semaphore: Arc<tokio::sync::Semaphore>,
+    pub sensor_key_cache: Arc<crate::auth::sensor_cache::SensorKeyCache>,
+    pub ingest_tx: tokio::sync::mpsc::Sender<(String, String)>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -317,7 +319,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/auth/check-username", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/install-sensor.sh"];
+    let public = ["/api/auth/login", "/api/auth/check-username", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh", "/api/pcap/pending", "/api/pcap/upload"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -604,7 +606,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                             &file_path, &sha256, size,
                             1, // auto_captured
                             90, // expires in 90 days
-                            "", "", &severity_str, "",
+                            &src_ip_str, &dst_ip_str, &severity_str, "",
                         ).await;
                         let _ = ch.log_evidence_action(
                             &tenant, &cid, &bundle_id,
@@ -626,9 +628,9 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         });
     }
 
-    // SIGMA detection on both sides
-    let mut detections = state.detection.read().await.check(&hit.zeek);
-    detections.extend(state.detection.read().await.check(&hit.suricata));
+    // SIGMA detection — only rules belonging to this tenant
+    let mut detections = state.detection.read().await.check_for_tenant(&hit.zeek, &tenant_id);
+    detections.extend(state.detection.read().await.check_for_tenant(&hit.suricata, &tenant_id));
 
     let cs      = hit.zeek.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);
@@ -700,6 +702,103 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 tracing::warn!("pcap_pending queue failed: {}", e);
             }
         });
+    }
+
+    // AI auto-suppression: check IDS alerts for false positives
+    if risk.tags.contains(&"ids-alert".to_string()) {
+        if let Some(alert_info) = hit.suricata.alert.as_ref() {
+            let sig_id   = alert_info.signature_id;
+            let sig_name = alert_info.signature.clone();
+            let src_ip   = src.to_string();
+            let dst_ip   = dst.to_string();
+            let cid      = hit.community_id.clone();
+            let ch3      = state.ch_storage.clone();
+            let tid3     = tenant_id.clone();
+            let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+
+            tokio::spawn(async move {
+                // Skip if already suppressed
+                if ch3.is_ai_suppressed(&tid3, sig_id, &src_ip, &dst_ip).await {
+                    return;
+                }
+                // Skip if we've already decided on this sig+dst recently
+                let already = ch3.list_ai_suppressions(&tid3).await.unwrap_or_default();
+                let already_seen = already.iter().any(|s|
+                    s["signature_id"].as_u64() == Some(sig_id)
+                    && s["suppress_ip"].as_str() == Some(dst_ip.as_str())
+                );
+                if already_seen { return; }
+
+                if openai_key.is_empty() { return; }
+
+                let prompt = "You are an NDR (Network Detection & Response) security analyst AI. \
+                    Your job is to determine if a Suricata IDS alert is a FALSE POSITIVE. \
+                    Respond ONLY with valid JSON: \
+                    {\"false_positive\": true/false, \"confidence\": 0-100, \
+                    \"suppress_type\": \"by_dst\"|\"by_src\"|\"by_sid\"|\"none\", \
+                    \"reason\": \"short explanation\"}. \
+                    Use by_dst when the destination IP is known infrastructure. \
+                    Use by_src when the source IP is a trusted internal scanner. \
+                    Use by_sid only if the entire rule is broken/noisy. \
+                    Use none if it looks like a real threat.";
+
+                let question = format!(
+                    "Alert: SID={} rule=\"{}\" src={} dst={} tenant={}. \
+                    Is this a false positive?",
+                    sig_id, sig_name, src_ip, dst_ip, tid3
+                );
+
+                if let Ok((reply, _)) = crate::ai::call_openai(
+                    &openai_key, prompt, &[], &question
+                ).await {
+                    // Parse AI JSON response
+                    let ai: serde_json::Value = serde_json::from_str(&reply)
+                        .unwrap_or_else(|_| {
+                            // Try to extract JSON from response text
+                            if let Some(start) = reply.find('{') {
+                                if let Some(end) = reply.rfind('}') {
+                                    return serde_json::from_str(&reply[start..=end])
+                                        .unwrap_or(json!({}));
+                                }
+                            }
+                            json!({})
+                        });
+
+                    let is_fp         = ai["false_positive"].as_bool().unwrap_or(false);
+                    let confidence    = ai["confidence"].as_u64().unwrap_or(0) as u8;
+                    let suppress_type = ai["suppress_type"].as_str().unwrap_or("none");
+                    let reason        = ai["reason"].as_str().unwrap_or("").to_string();
+
+                    if is_fp && confidence >= 80 && suppress_type != "none" {
+                        let suppress_ip = match suppress_type {
+                            "by_dst" => dst_ip.clone(),
+                            "by_src" => src_ip.clone(),
+                            _        => String::new(),
+                        };
+
+                        // Store in ai_suppressions table
+                        let _ = ch3.save_ai_suppression(
+                            &tid3, sig_id, &sig_name,
+                            suppress_type, &suppress_ip,
+                            &src_ip, &dst_ip, &cid,
+                            &reason, confidence, "",
+                        ).await;
+
+                        // Queue suppress command to sensor
+                        let cmd = match suppress_type {
+                            "by_sid" => format!("suppress_sid:{}", sig_id),
+                            _        => format!("suppress_sid:{}:{}:{}", sig_id, suppress_type, suppress_ip),
+                        };
+                        let _ = ch3.set_sensor_command(&tid3, "", &cmd).await;
+
+                        tracing::info!(
+                            "AI auto-suppressed SID={} {} {} confidence={}% reason={}",
+                            sig_id, suppress_type, suppress_ip, confidence, reason
+                        );
+                    }
+                }
+            });
+        }
     }
 
     // Build WebSocket hit message
@@ -1361,9 +1460,12 @@ pub async fn load_rules_from_clickhouse(
     if let Ok(ch_rules) = ch.get_all_enabled_sigma_rules().await {
         if !ch_rules.is_empty() {
             let mut rules = Vec::new();
-            for (id, content) in ch_rules {
+            for (id, content, tenant_id) in ch_rules {
                 match crate::detection::parse_rule_content(&content) {
-                    Ok(r) => rules.push(r),
+                    Ok(mut r) => {
+                        r.tenant_id = tenant_id;
+                        rules.push(r);
+                    }
                     Err(e) => tracing::warn!("Failed to parse rule {} from ClickHouse: {}", id, e),
                 }
             }
@@ -1508,14 +1610,13 @@ pub async fn get_rules(
     // Try ClickHouse first
     let db_rules = state.ch_storage.get_all_sigma_rules(&tenant_id).await.unwrap_or_default();
     
-    let result: Vec<serde_json::Value> = if !db_rules.is_empty() {
-        db_rules.iter().map(|(id, name, content, _r_tenant_id, enabled)| {
+    let map_db_rules = |rules: &Vec<(String, String, String, String, u8)>| -> Vec<serde_json::Value> {
+        rules.iter().map(|(id, name, content, _r_tenant_id, enabled)| {
             let parsed = crate::detection::parse_rule_content(content).ok();
             let conditions_len = parsed.as_ref().map(|p| p.conditions.len()).unwrap_or(0);
             let tags = parsed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
             let severity = parsed.as_ref().map(|p| p.severity.clone()).unwrap_or_default();
             let logsource = parsed.as_ref().map(|p| p.logsource.clone());
-            
             json!({
                 "id":          id,
                 "title":       name,
@@ -1531,8 +1632,12 @@ pub async fn get_rules(
                 "status":      if *enabled == 1 { "active" } else { "disabled" }
             })
         }).collect()
-    } else {
-        // Fallback to loading from files
+    };
+
+    let result: Vec<serde_json::Value> = if !db_rules.is_empty() {
+        map_db_rules(&db_rules)
+    } else if tenant_id == "default" {
+        // Fallback to filesystem only for default tenant
         let rules_dir = std::env::var("RULES_DIR")
             .unwrap_or_else(|_| "rules".to_string());
         let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
@@ -1556,6 +1661,9 @@ pub async fn get_rules(
                 "status":  if is_enabled { "active" } else { "disabled" }
             })
         }).collect()
+    } else {
+        // Non-default tenants with no rules in DB → empty list
+        vec![]
     };
 
     Json(json!(result))
@@ -1908,6 +2016,18 @@ pub async fn delete_rule(
         let count = active.len();
         state.detection.write().await.set_rules(active);
 
+        // Notify all other engine instances to reload
+        let redis = state.redis.clone();
+        let tid = tenant_id.clone();
+        tokio::spawn(async move {
+            if let Ok(mut conn) = redis.get_async_connection().await {
+                let _: Result<(), _> = redis::cmd("PUBLISH")
+                    .arg("system:reload_rules")
+                    .arg(&tid)
+                    .query_async(&mut conn).await;
+            }
+        });
+
         tracing::info!("Rule deleted: {}", rule_id);
         Json(json!({
             "status": "deleted",
@@ -1975,6 +2095,18 @@ pub async fn toggle_rule(
     let active = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
     let count = active.len();
     state.detection.write().await.set_rules(active);
+
+    // Notify all other engine instances to reload
+    let redis = state.redis.clone();
+    let tid = tenant_id.clone();
+    tokio::spawn(async move {
+        if let Ok(mut conn) = redis.get_async_connection().await {
+            let _: Result<(), _> = redis::cmd("PUBLISH")
+                .arg("system:reload_rules")
+                .arg(&tid)
+                .query_async(&mut conn).await;
+        }
+    });
 
     Json(json!({
         "status":       "ok",
@@ -4189,12 +4321,26 @@ pub async fn validate_sensor_key(
     headers: &axum::http::HeaderMap,
     ch: &Arc<ClickhouseStorage>,
 ) -> Option<String> {
+    validate_sensor_key_cached(headers, ch, None).await
+}
+
+/// Cached variant — used by handlers that have access to AppState.
+/// Falls back to direct bcrypt+DB on cache miss (same as before).
+pub async fn validate_sensor_key_cached(
+    headers: &axum::http::HeaderMap,
+    ch: &Arc<ClickhouseStorage>,
+    cache: Option<&crate::auth::sensor_cache::SensorKeyCache>,
+) -> Option<String> {
     let key = headers
         .get("X-Sensor-Key")
         .or_else(|| headers.get("x-sensor-key"))?
         .to_str().ok()?;
-    
-    ch.validate_sensor_key(key).await.ok()?
+
+    if let Some(c) = cache {
+        crate::auth::sensor_cache::resolve_tenant(c, ch, key).await
+    } else {
+        ch.validate_sensor_key(key).await.ok()?
+    }
 }
 
 fn extract_sensor_key_prefix(
@@ -4228,6 +4374,26 @@ pub async fn install_sensor_script() -> axum::response::Response {
             .body(axum::body::Body::from(json!({
                 "status": "error",
                 "message": format!("Installer script not found at {}: {}", path, e)
+            }).to_string()))
+            .unwrap(),
+    }
+}
+
+pub async fn uninstall_sensor_script() -> axum::response::Response {
+    let path = "/scripts/uninstall-sensor.sh".to_string();
+
+    match std::fs::read_to_string(&path) {
+        Ok(script) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/x-shellscript; charset=utf-8")
+            .body(axum::body::Body::from(script))
+            .unwrap(),
+        Err(e) => axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(json!({
+                "status": "error",
+                "message": format!("Uninstall script not found: {}", e)
             }).to_string()))
             .unwrap(),
     }
@@ -4315,14 +4481,19 @@ pub async fn revoke_sensor_key_api(
     }
     
     match state.ch_storage.revoke_sensor_key(&id).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "Sensor key revoked"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        })),
+        Ok(_) => {
+            // Immediately evict from shared Redis cache so ALL engine
+            // instances reject this key on their next request — no 90s wait.
+            // We look up by key_prefix (plain api_key is never stored in DB).
+            if let Ok(Some(prefix)) = state.ch_storage
+                .get_sensor_key_prefix_by_id(&id)
+                .await
+            {
+                state.sensor_key_cache.invalidate_by_prefix(&prefix).await;
+            }
+            Json(json!({"status": "ok", "message": "Sensor key revoked"}))
+        }
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()})),
     }
 }
 
@@ -4356,7 +4527,7 @@ pub async fn sensor_register(
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+    let tenant_id = match validate_sensor_key_cached(&headers, &state.ch_storage, Some(&state.sensor_key_cache)).await {
         Some(tid) => tid,
         None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
     };
@@ -4391,6 +4562,18 @@ pub async fn sensor_register(
         hostname, tenant_id, interface, os
     );
 
+    // Auto-suppress known false positives on sensor registration
+    if let Some(prefix) = key_prefix.as_deref() {
+        for sid_cmd in &[
+            "suppress_sid:2066052",  // ET INFO ngrok-free.dev in TLS SNI (sensor→cloud heartbeat)
+            "suppress_sid:2066057",  // Related ngrok tunneling rule
+        ] {
+            let _ = state.ch_storage
+                .set_sensor_command(&tenant_id, prefix, sid_cmd)
+                .await;
+        }
+    }
+
     Json(json!({
         "status":    "ok",
         "message":   "Sensor registered",
@@ -4403,7 +4586,7 @@ pub async fn sensor_heartbeat(
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+    let tenant_id = match validate_sensor_key_cached(&headers, &state.ch_storage, Some(&state.sensor_key_cache)).await {
         Some(tid) => tid,
         None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
     };
@@ -4452,27 +4635,15 @@ pub async fn ingest_events(
     headers: axum::http::HeaderMap,
     body: String,
 ) -> Json<Value> {
-    // Validate sensor key
-    let sensor_key = headers
-        .get("X-Sensor-Key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if sensor_key.is_empty() {
-        return Json(json!({
+    // Validate sensor key (cached — avoids bcrypt+DB on every ingest call)
+    let tenant_id = match validate_sensor_key_cached(
+        &headers, &state.ch_storage, Some(&state.sensor_key_cache)
+    ).await {
+        Some(tid) => tid,
+        None => return Json(json!({
             "status": "error",
-            "message": "Missing X-Sensor-Key header"
-        }));
-    }
-
-    // Validate key and get tenant_id
-    let tenant_id = match state.ch_storage
-        .validate_sensor_key(sensor_key).await {
-        Ok(Some(tid)) => tid,
-        _ => return Json(json!({
-            "status": "error",
-            "message": "Invalid sensor key"
-        }))
+            "message": "Invalid or missing X-Sensor-Key"
+        })),
     };
 
     // Parse body which can be standard JSON (Format 1/2) or newline-delimited JSON (ndjson)
@@ -4538,28 +4709,26 @@ pub async fn ingest_events(
             }
         };
 
-        // Publish to Kafka
-        use rdkafka::producer::FutureRecord;
-        let record = FutureRecord::<str, str>::to("ndr-events")
-            .payload(&payload_str);
-
-        match state.kafka_producer
-            .send(record, 
-                std::time::Duration::from_secs(5))
-            .await {
+        // Non-blocking push to async drain channel — returns immediately,
+        // background task flushes to Kafka in micro-batches.
+        match state.ingest_tx.try_send((tenant_id.clone(), payload_str)) {
             Ok(_) => {
                 published += 1;
-            },
-            Err((e, _)) => {
-                tracing::warn!(
-                    "Failed to publish to Kafka: {}", e);
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                // Channel full — system overloaded; Vector's disk buffer absorbs.
+                tracing::warn!("Ingest channel full — dropping event for tenant {}", tenant_id);
+                failed += 1;
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                tracing::error!("Ingest channel closed — drain task died");
                 failed += 1;
             }
         }
     }
 
     tracing::info!(
-        "Ingest: published={} failed={} tenant={}",
+        "Ingest: queued={} failed={} tenant={}",
         published, failed, tenant_id
     );
 
@@ -4575,23 +4744,11 @@ pub async fn get_sensor_command_api(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Json<Value> {
-    // Validate sensor key
-    let sensor_key = headers
-        .get("X-Sensor-Key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if sensor_key.is_empty() {
-        return Json(json!({
-            "command": ""
-        }));
-    }
-
-    // Validate key and get tenant_id
-    let tenant_id = match state.ch_storage
-        .validate_sensor_key(sensor_key).await {
-        Ok(Some(tid)) => tid,
-        _ => return Json(json!({ "command": "" }))
+    let tenant_id = match validate_sensor_key_cached(
+        &headers, &state.ch_storage, Some(&state.sensor_key_cache)
+    ).await {
+        Some(tid) => tid,
+        None => return Json(json!({ "command": "" })),
     };
     let sensor_id = match extract_sensor_key_prefix(&headers) {
         Some(prefix) => prefix,
@@ -4614,6 +4771,118 @@ pub async fn get_sensor_command_api(
     }
 
     Json(json!({ "command": command }))
+}
+
+// ── Merged sensor check-in ────────────────────────────────────────────────
+// Combines heartbeat + command poll + pcap pending into ONE request.
+// Cuts per-sensor HTTP traffic by ~3× vs the old 3 separate polls.
+// Old endpoints (/heartbeat, /command, /pcap/pending) are kept for
+// backward compat with already-deployed sensors.
+
+#[derive(serde::Deserialize)]
+pub struct CheckinRequest {
+    pub sensor_ip:      Option<String>,
+    pub arkime_url:     Option<String>,
+    pub arkime_pass:    Option<String>,
+    pub zeek:           Option<String>,
+    pub suricata:       Option<String>,
+    pub vector:         Option<String>,
+    pub arkime_capture: Option<String>,
+    pub arkime_viewer:  Option<String>,
+}
+
+/// POST /api/sensor/checkin
+/// Single combined endpoint: heartbeat + command + pcap pending.
+pub async fn sensor_checkin(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<CheckinRequest>,
+) -> Json<Value> {
+    let tenant_id = match validate_sensor_key_cached(
+        &headers, &state.ch_storage, Some(&state.sensor_key_cache)
+    ).await {
+        Some(t) => t,
+        None => return Json(json!({"status": "error", "message": "invalid sensor key"})),
+    };
+
+    let sensor_id = match extract_sensor_key_prefix(&headers) {
+        Some(p) => p,
+        None => return Json(json!({"status": "error", "message": "invalid sensor key prefix"})),
+    };
+
+    // ── 1. Heartbeat / status update ─────────────────────────────────────
+    let arkime_status = payload.arkime_capture.as_deref()
+        .or(payload.arkime_viewer.as_deref())
+        .unwrap_or("unknown");
+    let _ = state.ch_storage.update_sensor_heartbeat(
+        &sensor_id,
+        payload.zeek.as_deref().unwrap_or("unknown"),
+        payload.suricata.as_deref().unwrap_or("unknown"),
+        payload.vector.as_deref().unwrap_or("unknown"),
+        arkime_status,
+        payload.arkime_url.as_deref().unwrap_or(""),
+        payload.arkime_pass.as_deref().unwrap_or(""),
+    ).await;
+
+    // ── 2. Pending command ────────────────────────────────────────────────
+    let (command, command_sensor_id) = state.ch_storage
+        .get_sensor_command(&tenant_id, &sensor_id).await
+        .unwrap_or_default();
+    if !command.is_empty() {
+        let _ = state.ch_storage
+            .clear_sensor_command(&tenant_id, &command_sensor_id).await;
+        tracing::info!(
+            "Checkin: command '{}' dispatched to sensor {} tenant={}",
+            command, sensor_id, tenant_id
+        );
+    }
+
+    // ── 3. Pending PCAP uploads ───────────────────────────────────────────
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct PendingRow {
+        community_id: String,
+        severity:     String,
+        retry_count:  u8,
+    }
+    let db = crate::storage::clickhouse::tenant_db_pub(&tenant_id);
+    let pcap_rows = state.ch_storage.client
+        .query(&format!(
+            "SELECT community_id, severity, retry_count \
+             FROM {}.pcap_pending \
+             WHERE tenant_id = '{}' \
+             AND fulfilled = 0 \
+             AND retry_count < 3 \
+             AND requested_at > now() - INTERVAL 24 HOUR \
+             ORDER BY multiIf(severity='CRITICAL',1, severity='HIGH',2, 3) ASC, \
+                      requested_at ASC \
+             LIMIT 10",
+            db, sql_escape(&tenant_id)
+        ))
+        .fetch_all::<PendingRow>().await
+        .unwrap_or_default();
+
+    let pending_cids: Vec<String> = pcap_rows.iter().map(|r| r.community_id.clone()).collect();
+    let pending_details: Vec<Value> = pcap_rows.iter().map(|r| json!({
+        "community_id": r.community_id,
+        "severity":     r.severity,
+        "retry_count":  r.retry_count,
+    })).collect();
+
+    tracing::info!(
+        "Checkin tenant={} sensor={} zeek={} suricata={} pending_pcap={}",
+        tenant_id, sensor_id,
+        payload.zeek.as_deref().unwrap_or("?"),
+        payload.suricata.as_deref().unwrap_or("?"),
+        pending_cids.len()
+    );
+
+    Json(json!({
+        "status":               "ok",
+        "command":              command,
+        "pcap_pending":         pending_cids,
+        "pcap_details":         pending_details,
+        "checkin_interval_secs": 30
+    }))
 }
 
 // ── Arkime Proxy Endpoints ────────────────────────────────────────────────
@@ -4918,7 +5187,7 @@ pub async fn pcap_upload(
     headers: axum::http::HeaderMap,
     mut multipart: axum::extract::Multipart,
 ) -> axum::Json<serde_json::Value> {
-    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+    let tenant_id = match validate_sensor_key_cached(&headers, &state.ch_storage, Some(&state.sensor_key_cache)).await {
         Some(tid) => tid,
         None => return axum::Json(json!({
             "status": "error",
@@ -4927,6 +5196,7 @@ pub async fn pcap_upload(
     };
 
     let mut pcap_bytes: Vec<u8> = Vec::new();
+    let mut pcap_filename = String::new();
     let mut community_id = String::new();
     let mut src_ip = String::new();
     let mut dst_ip = String::new();
@@ -4939,6 +5209,7 @@ pub async fn pcap_upload(
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "pcap" => {
+                pcap_filename = field.file_name().unwrap_or("").to_string();
                 pcap_bytes = match field.bytes().await {
                     Ok(b) => b.to_vec(),
                     Err(e) => return axum::Json(json!({
@@ -4946,6 +5217,7 @@ pub async fn pcap_upload(
                         "message": format!("Failed to read pcap field: {}", e)
                     })),
                 };
+                tracing::info!("pcap_upload: received {}B filename={}", pcap_bytes.len(), pcap_filename);
             }
             "community_id" => {
                 community_id = field.text().await.unwrap_or_default();
@@ -4962,64 +5234,85 @@ pub async fn pcap_upload(
             }
             "proto" => { proto = field.text().await.unwrap_or_default(); }
             "sensor_host" => { sensor_host = field.text().await.unwrap_or_default(); }
-            _ => {}
+            _ => { let _ = field.bytes().await; }
         }
     }
 
     if pcap_bytes.is_empty() {
+        tracing::warn!("pcap_upload: no pcap data cid={} tenant={}", community_id, tenant_id);
         return axum::Json(json!({"status":"error","message":"No pcap data received"}));
     }
 
-    // BUG 2 FIX: dedup check — if PCAP for this community_id already stored,
-    // just mark fulfilled and return early so sensor stops re-uploading
-    if !community_id.is_empty() {
-        if let Ok(Some(_)) = state.ch_storage
-            .get_pcap_file_path_by_community_id(&tenant_id, &community_id).await
-        {
-            let _ = state.ch_storage.mark_pcap_fulfilled(&tenant_id, &community_id).await;
-            return axum::Json(json!({
-                "status": "already_exists",
-                "message": "PCAP already stored",
-                "community_id": community_id
-            }));
-        }
+    if community_id.is_empty() {
+        return axum::Json(json!({"status":"error","message":"Missing community_id"}));
     }
 
-    // Decompress if sensor sent gzip-compressed PCAP (Content-Encoding: gzip)
-    let is_gzip = headers.get("content-encoding")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.contains("gzip"))
-        .unwrap_or(false)
-        || pcap_bytes.starts_with(&[0x1f, 0x8b]); // gzip magic bytes
-    if is_gzip {
-        match {
-            use std::io::Read;
-            let mut decoder = flate2::read::GzDecoder::new(pcap_bytes.as_slice());
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed).map(|_| decompressed)
-        } {
-            Ok(raw) => { pcap_bytes = raw; }
+    // Dedup: already stored — mark fulfilled and return ok
+    if let Ok(Some(_)) = state.ch_storage
+        .get_pcap_file_path_by_community_id(&tenant_id, &community_id).await
+    {
+        let _ = state.ch_storage.mark_pcap_fulfilled(&tenant_id, &community_id).await;
+        return axum::Json(json!({
+            "status": "ok",
+            "message": "already stored",
+            "session_id": "existing"
+        }));
+    }
+
+    // Detect gzip by filename OR magic bytes — NOT by Content-Encoding header.
+    // Content-Encoding: gzip on a multipart request corrupts the multipart parser.
+    let is_gzip = pcap_filename.ends_with(".gz")
+        || (pcap_bytes.len() > 1 && pcap_bytes[0] == 0x1f && pcap_bytes[1] == 0x8b);
+    let raw_bytes = if is_gzip {
+        use std::io::Read;
+        let mut decoder = flate2::read::GzDecoder::new(pcap_bytes.as_slice());
+        let mut decompressed = Vec::new();
+        match decoder.read_to_end(&mut decompressed) {
+            Ok(_) => {
+                tracing::info!("pcap_upload: decompressed gzip {}B → {}B", pcap_bytes.len(), decompressed.len());
+                decompressed
+            }
             Err(e) => return axum::Json(json!({
                 "status": "error",
                 "message": format!("Failed to decompress pcap: {}", e)
             })),
         }
+    } else {
+        pcap_bytes
+    };
+
+    // Reject non-PCAP content (e.g. raw ZST blobs — fix Arkime: simpleCompression=none)
+    let valid_pcap = raw_bytes.len() >= 4 && matches!(
+        u32::from_le_bytes([raw_bytes[0], raw_bytes[1], raw_bytes[2], raw_bytes[3]]),
+        0xa1b2c3d4 | 0xd4c3b2a1 | 0xa1b23c4d | 0x4d3cb2a1 | 0x0a0d0d0a
+    );
+    if !valid_pcap {
+        let magic = if raw_bytes.len() >= 4 {
+            format!("0x{:08x}", u32::from_le_bytes([raw_bytes[0], raw_bytes[1], raw_bytes[2], raw_bytes[3]]))
+        } else { "too short".to_string() };
+        tracing::error!("pcap_upload: invalid PCAP magic {} cid={} — likely zstd-compressed", magic, community_id);
+        return axum::Json(json!({
+            "status": "error",
+            "message": format!("Invalid PCAP file (magic={}). Set simpleCompression=none in Arkime config.", magic)
+        }));
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let date_str = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let file_dir = format!("/opt/ndr/pcap/{}/{}", tenant_id, date_str);
     let file_path = format!("{}/{}.pcap", file_dir, session_id);
-    let bytes_count = pcap_bytes.len() as u64;
+    let bytes_count = raw_bytes.len() as u64;
 
     if let Err(e) = tokio::fs::create_dir_all(&file_dir).await {
+        tracing::error!("pcap_upload: mkdir failed {}: {}", file_dir, e);
         return axum::Json(json!({
             "status": "error",
             "message": format!("Failed to create storage directory: {}", e)
         }));
     }
 
-    if let Err(e) = tokio::fs::write(&file_path, &pcap_bytes).await {
+    if let Err(e) = tokio::fs::write(&file_path, &raw_bytes).await {
+        tracing::error!("pcap_upload: write failed {}: {}", file_path, e);
         return axum::Json(json!({
             "status": "error",
             "message": format!("Failed to write pcap file: {}", e)
@@ -5031,14 +5324,11 @@ pub async fn pcap_upload(
         &src_ip, &dst_ip, src_port, dst_port, &proto,
         bytes_count, "", &file_path, &sensor_host,
     ).await {
-        tracing::warn!("Failed to index pcap session in ClickHouse: {}", e);
+        tracing::warn!("pcap_upload: failed to index session: {}", e);
     }
 
-    // BUG 1 FIX: mark pcap_pending fulfilled so sensor stops re-uploading
-    if !community_id.is_empty() {
-        let _ = state.ch_storage.mark_pcap_fulfilled(&tenant_id, &community_id).await;
-        tracing::info!("PCAP fulfilled for cid={} tenant={}", community_id, tenant_id);
-    }
+    let _ = state.ch_storage.mark_pcap_fulfilled(&tenant_id, &community_id).await;
+    tracing::info!("pcap_upload: ✅ saved cid={} tenant={} size={}B", community_id, tenant_id, bytes_count);
 
     axum::Json(json!({
         "status": "ok",
@@ -5139,7 +5429,7 @@ pub async fn pcap_pending(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> axum::Json<serde_json::Value> {
-    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+    let tenant_id = match validate_sensor_key_cached(&headers, &state.ch_storage, Some(&state.sensor_key_cache)).await {
         Some(t) => t,
         None => return axum::Json(json!({"status":"error","message":"Unauthorized"})),
     };
@@ -5150,16 +5440,17 @@ pub async fn pcap_pending(
     struct PendingRow {
         community_id: String,
         severity:     String,
-        requested_at: String,
+        requested_at_str: String,
         retry_count:  u8,
     }
+    let db = crate::storage::clickhouse::tenant_db_pub(&tenant_id);
     let rows = state.ch_storage.client
         .query(&format!(
             "SELECT community_id, \
              severity, \
-             toString(requested_at) as requested_at, \
+             toString(requested_at) as requested_at_str, \
              retry_count \
-             FROM ndr.pcap_pending FINAL \
+             FROM {}.pcap_pending \
              WHERE tenant_id = '{}' \
              AND fulfilled = 0 \
              AND retry_count < 3 \
@@ -5168,15 +5459,18 @@ pub async fn pcap_pending(
                multiIf(severity='CRITICAL',1, severity='HIGH',2, 3) ASC, \
                requested_at ASC \
              LIMIT 10",
-            sql_escape(&tenant_id)
+            db, sql_escape(&tenant_id)
         ))
         .fetch_all::<PendingRow>().await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::error!("pcap_pending query failed: {}", e);
+            vec![]
+        });
 
     let pending: Vec<serde_json::Value> = rows.iter().map(|r| json!({
         "community_id": r.community_id,
         "severity":     r.severity,
-        "requested_at": r.requested_at,
+        "requested_at": r.requested_at_str,
         "retry_count":  r.retry_count,
         "priority": match r.severity.as_str() {
             "CRITICAL" => 1, "HIGH" => 2, _ => 3
@@ -5199,7 +5493,7 @@ pub async fn pcap_upload_failed(
     headers: axum::http::HeaderMap,
     axum::Json(payload): axum::Json<serde_json::Value>,
 ) -> axum::Json<serde_json::Value> {
-    let tenant_id = match validate_sensor_key(&headers, &state.ch_storage).await {
+    let tenant_id = match validate_sensor_key_cached(&headers, &state.ch_storage, Some(&state.sensor_key_cache)).await {
         Some(t) => t,
         None => return axum::Json(json!({"status":"error","message":"Unauthorized"})),
     };
@@ -5209,16 +5503,17 @@ pub async fn pcap_upload_failed(
         return axum::Json(json!({"status":"error","message":"missing community_id"}));
     }
     // Increment retry_count; if >= 3, mark fulfilled=2 (failed) so sensor stops
+    let db = crate::storage::clickhouse::tenant_db_pub(&tenant_id);
     let _ = state.ch_storage.client
         .query(&format!(
-            "ALTER TABLE ndr.pcap_pending \
+            "ALTER TABLE {}.pcap_pending \
              UPDATE \
                retry_count = retry_count + 1, \
                error_message = '{}', \
                last_retry = now(), \
                fulfilled = if(retry_count >= 2, 2, 0) \
              WHERE community_id = '{}' AND tenant_id = '{}' AND fulfilled = 0",
-            error_msg,
+            db, error_msg,
             sql_escape(community_id),
             sql_escape(&tenant_id)
         ))
@@ -5878,6 +6173,20 @@ pub async fn get_bundle_contents(
         &alert_from_zip,
         &session_metadata,
     ).await;
+
+    // If ZIP has no PCAP (bundle created before upload), check pcap_sessions live
+    if pcap_size == 0 {
+        if let Ok(fp) = state.ch_storage
+            .get_pcap_file_path_by_community_id(&claims.tenant_id, &community_id)
+            .await
+        {
+            if let Some(path) = fp {
+                if let Ok(meta) = tokio::fs::metadata(&path).await {
+                    pcap_size = meta.len();
+                }
+            }
+        }
+    }
 
     // Live OpenSearch check — same pattern as arkime_sessions endpoint.
     // ZIP pcap_size is stale (built before Arkime ran); always check current state.

@@ -63,6 +63,7 @@ pub struct SigmaRule {
     pub logsource:   LogSource,
     pub conditions:  Vec<FieldCondition>,
     pub logic:       Logic,
+    pub tenant_id:   String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +149,7 @@ pub fn parse_rule_content(content: &str) -> anyhow::Result<SigmaRule> {
     Ok(SigmaRule {
         id: get_str("id"), title: get_str("title"),
         severity: get_str("level"), tags, logsource, conditions, logic,
+        tenant_id: "default".to_string(),
     })
 }
 

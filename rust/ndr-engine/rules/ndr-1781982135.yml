@@ -1,0 +1,13 @@
+id: ndr-1781982135
+title: suri
+description: mo
+level: medium
+tags:
+  []
+logsource:
+  product: ndr
+detection:
+  keywords:
+    dest_ip|equals:
+      - '13.202.234.110'
+  condition: keywords
