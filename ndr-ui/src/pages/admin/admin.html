@@ -68,6 +68,10 @@
       <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
       Telemetry
     </button>
+    <button type="button" (click)="switchTab('kafka')" [class.active]="activeTab === 'kafka'">
+      <lucide-icon [name]="ServerIcon" class="w-4 h-4"></lucide-icon>
+      Kafka
+    </button>
   </div>
 
   <section *ngIf="activeTab === 'tenants'" class="admin-panel">
@@ -299,6 +303,87 @@
           Stop
         </button>
       </div>
+    </div>
+  </section>
+
+  <!-- ── Kafka Cluster Monitor ───────────────────────────────────────── -->
+  <section *ngIf="activeTab === 'kafka'" class="admin-panel">
+    <div class="panel-head">
+      <div>
+        <h3>Kafka Cluster</h3>
+        <p>Topic: ndr-events &nbsp;|&nbsp;
+          {{ kafkaData?.partition_count || 0 }} partitions &nbsp;|&nbsp;
+          Replication factor: {{ kafkaData?.replication_factor || 0 }}
+        </p>
+      </div>
+      <button class="secondary-action" type="button" (click)="loadKafkaStatus()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
+      </button>
+    </div>
+
+    <div *ngIf="kafkaLoading" class="loading-state">Loading Kafka status...</div>
+
+    <ng-container *ngIf="!kafkaLoading && kafkaData">
+
+      <!-- Brokers -->
+      <div class="kafka-broker-row">
+        <div *ngFor="let b of kafkaData.brokers" class="kafka-broker-card"
+             [class.broker-healthy]="b.status === 'healthy'"
+             [class.broker-down]="b.status !== 'healthy'">
+          <span class="broker-dot"></span>
+          <div>
+            <strong>Broker {{ b.id }}</strong>
+            <span class="broker-host">{{ b.host }}</span>
+          </div>
+          <span class="broker-badge">{{ b.status }}</span>
+        </div>
+      </div>
+
+      <!-- Partitions table -->
+      <table class="kafka-table">
+        <thead>
+          <tr>
+            <th>Partition</th>
+            <th>Leader Broker</th>
+            <th>Replicas</th>
+            <th>ISR</th>
+            <th>In Sync</th>
+            <th>Engine</th>
+            <th>Lag</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let p of kafkaData.partitions">
+            <td><span class="partition-badge">P{{ p.partition }}</span></td>
+            <td>Broker {{ p.leader_broker }}</td>
+            <td class="mono">{{ p.replicas }}</td>
+            <td class="mono">{{ p.isr }}</td>
+            <td>
+              <span class="sync-ok" *ngIf="p.in_sync">In Sync</span>
+              <span class="sync-warn" *ngIf="!p.in_sync">Under-replicated</span>
+            </td>
+            <td class="mono">{{ getEngineForPartition(p.partition) }}</td>
+            <td>
+              <span [class.lag-ok]="getLagForPartition(p.partition) === 0"
+                    [class.lag-warn]="getLagForPartition(p.partition) > 0">
+                {{ getLagForPartition(p.partition) }}
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="kafka-total-lag">
+        Total consumer lag: <strong>{{ kafkaData.total_lag }}</strong>
+        <span *ngIf="kafkaData.total_lag === 0" class="lag-ok"> — all caught up</span>
+      </div>
+
+    </ng-container>
+
+    <div *ngIf="!kafkaLoading && !kafkaData" class="empty-state">
+      <strong>Could not reach Kafka</strong>
+      <span>Ensure kafka1/2/3 containers are running.</span>
     </div>
   </section>
 

@@ -343,6 +343,10 @@ export class Api {
   }
 
 
+  getKafkaStatus(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/monitor/kafka`);
+  }
+
   scaleEngines(action: string, engine?: string): Observable<any> {
     return this.http.post(
       `${this.baseUrl}/admin/engines/scale`,

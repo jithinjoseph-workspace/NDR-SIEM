@@ -60,6 +60,67 @@
   padding-right: 0.25rem;
 }
 
+.bundle-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.alerts-toggle {
+  margin-top: 0.45rem;
+  font-size: 0.68rem;
+  color: rgba(105, 246, 184, 0.7);
+  cursor: pointer;
+  user-select: none;
+  letter-spacing: 0.04em;
+}
+.alerts-toggle:hover { color: var(--color-primary); }
+
+.related-alerts-list {
+  border-left: 2px solid rgba(105, 246, 184, 0.2);
+  margin-left: 0.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.related-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.7);
+  transition: background 120ms;
+}
+.related-alert-row:hover { background: rgba(105, 246, 184, 0.05); }
+.related-alert-row.selected-sub { background: rgba(105, 246, 184, 0.08); color: #fff; }
+
+.sev-mini {
+  font-size: 0.58rem;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.2rem;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.related-rule {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.related-time {
+  font-size: 0.65rem;
+  color: rgba(255,255,255,0.4);
+  flex-shrink: 0;
+}
+
 .bundle-card {
   border: 1px solid rgba(110, 117, 136, 0.12);
   border-radius: 0.5rem;
@@ -124,16 +185,36 @@
 }
 
 .hold-badge {
-  font-size: 0.62rem;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.58rem;
   font-weight: 800;
+  letter-spacing: 0.08em;
   color: #facc15;
-  letter-spacing: 0.05em;
+  background: rgba(250, 204, 21, 0.08);
+  border: 1px solid rgba(250, 204, 21, 0.28);
+  border-radius: 0.2rem;
+  padding: 0.08rem 0.4rem;
+  text-transform: uppercase;
 }
 
 .auto-badge {
-  font-size: 0.62rem;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.58rem;
   font-weight: 800;
+  letter-spacing: 0.08em;
   color: var(--color-primary);
+  background: rgba(105, 246, 184, 0.08);
+  border: 1px solid rgba(105, 246, 184, 0.25);
+  border-radius: 0.2rem;
+  padding: 0.08rem 0.4rem;
+  text-transform: uppercase;
+}
+
+.auto-label {
+  color: var(--color-primary);
+  font-size: 0.7rem;
 }
 
 .bundle-ips {
@@ -645,14 +726,31 @@
 
 .verify-status {
   padding: 1rem 1.25rem;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   font-weight: 800;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   border-bottom: 1px solid rgba(110, 117, 136, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.verify-status::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .verified .verify-status { color: var(--color-primary); }
+.verified .verify-status::before { background: var(--color-primary); box-shadow: 0 0 6px rgba(105,246,184,0.5); }
 .tampered .verify-status { color: #f87171; }
+.tampered .verify-status::before { background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,0.5); }
+
+.verify-table { padding: 0.75rem 1.25rem; }
 
 .verify-result .info-table {
   padding: 0.75rem 1.25rem;
@@ -671,10 +769,13 @@
   padding: 3rem 2rem;
 }
 
-.empty-icon {
-  font-size: 2.5rem;
-  opacity: 0.35;
+.empty-state-icon {
+  width: 36px;
+  height: 36px;
+  border: 2px solid rgba(110, 117, 136, 0.2);
+  border-radius: 50%;
   margin-bottom: 0.5rem;
+  opacity: 0.4;
 }
 
 .empty-state p {
@@ -842,6 +943,7 @@ html[data-theme="light"] .custody-table td {
   border-radius: 0.5rem;
   background: rgba(239, 68, 68, 0.07);
   border: 1px solid rgba(239, 68, 68, 0.25);
+  border-left: 3px solid #f87171;
   color: #fca5a5;
   font-size: 0.8rem;
   line-height: 1.5;
@@ -911,7 +1013,13 @@ html[data-theme="light"] .custody-table td {
 }
 .recommended-action h4 {
   color: var(--color-primary);
-  margin-bottom: 0.4rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding-left: 0.6rem;
+  border-left: 3px solid var(--color-primary);
 }
 .recommended-action p {
   margin: 0;
@@ -1119,6 +1227,7 @@ html[data-theme="light"] .custody-table td {
   border-radius: 0.5rem;
   background: rgba(105,246,184,.05);
   border: 1px solid rgba(105,246,184,.2);
+  border-left: 3px solid var(--color-primary);
   color: var(--color-primary);
   font-size: 0.82rem;
   font-weight: 600;

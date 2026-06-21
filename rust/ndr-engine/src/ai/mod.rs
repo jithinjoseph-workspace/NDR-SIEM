@@ -104,6 +104,7 @@ pub fn extract_emotion(text: &str)
 }
 
 /// Call Claude API and return (reply, emotion)
+#[allow(dead_code)]
 pub async fn call_claude(
     api_key: &str,
     system_prompt: &str,

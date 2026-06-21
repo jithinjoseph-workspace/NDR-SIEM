@@ -1029,3 +1029,65 @@ code,
   background: linear-gradient(90deg, #dc2626, #f87171);
   box-shadow: 0 0 10px rgba(248, 113, 113, 0.4);
 }
+
+/* ── Kafka Monitor ─────────────────────────────────────────────────── */
+.kafka-broker-row {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.kafka-broker-card {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(110,117,136,0.2);
+  background: rgba(15,23,42,0.4);
+  flex: 1;
+}
+.kafka-broker-card.broker-healthy { border-color: rgba(105,246,184,0.25); }
+.kafka-broker-card.broker-down    { border-color: rgba(248,113,113,0.25); }
+.broker-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.broker-healthy .broker-dot { background: var(--color-primary); box-shadow: 0 0 6px rgba(105,246,184,0.5); }
+.broker-down    .broker-dot { background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,0.5); }
+.broker-host { font-size: 0.7rem; color: var(--color-muted); display: block; }
+.broker-badge {
+  margin-left: auto;
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 0.1rem 0.4rem; border-radius: 0.2rem;
+}
+.broker-healthy .broker-badge { color: var(--color-primary); background: rgba(105,246,184,0.08); border: 1px solid rgba(105,246,184,0.25); }
+.broker-down    .broker-badge { color: #f87171; background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.25); }
+
+.kafka-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 0.78rem; margin-bottom: 0.75rem;
+}
+.kafka-table th {
+  text-align: left; padding: 0.5rem 0.75rem;
+  color: var(--color-muted); font-weight: 600; font-size: 0.68rem;
+  text-transform: uppercase; letter-spacing: 0.07em;
+  border-bottom: 1px solid rgba(110,117,136,0.15);
+}
+.kafka-table td {
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid rgba(110,117,136,0.08);
+}
+.partition-badge {
+  font-size: 0.65rem; font-weight: 700; padding: 0.1rem 0.4rem;
+  border-radius: 0.2rem; background: rgba(105,246,184,0.08);
+  border: 1px solid rgba(105,246,184,0.2); color: var(--color-primary);
+}
+.mono { font-family: monospace; font-size: 0.75rem; color: var(--color-muted); }
+.sync-ok   { color: var(--color-primary); font-size: 0.7rem; font-weight: 600; }
+.sync-warn { color: #facc15; font-size: 0.7rem; font-weight: 600; }
+.lag-ok   { color: var(--color-primary); font-weight: 600; }
+.lag-warn { color: #facc15; font-weight: 600; }
+
+.kafka-total-lag {
+  font-size: 0.78rem; color: var(--color-muted);
+  padding: 0.5rem 0.25rem;
+}

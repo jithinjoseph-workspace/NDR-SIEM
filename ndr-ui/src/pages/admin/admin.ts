@@ -143,6 +143,10 @@ export class Admin implements OnInit, OnDestroy {
   lastEngineRefresh: Date | null = null;
   pendingStopEngine = '';
 
+  kafkaData: any = null;
+  kafkaLoading = false;
+  private kafkaInterval: any = null;
+
   showAddAnnouncement = false;
   pendingDeleteAnnouncement: Announcement | null = null;
   loadingAnnouncements = false;
@@ -260,6 +264,9 @@ export class Admin implements OnInit, OnDestroy {
     if (this.telemetryInterval !== null) {
       clearInterval(this.telemetryInterval);
     }
+    if (this.kafkaInterval !== null) {
+      clearInterval(this.kafkaInterval);
+    }
   }
 
   switchTab(tab: string) {
@@ -275,6 +282,35 @@ export class Admin implements OnInit, OnDestroy {
         this.telemetryInterval = null;
       }
     }
+    if (tab === 'kafka') {
+      this.loadKafkaStatus();
+      if (!this.kafkaInterval) {
+        this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 10000);
+      }
+    } else {
+      if (this.kafkaInterval !== null) {
+        clearInterval(this.kafkaInterval);
+        this.kafkaInterval = null;
+      }
+    }
+  }
+
+  loadKafkaStatus() {
+    this.kafkaLoading = !this.kafkaData;
+    this.api.getKafkaStatus().subscribe({
+      next: (data: any) => { this.kafkaData = data; this.kafkaLoading = false; },
+      error: ()         => { this.kafkaLoading = false; }
+    });
+  }
+
+  getEngineForPartition(partition: number): string {
+    const c = (this.kafkaData?.consumers || []).find((c: any) => c.partition === partition);
+    return c?.engine || '-';
+  }
+
+  getLagForPartition(partition: number): number {
+    const c = (this.kafkaData?.consumers || []).find((c: any) => c.partition === partition);
+    return c?.lag ?? 0;
   }
 
   loadTelemetry() {

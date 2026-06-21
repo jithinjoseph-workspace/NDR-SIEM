@@ -707,14 +707,35 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     // AI auto-suppression: check IDS alerts for false positives
     if risk.tags.contains(&"ids-alert".to_string()) {
         if let Some(alert_info) = hit.suricata.alert.as_ref() {
-            let sig_id   = alert_info.signature_id;
-            let sig_name = alert_info.signature.clone();
-            let src_ip   = src.to_string();
-            let dst_ip   = dst.to_string();
-            let cid      = hit.community_id.clone();
-            let ch3      = state.ch_storage.clone();
-            let tid3     = tenant_id.clone();
-            let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+            let sig_id          = alert_info.signature_id;
+            let sig_name        = alert_info.signature.clone();
+            let alert_category  = alert_info.category.clone();
+            let alert_sev_raw   = alert_info.severity;
+            let src_ip          = src.to_string();
+            let dst_ip          = dst.to_string();
+            let cid             = hit.community_id.clone();
+            let ch3             = state.ch_storage.clone();
+            let tid3            = tenant_id.clone();
+            let openai_key      = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+
+            // Extra context extracted from raw event — gives AI enough signal
+            // to distinguish sensor-to-own-infrastructure FPs from real threats.
+            let app_proto = hit.suricata.raw
+                .get("app_proto").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+            let direction = hit.suricata.raw
+                .get("direction").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let tls_sni = hit.suricata.raw
+                .get("tls").and_then(|t| t.get("sni")).and_then(|v| v.as_str())
+                .unwrap_or("").to_string();
+            let zeek_conn_state = hit.zeek.conn_state.clone().unwrap_or_default();
+            let tags_str        = risk.tags.join(", ");
+            let threat_intel    = enrichment.is_malicious;
+            let sensitive_ctry  = enrichment.sensitive_country;
+
+            let src_scope = if src_ip.starts_with("10.") || src_ip.starts_with("192.168.")
+                || src_ip.starts_with("172.") { "private/internal" } else { "public/external" };
+            let dst_scope = if dst_ip.starts_with("10.") || dst_ip.starts_with("192.168.")
+                || dst_ip.starts_with("172.") { "private/internal" } else { "public/external" };
 
             tokio::spawn(async move {
                 // Skip if already suppressed
@@ -732,20 +753,44 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 if openai_key.is_empty() { return; }
 
                 let prompt = "You are an NDR (Network Detection & Response) security analyst AI. \
-                    Your job is to determine if a Suricata IDS alert is a FALSE POSITIVE. \
-                    Respond ONLY with valid JSON: \
+                    Determine if a Suricata IDS alert is a FALSE POSITIVE. \
+                    Respond ONLY with valid JSON (no markdown): \
                     {\"false_positive\": true/false, \"confidence\": 0-100, \
                     \"suppress_type\": \"by_dst\"|\"by_src\"|\"by_sid\"|\"none\", \
                     \"reason\": \"short explanation\"}. \
-                    Use by_dst when the destination IP is known infrastructure. \
-                    Use by_src when the source IP is a trusted internal scanner. \
-                    Use by_sid only if the entire rule is broken/noisy. \
-                    Use none if it looks like a real threat.";
+                    suppress_type rules: \
+                    by_dst = destination is known/trusted infrastructure (cloud, CDN, monitoring endpoint, tunnel server); \
+                    by_src = source is a trusted internal device (sensor, scanner, management host); \
+                    by_sid = the entire Suricata rule is globally broken/noisy regardless of IP; \
+                    none = real threat, do not suppress. \
+                    Critical hints: \
+                    (1) Rules starting with 'SURICATA STREAM' or 'SURICATA ENGINE' are Suricata internal \
+                    TCP/IP stack checks — they fire on NAT, VPN, and tunnel traffic; almost always FP. \
+                    (2) If direction is 'to_client', the alert fired on RESPONSE traffic from server to sensor. \
+                    (3) Private/internal IPs (10.x, 172.x, 192.168.x) are your own network devices. \
+                    (4) TLS SNI reveals the actual domain — if it matches known infrastructure or monitoring \
+                    tools it is almost certainly a FP. \
+                    (5) If threat_intel=false and the rule category is 'Generic Protocol Command Decode', \
+                    lean toward FP with high confidence.";
 
                 let question = format!(
-                    "Alert: SID={} rule=\"{}\" src={} dst={} tenant={}. \
-                    Is this a false positive?",
-                    sig_id, sig_name, src_ip, dst_ip, tid3
+                    "Suricata alert to analyse:\n\
+                     SID          : {sig_id}\n\
+                     Rule         : \"{sig_name}\"\n\
+                     Category     : \"{alert_category}\"\n\
+                     Suri severity: {alert_sev_raw} (1=high 2=medium 3=low)\n\
+                     Protocol     : {app_proto}\n\
+                     Direction    : {direction}\n\
+                     src_ip       : {src_ip} ({src_scope})\n\
+                     dst_ip       : {dst_ip} ({dst_scope})\n\
+                     TLS SNI      : {tls_sni_display}\n\
+                     Zeek state   : {zeek_conn_state}\n\
+                     Risk tags    : [{tags_str}]\n\
+                     Threat intel : {threat_intel}\n\
+                     Sensitive cty: {sensitive_ctry}\n\
+                     Tenant       : {tid3}\n\
+                     Is this a false positive?",
+                    tls_sni_display = if tls_sni.is_empty() { "none".to_string() } else { tls_sni },
                 );
 
                 if let Ok((reply, _)) = crate::ai::call_openai(
@@ -3835,7 +3880,7 @@ eval docker run -d --name "$NEW_ENGINE" --privileged --network "$NETWORK" $BINDS
             tracing::info!("Scaling Kafka ndr-events partitions to {}", new_instance_id);
             let kafka_out = std::process::Command::new("docker")
                 .args([
-                    "exec", "kafka",
+                    "exec", "kafka1",
                     "/opt/kafka/bin/kafka-topics.sh",
                     "--bootstrap-server", "localhost:9092",
                     "--alter", "--topic", "ndr-events",
@@ -4317,13 +4362,6 @@ fn generate_sensor_key(tenant_id: &str) -> (String, String, String) {
     (plain, prefix, hash)
 }
 
-pub async fn validate_sensor_key(
-    headers: &axum::http::HeaderMap,
-    ch: &Arc<ClickhouseStorage>,
-) -> Option<String> {
-    validate_sensor_key_cached(headers, ch, None).await
-}
-
 /// Cached variant — used by handlers that have access to AppState.
 /// Falls back to direct bcrypt+DB on cache miss (same as before).
 pub async fn validate_sensor_key_cached(
@@ -4780,6 +4818,7 @@ pub async fn get_sensor_command_api(
 // backward compat with already-deployed sensors.
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 pub struct CheckinRequest {
     pub sensor_ip:      Option<String>,
     pub arkime_url:     Option<String>,
@@ -6018,7 +6057,30 @@ pub async fn download_evidence_bundle(
         &claims.tenant_id,
         pcap_file_path,
     ).await {
-        Ok((zip_bytes, bundle_sha256, _manifest)) => {
+        Ok((zip_bytes, bundle_sha256, manifest)) => {
+            // Persist bundle record to evidence_bundles table
+            let bundle_id = manifest["bundle_id"].as_str().unwrap_or("").to_string();
+            let src_ip = manifest["summary"]["src_ip"].as_str().unwrap_or("").to_string();
+            let dst_ip = manifest["summary"]["dst_ip"].as_str().unwrap_or("").to_string();
+            let severity = manifest["summary"]["severity"].as_str().unwrap_or("UNKNOWN").to_string();
+            let zip_size = zip_bytes.len() as u64;
+            let ch = state.ch_storage.clone();
+            let tid = claims.tenant_id.clone();
+            let cid = community_id.clone();
+            let sha = bundle_sha256.clone();
+            tokio::spawn(async move {
+                let _ = ch.save_evidence_bundle(
+                    &tid, &bundle_id, &cid,
+                    "",          // file_path: on-demand, no disk file
+                    &sha,
+                    zip_size,
+                    0,           // auto_captured: 0 = manual download
+                    90,          // expires_days
+                    &src_ip, &dst_ip, &severity,
+                    &cid,
+                ).await;
+            });
+
             // Log to chain of custody
             let _ = state.ch_storage.log_evidence_action(
                 &claims.tenant_id,
@@ -6302,7 +6364,9 @@ pub async fn get_evidence_log(
 }
 
 /// GET /api/evidence/bundle/:bundle_id/verify
-/// Re-hash the file and compare to stored hash.
+/// Rebuild the bundle in memory and compare its SHA256 to the stored hash.
+/// Bundles are generated on-demand (never written to disk), so verification
+/// re-runs the same build pipeline and hashes the result.
 pub async fn verify_evidence_bundle(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -6320,12 +6384,50 @@ pub async fn verify_evidence_bundle(
         _ => return Json(json!({"error": "bundle not found"})),
     };
 
-    let file_path = bundle["file_path"].as_str().unwrap_or("");
-    let stored_sha256 = bundle["sha256"].as_str().unwrap_or("");
+    let stored_sha256  = bundle["sha256"].as_str().unwrap_or("").to_string();
+    let community_id   = bundle["community_id"].as_str().unwrap_or("").to_string();
 
-    let (matches, computed_sha256) =
-        evidence::verify_bundle_integrity(file_path, stored_sha256)
-        .await;
+    // Rebuild the bundle in memory using the same pipeline as the download handler
+    let alert_json = state.ch_storage
+        .get_hit_by_community_id(&claims.tenant_id, &community_id)
+        .await
+        .unwrap_or_default()
+        .unwrap_or(serde_json::json!({"community_id": &community_id}));
+
+    let opensearch_url = if claims.tenant_id == "default" {
+        std::env::var("OPENSEARCH_URL")
+            .unwrap_or_else(|_| "http://localhost:9200".to_string())
+    } else {
+        String::new()
+    };
+    let arkime_url  = std::env::var("ARKIME_URL").unwrap_or_default();
+    let arkime_pass = std::env::var("ARKIME_PASS").unwrap_or_else(|_| "admin".to_string());
+
+    let pcap_file_path = if claims.tenant_id != "default" {
+        state.ch_storage
+            .get_pcap_file_path_by_community_id(&claims.tenant_id, &community_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        None
+    };
+
+    // Pass the original bundle_id and captured_at so the rebuilt manifest is
+    // bit-for-bit identical → SHA256 matches the stored hash.
+    let original_bundle_id = bundle["id"].as_str().unwrap_or("").to_string();
+    let original_created_at = bundle["captured_at"].as_str().unwrap_or("").to_string();
+
+    let (matches, computed_sha256) = match evidence::build_evidence_bundle_for_verify(
+        &opensearch_url, &arkime_url, &arkime_pass,
+        &community_id, alert_json,
+        &claims.tenant_id, pcap_file_path,
+        &original_bundle_id, &original_created_at,
+    ).await {
+        Ok((_zip_bytes, computed, _manifest)) => {
+            (computed == stored_sha256, computed)
+        }
+        Err(e) => (false, format!("rebuild_error: {}", e))
+    };
 
     let status = if matches { "VERIFIED" } else { "TAMPERED_OR_CORRUPTED" };
 

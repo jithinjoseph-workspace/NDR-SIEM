@@ -229,7 +229,7 @@ CLOUD_MODE=true
 CLICKHOUSE_URL=http://localhost:8123
 CLICKHOUSE_USER=ndr
 CLICKHOUSE_PASSWORD=ndr123
-KAFKA_BROKERS=kafka:9092
+KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=$JWT_SECRET
 OPENSEARCH_URL=
 ARKIME_URL=
@@ -305,12 +305,12 @@ sudo docker compose up -d --build
 log "✅ Docker stack started (no --profile onpremise)"
 
 # ── Step 7: Create Kafka topic ────────────────
-step "Creating Kafka topics (12 partitions)"
+step "Creating Kafka topics (3 partitions, replication-factor 3)"
 
 log "Waiting for Kafka to be ready..."
 sleep 20
 for i in {1..30}; do
-    if sudo docker exec kafka \
+    if sudo docker exec kafka1 \
         /opt/kafka/bin/kafka-broker-api-versions.sh \
         --bootstrap-server localhost:9092 > /dev/null 2>&1; then
         log "✅ Kafka is ready"
@@ -321,17 +321,17 @@ for i in {1..30}; do
 done
 echo ""
 
-sudo docker exec kafka \
+sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:9092 \
     --create --if-not-exists \
     --topic ndr-events \
-    --partitions 12 \
-    --replication-factor 1 \
+    --partitions 3 \
+    --replication-factor 3 \
     2>/dev/null || true
-log "✅ Kafka topic ndr-events created with 12 partitions"
+log "✅ Kafka topic ndr-events created with 3 partitions, replication-factor 3"
 
-sudo docker exec kafka \
+sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-configs.sh \
     --bootstrap-server localhost:9092 \
     --alter --entity-type topics \
@@ -390,7 +390,7 @@ else
 fi
 
 # Kafka container
-if sudo docker ps --format '{{.Names}}' | grep -q "^kafka$"; then
+if sudo docker ps --format '{{.Names}}' | grep -q "^kafka1$"; then
     log "  ✅ Kafka         — running"
 else
     warn "  ⚠️  Kafka         — NOT running"

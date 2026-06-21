@@ -14,6 +14,7 @@ mod storage;
 mod evidence;
 mod ai;
 pub mod soar;
+mod monitor;
 
 use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
@@ -410,7 +411,8 @@ async fn main() {
 .route("/api/evidence/:cid/timeline", get(api::get_evidence_timeline))
 .route("/api/evidence/iocs/check", get(api::check_shared_ioc))
  .route("/api/aria/chat",   post(api::aria_chat))
-.route("/api/aria/status", get(api::aria_status))   
+.route("/api/aria/status", get(api::aria_status))
+.route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB for PCAP uploads

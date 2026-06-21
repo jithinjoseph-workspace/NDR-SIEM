@@ -120,26 +120,39 @@ impl RiskScorer {
 
         // ── 2. Suricata alert ─────────────────────────────────────────
         if suricata.event_type.as_deref() == Some("alert") {
-            score += 60.0;
-            reasons.push("Suricata IDS alert fired".into());
-            tags.push("ids-alert".into());
+            let is_suricata_internal = suricata.alert.as_ref()
+                .map(|a| a.signature.starts_with("SURICATA "))
+                .unwrap_or(false);
 
-            if let Some(alert) = &suricata.alert {
-                // Suricata severity: 1=high, 2=medium, 3=low
-                match alert.severity {
-                    1 => { score += 30.0; tags.push("alert-sev-high".into()); }
-                    2 => { score += 15.0; tags.push("alert-sev-medium".into()); }
-                    _ => {               tags.push("alert-sev-low".into()); }
+            if is_suricata_internal {
+                // Internal Suricata engine diagnostics (protocol anomalies, stream
+                // quirks) — not real threat detections. Tag but do not boost score.
+                tags.push("suricata-internal".into());
+                if let Some(alert) = &suricata.alert {
+                    reasons.push(format!("Suricata internal diagnostic: {}", alert.signature));
                 }
-                if !alert.signature.is_empty() {
-                    reasons.push(format!("Rule: {}", alert.signature));
-                }
-                for t in &alert.mitre_tactics {
-                    score += 10.0;
-                    tags.push(format!("mitre:{}", t));
-                }
-                for t in &alert.mitre_techniques {
-                    tags.push(format!("technique:{}", t));
+            } else {
+                score += 60.0;
+                reasons.push("Suricata IDS alert fired".into());
+                tags.push("ids-alert".into());
+
+                if let Some(alert) = &suricata.alert {
+                    // Suricata severity: 1=high, 2=medium, 3=low
+                    match alert.severity {
+                        1 => { score += 30.0; tags.push("alert-sev-high".into()); }
+                        2 => { score += 15.0; tags.push("alert-sev-medium".into()); }
+                        _ => {               tags.push("alert-sev-low".into()); }
+                    }
+                    if !alert.signature.is_empty() {
+                        reasons.push(format!("Rule: {}", alert.signature));
+                    }
+                    for t in &alert.mitre_tactics {
+                        score += 10.0;
+                        tags.push(format!("mitre:{}", t));
+                    }
+                    for t in &alert.mitre_techniques {
+                        tags.push(format!("technique:{}", t));
+                    }
                 }
             }
         }

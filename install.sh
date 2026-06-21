@@ -432,7 +432,7 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     CLICKHOUSE_URL="http://localhost:8123"
     CLOUD_CH_USER="ndr"
     CLOUD_CH_PASS="ndr123"
-    CLOUD_KAFKA="kafka:9092"
+    CLOUD_KAFKA="kafka1:9092,kafka2:9092,kafka3:9092"
 
 else
     log "☁️  Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
@@ -869,7 +869,7 @@ log "✅ Docker stack started"
 # ── Set Kafka retention ───────────────────────
 log "Setting Kafka retention policy..."
 sleep 15
-sudo docker exec kafka \
+sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-configs.sh \
     --bootstrap-server localhost:9092 \
     --alter --entity-type topics \
@@ -880,7 +880,7 @@ log "✅ Kafka retention set to 24 hours"
 
 # ── Create Kafka topic with 3 partitions ──────
 log "Creating Kafka topic with 3 partitions..."
-sudo docker exec kafka     /opt/kafka/bin/kafka-topics.sh     --bootstrap-server localhost:9092     --create --if-not-exists     --topic ndr-events     --partitions 3     --replication-factor 1     2>/dev/null || true
+sudo docker exec kafka1     /opt/kafka/bin/kafka-topics.sh     --bootstrap-server localhost:9092     --create --if-not-exists     --topic ndr-events     --partitions 3     --replication-factor 3     2>/dev/null || true
 
 # Grant ClickHouse permissions for tenant DB creation
 log "Granting ClickHouse permissions..."

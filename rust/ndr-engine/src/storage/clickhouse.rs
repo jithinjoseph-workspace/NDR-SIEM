@@ -3084,6 +3084,24 @@ pub async fn save_evidence_bundle(
     alert_id: &str,
 ) -> anyhow::Result<()> {
     let db = tenant_db(tenant_id);
+
+    // Skip insert if a bundle already exists for this community_id — prevents
+    // duplicate entries when the same alert is downloaded more than once.
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Count { n: u64 }
+    let existing: Vec<Count> = self.client
+        .query(&format!(
+            "SELECT count() as n FROM {}.evidence_bundles FINAL \
+             WHERE community_id = '{}'",
+            db, community_id
+        ))
+        .fetch_all::<Count>()
+        .await
+        .unwrap_or_default();
+    if existing.first().map(|r| r.n).unwrap_or(0) > 0 {
+        return Ok(());
+    }
+
     self.client.query(&format!(
         "INSERT INTO {}.evidence_bundles
          (id,community_id,file_path,sha256,size_bytes,

@@ -97,7 +97,11 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 }.to_string();
 
                 let ch_event = NdrEvent {
-                    timestamp: chrono::Utc::now().timestamp() as u32,
+                    timestamp: if event.timestamp > 0 {
+                        (event.timestamp / 1000) as u32
+                    } else {
+                        chrono::Utc::now().timestamp() as u32
+                    },
                     source: source_str,
                     src_ip: event.source_ip.clone().unwrap_or_default(),
                     dst_ip: event.dest_ip.clone().unwrap_or_default(),

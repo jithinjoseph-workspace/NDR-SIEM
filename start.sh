@@ -89,7 +89,7 @@ fi
 # Wait for Kafka to be healthy before touching topics
 echo "  → Waiting for Kafka to be ready..."
 for i in {1..30}; do
-    if sudo docker exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh \
+    if sudo docker exec kafka1 /opt/kafka/bin/kafka-broker-api-versions.sh \
         --bootstrap-server localhost:9092 > /dev/null 2>&1; then
         log "✅ Kafka ready"
         break
@@ -98,7 +98,7 @@ for i in {1..30}; do
 done
 
 # Set retention
-sudo docker exec kafka \
+sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-configs.sh \
     --bootstrap-server localhost:9092 \
     --alter --entity-type topics \
@@ -108,26 +108,26 @@ sudo docker exec kafka \
 
 # Create topic with 3 partitions only if it doesn't exist yet
 # Never delete an existing topic — that breaks live consumer connections
-sudo docker exec kafka \
+sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:9092 \
     --create --if-not-exists \
     --topic ndr-events \
     --partitions 3 \
-    --replication-factor 1 \
+    --replication-factor 3 \
     2>/dev/null || true
 
 log "✅ Kafka 3 partitions ready for scaling"
 
 # Verify
-sudo docker exec kafka \
+sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:9092 \
     --describe --topic ndr-events
 
 # Check consumer group
 sleep 5
-sudo docker exec kafka \
+sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-consumer-groups.sh \
     --bootstrap-server localhost:9092 \
     --group ndr-engine-group \

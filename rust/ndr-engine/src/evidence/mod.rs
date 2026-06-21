@@ -49,6 +49,50 @@ async fn query_ch(
     }
 }
 
+/// For ndr_hits rows whose sigma_hits is empty, rule_name comes from
+/// arrayElement(sigma_hits,1) which returns "". This function patches those
+/// rows by looking up the actual Suricata signature from ndr_events.raw.
+async fn fill_rule_names(
+    mut rows: Value,
+    http: &reqwest::Client,
+    ch_url: &str,
+    ch_user: &str,
+    ch_pass: &str,
+    db: &str,
+    community_id: &str,
+) -> Value {
+    let has_empty = rows.as_array()
+        .map(|a| a.iter().any(|r| {
+            r["rule_name"].as_str().map(|s| s.is_empty()).unwrap_or(true)
+        }))
+        .unwrap_or(false);
+
+    if !has_empty { return rows; }
+
+    let sig_rows = query_ch(http, ch_url, ch_user, ch_pass, &format!(
+        "SELECT JSONExtractString(raw, 'alert', 'signature') as sig \
+         FROM {}.ndr_events \
+         WHERE community_id = '{}' AND source = 'suricata' AND event_type = 'alert' \
+         LIMIT 1",
+        db, community_id
+    )).await;
+
+    let fallback = sig_rows.get(0)
+        .and_then(|r| r["sig"].as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Suricata IDS Alert")
+        .to_string();
+
+    if let Value::Array(ref mut arr) = rows {
+        for row in arr.iter_mut() {
+            if row["rule_name"].as_str().map(|s| s.is_empty()).unwrap_or(true) {
+                row["rule_name"] = json!(fallback);
+            }
+        }
+    }
+    rows
+}
+
 /// Query Suricata events from ndr_events by community_id and event_type.
 /// All Suricata log types carry community_id directly — no uid join needed.
 async fn query_suricata_events(
@@ -670,14 +714,17 @@ pub async fn fetch_live_investigation(
         };
 
     // ── Suricata / NDR alerts ────────────────────────────────────────────────
-    let suricata_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-        "SELECT src_ip, dst_ip, severity, score, \
-         toString(tags) as tags, toString(sigma_hits) as sigma_hits, \
-         arrayElement(sigma_hits, 1) as rule_name, \
-         src_country, dst_country, toString(timestamp) as timestamp \
-         FROM {}.ndr_hits WHERE community_id = '{}' ORDER BY timestamp DESC",
-        db, community_id
-    )).await;
+    let suricata_rows = {
+        let rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+            "SELECT src_ip, dst_ip, severity, score, \
+             tags, sigma_hits, \
+             arrayElement(sigma_hits, 1) as rule_name, \
+             src_country, dst_country, toString(timestamp) as timestamp \
+             FROM {}.ndr_hits WHERE community_id = '{}' ORDER BY timestamp DESC",
+            db, community_id
+        )).await;
+        fill_rule_names(rows, &http, &ch_url, &ch_user, &ch_pass, &db, &community_id).await
+    };
 
     let suricata_json = json!({
         "source": "suricata_alerts",
@@ -686,7 +733,7 @@ pub async fn fetch_live_investigation(
     });
 
     let sigma_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-        "SELECT severity, toString(tags) as tags, toString(sigma_hits) as sigma_hits, \
+        "SELECT severity, tags, sigma_hits, \
          toString(timestamp) as timestamp \
          FROM {}.ndr_hits WHERE community_id = '{}' AND notEmpty(sigma_hits)",
         db, community_id
@@ -799,6 +846,44 @@ pub async fn build_evidence_bundle(
     alert_json: Value,
     tenant_id: &str,
     pcap_file_path: Option<String>,
+) -> anyhow::Result<(Vec<u8>, String, Value)> {
+    build_evidence_bundle_inner(
+        opensearch_url, arkime_url, arkime_pass,
+        community_id, alert_json, tenant_id, pcap_file_path,
+        None, None,
+    ).await
+}
+
+/// Same as build_evidence_bundle but with fixed bundle_id and created_at for
+/// deterministic rebuild — used by verify so the ZIP hash matches the original.
+pub async fn build_evidence_bundle_for_verify(
+    opensearch_url: &str,
+    arkime_url: &str,
+    arkime_pass: &str,
+    community_id: &str,
+    alert_json: Value,
+    tenant_id: &str,
+    pcap_file_path: Option<String>,
+    bundle_id: &str,
+    created_at: &str,
+) -> anyhow::Result<(Vec<u8>, String, Value)> {
+    build_evidence_bundle_inner(
+        opensearch_url, arkime_url, arkime_pass,
+        community_id, alert_json, tenant_id, pcap_file_path,
+        Some(bundle_id), Some(created_at),
+    ).await
+}
+
+async fn build_evidence_bundle_inner(
+    opensearch_url: &str,
+    arkime_url: &str,
+    arkime_pass: &str,
+    community_id: &str,
+    alert_json: Value,
+    tenant_id: &str,
+    pcap_file_path: Option<String>,
+    fixed_bundle_id: Option<&str>,
+    fixed_created_at: Option<&str>,
 ) -> anyhow::Result<(Vec<u8>, String, Value)> {
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -1112,18 +1197,20 @@ pub async fn build_evidence_bundle(
     });
 
     // ── 4. Suricata / NDR alerts ──────────────────────────────────────────────
-    let suricata_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-        "SELECT src_ip, dst_ip, severity, score, \
-         toString(tags) as tags, \
-         toString(sigma_hits) as sigma_hits, \
-         arrayElement(sigma_hits, 1) as rule_name, \
-         src_country, dst_country, \
-         toString(timestamp) as timestamp \
-         FROM {}.ndr_hits \
-         WHERE community_id = '{}' \
-         ORDER BY timestamp DESC",
-        db, community_id
-    )).await;
+    let suricata_rows = {
+        let rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
+            "SELECT src_ip, dst_ip, severity, score, \
+             tags, sigma_hits, \
+             arrayElement(sigma_hits, 1) as rule_name, \
+             src_country, dst_country, \
+             toString(timestamp) as timestamp \
+             FROM {}.ndr_hits \
+             WHERE community_id = '{}' \
+             ORDER BY timestamp DESC",
+            db, community_id
+        )).await;
+        fill_rule_names(rows, &http, &ch_url, &ch_user, &ch_pass, &db, &community_id).await
+    };
 
     let suricata_json = json!({
         "source": "suricata_alerts",
@@ -1133,8 +1220,7 @@ pub async fn build_evidence_bundle(
 
     // ── 5. SIGMA matches ──────────────────────────────────────────────────────
     let sigma_rows = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-        "SELECT severity, toString(tags) as tags, \
-         toString(sigma_hits) as sigma_hits, \
+        "SELECT severity, tags, sigma_hits, \
          toString(timestamp) as timestamp \
          FROM {}.ndr_hits \
          WHERE community_id = '{}' \
@@ -1212,7 +1298,11 @@ pub async fn build_evidence_bundle(
     });
 
     // ── 8. Attack summary ─────────────────────────────────────────────────────
-    let now = chrono::Utc::now().to_rfc3339();
+    // fixed_created_at is set during verify-rebuild so generated_at and
+    // manifest.created_at are identical to the original → deterministic ZIP hash.
+    let now = fixed_created_at
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let pcap_captured = !pcap_bytes.is_empty();
 
     // Elevate severity to highest confirmed across suricata rows + sigma rows
@@ -1263,7 +1353,9 @@ pub async fn build_evidence_bundle(
     let attack_str       = serde_json::to_string_pretty(&attack_summary).unwrap_or_default();
 
     // ── 10. Build enhanced manifest ───────────────────────────────────────────
-    let bundle_id = uuid::Uuid::new_v4().to_string();
+    let bundle_id = fixed_bundle_id
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let suricata_count = suricata_rows.as_array().map(|a| a.len()).unwrap_or(0);
     let highest_severity = suricata_rows.as_array()
@@ -1386,6 +1478,7 @@ pub async fn build_evidence_bundle(
 }
 
 /// Verify a stored evidence bundle against its logged SHA256.
+#[allow(dead_code)]
 pub async fn verify_bundle_integrity(
     file_path: &str,
     stored_sha256: &str,
