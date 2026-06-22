@@ -260,7 +260,9 @@ services:
   # network_mode: host — binds directly to host ports 8123/9000,
   # same as the old bare-metal install. Engines reach it via HOST_IP:8123.
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    build:
+      context: ${INSTALL_DIR}/config/clickhouse
+      dockerfile: Dockerfile
     container_name: clickhouse
     network_mode: host
     ulimits:
@@ -270,7 +272,6 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
-      - ${INSTALL_DIR}/config/clickhouse/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]

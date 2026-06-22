@@ -1,7 +1,3 @@
--- Create ndr user (replaces ndr-user.xml — avoids file permission issues on shared folders)
-CREATE USER IF NOT EXISTS ndr IDENTIFIED WITH sha256_password BY 'ndr123';
-GRANT ALL ON *.* TO ndr WITH GRANT OPTION;
-
 CREATE DATABASE IF NOT EXISTS ndr;
 
 CREATE TABLE IF NOT EXISTS ndr.ndr_events (
