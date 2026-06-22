@@ -141,7 +141,7 @@ if err == null { . = parsed; .source = "zeek"; .log_type = "quic" } else { abort
 [sinks.kafka]
 type = "kafka"
 inputs = ["suricata_json", "zeek_json", "zeek_http_json", "zeek_dns_json", "zeek_ssl_json", "zeek_files_json", "zeek_dhcp_json", "zeek_weird_json", "zeek_quic_json"]
-bootstrap_servers = "kafka:9092"
+bootstrap_servers = "kafka1:9092,kafka2:9092,kafka3:9092"
 topic = "ndr-events"
 encoding.codec = "json"
 # Route by community_id so Zeek + Suricata events for the same flow

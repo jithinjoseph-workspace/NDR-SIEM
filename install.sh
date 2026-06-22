@@ -360,6 +360,26 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     log "ClickHouse will start as a Docker container with the stack"
     log "  User:   ndr / ndr123"
     log "  Port:   8123 (HTTP), 9000 (native)"
+
+    # ── Migrate bare-metal ClickHouse → Docker container ─────────────────
+    # If host clickhouse-server is running: export all data first, then stop
+    # it so the Docker container can bind to ports 8123/9000.
+    # The import runs automatically after Docker ClickHouse is healthy.
+    CH_NEEDS_IMPORT=false
+    if systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+        warn "Detected bare-metal ClickHouse on this host — exporting data before migration..."
+        bash "$INSTALL_DIR/scripts/ch-export.sh"
+        CH_NEEDS_IMPORT=true
+        log "✅ Data exported to /home/user/ch-export/"
+        log "Stopping host ClickHouse so Docker container can take over ports 8123/9000..."
+        sudo systemctl stop clickhouse-server
+        sudo systemctl disable clickhouse-server
+        log "✅ Host ClickHouse stopped and disabled"
+    elif ss -tlnp 2>/dev/null | grep -qE ':8123|:9000'; then
+        warn "Ports 8123/9000 are in use by another process — this may cause ClickHouse container to restart-loop"
+        warn "Run: ss -tlnp | grep -E '8123|9000'  to identify and stop it"
+    fi
+
     CLICKHOUSE_URL="http://localhost:8123"
     CLOUD_CH_USER="ndr"
     CLOUD_CH_PASS="ndr123"
@@ -806,6 +826,13 @@ if [ "$DEPLOY_MODE" = "local" ]; then
         sleep 3
     done
     echo ""
+
+    # ── Auto-import exported data if we migrated from bare-metal ─────────
+    if [ "${CH_NEEDS_IMPORT:-false}" = "true" ] && [ -d "/home/user/ch-export" ]; then
+        log "Importing exported ClickHouse data into Docker container..."
+        bash "$INSTALL_DIR/scripts/ch-import.sh"
+        log "✅ Data migration complete"
+    fi
 fi
 
 # ── Set Kafka retention ───────────────────────
