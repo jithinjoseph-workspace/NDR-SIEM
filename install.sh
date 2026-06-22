@@ -362,19 +362,46 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     log "  Port:   8123 (HTTP), 9000 (native)"
 
     # ── Migrate bare-metal ClickHouse → Docker container ─────────────────
-    # If host clickhouse-server is running: export all data first, then stop
-    # it so the Docker container can bind to ports 8123/9000.
-    # The import runs automatically after Docker ClickHouse is healthy.
     CH_NEEDS_IMPORT=false
     if systemctl is-active --quiet clickhouse-server 2>/dev/null; then
-        warn "Detected bare-metal ClickHouse on this host — exporting data before migration..."
-        bash "$INSTALL_DIR/scripts/ch-export.sh"
-        CH_NEEDS_IMPORT=true
-        log "✅ Data exported to /home/user/ch-export/"
-        log "Stopping host ClickHouse so Docker container can take over ports 8123/9000..."
+        warn "Detected an existing ClickHouse installation running on this host."
+        echo ""
+        echo "  Choose how to proceed:"
+        echo "  [1] Migrate existing data  — export from host, import into Docker container"
+        echo "  [2] Fresh start            — wipe existing data, start with an empty database"
+        echo ""
+        read -p "  Enter choice [1/2]: " CH_MIGRATE_CHOICE
+        echo ""
+
+        if [ "$CH_MIGRATE_CHOICE" = "1" ]; then
+            log "Exporting existing ClickHouse data before stopping host service..."
+            bash "$INSTALL_DIR/scripts/ch-export.sh"
+            CH_NEEDS_IMPORT=true
+            log "✅ Data exported to /home/user/ch-export/"
+        else
+            log "Fresh start selected — existing host ClickHouse data will not be migrated"
+        fi
+
+        log "Stopping host ClickHouse so Docker container can bind to ports 8123/9000..."
         sudo systemctl stop clickhouse-server
         sudo systemctl disable clickhouse-server
         log "✅ Host ClickHouse stopped and disabled"
+
+        # ── Optionally remove host ClickHouse packages ────────────────────
+        echo ""
+        read -p "  Uninstall ClickHouse from this system? (Docker container will be used instead) [y/N]: " CH_PURGE
+        if [[ "$CH_PURGE" =~ ^[Yy]$ ]]; then
+            log "Removing ClickHouse packages..."
+            if command -v apt-get &>/dev/null; then
+                sudo apt-get remove -y clickhouse-server clickhouse-client clickhouse-common-static 2>/dev/null || true
+                sudo apt-get autoremove -y 2>/dev/null || true
+            elif command -v yum &>/dev/null; then
+                sudo yum remove -y clickhouse-server clickhouse-client 2>/dev/null || true
+            fi
+            log "✅ ClickHouse packages removed — Docker container takes over"
+        else
+            log "Keeping ClickHouse packages installed (service remains disabled)"
+        fi
     elif ss -tlnp 2>/dev/null | grep -qE ':8123|:9000'; then
         warn "Ports 8123/9000 are in use by another process — this may cause ClickHouse container to restart-loop"
         warn "Run: ss -tlnp | grep -E '8123|9000'  to identify and stop it"
