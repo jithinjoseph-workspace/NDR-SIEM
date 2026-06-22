@@ -84,6 +84,37 @@ fi
 echo ""
 
 # ══════════════════════════════════════════════════════
+# STEP 0 — Notify NDR cloud: sensor uninstalled
+# ══════════════════════════════════════════════════════
+log "Step 0: Reporting uninstall status to NDR cloud..."
+
+NDR_CLOUD_URL=""
+NDR_API_KEY=""
+if [ -f /etc/ndr/sensor.conf ]; then
+    NDR_CLOUD_URL=$(grep '^CLOUD_URL=' /etc/ndr/sensor.conf | cut -d= -f2 | tr -d '[:space:]')
+    NDR_API_KEY=$(grep '^API_KEY=' /etc/ndr/sensor.conf | cut -d= -f2 | tr -d '[:space:]')
+fi
+
+if [ -n "$NDR_CLOUD_URL" ] && [ -n "$NDR_API_KEY" ]; then
+    if ! $DRY_RUN; then
+        curl -sf -X POST "${NDR_CLOUD_URL}/api/sensor/checkin" \
+            -H "Content-Type: application/json" \
+            -H "X-Sensor-Key: ${NDR_API_KEY}" \
+            -d '{"zeek":"uninstalled","suricata":"uninstalled","vector":"uninstalled"}' \
+            --max-time 5 \
+            --retry 2 > /dev/null 2>&1 && \
+            log "  ✅ Uninstall status reported to cloud" || \
+            warn "  Could not reach NDR cloud — status will show offline after timeout"
+    else
+        dry "POST ${NDR_CLOUD_URL}/api/sensor/checkin {zeek:uninstalled,...}"
+    fi
+else
+    warn "  No cloud config found — skipping status report"
+fi
+
+echo ""
+
+# ══════════════════════════════════════════════════════
 # STEP 1 — Stop & disable current services (ndr-sensor-*)
 # ══════════════════════════════════════════════════════
 log "Step 1: Stopping all NDR sensor services..."
