@@ -30,7 +30,7 @@
       WebSocket telemetry active
     </div>
     <div>Refresh interval: 30s</div>
-    <div>{{ eventsLastHour }} events in the last hour</div>
+    <div>{{ eventsLastHour() }} events in the last hour</div>
   </div>
 
   <div class="metrics-grid">
@@ -39,12 +39,23 @@
         <div class="metric-icon">
           <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
         </div>
-        <span class="metric-badge">+{{ eventsLastHour }} /hr</span>
+        <span class="metric-badge">+{{ eventsLastHour() }} /hr</span>
       </div>
       <div>
         <h3>Total Events</h3>
-        <p class="metric-value">{{ totalEvents.toLocaleString() }}</p>
-        <p class="metric-detail">Zeek {{ zeekEvents }} / Suricata {{ suricataEvents }}</p>
+        <p class="metric-value">{{ totalEvents().toLocaleString() }}</p>
+        <p class="metric-detail">Zeek {{ zeekEvents() }} / Suricata {{ suricataEvents() }}</p>
+      </div>
+      
+      <div class="metric-wave" style="--accent: #c6cede;">
+        <svg viewBox="0 0 2400 120" preserveAspectRatio="none">
+          <path class="wave-back" d="M0,60 C150,120 450,0 600,60 C750,120 1050,0 1200,60 L1200,120 L0,120 Z"></path>
+          <path class="wave-back" transform="translate(1200, 0)" d="M0,60 C150,120 450,0 600,60 C750,120 1050,0 1200,60 L1200,120 L0,120 Z"></path>
+        </svg>
+        <svg viewBox="0 0 2400 120" preserveAspectRatio="none">
+          <path class="wave-front" d="M0,80 C150,140 450,20 600,80 C750,140 1050,20 1200,80 L1200,120 L0,120 Z"></path>
+          <path class="wave-front" transform="translate(1200, 0)" d="M0,80 C150,140 450,20 600,80 C750,140 1050,20 1200,80 L1200,120 L0,120 Z"></path>
+        </svg>
       </div>
     </article>
 
@@ -63,16 +74,17 @@
       </div>
       <div>
         <h3>Correlation Hits</h3>
-        <p class="metric-value">{{ totalHits }}</p>
-        <p class="metric-detail">{{ hitsLastHour }} new hits in the last hour</p>
+        <p class="metric-value">{{ totalHits() }}</p>
+        <p class="metric-detail">{{ hitsLastHour() }} new hits in the last hour</p>
       </div>
+      
     </article>
 
     <article
       class="metric-card metric-danger clickable-card"
       role="button"
       tabindex="0"
-      [class.has-alerts]="critical > 0"
+      [class.has-alerts]="critical() > 0"
       (click)="openAlerts({ severity: 'CRITICAL' })"
       (keydown.enter)="openAlerts({ severity: 'CRITICAL' })"
       (keydown.space)="openAlerts({ severity: 'CRITICAL' })">
@@ -80,13 +92,14 @@
         <div class="metric-icon">
           <lucide-icon [name]="AlertIcon" class="w-5 h-5"></lucide-icon>
         </div>
-        <span class="metric-badge danger">{{ critical > 0 ? 'Action Needed' : 'Clear' }}</span>
+        <span class="metric-badge danger">{{ critical() > 0 ? 'Action Needed' : 'Clear' }}</span>
       </div>
       <div>
         <h3>Critical Alerts</h3>
-        <p class="metric-value">{{ critical }}</p>
-        <p class="metric-detail">High {{ high }} / Medium {{ medium }}</p>
+        <p class="metric-value">{{ critical() }}</p>
+        <p class="metric-detail">High {{ high() }} / Medium {{ medium() }}</p>
       </div>
+
     </article>
 
     <article
@@ -105,25 +118,26 @@
       <div class="severity-bars">
         <div class="severity-row critical">
           <span>Critical</span>
-          <div><i [style.width.%]="(critical / ((critical + high + medium + low) || 1)) * 100"></i></div>
-          <strong>{{ critical }}</strong>
+          <div><i [style.width.%]="(critical() / totalSeverityCount()) * 100"></i></div>
+          <strong>{{ critical() }}</strong>
         </div>
         <div class="severity-row high">
           <span>High</span>
-          <div><i [style.width.%]="(high / ((critical + high + medium + low) || 1)) * 100"></i></div>
-          <strong>{{ high }}</strong>
+          <div><i [style.width.%]="(high() / totalSeverityCount()) * 100"></i></div>
+          <strong>{{ high() }}</strong>
         </div>
         <div class="severity-row medium">
           <span>Medium</span>
-          <div><i [style.width.%]="(medium / ((critical + high + medium + low) || 1)) * 100"></i></div>
-          <strong>{{ medium }}</strong>
+          <div><i [style.width.%]="(medium() / totalSeverityCount()) * 100"></i></div>
+          <strong>{{ medium() }}</strong>
         </div>
         <div class="severity-row low">
           <span>Low</span>
-          <div><i [style.width.%]="(low / ((critical + high + medium + low) || 1)) * 100"></i></div>
-          <strong>{{ low }}</strong>
+          <div><i [style.width.%]="(low() / totalSeverityCount()) * 100"></i></div>
+          <strong>{{ low() }}</strong>
         </div>
       </div>
+
     </article>
   </div>
 
@@ -143,7 +157,7 @@
       <div class="chart-frame">
 
         <!-- Cold-start skeleton: shimmer bars until first data point arrives -->
-        <div *ngIf="chartLoading && !chartError" class="chart-skeleton">
+        <div *ngIf="chartLoading() && !chartError()" class="chart-skeleton">
           <div class="skeleton-shimmer"></div>
           <div class="skeleton-bars">
             <i *ngFor="let h of skeletonBars" [style.height]="h"></i>
@@ -152,7 +166,7 @@
         </div>
 
         <!-- Error state: shown when API failed with no cached data -->
-        <div *ngIf="chartError" class="chart-error">
+        <div *ngIf="chartError()" class="chart-error">
           <lucide-icon [name]="ActivityIcon" class="chart-error-icon"></lucide-icon>
           <span>Unable to load telemetry data</span>
           <button class="retry-btn" (click)="retryChart()">
@@ -162,47 +176,16 @@
         </div>
 
         <!-- Real chart: only mounted when  valid snapshot exists -->
-        <canvas *ngIf="!chartLoading && !chartError"
-          baseChart
-          [data]="lineChartData"
-          [options]="lineChartOptions"
-          type="line">
-        </canvas>
+        <div *ngIf="!chartLoading() && !chartError()"
+             #liveEventStream
+             class="d3-chart-container"
+             style="width: 100%; height: 100%; min-height: 250px;">
+        </div>
 
       </div>
     </section>
 
     <div class="side-stack">
-      <section class="panel critical-panel">
-        <div class="panel-header compact">
-          <div>
-            <h4>Recent Critical Alerts</h4>
-            <p>Latest high-priority correlation hits.</p>
-          </div>
-        </div>
-
-        <div class="critical-list" *ngIf="recentCriticalAlerts.length > 0; else emptyCriticalAlerts">
-          <div *ngFor="let alert of recentCriticalAlerts" class="critical-row">
-            <div class="critical-row-main">
-              <span [class]="'critical-severity ' + alert.severity.toLowerCase()">{{ alert.severity }}</span>
-              <strong>{{ alert.score | number:'1.0-0' }}</strong>
-            </div>
-            <div class="critical-flow">
-              <span>{{ alert.src_ip }}</span>
-              <span>-></span>
-              <span>{{ alert.dst_ip }}</span>
-            </div>
-            <div class="critical-time">{{ alert.time }}</div>
-          </div>
-        </div>
-
-        <ng-template #emptyCriticalAlerts>
-          <div class="empty-state">
-            <span>No critical alerts yet</span>
-            High-priority hits will appear here when detected.
-          </div>
-        </ng-template>
-      </section>
 
       <section
         class="panel ip-panel clickable-panel"
@@ -218,14 +201,17 @@
           </div>
         </div>
 
-        <div class="ip-list" *ngIf="topSrcIps.length > 0; else emptyIps">
-          <div *ngFor="let ip of topSrcIps.slice(0, 5)" class="ip-row">
-            <div class="ip-row-header">
-              <span>{{ ip.ip }}</span>
-              <strong>{{ ip.count }} events</strong>
-            </div>
-            <div class="ip-meter">
-              <i [style.width.%]="(ip.count / (topSrcIps[0]?.count || 1)) * 100"></i>
+        <div class="ip-list" *ngIf="topSrcIps().length > 0; else emptyIps">
+          <div *ngFor="let ip of topSrcIps().slice(0, 5); let i = index" class="ip-row">
+            <div class="ip-rank">{{ i + 1 }}</div>
+            <div class="ip-content">
+              <div class="ip-row-header">
+                <span class="ip-address">{{ ip.ip }}</span>
+                <strong>{{ ip.count | number }} events</strong>
+              </div>
+              <div class="ip-meter">
+                <i [style.width.%]="(ip.count / (topSrcIps()[0]?.count || 1)) * 100"></i>
+              </div>
             </div>
           </div>
         </div>
@@ -240,5 +226,36 @@
         <button class="panel-link" type="button" (click)="openNetworkMap()">View All IPs</button>
       </section>
     </div>
+  </div>
+  <div class="secondary-charts-grid">
+    <section class="panel">
+      <div class="panel-header compact">
+        <div>
+          <h4>Severity Distribution</h4>
+          <p>Breakdown by criticality.</p>
+        </div>
+      </div>
+      <div #severityDonutChart class="d3-container" style="width: 100%; height: 220px;"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header compact">
+        <div>
+          <h4>Top Destination IPs</h4>
+          <p>Highest observed destination traffic.</p>
+        </div>
+      </div>
+      <div #topDstIpsChart class="d3-container" style="width: 100%; height: 220px;"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header compact">
+        <div>
+          <h4>Traffic by Protocol</h4>
+          <p>Top application layer protocols.</p>
+        </div>
+      </div>
+      <div #protocolPieChart class="d3-container" style="width: 100%; height: 220px;"></div>
+    </section>
   </div>
 </section>

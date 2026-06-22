@@ -1527,6 +1527,14 @@ pub async fn get_top_ips(State(state): State<AppState>, headers: axum::http::Hea
 }
 
 
+pub async fn get_protocols(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    let protos = state.ch_storage.get_top_protocols_by_tenant(5, &tenant_id).await.unwrap_or_default();
+    Json(json!({ "protocols": protos }))
+}
+
 pub async fn get_hits(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let tenant_id = extract_claims(&headers)
         .map(|c| c.tenant_id)
@@ -2690,7 +2698,7 @@ pub async fn delete_integration(
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let id = payload["id"]
         .as_str().unwrap_or("").to_string();
-    
+
     match state.ch_storage
         .delete_integration(&id, &tenant_id).await {
         Ok(_) => Json(json!({
@@ -2704,7 +2712,41 @@ pub async fn delete_integration(
     }
 }
 
+pub async fn update_integration(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
 
+    let name = payload["name"].as_str().unwrap_or("").to_string();
+    let int_type = payload["type"].as_str().unwrap_or("").to_string();
+    let config = payload["config"].to_string();
+
+    if name.is_empty() || int_type.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "name and type required"
+        }));
+    }
+
+    match state.ch_storage
+        .update_integration(&id, &name, &int_type, &config, &tenant_id)
+        .await
+    {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": format!("{} integration updated!", name)
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
+    }
+}
 
 
 //severity
@@ -6001,15 +6043,17 @@ pub async fn update_native_playbook(
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
     axum::extract::Json(payload): axum::extract::Json<Value>,
 ) -> Json<Value> {
-    let enabled = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true) as u8;
-    let cond_field = payload.get("cond_field").and_then(|v| v.as_str()).unwrap_or("");
-    let cond_op = payload.get("cond_op").and_then(|v| v.as_str()).unwrap_or("");
-    let cond_value = payload.get("cond_value").and_then(|v| v.as_str()).unwrap_or("");
+    let name        = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let description = payload.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let enabled     = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true) as u8;
+    let cond_field  = payload.get("cond_field").and_then(|v| v.as_str()).unwrap_or("");
+    let cond_op     = payload.get("cond_op").and_then(|v| v.as_str()).unwrap_or("");
+    let cond_value  = payload.get("cond_value").and_then(|v| v.as_str()).unwrap_or("");
     let action_type = payload.get("action_type").and_then(|v| v.as_str()).unwrap_or("");
     let action_config = payload.get("action_config").and_then(|v| v.as_str()).unwrap_or("{}");
 
     match state.ch_storage.update_native_playbook(
-        &id, enabled, cond_field, cond_op, cond_value, action_type, action_config, &claims.tenant_id
+        &id, name, description, enabled, cond_field, cond_op, cond_value, action_type, action_config, &claims.tenant_id
     ).await {
         Ok(_) => Json(json!({"status": "success", "message": "Playbook updated"})),
         Err(e) => Json(json!({"status": "error", "message": e.to_string()}))

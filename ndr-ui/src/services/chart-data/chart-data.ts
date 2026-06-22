@@ -36,6 +36,7 @@ export class ChartDataService implements OnDestroy {
   private started = false;
   private refreshInterval: any  = null;
   private statsSub: Subscription | null = null;
+  private lastEventsTotal: number | null = null;
 
   // ── State atoms ────────────────────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ export class ChartDataService implements OnDestroy {
         if (user.username) return `ndr_chart_data_${user.username}`;
       }
     } catch (_) {}
-    return 'ndr_chart_data';
+    return 'ndr_chart_data_v2';
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -160,8 +161,21 @@ export class ChartDataService implements OnDestroy {
           suricata_events: raw.suricata_events || 0,
         });
 
-        // 2. Append a chart data point from the rolling 1-hour count
-        this.pushPoint(raw.events_1h || 0);
+        // 2. Append a chart data point (events in this interval)
+        const currentTotal = raw.events_total || 0;
+        let delta = 0;
+        const wasNull = this.lastEventsTotal === null;
+        if (!wasNull) {
+          delta = Math.max(0, currentTotal - this.lastEventsTotal!);
+        }
+        this.lastEventsTotal = currentTotal;
+
+        // Freeze chart if no new events arrived (sensors stopped), unless it's the very first point
+        if (!wasNull && delta === 0) {
+          return;
+        }
+
+        this.pushPoint(delta);
       },
       error: () => {
         // Surface error UI only when there is no cached data to fall back on.
@@ -192,6 +206,7 @@ export class ChartDataService implements OnDestroy {
       localStorage.setItem(this.getStorageKey(), JSON.stringify({
         labels:    this.labels,
         data:      this.data,
+        lastEventsTotal: this.lastEventsTotal,
         timestamp: Date.now()
       }));
     } catch (_) { /* storage full — silently ignore */ }
@@ -219,6 +234,7 @@ export class ChartDataService implements OnDestroy {
       ) {
         this.labels = [...stored.labels];
         this.data   = [...stored.data];
+        this.lastEventsTotal = typeof stored.lastEventsTotal === 'number' ? stored.lastEventsTotal : null;
         return { labels: [...stored.labels], data: [...stored.data] };
       }
       return null;

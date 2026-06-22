@@ -53,7 +53,6 @@
             <th>Description</th>
             <th>Score</th>
             <th>Timestamp</th>
-            <th class="text-right">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -87,36 +86,6 @@
             </td>
             <td class="timestamp-cell">
               {{ alert.time }}
-            </td>
-            <td>
-              <div class="row-actions">
-                <button class="icon-action pcap-btn"
-                  type="button"
-                  title="View PCAP sessions"
-                  [disabled]="!alert.community_id"
-                  (click)="viewPcap(alert.community_id)">
-                  <lucide-icon [name]="PackageIcon" class="w-4 h-4"></lucide-icon>
-                </button>
-                <button class="icon-action arkime-btn"
-                  type="button"
-                  title="Open in Arkime"
-                  [disabled]="!alert.community_id"
-                  (click)="openArkime(alert.community_id)">
-                  <lucide-icon [name]="ExternalLinkIcon" class="w-4 h-4"></lucide-icon>
-                </button>
-                <button class="btn-evidence"
-                        (click)="downloadEvidence(alert.community_id)"
-                        title="Download Evidence Bundle"
-                        *ngIf="alert.community_id">
-                  📦 Evidence
-                </button>
-                <button class="btn-timeline"
-                        (click)="viewTimeline(alert.community_id)"
-                        title="View Attack Timeline"
-                        *ngIf="alert.community_id">
-                  ⏱ Timeline
-                </button>
-              </div>
             </td>
           </tr>
         </tbody>

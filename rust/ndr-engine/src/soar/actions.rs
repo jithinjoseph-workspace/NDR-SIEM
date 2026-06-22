@@ -140,7 +140,9 @@ pub async fn execute_action(
                     .unwrap_or("");
                 let from_addr = sc["from_addr"].as_str().unwrap_or("ndr@localhost");
                 let host = sc["smtp_host"].as_str().unwrap_or("localhost");
-                let port = sc["smtp_port"].as_u64().unwrap_or(587) as u16;
+                let port = sc["smtp_port"].as_u64()
+                    .or_else(|| sc["smtp_port"].as_str().and_then(|s| s.parse().ok()))
+                    .unwrap_or(587) as u16;
                 let user = sc["smtp_user"].as_str().unwrap_or("");
                 let pass = sc["smtp_pass"].as_str().unwrap_or("");
 
@@ -151,7 +153,9 @@ pub async fn execute_action(
                     .body(format!("Alert for {} -> {}. Score: {}", src, dst, risk.score))
                     .unwrap();
 
-                let mut mailer_builder = SmtpTransport::builder_dangerous(host).port(port);
+                let mut mailer_builder = SmtpTransport::relay(host)
+                    .unwrap_or_else(|_| SmtpTransport::builder_dangerous(host))
+                    .port(port);
                 if !user.is_empty() {
                     mailer_builder = mailer_builder.credentials(Credentials::new(user.to_string(), pass.to_string()));
                 }

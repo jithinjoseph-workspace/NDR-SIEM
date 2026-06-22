@@ -118,10 +118,10 @@ export class Health implements OnInit, OnDestroy {
         this.updateStatus('vector', this.rollupServiceStatus(sensors, 'vector'));
         this.cdr.detectChanges();
       },
-      error: () => {
+      error: (err) => {
         this.activeSensors = 0;
         this.onlineSensors = 0;
-        this.lastSensorSeen = '';
+        this.lastSensorSeen = err.message || 'API Error';
         ['zeek', 'suricata', 'vector'].forEach(service => this.updateStatus(service, 'unknown'));
         this.cdr.detectChanges();
       }

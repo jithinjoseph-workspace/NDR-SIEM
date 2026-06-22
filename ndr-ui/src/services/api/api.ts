@@ -458,4 +458,12 @@ export class Api {
   getAiActivity(): Observable<any> {
     return this.http.get(`${this.baseUrl}/ai-activity`);
   }
+
+  getProtocols(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/protocols`);
+  }
+
+  updateIntegration(id: string, data: any): Observable<any> {
+    return this.http.put(`${this.baseUrl}/soar/integrations/${id}`, data);
+  }
 }

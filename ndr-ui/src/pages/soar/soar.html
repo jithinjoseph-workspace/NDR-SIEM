@@ -1,121 +1,208 @@
-<div class="p-8 animate-in fade-in duration-500 max-w-7xl mx-auto">
+<div class="p-6 max-w-7xl mx-auto">
 
-  <!-- Header -->
-  <div class="flex items-center justify-between mb-8">
+  <!-- ══ Page Header ═══════════════════════════════════════════════════════ -->
+  <div class="flex items-center justify-between mb-6">
     <div>
-      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight flex items-center gap-3">
-        <lucide-icon [name]="ZapIcon" class="w-6 h-6 text-primary"></lucide-icon>
-        SOAR — Native Automation
-      </h2>
-      <p class="text-on-surface-variant text-sm mt-1">
-        Automate your threat response natively within NDR.
-      </p>
+      <div class="flex items-center gap-2 mb-1">
+        <lucide-icon [name]="ZapIcon" class="w-4 h-4 text-primary"></lucide-icon>
+        <span class="text-[11px] font-bold text-primary uppercase tracking-[0.15em]">Security Orchestration</span>
+      </div>
+      <h1 class="text-xl font-bold text-white tracking-tight">SOAR — Native Automation</h1>
+      <p class="text-xs text-on-surface-variant mt-0.5">Automated threat response engine — native to NDR</p>
+    </div>
+    <div class="flex items-center gap-2 text-xs text-on-surface-variant font-mono bg-surface-container border border-outline/10 px-3 py-1.5 rounded-lg">
+      <span class="status-dot-live w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0"></span>
+      ENGINE RUNNING
     </div>
   </div>
 
-  <!-- Tabs Navigation -->
-  <div class="flex items-center gap-6 border-b border-outline/10 mb-6">
-    <button (click)="switchTab('cases')" [class]="'pb-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ' +
-      (activeTab === 'cases' ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-white')">
-      <lucide-icon [name]="ShieldIcon" class="w-4 h-4"></lucide-icon> Cases
+  <!-- ══ Tab Bar ════════════════════════════════════════════════════════════ -->
+  <div class="flex items-center gap-0 border-b border-outline/10 mb-6">
+
+    <button (click)="switchTab('cases')"
+      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
+        (activeTab === 'cases' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
+      <lucide-icon [name]="ShieldIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Cases
+      <span *ngIf="cases.length > 0" class="ml-0.5 text-[10px] font-bold bg-primary/15 text-primary px-1.5 py-0.5 rounded">
+        {{ cases.length }}
+      </span>
     </button>
-    <button (click)="switchTab('playbooks')" [class]="'pb-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ' +
-      (activeTab === 'playbooks' ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-white')">
-      <lucide-icon [name]="ZapIcon" class="w-4 h-4"></lucide-icon> Playbooks
+
+    <button (click)="switchTab('playbooks')"
+      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
+        (activeTab === 'playbooks' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
+      <lucide-icon [name]="ZapIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Playbooks
     </button>
-    <button (click)="switchTab('integrations')" [class]="'pb-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ' +
-      (activeTab === 'integrations' ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-white')">
-      <lucide-icon [name]="LinkIcon" class="w-4 h-4"></lucide-icon> Integrations
+
+    <button (click)="switchTab('integrations')"
+      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
+        (activeTab === 'integrations' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
+      <lucide-icon [name]="LinkIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Integrations
     </button>
-    <button (click)="switchTab('activity')" [class]="'pb-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ' +
-      (activeTab === 'activity' ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-white')">
-      <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon> Activity Log
+
+    <button (click)="switchTab('activity')"
+      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
+        (activeTab === 'activity' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
+      <lucide-icon [name]="ActivityIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Activity Log
     </button>
+
   </div>
 
-  <!-- TAB: CASES -->
-  <div *ngIf="activeTab === 'cases'" class="space-y-4">
-    <div *ngIf="cases.length === 0" class="text-center py-12 text-on-surface-variant">
-      <lucide-icon [name]="ShieldIcon" class="w-12 h-12 mx-auto mb-4 opacity-50"></lucide-icon>
-      <p>No active cases right now.</p>
+
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB — CASES
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'cases'" class="soar-tab-content">
+
+    <!-- Empty -->
+    <div *ngIf="cases.length === 0" class="flex flex-col items-center justify-center py-16 border border-outline/10 rounded-xl bg-surface-container/20">
+      <lucide-icon [name]="ShieldIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
+      <p class="text-sm font-semibold text-on-surface-variant">No active cases</p>
+      <p class="text-xs text-on-surface-variant/60 mt-1">Cases are auto-generated by playbook actions.</p>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <div *ngFor="let c of cases" (click)="openCase(c)" class="bg-surface-container-highest border border-outline/10 p-5 rounded-xl hover:border-primary/50 cursor-pointer transition-all">
-        <div class="flex justify-between items-start mb-3">
-          <span [class]="'text-xs font-bold px-2 py-1 rounded ' + getCaseColor(c.severity)">
-            {{ c.severity | uppercase }}
-          </span>
-          <span class="text-xs text-on-surface-variant">{{ formatDate(c.created_at) }}</span>
-        </div>
-        <h4 class="text-white font-bold mb-1 truncate">{{ c.title }}</h4>
-        <p class="text-xs text-on-surface-variant mb-4 truncate">{{ c.description }}</p>
-        
-        <div class="flex items-center justify-between mt-auto pt-4 border-t border-outline/5">
-          <div class="text-xs font-mono text-primary bg-primary/10 px-2 py-1 rounded">
-            {{ c.src_ip }} → {{ c.dst_ip }}
+    <!-- Case grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div *ngFor="let c of cases" (click)="openCase(c)"
+        [class]="'group cursor-pointer bg-surface-container-highest border border-outline/10 rounded-xl p-4 hover:border-outline/30 transition-all ' +
+          (c.severity?.toLowerCase() === 'critical' ? 'case-card-critical' :
+           c.severity?.toLowerCase() === 'high'     ? 'case-card-high'     :
+           c.severity?.toLowerCase() === 'medium'   ? 'case-card-medium'   :
+           c.severity?.toLowerCase() === 'low'      ? 'case-card-low'      : 'case-card-default')">
+
+        <div class="flex items-start justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <!-- Severity badge -->
+            <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider border ' + getCaseColor(c.severity) +
+              (c.severity?.toLowerCase() === 'critical' ? ' border-red-500/20'    :
+               c.severity?.toLowerCase() === 'high'     ? ' border-orange-500/20' :
+               c.severity?.toLowerCase() === 'medium'   ? ' border-yellow-500/20' : ' border-blue-500/20')">
+              {{ c.severity }}
+            </span>
+            <!-- Status -->
+            <span [class]="'text-[10px] font-semibold px-2 py-0.5 rounded uppercase tracking-wide ' +
+              (c.status === 'Resolved'     ? 'bg-green-500/10 text-green-400'  :
+               c.status === 'In Progress'  ? 'bg-blue-500/10  text-blue-400'   :
+               c.status === 'False Positive' ? 'bg-slate-500/10 text-slate-400' :
+                                              'bg-surface-container text-on-surface-variant')">
+              {{ c.status }}
+            </span>
           </div>
-          <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded ' + (c.status === 'Resolved' ? 'bg-green-500/20 text-green-400' : 'bg-surface-container text-white')">
-            {{ c.status | uppercase }}
+          <span class="text-[11px] font-mono text-on-surface-variant/60">{{ formatDate(c.created_at) }}</span>
+        </div>
+
+        <h4 class="text-sm font-semibold text-white mb-0.5 truncate group-hover:text-primary transition-colors">{{ c.title }}</h4>
+        <p class="text-xs text-on-surface-variant truncate mb-3">{{ c.description }}</p>
+
+        <div class="flex items-center justify-between pt-3 border-t border-outline/5">
+          <span class="text-[11px] font-mono text-primary/80 bg-primary/8 px-2 py-0.5 rounded">
+            {{ c.src_ip }} → {{ c.dst_ip }}
+          </span>
+          <span class="text-[10px] text-on-surface-variant/50 group-hover:text-on-surface-variant transition-colors">
+            Open →
           </span>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- TAB: PLAYBOOKS -->
-  <div *ngIf="activeTab === 'playbooks'" class="space-y-6">
-    <div class="flex justify-end mb-2">
-      <button (click)="initPlaybookModal()" class="flex items-center gap-2 bg-primary text-black px-4 py-2 rounded-lg text-sm font-bold hover:bg-primary/90 transition-all">
-        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon> New Playbook
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB — PLAYBOOKS
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'playbooks'" class="soar-tab-content space-y-4">
+
+    <!-- Toolbar -->
+    <div class="flex items-center justify-between">
+      <span class="text-xs text-on-surface-variant">{{ playbooks.length }} playbook{{ playbooks.length !== 1 ? 's' : '' }} defined</span>
+      <button (click)="initPlaybookModal()"
+        class="flex items-center gap-1.5 text-xs font-semibold bg-primary text-black px-3 py-2 rounded-lg hover:bg-primary/85 transition-colors">
+        <lucide-icon [name]="PlusIcon" class="w-3.5 h-3.5"></lucide-icon>
+        New Playbook
       </button>
     </div>
 
-    <div class="bg-surface-container-highest border border-outline/10 rounded-xl overflow-hidden">
-      <table class="w-full text-left border-collapse">
-        <thead>
-          <tr class="bg-surface-container/50 border-b border-outline/10 text-xs text-on-surface-variant uppercase">
-            <th class="p-4 font-bold">Status</th>
-            <th class="p-4 font-bold">Name</th>
-            <th class="p-4 font-bold">Condition</th>
-            <th class="p-4 font-bold">Action</th>
-            <th class="p-4 font-bold text-right">Runs</th>
-            <th class="p-4"></th>
+    <!-- Empty -->
+    <div *ngIf="playbooks.length === 0" class="flex flex-col items-center justify-center py-16 border border-outline/10 border-dashed rounded-xl bg-surface-container/10">
+      <lucide-icon [name]="ZapIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
+      <p class="text-sm font-semibold text-on-surface-variant">No playbooks configured</p>
+      <p class="text-xs text-on-surface-variant/60 mt-1 mb-4">Create a playbook to automate response actions.</p>
+      <button (click)="initPlaybookModal()"
+        class="flex items-center gap-1.5 text-xs font-semibold bg-primary text-black px-3 py-2 rounded-lg hover:bg-primary/85 transition-colors">
+        <lucide-icon [name]="PlusIcon" class="w-3.5 h-3.5"></lucide-icon> New Playbook
+      </button>
+    </div>
+
+    <!-- Table -->
+    <div *ngIf="playbooks.length > 0" class="border border-outline/10 rounded-xl overflow-hidden">
+      <table class="soar-table w-full text-left text-sm">
+        <thead class="bg-surface-container/60">
+          <tr class="border-b border-outline/10 text-[10px] uppercase tracking-[0.12em] text-on-surface-variant font-bold">
+            <th class="px-4 py-3 w-16">Enabled</th>
+            <th class="px-4 py-3">Playbook</th>
+            <th class="px-4 py-3">Trigger Condition</th>
+            <th class="px-4 py-3">Action</th>
+            <th class="px-4 py-3 text-right w-20">Runs</th>
+            <th class="px-4 py-3 w-20"></th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-outline/5">
-          <tr *ngFor="let pb of playbooks" class="hover:bg-surface-container/30 transition-colors">
-            <td class="p-4">
-              <button (click)="togglePlaybook(pb)" [class]="'w-10 h-6 rounded-full relative transition-colors ' + (pb.enabled ? 'bg-primary' : 'bg-surface-container border border-outline/20')">
-                <div [class]="'absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ' + (pb.enabled ? 'translate-x-4' : '')"></div>
+        <tbody class="divide-y divide-outline/5 bg-surface-container-highest">
+          <tr *ngFor="let pb of playbooks" class="soar-row group hover:bg-surface-container/40">
+            <!-- Toggle -->
+            <td class="px-4 py-3.5">
+              <button (click)="togglePlaybook(pb)" [title]="pb.enabled ? 'Click to disable' : 'Click to enable'"
+                [class]="'soar-switch ' + (pb.enabled ? 'bg-primary on' : 'bg-outline/20')">
+                <div class="soar-switch-thumb"></div>
               </button>
             </td>
-            <td class="p-4">
-              <div class="text-sm text-white font-bold">{{ pb.name }}</div>
-              <div class="text-xs text-on-surface-variant">{{ pb.description }}</div>
+            <!-- Name + desc -->
+            <td class="px-4 py-3.5">
+              <div class="flex items-center gap-2">
+                <div [class]="'w-1 h-8 rounded-full flex-shrink-0 ' + (pb.enabled ? 'bg-primary' : 'bg-outline/20')"></div>
+                <div>
+                  <div class="text-sm font-semibold text-white leading-tight">{{ pb.name }}</div>
+                  <div class="text-xs text-on-surface-variant mt-0.5 leading-tight">{{ pb.description }}</div>
+                </div>
+              </div>
             </td>
-            <td class="p-4">
-              <code class="text-xs text-primary bg-primary/10 px-2 py-1 rounded">
-                {{ pb.cond_field }} {{ pb.cond_op }} {{ pb.cond_value }}
+            <!-- Condition -->
+            <td class="px-4 py-3.5">
+              <code class="text-xs font-mono text-primary/90 bg-primary/8 border border-primary/15 px-2 py-1 rounded">
+                {{ pb.cond_field }}&nbsp;{{ pb.cond_op }}&nbsp;{{ pb.cond_value }}
               </code>
             </td>
-            <td class="p-4">
-              <span class="text-xs text-white bg-surface-container px-2 py-1 rounded capitalize">
+            <!-- Action -->
+            <td class="px-4 py-3.5">
+              <span class="inline-flex items-center gap-1.5 text-xs text-on-surface-variant bg-surface-container border border-outline/10 px-2.5 py-1 rounded capitalize">
+                <span class="int-abbr text-primary/70 text-[10px]">{{ getIntAbbr(pb.action_type) }}</span>
                 {{ pb.action_type }}
               </span>
             </td>
-            <td class="p-4 text-right text-xs text-on-surface-variant">
-              {{ pb.run_count }}
+            <!-- Runs -->
+            <td class="px-4 py-3.5 text-right">
+              <span class="text-sm font-mono font-semibold text-white">{{ pb.run_count || 0 }}</span>
             </td>
-            <td class="p-4 text-right">
-              <button (click)="deletePlaybook(pb)" class="text-red-400 hover:bg-red-500/10 p-2 rounded-lg transition-all">
-                <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
-              </button>
-            </td>
-          </tr>
-          <tr *ngIf="playbooks.length === 0">
-            <td colspan="6" class="p-8 text-center text-on-surface-variant text-sm">
-              No playbooks defined. Click "New Playbook" to automate responses.
+            <!-- Actions -->
+            <td class="px-4 py-3.5">
+              <div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button (click)="openEditPlaybook(pb)" title="Edit playbook"
+                  class="p-1.5 text-on-surface-variant hover:text-white hover:bg-surface-container rounded transition-all">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                </button>
+                <button (click)="deletePlaybook(pb)" title="Delete playbook"
+                  class="p-1.5 text-on-surface-variant hover:text-red-400 hover:bg-red-500/8 rounded transition-all">
+                  <lucide-icon [name]="TrashIcon" class="w-3.5 h-3.5"></lucide-icon>
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -123,86 +210,173 @@
     </div>
   </div>
 
-  <!-- TAB: INTEGRATIONS -->
-  <div *ngIf="activeTab === 'integrations'" class="space-y-6">
-    <div class="flex justify-between items-end mb-2">
-      <div>
-        <p class="text-sm text-on-surface-variant">Configure communication channels used by Playbook actions.</p>
-      </div>
-      <button (click)="showNewIntegration=true; intConfig={}" class="flex items-center gap-2 bg-surface-container text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-surface-container-highest transition-all border border-outline/20">
-        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon> Add Integration
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB — INTEGRATIONS
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'integrations'" class="soar-tab-content space-y-4">
+
+    <!-- Toolbar -->
+    <div class="flex items-center justify-between">
+      <span class="text-xs text-on-surface-variant">
+        {{ integrations.length }} channel{{ integrations.length !== 1 ? 's' : '' }} configured
+      </span>
+      <button (click)="showNewIntegration=true; editingIntId=null; intConfig={}; intName=''; intType='slack'; testResult=''"
+        class="flex items-center gap-1.5 text-xs font-semibold bg-primary text-black px-3 py-2 rounded-lg hover:bg-primary/85 transition-colors">
+        <lucide-icon [name]="PlusIcon" class="w-3.5 h-3.5"></lucide-icon>
+        Add Integration
       </button>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <div *ngFor="let int of integrations" class="bg-surface-container-highest border border-outline/10 p-5 rounded-xl relative group">
-        <div class="flex justify-between items-start mb-4">
-          <div class="w-10 h-10 rounded-lg flex items-center justify-center text-xl bg-surface-container border border-outline/10">
-            {{ getIntIcon(int.type) }}
-          </div>
-          <button (click)="toggleIntegration(int)" [class]="'text-[10px] font-bold px-2 py-1 rounded ' + (int.enabled ? 'bg-primary/20 text-primary' : 'bg-surface-container text-on-surface-variant')">
-            {{ int.enabled ? 'ACTIVE' : 'DISABLED' }}
-          </button>
-        </div>
-        <h4 class="text-white font-bold text-sm">{{ int.name }}</h4>
-        <p class="text-xs text-on-surface-variant uppercase tracking-widest mt-1">{{ int.type }}</p>
-        
-        <button (click)="deleteIntegration(int)" class="absolute top-4 right-4 text-red-400 opacity-0 group-hover:opacity-100 bg-red-500/10 p-2 rounded-lg transition-all">
-          <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- TAB: ACTIVITY LOG -->
-  <div *ngIf="activeTab === 'activity'" class="space-y-4">
-    <div class="flex justify-end mb-2">
-      <button (click)="loadRuns()" class="text-on-surface-variant hover:text-white transition-all flex items-center gap-2 text-sm">
-        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon> Refresh
+    <!-- Empty -->
+    <div *ngIf="integrations.length === 0" class="flex flex-col items-center justify-center py-16 border border-outline/10 border-dashed rounded-xl bg-surface-container/10">
+      <lucide-icon [name]="LinkIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
+      <p class="text-sm font-semibold text-on-surface-variant">No integrations configured</p>
+      <p class="text-xs text-on-surface-variant/60 mt-1 mb-4">Add a notification channel for playbook actions.</p>
+      <button (click)="showNewIntegration=true; editingIntId=null; intConfig={}; intName=''; intType='slack'; testResult=''"
+        class="flex items-center gap-1.5 text-xs font-semibold bg-primary text-black px-3 py-2 rounded-lg hover:bg-primary/85 transition-colors">
+        <lucide-icon [name]="PlusIcon" class="w-3.5 h-3.5"></lucide-icon> Add Integration
       </button>
     </div>
 
-    <div class="bg-surface-container-highest border border-outline/10 rounded-xl overflow-hidden">
-      <table class="w-full text-left border-collapse">
-        <thead>
-          <tr class="bg-surface-container/50 border-b border-outline/10 text-xs text-on-surface-variant uppercase">
-            <th class="p-4 font-bold">Time</th>
-            <th class="p-4 font-bold">Playbook</th>
-            <th class="p-4 font-bold">Status</th>
-            <th class="p-4 font-bold">Details</th>
+    <!-- Integration list table -->
+    <div *ngIf="integrations.length > 0" class="border border-outline/10 rounded-xl overflow-hidden">
+      <table class="soar-table w-full text-left text-sm">
+        <thead class="bg-surface-container/60">
+          <tr class="border-b border-outline/10 text-[10px] uppercase tracking-[0.12em] text-on-surface-variant font-bold">
+            <th class="px-4 py-3 w-16">Status</th>
+            <th class="px-4 py-3 w-16">Type</th>
+            <th class="px-4 py-3">Name</th>
+            <th class="px-4 py-3">Endpoint / Host</th>
+            <th class="px-4 py-3 w-28"></th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-outline/5">
-          <tr *ngFor="let run of runs" class="hover:bg-surface-container/30 transition-colors">
-            <td class="p-4 text-xs text-on-surface-variant whitespace-nowrap">
-              {{ formatDate(run.created_at) }}
+        <tbody class="divide-y divide-outline/5 bg-surface-container-highest">
+          <tr *ngFor="let int of integrations" class="soar-row group hover:bg-surface-container/40">
+
+            <!-- Status dot + toggle -->
+            <td class="px-4 py-3.5">
+              <div class="flex items-center gap-2">
+                <span [class]="'w-1.5 h-1.5 rounded-full flex-shrink-0 ' + (int.enabled ? 'status-dot-live bg-primary' : 'bg-outline/30')"></span>
+                <button (click)="toggleIntegration(int)" [title]="int.enabled ? 'Disable' : 'Enable'"
+                  [class]="'soar-switch ' + (int.enabled ? 'bg-primary on' : 'bg-outline/20')">
+                  <div class="soar-switch-thumb"></div>
+                </button>
+              </div>
             </td>
-            <td class="p-4 text-sm text-white font-bold">
-              {{ run.playbook_name }}
-            </td>
-            <td class="p-4">
-              <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded uppercase ' + (run.status === 'success' ? 'bg-primary/20 text-primary' : 'bg-red-500/20 text-red-400')">
-                {{ run.status }}
+
+            <!-- Type abbr badge -->
+            <td class="px-4 py-3.5">
+              <span class="int-abbr text-[10px] font-bold px-2 py-1 rounded bg-surface-container border border-outline/15 text-on-surface-variant uppercase tracking-widest">
+                {{ getIntAbbr(int.type) }}
               </span>
             </td>
-            <td class="p-4 text-xs text-on-surface-variant max-w-xs truncate">
-              {{ run.detail }}
+
+            <!-- Name -->
+            <td class="px-4 py-3.5">
+              <div class="text-sm font-semibold text-white">{{ int.name }}</div>
+              <div class="text-xs text-on-surface-variant capitalize">{{ int.type }}</div>
+            </td>
+
+            <!-- Endpoint preview -->
+            <td class="px-4 py-3.5">
+              <span class="text-xs font-mono text-on-surface-variant/70 truncate block max-w-xs">
+                <ng-container *ngIf="int.config?.webhook_url">{{ int.config.webhook_url | slice:0:48 }}{{ int.config.webhook_url?.length > 48 ? '…' : '' }}</ng-container>
+                <ng-container *ngIf="int.config?.smtp_host">{{ int.config.smtp_host }}:{{ int.config.smtp_port || '587' }}</ng-container>
+                <ng-container *ngIf="!int.config?.webhook_url && !int.config?.smtp_host">—</ng-container>
+              </span>
+            </td>
+
+            <!-- Actions -->
+            <td class="px-4 py-3.5">
+              <div class="flex items-center justify-end gap-1">
+                <button (click)="openEditIntegration(int)" title="Edit"
+                  class="flex items-center gap-1 text-[11px] font-semibold text-on-surface-variant hover:text-white hover:bg-surface-container px-2.5 py-1.5 rounded transition-all border border-transparent hover:border-outline/10">
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  Edit
+                </button>
+                <button (click)="deleteIntegration(int)" title="Remove"
+                  class="flex items-center gap-1 text-[11px] font-semibold text-on-surface-variant hover:text-red-400 hover:bg-red-500/8 px-2.5 py-1.5 rounded transition-all border border-transparent hover:border-red-500/15">
+                  <lucide-icon [name]="TrashIcon" class="w-3 h-3"></lucide-icon>
+                  Remove
+                </button>
+              </div>
             </td>
           </tr>
-          <tr *ngIf="runs.length === 0">
-            <td colspan="4" class="p-8 text-center text-on-surface-variant text-sm">
-              No automation activity recorded yet.
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Summary row -->
+    <div *ngIf="integrations.length > 0" class="text-[11px] text-on-surface-variant px-1">
+      {{ integrations.length }} channel{{ integrations.length !== 1 ? 's' : '' }} configured
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB — ACTIVITY LOG
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'activity'" class="soar-tab-content space-y-4">
+
+    <!-- Toolbar -->
+    <div class="flex items-center justify-between">
+      <span class="text-xs text-on-surface-variant">{{ runs.length }} execution{{ runs.length !== 1 ? 's' : '' }} recorded</span>
+      <button (click)="loadRuns()"
+        class="flex items-center gap-1.5 text-xs font-semibold text-on-surface-variant hover:text-white border border-outline/10 hover:border-outline/25 px-3 py-1.5 rounded-lg transition-all bg-surface-container">
+        <lucide-icon [name]="RefreshIcon" class="w-3.5 h-3.5"></lucide-icon>
+        Refresh
+      </button>
+    </div>
+
+    <!-- Empty -->
+    <div *ngIf="runs.length === 0" class="flex flex-col items-center justify-center py-16 border border-outline/10 rounded-xl bg-surface-container/10">
+      <lucide-icon [name]="ActivityIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
+      <p class="text-sm font-semibold text-on-surface-variant">No executions recorded</p>
+      <p class="text-xs text-on-surface-variant/60 mt-1">Playbook runs will appear here.</p>
+    </div>
+
+    <!-- Log table -->
+    <div *ngIf="runs.length > 0" class="border border-outline/10 rounded-xl overflow-hidden">
+      <table class="soar-table w-full text-left text-sm">
+        <thead class="bg-surface-container/60">
+          <tr class="border-b border-outline/10 text-[10px] uppercase tracking-[0.12em] text-on-surface-variant font-bold">
+            <th class="px-4 py-3 w-44">Timestamp</th>
+            <th class="px-4 py-3">Playbook</th>
+            <th class="px-4 py-3 w-24">Result</th>
+            <th class="px-4 py-3">Details</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-outline/5 bg-surface-container-highest">
+          <tr *ngFor="let run of runs" class="soar-row hover:bg-surface-container/40">
+            <td class="px-4 py-3 font-mono text-xs text-on-surface-variant whitespace-nowrap">
+              {{ formatDate(run.created_at) }}
             </td>
+            <td class="px-4 py-3 text-sm font-semibold text-white">{{ run.playbook_name }}</td>
+            <td class="px-4 py-3">
+              <div class="flex items-center gap-1.5">
+                <span [class]="'w-1.5 h-1.5 rounded-full flex-shrink-0 ' + (run.status === 'success' ? 'bg-primary' : 'bg-red-400')"></span>
+                <span [class]="'text-xs font-semibold uppercase tracking-wide ' + (run.status === 'success' ? 'text-primary' : 'text-red-400')">
+                  {{ run.status }}
+                </span>
+              </div>
+            </td>
+            <td class="px-4 py-3 text-xs text-on-surface-variant max-w-sm truncate">{{ run.detail }}</td>
           </tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- MODALS -->
 
-  <!-- Case Detail Modal -->
-  <div *ngIf="selectedCase" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+  <!-- ══════════════════════════════════════════════════════════════════════
+       MODAL — Case Detail
+  ══════════════════════════════════════════════════════════════════════════ -->
+﻿  <div *ngIf="selectedCase" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
     <div class="bg-surface-container-highest border border-outline/20 rounded-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
       <!-- Header -->
       <div class="p-6 border-b border-outline/10 flex justify-between items-start">
@@ -213,7 +387,7 @@
           <h3 class="text-xl font-bold text-white mt-2">{{ selectedCase.title }}</h3>
           <p class="text-xs text-on-surface-variant mt-1">{{ formatDate(selectedCase.created_at) }}</p>
         </div>
-        <button (click)="closeCaseModal()" class="text-on-surface-variant hover:text-white p-2">✕</button>
+        <button (click)="closeCaseModal()" class="text-on-surface-variant hover:text-white p-2">Γ£ò</button>
       </div>
       
       <!-- Body -->
@@ -234,7 +408,7 @@
           </div>
         </div>
 
-        <!-- Evidence Panel — loads live for every case with a community_id -->
+        <!-- Evidence Panel ΓÇö loads live for every case with a community_id -->
         <div *ngIf="evidenceLoading" class="text-xs text-on-surface-variant animate-pulse py-2">Loading evidence...</div>
         <ng-container *ngIf="liveEvidence && !evidenceLoading">
 
@@ -297,7 +471,7 @@
                       </span>
                     </td>
                     <td class="py-1.5 text-primary">{{ e.event_type || 'conn' }}</td>
-                    <td class="py-1.5 font-mono text-xs">{{ e.src_ip }}:{{ e.src_port }} → {{ e.dst_ip }}:{{ e.dst_port }}</td>
+                    <td class="py-1.5 font-mono text-xs">{{ e.src_ip }}:{{ e.src_port }} ΓåÆ {{ e.dst_ip }}:{{ e.dst_port }}</td>
                     <td class="py-1.5 uppercase text-on-surface-variant">{{ e.proto }}</td>
                   </tr>
                 </tbody>
@@ -352,121 +526,209 @@
     </div>
   </div>
 
-  <!-- New Playbook Modal -->
-  <div *ngIf="showNewPlaybook" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-    <div class="bg-surface-container-highest border border-outline/20 rounded-2xl w-full max-w-md p-6">
-      <h3 class="text-white font-bold text-lg mb-6 flex items-center gap-2">
-        <lucide-icon [name]="ZapIcon" class="w-5 h-5 text-primary"></lucide-icon> New Playbook
-      </h3>
 
-      <div class="space-y-4">
+  <!-- ══════════════════════════════════════════════════════════════════════
+       MODAL — Playbook (Create / Edit)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="showNewPlaybook" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-lg shadow-2xl">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10">
         <div>
-          <label class="text-xs text-on-surface-variant uppercase">Playbook Name</label>
-          <input [(ngModel)]="pbName" placeholder="e.g. Isolate High Risk Host" class="w-full mt-1 bg-surface-container border border-outline/20 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-primary" />
+          <h2 class="text-sm font-bold text-white">{{ editingPbId ? 'Edit Playbook' : 'New Playbook' }}</h2>
+          <p class="text-xs text-on-surface-variant mt-0.5">Define trigger condition and response action</p>
         </div>
+        <button (click)="showNewPlaybook=false"
+          class="text-on-surface-variant hover:text-white p-1.5 rounded hover:bg-surface-container transition-all text-sm leading-none">✕</button>
+      </div>
+
+      <!-- Form -->
+      <div class="p-6 space-y-4">
+        <!-- Name -->
         <div>
-          <label class="text-xs text-on-surface-variant uppercase">Description</label>
-          <input [(ngModel)]="pbDesc" class="w-full mt-1 bg-surface-container border border-outline/20 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-primary" />
+          <label class="block text-[10px] uppercase tracking-[0.12em] font-bold text-on-surface-variant mb-1.5">Playbook Name <span class="text-red-400">*</span></label>
+          <input [(ngModel)]="pbName" placeholder="e.g. Block High-Risk Source"
+            class="soar-input w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-primary/50 placeholder:text-on-surface-variant/40 transition-colors"/>
+        </div>
+        <!-- Description -->
+        <div>
+          <label class="block text-[10px] uppercase tracking-[0.12em] font-bold text-on-surface-variant mb-1.5">Description</label>
+          <input [(ngModel)]="pbDesc" placeholder="Brief description of what this playbook does"
+            class="soar-input w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-primary/50 placeholder:text-on-surface-variant/40 transition-colors"/>
         </div>
 
-        <div class="pt-4 border-t border-outline/10">
-          <label class="text-xs font-bold text-primary uppercase block mb-2">1. When to trigger</label>
+        <!-- Trigger condition -->
+        <div class="border border-outline/10 rounded-lg p-4 space-y-3">
+          <div class="text-[10px] uppercase tracking-[0.12em] font-bold text-on-surface-variant">Trigger Condition</div>
           <div class="grid grid-cols-3 gap-2">
-            <select [(ngModel)]="pbCondField" class="bg-surface-container border border-outline/20 rounded-lg px-2 py-2 text-white text-xs outline-none focus:border-primary">
-              <option value="score">Risk Score</option>
-              <option value="severity">Severity</option>
-              <option value="threat_intel">Threat Intel</option>
-            </select>
-            <select [(ngModel)]="pbCondOp" class="bg-surface-container border border-outline/20 rounded-lg px-2 py-2 text-white text-xs outline-none focus:border-primary">
-              <option value=">">&gt;</option>
-              <option value="<">&lt;</option>
-              <option value="==">==</option>
-              <option value="!=">!=</option>
-            </select>
-            <input [(ngModel)]="pbCondValue" placeholder="e.g. 75" class="bg-surface-container border border-outline/20 rounded-lg px-2 py-2 text-white text-xs outline-none focus:border-primary" />
+            <div>
+              <label class="block text-[10px] text-on-surface-variant/70 mb-1">Field</label>
+              <select [(ngModel)]="pbCondField" (ngModelChange)="onCondFieldChange()"
+                class="w-full bg-surface-container border border-outline/15 rounded-lg px-2.5 py-2 text-white text-xs outline-none focus:border-primary/50 transition-colors">
+                <option value="score">Risk Score</option>
+                <option value="severity">Severity</option>
+                <option value="threat_intel">Threat Intel</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[10px] text-on-surface-variant/70 mb-1">Operator</label>
+              <select [(ngModel)]="pbCondOp"
+                class="w-full bg-surface-container border border-outline/15 rounded-lg px-2.5 py-2 text-white text-xs font-mono outline-none focus:border-primary/50 transition-colors">
+                <option *ngFor="let op of condOps" [value]="op.value">{{ op.label }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[10px] text-on-surface-variant/70 mb-1">Value</label>
+              <select *ngIf="condValueType === 'severity'" [(ngModel)]="pbCondValue"
+                class="w-full bg-surface-container border border-outline/15 rounded-lg px-2.5 py-2 text-white text-xs outline-none focus:border-primary/50 transition-colors">
+                <option value="LOW">LOW</option>
+                <option value="MEDIUM">MEDIUM</option>
+                <option value="HIGH">HIGH</option>
+                <option value="CRITICAL">CRITICAL</option>
+              </select>
+              <select *ngIf="condValueType === 'bool'" [(ngModel)]="pbCondValue"
+                class="w-full bg-surface-container border border-outline/15 rounded-lg px-2.5 py-2 text-white text-xs outline-none focus:border-primary/50 transition-colors">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+              <input *ngIf="condValueType === 'text'" [(ngModel)]="pbCondValue"
+                [placeholder]="pbCondField === 'score' ? '75' : 'CN'"
+                class="w-full bg-surface-container border border-outline/15 rounded-lg px-2.5 py-2 text-white text-xs font-mono outline-none focus:border-primary/50 transition-colors"/>
+            </div>
           </div>
         </div>
 
-        <div class="pt-4 border-t border-outline/10">
-          <label class="text-xs font-bold text-primary uppercase block mb-2">2. What to do</label>
-          <select [(ngModel)]="pbActionType" class="w-full mb-2 bg-surface-container border border-outline/20 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-primary">
-            <option value="create_case">Create Security Case</option>
-            <option value="slack">Send Slack Message</option>
-            <option value="teams">Send Teams Card</option>
-            <option value="discord">Send Discord Message</option>
-            <option value="email">Send Email</option>
-            <option value="webhook">Call Custom Webhook</option>
-          </select>
-          
-          <!-- Dynamic Action Configs based on selected action -->
+        <!-- Response action -->
+        <div class="border border-outline/10 rounded-lg p-4 space-y-3">
+          <div class="text-[10px] uppercase tracking-[0.12em] font-bold text-on-surface-variant">Response Action</div>
+          <div>
+            <label class="block text-[10px] text-on-surface-variant/70 mb-1">Action Type</label>
+            <select [(ngModel)]="pbActionType"
+              class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-white text-sm outline-none focus:border-primary/50 transition-colors">
+              <option value="create_case">Create Security Case</option>
+              <option value="slack">Send Slack Notification</option>
+              <option value="teams">Send Microsoft Teams Notification</option>
+              <option value="discord">Send Discord Notification</option>
+              <option value="email">Send Email Alert</option>
+              <option value="webhook">Call Custom Webhook</option>
+            </select>
+          </div>
           <div *ngIf="['slack','teams','discord','webhook'].includes(pbActionType)">
-            <input [(ngModel)]="pbActionConfig['webhook_url']" placeholder="Webhook URL..." class="w-full bg-surface-container border border-outline/20 rounded-lg px-3 py-2 text-white text-xs outline-none focus:border-primary" />
+            <label class="block text-[10px] text-on-surface-variant/70 mb-1">Webhook URL</label>
+            <input [(ngModel)]="pbActionConfig['webhook_url']" placeholder="https://…"
+              class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2 text-white text-xs font-mono outline-none focus:border-primary/50 placeholder:text-on-surface-variant/40 transition-colors"/>
           </div>
           <div *ngIf="pbActionType === 'email'">
-            <input [(ngModel)]="pbActionConfig['to_addr']" placeholder="Recipient Email..." class="w-full bg-surface-container border border-outline/20 rounded-lg px-3 py-2 text-white text-xs outline-none focus:border-primary" />
+            <label class="block text-[10px] text-on-surface-variant/70 mb-1">Recipient Email</label>
+            <input [(ngModel)]="pbActionConfig['to_addr']" placeholder="soc@company.com"
+              class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2 text-white text-xs font-mono outline-none focus:border-primary/50 placeholder:text-on-surface-variant/40 transition-colors"/>
           </div>
-          <div *ngIf="pbActionType === 'create_case'" class="text-xs text-on-surface-variant italic">
-            This will automatically generate a case in the Cases tab.
+          <div *ngIf="pbActionType === 'create_case'"
+            class="text-xs text-on-surface-variant bg-surface-container border border-outline/8 px-3 py-2 rounded-lg">
+            A new case entry will be created automatically in the Cases tab.
           </div>
         </div>
 
-        <div *ngIf="pbError" class="text-red-400 bg-red-500/10 p-2 rounded text-xs font-bold">
+        <!-- Error message -->
+        <div *ngIf="pbError" class="text-xs text-red-400 bg-red-500/8 border border-red-500/15 px-3 py-2.5 rounded-lg">
           {{ pbError }}
         </div>
+      </div>
 
-        <div class="flex gap-3 pt-4">
-          <button (click)="savePlaybook()" [disabled]="savingPb" class="flex-1 bg-primary text-black font-bold py-2.5 rounded-lg text-sm disabled:opacity-50">
-            {{ savingPb ? 'Saving...' : 'Save Playbook' }}
-          </button>
-          <button (click)="showNewPlaybook=false" class="flex-1 bg-surface-container text-white py-2.5 rounded-lg text-sm">
-            Cancel
-          </button>
-        </div>
+      <!-- Footer -->
+      <div class="flex items-center justify-end gap-2 px-6 py-4 border-t border-outline/10">
+        <button (click)="showNewPlaybook=false"
+          class="text-xs font-semibold text-on-surface-variant hover:text-white px-4 py-2 rounded-lg border border-outline/10 hover:border-outline/25 transition-all bg-surface-container">
+          Cancel
+        </button>
+        <button (click)="savePlaybook()" [disabled]="savingPb"
+          class="text-xs font-bold bg-primary text-black px-4 py-2 rounded-lg hover:bg-primary/85 disabled:opacity-50 transition-colors">
+          {{ savingPb ? 'Saving…' : (editingPbId ? 'Save Changes' : 'Create Playbook') }}
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- New Integration Modal -->
-  <div *ngIf="showNewIntegration" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-    <div class="bg-surface-container-highest border border-outline/20 rounded-2xl w-full max-w-md p-6">
-      <h3 class="text-white font-bold text-lg mb-6 flex items-center gap-2">
-        <lucide-icon [name]="LinkIcon" class="w-5 h-5 text-primary"></lucide-icon> Add Integration
-      </h3>
-      <div class="space-y-4">
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       MODAL — Integration (Add / Edit)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="showNewIntegration" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10 flex-shrink-0">
         <div>
-          <label class="text-xs text-on-surface-variant uppercase">Type</label>
-          <div class="grid grid-cols-3 gap-2 mt-2">
-            <button *ngFor="let t of integrationTypes" (click)="intType=t.type; intConfig={}" [class]="'py-2 px-1 rounded-lg text-[10px] font-bold transition-all flex flex-col items-center gap-1 ' +
-              (intType === t.type ? 'bg-primary text-black' : 'bg-surface-container text-on-surface-variant')">
-              <span class="text-base">{{ t.icon }}</span>
-              <span>{{ t.name }}</span>
+          <h2 class="text-sm font-bold text-white">{{ editingIntId ? 'Edit Integration' : 'Add Integration' }}</h2>
+          <p class="text-xs text-on-surface-variant mt-0.5">
+            {{ editingIntId ? 'Update channel configuration' : 'Connect a notification channel to your playbooks' }}
+          </p>
+        </div>
+        <button (click)="showNewIntegration=false"
+          class="text-on-surface-variant hover:text-white p-1.5 rounded hover:bg-surface-container transition-all text-sm leading-none">✕</button>
+      </div>
+
+      <!-- Form -->
+      <div class="p-6 space-y-4 overflow-y-auto flex-1">
+
+        <!-- Channel type selector -->
+        <div>
+          <label class="block text-[10px] uppercase tracking-[0.12em] font-bold text-on-surface-variant mb-2">Channel Type</label>
+          <div class="grid grid-cols-5 gap-1.5">
+            <button *ngFor="let t of integrationTypes"
+              (click)="intType=t.type; intConfig={}"
+              [class]="'flex flex-col items-center gap-1 py-2.5 px-1 rounded-lg border text-[10px] font-bold transition-all ' +
+                (intType === t.type
+                  ? 'bg-primary text-black border-primary'
+                  : 'bg-surface-container text-on-surface-variant border-outline/10 hover:border-outline/25 hover:text-white')">
+              <span class="int-abbr text-[11px] font-bold tracking-widest">{{ t.abbr }}</span>
+              <span class="text-center leading-tight opacity-80">{{ t.name }}</span>
             </button>
           </div>
         </div>
+
+        <!-- Connection name -->
         <div>
-          <label class="text-xs text-on-surface-variant uppercase">Connection Name</label>
-          <input [(ngModel)]="intName" [placeholder]="selectedIntType?.name || ''" class="w-full mt-1 bg-surface-container border border-outline/20 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-primary" />
+          <label class="block text-[10px] uppercase tracking-[0.12em] font-bold text-on-surface-variant mb-1.5">Connection Name</label>
+          <input [(ngModel)]="intName" [placeholder]="'e.g. Production ' + (selectedIntType?.name || 'Channel')"
+            class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-primary/50 placeholder:text-on-surface-variant/40 transition-colors"/>
         </div>
+
+        <!-- Dynamic fields -->
         <div *ngFor="let field of selectedIntType?.fields">
-          <label class="text-xs text-on-surface-variant uppercase">{{ field.label }}</label>
-          <input [(ngModel)]="intConfig[field.key]" [placeholder]="field.placeholder" class="w-full mt-1 bg-surface-container border border-outline/20 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-primary" />
+          <label class="block text-[10px] uppercase tracking-[0.12em] font-bold text-on-surface-variant mb-1.5">{{ field.label }}</label>
+          <input [(ngModel)]="intConfig[field.key]" [placeholder]="field.placeholder" [type]="field.type || 'text'"
+            class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-sm font-mono text-white outline-none focus:border-primary/50 placeholder:text-on-surface-variant/40 transition-colors"/>
         </div>
-        
-        <div *ngIf="testResult" [class]="'text-xs font-bold p-2 rounded ' + (testResult.includes('✅') ? 'bg-primary/10 text-primary' : 'bg-red-500/10 text-red-400')">
+
+        <!-- Test result -->
+        <div *ngIf="testResult"
+          [class]="'text-xs px-3 py-2.5 rounded-lg border ' +
+            (testResult.includes('✅')
+              ? 'bg-primary/8 text-primary border-primary/15'
+              : 'bg-red-500/8 text-red-400 border-red-500/15')">
           {{ testResult }}
         </div>
       </div>
-      
-      <div class="flex gap-2 mt-6 pt-4 border-t border-outline/10">
-        <button (click)="testIntegration()" [disabled]="testingInt" class="flex-1 bg-surface-container text-white font-bold py-2.5 rounded-lg text-xs disabled:opacity-50">
-          {{ testingInt ? 'Testing...' : 'Test Connection' }}
+
+      <!-- Footer -->
+      <div class="flex items-center justify-between gap-2 px-6 py-4 border-t border-outline/10 flex-shrink-0">
+        <button (click)="testIntegration()" [disabled]="testingInt"
+          class="flex items-center gap-1.5 text-xs font-semibold text-on-surface-variant hover:text-white border border-outline/10 hover:border-outline/25 px-3 py-2 rounded-lg bg-surface-container disabled:opacity-50 transition-all">
+          <lucide-icon [name]="RefreshIcon" class="w-3.5 h-3.5" [class.animate-spin]="testingInt"></lucide-icon>
+          {{ testingInt ? 'Testing…' : 'Test Connection' }}
         </button>
-        <button (click)="saveIntegration()" [disabled]="savingInt" class="flex-1 bg-primary text-black font-bold py-2.5 rounded-lg text-xs disabled:opacity-50">
-          {{ savingInt ? 'Saving...' : 'Save Integration' }}
-        </button>
-        <button (click)="showNewIntegration=false" class="px-4 bg-surface-container text-white py-2.5 rounded-lg text-xs">
-          ✕
-        </button>
+        <div class="flex items-center gap-2">
+          <button (click)="showNewIntegration=false"
+            class="text-xs font-semibold text-on-surface-variant hover:text-white px-4 py-2 rounded-lg border border-outline/10 hover:border-outline/25 transition-all bg-surface-container">
+            Cancel
+          </button>
+          <button (click)="saveIntegration()" [disabled]="savingInt"
+            class="text-xs font-bold bg-primary text-black px-4 py-2 rounded-lg hover:bg-primary/85 disabled:opacity-50 transition-colors">
+            {{ savingInt ? 'Saving…' : (editingIntId ? 'Save Changes' : 'Save Integration') }}
+          </button>
+        </div>
       </div>
     </div>
   </div>

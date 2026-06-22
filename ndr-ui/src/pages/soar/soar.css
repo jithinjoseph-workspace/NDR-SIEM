@@ -1,0 +1,74 @@
+/* ── SOAR – Enterprise Security Operations UI ─────────────────────────── */
+
+/* ── Fade-in for tab content ─────────────────────────────────────────────── */
+@keyframes tabFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.soar-tab-content {
+  animation: tabFadeIn 0.18s ease both;
+}
+
+/* ── Modal entrance ──────────────────────────────────────────────────────── */
+@keyframes modalEnter {
+  from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+.soar-modal {
+  animation: modalEnter 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Toggle switch ───────────────────────────────────────────────────────── */
+.soar-switch {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  flex-shrink: 0;
+}
+.soar-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+}
+.soar-switch.on .soar-switch-thumb {
+  transform: translateX(14px);
+}
+
+/* ── Type-abbr badge ─────────────────────────────────────────────────────── */
+.int-abbr {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* ── Table row hover ─────────────────────────────────────────────────────── */
+.soar-table tr.soar-row {
+  transition: background-color 0.12s ease;
+}
+
+/* ── Status dot pulse (active integrations) ──────────────────────────────── */
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.status-dot-live {
+  animation: dotPulse 2s ease-in-out infinite;
+}
+
+/* ── Severity left-bar on case cards ────────────────────────────────────── */
+.case-card-critical { border-left: 3px solid rgb(248 113 113); }
+.case-card-high     { border-left: 3px solid rgb(251 146 60);  }
+.case-card-medium   { border-left: 3px solid rgb(234 179 8);   }
+.case-card-low      { border-left: 3px solid rgb(96 165 250);  }
+.case-card-default  { border-left: 3px solid rgb(71 85 105);   }

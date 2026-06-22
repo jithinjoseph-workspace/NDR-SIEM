@@ -1437,6 +1437,37 @@ pub async fn delete_integration(
     Ok(())
 }
 
+pub async fn update_integration(
+    &self,
+    id: &str,
+    name: &str,
+    int_type: &str,
+    config: &str,
+    tenant_id: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    // Re-INSERT with same id — ReplacingMergeTree will deduplicate on next merge.
+    // We preserve the existing enabled flag by SELECTing it from the current row.
+    let query = format!(
+        "INSERT INTO {}.soar_integrations \
+         (id, name, type, config, enabled, tenant_id) \
+         SELECT '{}', '{}', '{}', '{}', enabled, '{}' \
+         FROM {}.soar_integrations \
+         WHERE id = '{}' \
+         LIMIT 1",
+        db,
+        id,
+        name.replace('\'', "\\'"),
+        int_type.replace('\'', "\\'"),
+        config.replace('\'', "\\'"),
+        tenant_id,
+        db,
+        id
+    );
+    self.client.query(&query).execute().await?;
+    Ok(())
+}
+
 
 //save soar config
 pub async fn save_soar_config_by_tenant(
@@ -1790,6 +1821,22 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             "source":     r.3,
             "event_type": r.4,
             "timestamp":  r.5
+        })).collect())
+    }
+
+    pub async fn get_top_protocols_by_tenant(
+        &self, limit: u64, tenant_id: &str
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db_name = tenant_db(tenant_id);
+        let rows = self.client.query(&format!(
+            "SELECT proto, count() as cnt \
+             FROM {}.ndr_events \
+             WHERE proto != '' \
+             GROUP BY proto ORDER BY cnt DESC LIMIT {}", db_name, limit))
+            .fetch_all::<(String, u64)>()
+            .await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({
+            "proto": r.0, "count": r.1
         })).collect())
     }
 
@@ -2878,7 +2925,7 @@ pub async fn clear_sensor_command(
 
         let update = format!(
             "ALTER TABLE {}.soar_native_playbooks \
-             UPDATE run_count = run_count + 1, last_run = now(), updated_at = now() \
+             UPDATE run_count = run_count + 1, last_run = now() \
              WHERE id = '{}'",
             db, sql_escape(&run.playbook_id)
         );
@@ -2963,12 +3010,30 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
-    pub async fn update_native_playbook(&self, id: &str, enabled: u8, cond_field: &str, cond_op: &str, cond_value: &str, action_type: &str, action_config: &str, tenant_id: &str) -> anyhow::Result<()> {
+    pub async fn update_native_playbook(&self, id: &str, name: &str, description: &str, enabled: u8, cond_field: &str, cond_op: &str, cond_value: &str, action_type: &str, action_config: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
+        // INSERT SELECT preserves run_count/last_run/created_at and sets updated_at = now().
+        // ReplacingMergeTree deduplicates on next merge keeping the latest updated_at row.
+        // This avoids "Cannot UPDATE key column `updated_at`" from ALTER TABLE UPDATE.
         let query = format!(
-            "ALTER TABLE {}.soar_native_playbooks UPDATE enabled = {}, cond_field = '{}', cond_op = '{}', cond_value = '{}', action_type = '{}', action_config = '{}', updated_at = now() WHERE id = '{}' SETTINGS mutations_sync=1",
-            db, enabled, sql_escape(cond_field), sql_escape(cond_op), sql_escape(cond_value),
-            sql_escape(action_type), sql_escape(action_config), sql_escape(id)
+            "INSERT INTO {db}.soar_native_playbooks \
+             (id, name, description, enabled, cond_field, cond_op, cond_value, \
+              action_type, action_config, run_count, last_run, created_at, updated_at, tenant_id) \
+             SELECT id, '{name}', '{desc}', {enabled}, '{cf}', '{co}', '{cv}', '{at}', '{ac}', \
+                    run_count, last_run, created_at, now(), tenant_id \
+             FROM {db}.soar_native_playbooks FINAL \
+             WHERE id = '{id}' AND tenant_id = '{tid}'",
+            db  = db,
+            name = sql_escape(name),
+            desc = sql_escape(description),
+            enabled = enabled,
+            cf  = sql_escape(cond_field),
+            co  = sql_escape(cond_op),
+            cv  = sql_escape(cond_value),
+            at  = sql_escape(action_type),
+            ac  = sql_escape(action_config),
+            id  = sql_escape(id),
+            tid = sql_escape(tenant_id),
         );
         self.client.query(&query).execute().await?;
         Ok(())

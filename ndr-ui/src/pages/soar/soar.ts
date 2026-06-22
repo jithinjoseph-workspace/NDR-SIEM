@@ -50,6 +50,7 @@ export class Soar implements OnInit {
     // --- Playbooks ---
     playbooks: any[] = [];
     showNewPlaybook = false;
+    editingPbId: string | null = null;
     pbName = '';
     pbDesc = '';
     pbCondField = 'score';
@@ -63,6 +64,7 @@ export class Soar implements OnInit {
     // --- Integrations ---
     integrations: any[] = [];
     showNewIntegration = false;
+    editingIntId: string | null = null;
     intType = 'slack';
     intName = '';
     intConfig: any = {};
@@ -77,34 +79,33 @@ export class Soar implements OnInit {
 
     integrationTypes = [
         {
-            type: 'slack', name: 'Slack', icon: '💬',
-            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://hooks.slack.com/...' }]
+            type: 'slack', name: 'Slack', abbr: 'SLK',
+            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://hooks.slack.com/...', type: 'text' }]
         },
         {
-            type: 'teams', name: 'Microsoft Teams', icon: '🟦',
-            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://outlook.office.com/webhook/...' }]
+            type: 'teams', name: 'Microsoft Teams', abbr: 'TMS',
+            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://outlook.office.com/webhook/...', type: 'text' }]
         },
         {
-            type: 'discord', name: 'Discord', icon: '🎮',
-            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://discord.com/api/webhooks/...' }]
+            type: 'discord', name: 'Discord', abbr: 'DSC',
+            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://discord.com/api/webhooks/...', type: 'text' }]
         },
         {
-            type: 'webhook', name: 'Custom Webhook', icon: '🔗',
-            fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://your-endpoint.com/alert' }]
+            type: 'webhook', name: 'Custom Webhook', abbr: 'WHK',
+            fields: [{ key: 'webhook_url', label: 'Endpoint URL', placeholder: 'https://your-endpoint.com/alert', type: 'text' }]
         },
         {
-            type: 'smtp', name: 'SMTP Email', icon: '📧',
+            type: 'smtp', name: 'SMTP Email', abbr: 'EML',
             fields: [
-                { key: 'smtp_host', label: 'SMTP Host', placeholder: 'smtp.gmail.com' },
-                { key: 'smtp_port', label: 'SMTP Port', placeholder: '587' },
-                { key: 'smtp_user', label: 'SMTP User', placeholder: 'user@domain.com' },
-                { key: 'smtp_pass', label: 'SMTP Password', placeholder: 'password' },
-                { key: 'from_addr', label: 'From Address', placeholder: 'alerts@domain.com' },
-                { key: 'to_addr', label: 'Default To Address', placeholder: 'soc@domain.com' }
+                { key: 'smtp_host', label: 'SMTP Host', placeholder: 'smtp.gmail.com', type: 'text' },
+                { key: 'smtp_port', label: 'SMTP Port', placeholder: '587', type: 'text' },
+                { key: 'smtp_user', label: 'Username', placeholder: 'user@domain.com', type: 'text' },
+                { key: 'smtp_pass', label: 'Password', placeholder: '••••••••', type: 'password' },
+                { key: 'from_addr', label: 'From Address', placeholder: 'alerts@domain.com', type: 'text' },
+                { key: 'to_addr', label: 'Default Recipient', placeholder: 'soc@domain.com', type: 'text' }
             ]
         }
     ];
-
     evidenceLoading = false;
     liveEvidence: any = null;
 
@@ -168,7 +169,9 @@ export class Soar implements OnInit {
         this.loadingCase = true;
 
         this.api.getSoarCaseComments(c.id).subscribe((res: any) => {
-            if (res.status === 'success') this.caseComments = res.data;
+            if (res.status === 'success') {
+                this.caseComments = res.data;
+            }
             this.loadingCase = false;
             this.cdr.detectChanges();
         });
@@ -214,13 +217,24 @@ export class Soar implements OnInit {
 
     updateCaseStatus(status: string) {
         if (!this.selectedCase) return;
-        this.api.updateSoarCaseStatus(this.selectedCase.id, status).subscribe((res: any) => {
-            if (res.status === 'success') {
-                this.selectedCase.status = status;
-                this.loadCases();
+        this.api.updateSoarCaseStatus(this.selectedCase.id, status).subscribe({
+            next: (res: any) => {
+                if (res.status === 'success') {
+                    this.selectedCase.status = status;
+                    this.cdr.detectChanges();
+                    this.loadCases();
+                } else {
+                    console.error('Status update failed:', res);
+                    alert('Update failed: ' + res.message);
+                }
+            },
+            error: (err) => {
+                console.error('Status update API error:', err);
+                alert('API error updating status: ' + (err.error?.message || err.message));
             }
         });
     }
+
 
     addComment() {
         if (!this.newComment.trim() || !this.selectedCase) return;
@@ -240,10 +254,53 @@ export class Soar implements OnInit {
         return 'text-blue-400 bg-blue-500/10';
     }
 
+    // --- Condition Helpers ---
+    get condOps(): { value: string; label: string }[] {
+        switch (this.pbCondField) {
+            case 'score':
+                return [
+                    { value: '>',  label: '>'  },
+                    { value: '>=', label: '>=' },
+                    { value: '<',  label: '<'  },
+                    { value: '<=', label: '<=' },
+                    { value: '==', label: '==' },
+                ];
+            case 'severity':
+            case 'src_country':
+            case 'sigma_tag':
+                return [
+                    { value: '==',       label: '=='       },
+                    { value: 'contains', label: 'contains' },
+                ];
+            case 'threat_intel':
+            default:
+                return [{ value: '==', label: '==' }];
+        }
+    }
+
+    get condValueType(): 'text' | 'severity' | 'bool' {
+        if (this.pbCondField === 'severity')     return 'severity';
+        if (this.pbCondField === 'threat_intel') return 'bool';
+        return 'text';
+    }
+
+    onCondFieldChange() {
+        this.pbCondOp = this.condOps[0].value;
+        if (this.pbCondField === 'threat_intel') {
+            this.pbCondValue = 'true';
+        } else if (this.pbCondField === 'severity') {
+            this.pbCondValue = 'HIGH';
+        } else {
+            this.pbCondValue = '75';
+        }
+    }
+
     // --- Playbooks Logic ---
     togglePlaybook(pb: any) {
         pb.enabled = pb.enabled === 1 ? 0 : 1;
         this.api.updateNativePlaybook(pb.id, {
+            name: pb.name,
+            description: pb.description,
             enabled: pb.enabled === 1,
             cond_field: pb.cond_field,
             cond_op: pb.cond_op,
@@ -275,27 +332,35 @@ export class Soar implements OnInit {
             cond_op: this.pbCondOp,
             cond_value: this.pbCondValue,
             action_type: this.pbActionType,
-            action_config: JSON.stringify(this.pbActionConfig) // Must send string
+            action_config: JSON.stringify(this.pbActionConfig)
         };
 
-        this.api.createNativePlaybook(data).subscribe({
+        const request$ = this.editingPbId
+            ? this.api.updateNativePlaybook(this.editingPbId, data)
+            : this.api.createNativePlaybook(data);
+
+        request$.subscribe({
             next: (res: any) => {
                 this.savingPb = false;
                 if (res.status === 'success') {
                     this.showNewPlaybook = false;
+                    this.editingPbId = null;
                     this.loadPlaybooks();
                 } else {
                     this.pbError = res.message;
+                    this.cdr.detectChanges();
                 }
             },
-            error: (err) => {
+            error: () => {
                 this.savingPb = false;
-                this.pbError = 'Failed to create playbook';
+                this.pbError = this.editingPbId ? 'Failed to update playbook' : 'Failed to create playbook';
+                this.cdr.detectChanges();
             }
         });
     }
 
     initPlaybookModal() {
+        this.editingPbId = null;
         this.showNewPlaybook = true;
         this.pbName = '';
         this.pbDesc = '';
@@ -307,9 +372,32 @@ export class Soar implements OnInit {
         this.pbError = '';
     }
 
+    openEditPlaybook(pb: any) {
+        this.editingPbId = pb.id;
+        this.showNewPlaybook = true;
+        this.pbName = pb.name;
+        this.pbDesc = pb.description;
+        this.pbCondField = pb.cond_field;
+        this.pbCondOp = pb.cond_op;
+        this.pbCondValue = pb.cond_value;
+        this.pbActionType = pb.action_type;
+        try {
+            this.pbActionConfig = typeof pb.action_config === 'string'
+                ? JSON.parse(pb.action_config)
+                : (pb.action_config || {});
+        } catch {
+            this.pbActionConfig = {};
+        }
+        this.pbError = '';
+    }
+
     // --- Integrations Logic (Reused) ---
+    getIntAbbr(type: string): string {
+        return (this.integrationTypes as any[]).find((t: any) => t.type === type)?.abbr || type.slice(0,3).toUpperCase();
+    }
+
     getIntIcon(type: string): string {
-        return this.integrationTypes.find(t => t.type === type)?.icon || '🔔';
+        return this.getIntAbbr(type);
     }
 
     get selectedIntType() {
@@ -333,22 +421,39 @@ export class Soar implements OnInit {
         });
     }
 
+    openEditIntegration(int: any) {
+        this.editingIntId = int.id;
+        this.intType = int.type;
+        this.intName = int.name;
+        this.intConfig = typeof int.config === 'object' ? { ...int.config } : {};
+        this.testResult = '';
+        this.showNewIntegration = true;
+    }
+
     saveIntegration() {
         this.savingInt = true;
-        this.api.saveIntegration({
+        const payload = {
             name: this.intName || this.selectedIntType?.name,
             type: this.intType,
             config: this.intConfig
-        }).subscribe({
+        };
+
+        const request$ = this.editingIntId
+            ? this.api.updateIntegration(this.editingIntId, payload)
+            : this.api.saveIntegration(payload);
+
+        request$.subscribe({
             next: () => {
                 this.savingInt = false;
                 this.showNewIntegration = false;
+                this.editingIntId = null;
                 this.intConfig = {};
                 this.intName = '';
                 this.loadIntegrations();
             },
             error: () => {
                 this.savingInt = false;
+                this.cdr.detectChanges();
             }
         });
     }
