@@ -35,9 +35,7 @@ fi
 
 sudo docker compose --profile onpremise down
 
-# Stop ClickHouse
-echo "  → Stopping ClickHouse..."
-sudo service clickhouse-server stop 2>/dev/null || true
+# ClickHouse is now containerized — stopped via docker compose down above
 
 # Kill any leftover processes
 sudo pkill -f suricata 2>/dev/null || true

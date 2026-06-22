@@ -27,10 +27,7 @@ mkdir -p "$RUNTIME_DIR"
 echo "$IFACE" > "$IFACE_FILE"
 echo "  → Interface: $IFACE"
 
-# Start ClickHouse
-echo "  → Starting ClickHouse..."
-sudo service clickhouse-server start 2>/dev/null || true
-sleep 3
+# ClickHouse is now containerized — started via docker compose up below
 
 # Start NDR Agent
 echo "  → Starting NDR Agent..."

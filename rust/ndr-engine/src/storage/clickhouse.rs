@@ -3142,8 +3142,8 @@ pub async fn get_evidence_bundle(
     let rows = self.client.query(&format!(
         "SELECT id, community_id, file_path, sha256,
          size_bytes, auto_captured,
-         toString(captured_at) as captured_at,
-         toString(expires_at) as expires_at,
+         formatDateTime(captured_at, '%Y-%m-%dT%H:%i:%SZ') as captured_at,
+         formatDateTime(expires_at, '%Y-%m-%dT%H:%i:%SZ') as expires_at,
          status, legal_hold, hold_reason,
          src_ip, dst_ip, severity
          FROM {}.evidence_bundles FINAL
@@ -3184,8 +3184,9 @@ pub async fn list_evidence_bundles(
     let db = tenant_db(tenant_id);
     let rows = self.client.query(&format!(
         "SELECT id, community_id, sha256, size_bytes,
-         auto_captured, toString(captured_at) as captured_at,
-         toString(expires_at) as expires_at,
+         auto_captured,
+         formatDateTime(captured_at, '%Y-%m-%dT%H:%i:%SZ') as captured_at,
+         formatDateTime(expires_at, '%Y-%m-%dT%H:%i:%SZ') as expires_at,
          status, legal_hold, src_ip, dst_ip, severity
          FROM {}.evidence_bundles FINAL
          ORDER BY captured_at DESC LIMIT {}",
@@ -3258,6 +3259,28 @@ pub async fn get_annotations(
     })).collect())
 }
 
+pub async fn get_all_ai_annotations(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT ea.id, ea.bundle_id, ea.community_id, ea.author, ea.note,
+         toString(ea.created_at) as created_at,
+         eb.severity, eb.src_ip, eb.dst_ip
+         FROM {db}.evidence_annotations ea
+         LEFT JOIN {db}.evidence_bundles eb ON ea.bundle_id = eb.id
+         WHERE ea.tag = 'ai_analysis'
+         ORDER BY ea.created_at DESC LIMIT 200",
+        db = db
+    )).fetch_all::<(String,String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "id": r.0, "bundle_id": r.1, "community_id": r.2,
+        "author": r.3, "analysis": r.4, "created_at": r.5,
+        "severity": r.6, "src_ip": r.7, "dst_ip": r.8
+    })).collect())
+}
+
 // ---- SHARED IOCs ----
 
 pub async fn upsert_shared_ioc(
@@ -3326,7 +3349,7 @@ pub async fn get_hit_by_community_id(
     let db = tenant_db(tenant_id);
     let hits = self.client.query(&format!(
         "SELECT community_id, src_ip, dst_ip,
-         toString(timestamp) as timestamp, severity
+         formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp, severity
          FROM {}.ndr_hits
          WHERE community_id = '{}'
          ORDER BY timestamp DESC LIMIT 1",
@@ -3369,7 +3392,7 @@ pub async fn get_related_hits_by_ip(
     let db = tenant_db(tenant_id);
     let rows = self.client.query(&format!(
         "SELECT community_id, src_ip, dst_ip,
-         toString(timestamp) as timestamp,
+         formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp,
          severity, rule_name
          FROM {}.ndr_hits
          WHERE src_ip = '{}'
@@ -3430,7 +3453,7 @@ pub async fn get_recent_hits_for_aria(
     let rows = self.client.query(&format!(
         "SELECT community_id, src_ip, dst_ip,
          severity, score, tags,
-         toString(timestamp) as timestamp
+         formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
          FROM {}.ndr_hits
          ORDER BY timestamp DESC LIMIT {}",
         db, limit
@@ -3526,7 +3549,7 @@ pub async fn get_ioc_hits(
         feed_source:  String,
     }
     let rows = self.client.query(&format!(
-        "SELECT toString(timestamp) as timestamp, community_id, \
+        "SELECT formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp, community_id, \
          src_ip, dst_ip, matched_ip, ioc_type, feed_source \
          FROM {}.ioc_hits \
          WHERE community_id = '{}' \

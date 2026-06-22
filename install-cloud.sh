@@ -135,81 +135,17 @@ info "    /etc/ssl/ndr/cert.pem   (TLS certificate)"
 info "    /etc/ssl/ndr/key.pem    (TLS private key)"
 info "  Use certbot: certbot certonly --standalone -d your.domain.com"
 
-# ── Step 3: Install ClickHouse ────────────────
-step "Installing ClickHouse"
+# ── Step 3: Configure ClickHouse ─────────────
+step "Configuring ClickHouse"
 
-if ! command -v clickhouse-server &>/dev/null; then
-    log "Installing ClickHouse..."
-    curl -fsSL \
-        'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' \
-        | sudo gpg --dearmor \
-        -o /usr/share/keyrings/clickhouse-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg] \
-        https://packages.clickhouse.com/deb stable main" \
-        | sudo tee /etc/apt/sources.list.d/clickhouse.list
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        clickhouse-server clickhouse-client
-    log "✅ ClickHouse installed"
-else
-    log "✅ ClickHouse already installed"
-fi
-
-sudo mkdir -p /etc/clickhouse-server/config.d
-echo '<clickhouse><listen_host>0.0.0.0</listen_host></clickhouse>' | \
-    sudo tee /etc/clickhouse-server/config.d/network.xml > /dev/null
-
-sudo tee /etc/clickhouse-server/config.d/fix.xml > /dev/null << 'EOF'
-<clickhouse>
-    <merge_tree>
-        <max_suspicious_broken_parts>300</max_suspicious_broken_parts>
-    </merge_tree>
-</clickhouse>
-EOF
-
-sudo service clickhouse-server restart
-sleep 5
-
-log "Waiting for ClickHouse to be ready..."
-for i in {1..20}; do
-    if clickhouse-client --query "SELECT 1" > /dev/null 2>&1; then
-        log "✅ ClickHouse is ready"
-        break
-    fi
-    echo -n "."
-    sleep 2
-done
-echo ""
-
-clickhouse-client --query \
-    "CREATE DATABASE IF NOT EXISTS ndr" 2>/dev/null || true
-clickhouse-client --query \
-    "CREATE USER IF NOT EXISTS ndr IDENTIFIED BY 'ndr123'" \
-    2>/dev/null || true
-clickhouse-client --query \
-    "GRANT ALL ON ndr.* TO ndr" 2>/dev/null || true
-clickhouse-client --query \
-    "GRANT CREATE DATABASE ON *.* TO ndr" 2>/dev/null || true
-clickhouse-client --query \
-    "GRANT ALL ON ndr_*.* TO ndr WITH GRANT OPTION" 2>/dev/null || true
-
-log "Creating ClickHouse tables..."
-clickhouse-client --multiquery \
-    < "$INSTALL_DIR/config/clickhouse/init.sql" \
-    && log "✅ ClickHouse tables created" \
-    || warn "⚠️  ClickHouse table creation failed — check $INSTALL_DIR/config/clickhouse/init.sql"
-
-TABLES=$(clickhouse-client --query "SHOW TABLES FROM ndr" 2>/dev/null || true)
-if echo "$TABLES" | grep -q "ndr_events"; then
-    log "✅ Tables verified: $TABLES"
-else
-    warn "Tables not found, retrying..."
-    clickhouse-client --multiquery \
-        < "$INSTALL_DIR/config/clickhouse/init.sql" \
-        2>&1 || true
-fi
-
-sudo systemctl enable clickhouse-server 2>/dev/null || true
+# ClickHouse runs as a Docker container — started in Step 6 via docker compose up.
+# User (ndr/ndr123) is defined in config/clickhouse/ndr-user.xml (mounted at boot).
+# Schema (ndr database + all tables) is created by config/clickhouse/init.sql
+# on the first container start via /docker-entrypoint-initdb.d/.
+log "ClickHouse will start as a Docker container with the stack"
+log "  User:   ndr / ndr123  (via ndr-user.xml)"
+log "  Port:   8123 (HTTP), 9000 (native)"
+log "  Schema: auto-created on first start via init.sql"
 log "✅ ClickHouse configured"
 
 # ── Step 4: Generate .env ─────────────────────
@@ -304,6 +240,18 @@ sudo docker compose down 2>/dev/null || true
 sudo docker compose up -d --build
 log "✅ Docker stack started (no --profile onpremise)"
 
+# ── Wait for ClickHouse container to be healthy ───────────────────
+log "Waiting for ClickHouse container..."
+for i in {1..30}; do
+    if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
+        log "✅ ClickHouse ready"
+        break
+    fi
+    echo -n "."
+    sleep 3
+done
+echo ""
+
 # ── Step 7: Create Kafka topic ────────────────
 step "Creating Kafka topics (3 partitions, replication-factor 3)"
 
@@ -340,13 +288,7 @@ sudo docker exec kafka1 \
     2>/dev/null || true
 log "✅ Kafka retention set to 24 hours"
 
-clickhouse-client --user=default \
-    --query "GRANT CREATE DATABASE ON *.* TO ndr" \
-    2>/dev/null || true
-clickhouse-client --user=default \
-    --query "GRANT ALL ON ndr_*.* TO ndr WITH GRANT OPTION" \
-    2>/dev/null || true
-log "✅ ClickHouse permissions refreshed"
+log "✅ Kafka topic and retention set"
 
 # ── Step 8: UFW firewall rules ────────────────
 step "Configuring UFW firewall"
@@ -383,7 +325,7 @@ echo ""
 log "Checking services..."
 
 # ClickHouse
-if clickhouse-client --query "SELECT 1" > /dev/null 2>&1; then
+if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
     log "  ✅ ClickHouse    — OK"
 else
     warn "  ⚠️  ClickHouse    — NOT READY"

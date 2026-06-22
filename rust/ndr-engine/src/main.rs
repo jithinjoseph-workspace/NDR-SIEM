@@ -412,6 +412,7 @@ async fn main() {
 .route("/api/evidence/iocs/check", get(api::check_shared_ioc))
  .route("/api/aria/chat",   post(api::aria_chat))
 .route("/api/aria/status", get(api::aria_status))
+.route("/api/ai-activity", get(api::get_ai_activity))
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))

@@ -1325,6 +1325,15 @@ def get_arkime_files(file_ids):
             path = h.get('_source',{}).get(
                 'name','')
             if path and os.path.exists(path):
+                # Skip files Arkime is still writing
+                age = time.time() - \
+                    os.path.getmtime(path)
+                if age < 60:
+                    print(f"[UPLOADER] skipping "
+                          f"active file "
+                          f"({age:.0f}s old): "
+                          f"{os.path.basename(path)}")
+                    continue
                 files.append(path)
                 print(f"[UPLOADER] "
                       f"pcap file: {path}")

@@ -454,4 +454,8 @@ export class Api {
   getEventsByCid(cid: string): Observable<any> {
     return this.http.get(`${this.baseUrl}/events/by-cid?cid=${encodeURIComponent(cid)}`);
   }
+
+  getAiActivity(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/ai-activity`);
+  }
 }

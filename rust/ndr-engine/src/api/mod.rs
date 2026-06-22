@@ -552,9 +552,9 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         reasons:  raw_risk.reasons,
     };
 
-    // Auto-capture evidence for HIGH and CRITICAL hits
+    // Auto-capture evidence for HIGH, CRITICAL, and MEDIUM hits
     let severity_str = risk.severity.as_str().to_string();
-    if matches!(severity_str.as_str(), "HIGH" | "CRITICAL") {
+    if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM") {
         let cid = hit.community_id.clone();
         let tenant = tenant_id.clone();
         let ch = state.ch_storage.clone();
@@ -612,13 +612,53 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                             &tenant, &cid, &bundle_id,
                             "auto_captured", "auto",
                             &severity_str, "", "",
-                            "Automatically captured on HIGH/CRITICAL alert",
+                            "Automatically captured on HIGH/CRITICAL/MEDIUM alert",
                             "",
                         ).await;
                         tracing::info!(
                             "Auto-captured evidence bundle {} for cid {}",
                             bundle_id, cid
                         );
+
+                        // AI threat analysis — runs async, stored as annotation
+                        let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+                        if !openai_key.is_empty() {
+                            let system_prompt = "You are a senior NDR (Network Detection & Response) \
+                                security analyst. Analyse the alert and respond in plain text with \
+                                three short sections:\n\
+                                THREAT: what this alert indicates (1-2 sentences)\n\
+                                RISK: why it matters and potential impact (1-2 sentences)\n\
+                                ACTION: recommended immediate response steps (2-3 bullet points)\n\
+                                Be concise and actionable. No markdown headers.";
+                            let question = format!(
+                                "Alert details:\n\
+                                 Severity     : {severity_str}\n\
+                                 Community ID : {cid}\n\
+                                 Source IP    : {src_ip_str}\n\
+                                 Destination  : {dst_ip_str}\n\
+                                 Rule/Reason  : {rule_name_str}\n\
+                                 Captured at  : {now_str}\n\
+                                 Tenant       : {tenant}\n\
+                                 Provide your threat analysis.",
+                            );
+                            match crate::ai::call_openai(
+                                &openai_key, system_prompt, &[], &question
+                            ).await {
+                                Ok((analysis, _)) => {
+                                    let safe_analysis = analysis.replace('\'', "''");
+                                    let _ = ch.add_evidence_annotation(
+                                        &tenant, &bundle_id, &cid,
+                                        "ARIA-AI", &safe_analysis, "ai_analysis",
+                                    ).await;
+                                    tracing::info!(
+                                        "AI analysis saved for bundle {}", bundle_id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!("AI analysis failed for {}: {}", bundle_id, e);
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -690,9 +730,11 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         }
     });
 
-    // Queue PCAP upload request for external sensors on MEDIUM+ alerts
+    // Queue PCAP upload request for external sensors — HIGH/CRITICAL only.
+    // MEDIUM generates too many short-lived multicast sessions (SSDP etc.)
+    // and evidence bundles for MEDIUM are already auto-captured above.
     if tenant_id != "default" && !hit.community_id.is_empty()
-        && risk.severity.as_str() != "LOW"
+        && matches!(risk.severity.as_str(), "HIGH" | "CRITICAL")
     {
         let ch2 = state.ch_storage.clone();
         let tid2 = tenant_id.clone();
@@ -6384,49 +6426,23 @@ pub async fn verify_evidence_bundle(
         _ => return Json(json!({"error": "bundle not found"})),
     };
 
-    let stored_sha256  = bundle["sha256"].as_str().unwrap_or("").to_string();
-    let community_id   = bundle["community_id"].as_str().unwrap_or("").to_string();
+    let stored_sha256 = bundle["sha256"].as_str().unwrap_or("").to_string();
+    let file_path     = bundle["file_path"].as_str().unwrap_or("").to_string();
 
-    // Rebuild the bundle in memory using the same pipeline as the download handler
-    let alert_json = state.ch_storage
-        .get_hit_by_community_id(&claims.tenant_id, &community_id)
-        .await
-        .unwrap_or_default()
-        .unwrap_or(serde_json::json!({"community_id": &community_id}));
-
-    let opensearch_url = if claims.tenant_id == "default" {
-        std::env::var("OPENSEARCH_URL")
-            .unwrap_or_else(|_| "http://localhost:9200".to_string())
+    // Integrity check: hash the stored ZIP file on disk and compare.
+    // Rebuilding from live ClickHouse data was wrong — Zeek logs and events
+    // accumulate after capture, so the rebuilt ZIP always differs → false TAMPERED.
+    let (matches, computed_sha256) = if file_path.is_empty() {
+        (false, "no_file_path_stored".to_string())
     } else {
-        String::new()
-    };
-    let arkime_url  = std::env::var("ARKIME_URL").unwrap_or_default();
-    let arkime_pass = std::env::var("ARKIME_PASS").unwrap_or_else(|_| "admin".to_string());
-
-    let pcap_file_path = if claims.tenant_id != "default" {
-        state.ch_storage
-            .get_pcap_file_path_by_community_id(&claims.tenant_id, &community_id)
-            .await
-            .unwrap_or_default()
-    } else {
-        None
-    };
-
-    // Pass the original bundle_id and captured_at so the rebuilt manifest is
-    // bit-for-bit identical → SHA256 matches the stored hash.
-    let original_bundle_id = bundle["id"].as_str().unwrap_or("").to_string();
-    let original_created_at = bundle["captured_at"].as_str().unwrap_or("").to_string();
-
-    let (matches, computed_sha256) = match evidence::build_evidence_bundle_for_verify(
-        &opensearch_url, &arkime_url, &arkime_pass,
-        &community_id, alert_json,
-        &claims.tenant_id, pcap_file_path,
-        &original_bundle_id, &original_created_at,
-    ).await {
-        Ok((_zip_bytes, computed, _manifest)) => {
-            (computed == stored_sha256, computed)
+        match tokio::fs::read(&file_path).await {
+            Ok(bytes) => {
+                use sha2::Digest;
+                let hash = format!("{:x}", sha2::Sha256::digest(&bytes));
+                (hash == stored_sha256, hash)
+            }
+            Err(e) => (false, format!("file_read_error: {}", e))
         }
-        Err(e) => (false, format!("rebuild_error: {}", e))
     };
 
     let status = if matches { "VERIFIED" } else { "TAMPERED_OR_CORRUPTED" };
@@ -6863,5 +6879,32 @@ pub async fn aria_status(
         } else {
             "idle"
         }
+    }))
+}
+
+/// GET /api/ai-activity
+/// Returns AI suppression decisions and AI evidence analysis annotations.
+pub async fn get_ai_activity(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+
+    let suppressions = state.ch_storage
+        .list_ai_suppressions(&claims.tenant_id)
+        .await
+        .unwrap_or_default();
+
+    let analyses = state.ch_storage
+        .get_all_ai_annotations(&claims.tenant_id)
+        .await
+        .unwrap_or_default();
+
+    Json(json!({
+        "suppressions": suppressions,
+        "analyses": analyses
     }))
 }

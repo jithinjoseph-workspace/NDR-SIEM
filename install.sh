@@ -350,95 +350,26 @@ else
     log "✅ Zeek already installed"
 fi
 
-step "Installing ClickHouse"
+step "Configuring ClickHouse"
 
-# ── Install ClickHouse (LOCAL MODE ONLY) ──────
+# ── ClickHouse runs as a Docker container ──────
+# User (ndr/ndr123) is configured via config/clickhouse/ndr-user.xml
+# Schema (ndr database + all tables) is created by config/clickhouse/init.sql
+# on the first container start via /docker-entrypoint-initdb.d/
 if [ "$DEPLOY_MODE" = "local" ]; then
-    log "Installing ClickHouse locally..."
-    if ! command -v clickhouse-server &>/dev/null; then
-        sudo apt-get install -y \
-            apt-transport-https ca-certificates curl gnupg
-        curl -fsSL \
-            'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' \
-            | sudo gpg --dearmor \
-            -o /usr/share/keyrings/clickhouse-keyring.gpg
-        echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg] \
-            https://packages.clickhouse.com/deb stable main" \
-            | sudo tee /etc/apt/sources.list.d/clickhouse.list
-        sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            clickhouse-server clickhouse-client
-        log "✅ ClickHouse installed"
-    else
-        log "✅ ClickHouse already installed"
-    fi
-
-    log "Configuring ClickHouse network..."
-    sudo mkdir -p /etc/clickhouse-server/config.d
-    echo '<clickhouse><listen_host>0.0.0.0</listen_host></clickhouse>' | \
-        sudo tee /etc/clickhouse-server/config.d/network.xml > /dev/null
-
-    sudo service clickhouse-server restart
-    sleep 5
-    log "✅ ClickHouse listening on all interfaces"
-
-    log "Configuring ClickHouse..."
-    sudo service clickhouse-server start 2>/dev/null || true
-    sleep 5
-
-    for i in {1..20}; do
-        if clickhouse-client --query "SELECT 1" > /dev/null 2>&1; then
-            log "✅ ClickHouse is ready"
-            break
-        fi
-        echo -n "."
-        sleep 2
-    done
-    echo ""
-
-    clickhouse-client --query \
-        "CREATE DATABASE IF NOT EXISTS ndr" 2>/dev/null || true
-    clickhouse-client --query \
-        "CREATE USER IF NOT EXISTS ndr IDENTIFIED BY 'ndr123'" \
-        2>/dev/null || true
-    clickhouse-client --query \
-        "GRANT ALL ON ndr.* TO ndr" 2>/dev/null || true
-    # Grant ClickHouse permissions for tenant DB creation
-    clickhouse-client --query \
-        "GRANT CREATE DATABASE ON *.* TO ndr" 2>/dev/null || true
-    clickhouse-client --query \
-        "GRANT ALL ON ndr_*.* TO ndr WITH GRANT OPTION" 2>/dev/null || true
-
-    log "Creating ClickHouse tables..."
-    clickhouse-client --multiquery \
-        < "$INSTALL_DIR/config/clickhouse/init.sql" \
-        && log "✅ ClickHouse tables created" \
-        || warn "⚠️ ClickHouse table creation failed"
-
-    TABLES=$(clickhouse-client \
-        --query "SHOW TABLES FROM ndr" 2>/dev/null)
-    if echo "$TABLES" | grep -q "ndr_events"; then
-        log "✅ Tables verified: $TABLES"
-    else
-        warn "Tables not found, retrying..."
-        clickhouse-client --multiquery \
-            < "$INSTALL_DIR/config/clickhouse/init.sql" \
-            2>&1 || true
-    fi
-
-    sudo systemctl enable clickhouse-server 2>/dev/null || true
-    log "✅ ClickHouse configured"
-
+    log "ClickHouse will start as a Docker container with the stack"
+    log "  User:   ndr / ndr123"
+    log "  Port:   8123 (HTTP), 9000 (native)"
     CLICKHOUSE_URL="http://localhost:8123"
     CLOUD_CH_USER="ndr"
     CLOUD_CH_PASS="ndr123"
     CLOUD_KAFKA="kafka1:9092,kafka2:9092,kafka3:9092"
-
 else
     log "☁️  Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
     CLICKHOUSE_URL="$CLOUD_CLICKHOUSE"
-    info "Skipping local ClickHouse installation"
+    info "Skipping local ClickHouse setup"
 fi
+log "✅ ClickHouse configured"
 
 step "Configuring network and services"
 
@@ -863,8 +794,19 @@ fi
 
 log "✅ Docker stack started"
 
-
-log "✅ Docker stack started"
+# ── Wait for ClickHouse container to be healthy ───────────────────────
+if [ "$DEPLOY_MODE" = "local" ]; then
+    log "Waiting for ClickHouse container..."
+    for i in {1..30}; do
+        if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
+            log "✅ ClickHouse ready"
+            break
+        fi
+        echo -n "."
+        sleep 3
+    done
+    echo ""
+fi
 
 # ── Set Kafka retention ───────────────────────
 log "Setting Kafka retention policy..."
@@ -882,29 +824,11 @@ log "✅ Kafka retention set to 24 hours"
 log "Creating Kafka topic with 3 partitions..."
 sudo docker exec kafka1     /opt/kafka/bin/kafka-topics.sh     --bootstrap-server localhost:9092     --create --if-not-exists     --topic ndr-events     --partitions 3     --replication-factor 3     2>/dev/null || true
 
-# Grant ClickHouse permissions for tenant DB creation
-log "Granting ClickHouse permissions..."
-clickhouse-client --user=default     --query "GRANT CREATE DATABASE ON *.* TO ndr"     2>/dev/null || true
-clickhouse-client --user=default     --query "GRANT ALL ON ndr_*.* TO ndr WITH GRANT OPTION"     2>/dev/null || true
-
-log "✅ Kafka topic and ClickHouse permissions ready"
+log "✅ Kafka topic ready"
 
 # ── JWT Secret Status ─────────────────────────
 log "✅ JWT secret already verified and stored in .env"
 
-# ── Fix broken ClickHouse parts ───────────────
-log "Configuring ClickHouse merge tree settings..."
-sudo tee /etc/clickhouse-server/config.d/fix.xml \
-    > /dev/null << 'EOF'
-<clickhouse>
-    <merge_tree>
-        <max_suspicious_broken_parts>300</max_suspicious_broken_parts>
-    </merge_tree>
-</clickhouse>
-EOF
-sudo service clickhouse-server restart
-sleep 5
-log "✅ ClickHouse configured"
 
 # ── Setup OpenSearch (for Arkime PCAP) ───────────────────────────────────
 step "Setting up OpenSearch"

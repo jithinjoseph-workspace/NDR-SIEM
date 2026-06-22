@@ -110,5 +110,12 @@ export const routes: Routes = [
     loadComponent: () => import('../pages/evidence/evidence')
       .then(m => m.EvidenceComponent)
   },
+  {
+    path: 'ai-activity',
+    canActivate: [authGuard],
+    data: { permission: 'alerts' },
+    loadComponent: () => import('../pages/ai-activity/ai-activity')
+      .then(m => m.AiActivity)
+  },
   { path: '**', redirectTo: 'login' }
 ];

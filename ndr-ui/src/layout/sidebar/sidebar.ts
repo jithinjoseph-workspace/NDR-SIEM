@@ -16,6 +16,7 @@ import {
   Zap,
   Users,
   FolderSearch,
+  Bot,
   LucideAngularModule
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
@@ -66,6 +67,7 @@ export class Sidebar implements OnInit, OnDestroy {
       }
 
       this.navItems.push({ label: 'Evidence', route: '/evidence', icon: FolderSearch });
+      this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot });
     } else {
       this.navItems = [
         { label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, permission: 'dashboard' },
@@ -88,6 +90,7 @@ export class Sidebar implements OnInit, OnDestroy {
 
       if (this.auth.hasPermission('alerts')) {
         this.navItems.push({ label: 'Evidence', route: '/evidence', icon: FolderSearch, permission: 'alerts' });
+        this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot, permission: 'alerts' });
       }
     }
 

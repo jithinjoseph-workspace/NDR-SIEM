@@ -1,0 +1,115 @@
+<div class="ai-activity-page">
+
+  <!-- Header -->
+  <div class="page-header">
+    <lucide-icon [name]="BotIcon" class="header-icon"></lucide-icon>
+    <div>
+      <h2>AI Agent Activity</h2>
+      <p class="subtitle">ARIA threat analyses and suppression decisions</p>
+    </div>
+    <div class="live-indicator">
+      <span class="live-dot"></span>
+      Live · updates every 15s
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div *ngIf="error()" class="error-banner">{{ error() }}</div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn" [class.active]="activeTab === 'analyses'" (click)="activeTab = 'analyses'">
+      <lucide-icon [name]="FileIcon" class="w-4 h-4"></lucide-icon>
+      Threat Analyses
+      <span class="badge">{{ analyses().length }}</span>
+    </button>
+    <button class="tab-btn" [class.active]="activeTab === 'suppressions'" (click)="activeTab = 'suppressions'">
+      <lucide-icon [name]="ShieldOffIcon" class="w-4 h-4"></lucide-icon>
+      Suppression Decisions
+      <span class="badge">{{ suppressions().length }}</span>
+    </button>
+  </div>
+
+  <!-- Loading -->
+  <div *ngIf="loading()" class="loading-state">Loading AI activity...</div>
+
+  <!-- ── Threat Analyses Tab ──────────────────────────────────────── -->
+  <div *ngIf="!loading() && activeTab === 'analyses'">
+    <div *ngIf="analyses().length === 0" class="empty-state">
+      No AI threat analyses yet. Analyses are generated automatically when HIGH, CRITICAL, or MEDIUM evidence bundles are captured.
+    </div>
+
+    <div class="analysis-list" *ngIf="analyses().length > 0">
+      <div class="analysis-card" *ngFor="let a of analyses()">
+        <div class="analysis-header" (click)="toggleAnalysis(a.id)">
+          <div class="analysis-meta">
+            <span class="sev-badge" [class]="sevClass(a.severity)">{{ a.severity || 'UNKNOWN' }}</span>
+            <span class="flow">{{ a.src_ip }} → {{ a.dst_ip }}</span>
+            <span class="cid-short" [title]="a.community_id">{{ (a.community_id || '').slice(0, 24) }}…</span>
+          </div>
+          <div class="analysis-right">
+            <span class="time">{{ formatTime(a.created_at) }}</span>
+            <lucide-icon [name]="isExpanded(a.id) ? ChevronUpIcon : ChevronDownIcon" class="w-4 h-4"></lucide-icon>
+          </div>
+        </div>
+
+        <div class="analysis-body" *ngIf="isExpanded(a.id)">
+          <div class="analysis-label">ARIA Analysis</div>
+          <pre class="analysis-text">{{ a.analysis }}</pre>
+          <div class="analysis-footer">
+            <span class="bundle-link">Bundle: {{ a.bundle_id }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Suppression Decisions Tab ──────────────────────────────── -->
+  <div *ngIf="!loading() && activeTab === 'suppressions'">
+    <div *ngIf="suppressions().length === 0" class="empty-state">
+      No suppression decisions yet. ARIA automatically suppresses high-confidence false positives.
+    </div>
+
+    <div class="suppression-table-wrap" *ngIf="suppressions().length > 0">
+      <table class="suppression-table">
+        <thead>
+          <tr>
+            <th>Signature</th>
+            <th>Suppress Type</th>
+            <th>Target IP</th>
+            <th>Flow</th>
+            <th>Confidence</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let s of suppressions()">
+            <td>
+              <span class="sig-name" [title]="s.signature_name">{{ s.signature_name || '—' }}</span>
+              <span class="sig-id">SID {{ s.signature_id }}</span>
+            </td>
+            <td><span class="suppress-type">{{ suppressTypeLabel(s.suppress_type) }}</span></td>
+            <td class="mono">{{ s.suppress_ip || '—' }}</td>
+            <td class="mono small">{{ s.src_ip }} → {{ s.dst_ip }}</td>
+            <td>
+              <span class="confidence-bar">
+                <span class="confidence-fill" [style.width]="s.ai_confidence + '%'"></span>
+              </span>
+              {{ s.ai_confidence }}%
+            </td>
+            <td>
+              <span class="status-badge" [class.active]="s.active" [class.inactive]="!s.active">
+                {{ s.active ? 'Active' : 'Inactive' }}
+              </span>
+            </td>
+            <td class="reason-cell" [title]="s.ai_reason">{{ s.ai_reason }}</td>
+            <td class="small">{{ formatTime(s.created_at) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
