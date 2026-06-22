@@ -139,11 +139,11 @@ info "  Use certbot: certbot certonly --standalone -d your.domain.com"
 step "Configuring ClickHouse"
 
 # ClickHouse runs as a Docker container — started in Step 6 via docker compose up.
-# User (ndr/ndr123) is defined in config/clickhouse/ndr-user.xml (mounted at boot).
+# User (ndr/ndr123) is created via CREATE USER in init.sql on first start.
 # Schema (ndr database + all tables) is created by config/clickhouse/init.sql
 # on the first container start via /docker-entrypoint-initdb.d/.
 log "ClickHouse will start as a Docker container with the stack"
-log "  User:   ndr / ndr123  (via ndr-user.xml)"
+log "  User:   ndr / ndr123  (via init.sql)"
 log "  Port:   8123 (HTTP), 9000 (native)"
 log "  Schema: auto-created on first start via init.sql"
 log "✅ ClickHouse configured"

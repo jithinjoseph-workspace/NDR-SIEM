@@ -270,7 +270,6 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
-      - ${INSTALL_DIR}/config/clickhouse/ndr-user.xml:/etc/clickhouse-server/users.d/ndr-user.xml:ro
       - ${INSTALL_DIR}/config/clickhouse/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     restart: unless-stopped
     healthcheck:

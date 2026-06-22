@@ -353,7 +353,7 @@ fi
 step "Configuring ClickHouse"
 
 # ── ClickHouse runs as a Docker container ──────
-# User (ndr/ndr123) is configured via config/clickhouse/ndr-user.xml
+# User (ndr/ndr123) is created via CREATE USER in config/clickhouse/init.sql
 # Schema (ndr database + all tables) is created by config/clickhouse/init.sql
 # on the first container start via /docker-entrypoint-initdb.d/
 if [ "$DEPLOY_MODE" = "local" ]; then
