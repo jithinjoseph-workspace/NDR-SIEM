@@ -334,6 +334,7 @@ async fn main() {
         .route("/api/threat-intel/add", post(api::add_manual_ioc))
         .route("/api/soar/status",  get(api::get_soar_status))
         .route("/api/settings", get(api::get_settings).post(api::update_settings))
+        .route("/api/settings/ai", get(api::get_ai_config).post(api::update_ai_config))
         .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
         .route("/api/soar/playbook/create",post(api::create_playbook))
         .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))

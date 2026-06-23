@@ -856,6 +856,7 @@ pub async fn build_evidence_bundle(
 
 /// Same as build_evidence_bundle but with fixed bundle_id and created_at for
 /// deterministic rebuild — used by verify so the ZIP hash matches the original.
+#[allow(dead_code)]
 pub async fn build_evidence_bundle_for_verify(
     opensearch_url: &str,
     arkime_url: &str,

@@ -13,6 +13,15 @@ fi
 
 set -e
 
+# ── Fix DNS early — before any curl/apt/wget ──
+# systemd-resolved (127.0.0.53) is unreliable on some systems; bypass it.
+if ! curl -s --max-time 3 https://archive.ubuntu.com > /dev/null 2>&1; then
+    echo "[NDR] Fixing DNS (switching to 8.8.8.8)..."
+    sudo systemctl stop systemd-resolved 2>/dev/null || true
+    sudo rm -f /etc/resolv.conf
+    printf "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" | sudo tee /etc/resolv.conf > /dev/null
+fi
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -44,13 +53,26 @@ step() {
 }
 
 # ── Fix APT sources ───────────────────────────
-log "  → Switching to reliable mirror..."
-sudo tee /etc/apt/sources.list > /dev/null << 'EOF'
-deb https://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-deb https://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-deb https://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
-deb https://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+# Detect Ubuntu codename early so sources.list uses the correct suite
+UBUNTU_CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-$(lsb_release -cs 2>/dev/null)}")
+UBUNTU_CODENAME=${UBUNTU_CODENAME:-noble}
+UBUNTU_MAJOR_VER=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID}" | cut -d. -f1)
+log "  → Ubuntu ${UBUNTU_CODENAME} (${UBUNTU_MAJOR_VER}.x) detected"
+
+# Ubuntu 24+ uses DEB822 format in ubuntu.sources — writing to sources.list causes duplicates.
+# Only write sources.list on older Ubuntu where ubuntu.sources doesn't exist.
+if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+    log "  → ubuntu.sources found — clearing sources.list to avoid duplicates"
+    sudo truncate -s 0 /etc/apt/sources.list
+else
+    log "  → Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
+    sudo tee /etc/apt/sources.list > /dev/null << EOF
+deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME} main restricted universe multiverse
+deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-updates main restricted universe multiverse
+deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-backports main restricted universe multiverse
+deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse
 EOF
+fi
 
 # Set apt timeout
 sudo tee /etc/apt/apt.conf.d/99timeout > /dev/null << 'EOF'
@@ -338,9 +360,19 @@ step "Installing Zeek"
 # ── Install Zeek ──────────────────────────────
 if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     log "Installing Zeek..."
-    echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${OS_VERSION}/ /" \
+    # Find the newest Zeek repo that exists for this Ubuntu version
+    ZEEK_UBUNTU_VER="$OS_VERSION"
+    for TRY_VER in "$OS_VERSION" "24.04" "22.04"; do
+        ZEEK_KEY_URL="https://download.opensuse.org/repositories/security:zeek/xUbuntu_${TRY_VER}/Release.key"
+        if curl -fsSL --max-time 10 "$ZEEK_KEY_URL" -o /dev/null 2>/dev/null; then
+            ZEEK_UBUNTU_VER="$TRY_VER"
+            break
+        fi
+    done
+    log "  → Using Zeek repo for Ubuntu ${ZEEK_UBUNTU_VER}"
+    echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${ZEEK_UBUNTU_VER}/ /" \
         | sudo tee /etc/apt/sources.list.d/security:zeek.list
-    curl -fsSL https://download.opensuse.org/repositories/security:zeek/xUbuntu_${OS_VERSION}/Release.key \
+    curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
         | gpg --dearmor \
         | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
     sudo apt-get update -qq
@@ -359,7 +391,7 @@ step "Configuring ClickHouse"
 if [ "$DEPLOY_MODE" = "local" ]; then
     log "ClickHouse will start as a Docker container with the stack"
     log "  User:   ndr / ndr123"
-    log "  Port:   8123 (HTTP), 9000 (native)"
+    log "  Ports:  8123/8124 (HTTP), 9000/9001 (native) — 2-node cluster"
 
     # ── Migrate bare-metal ClickHouse → Docker container ─────────────────
     CH_NEEDS_IMPORT=false
@@ -382,7 +414,7 @@ if [ "$DEPLOY_MODE" = "local" ]; then
             log "Fresh start selected — existing host ClickHouse data will not be migrated"
         fi
 
-        log "Stopping host ClickHouse so Docker container can bind to ports 8123/9000..."
+        log "Stopping host ClickHouse so Docker containers can bind to ports 8123/8124/9000/9001..."
         sudo systemctl stop clickhouse-server
         sudo systemctl disable clickhouse-server
         log "✅ Host ClickHouse stopped and disabled"
@@ -402,12 +434,13 @@ if [ "$DEPLOY_MODE" = "local" ]; then
         else
             log "Keeping ClickHouse packages installed (service remains disabled)"
         fi
-    elif ss -tlnp 2>/dev/null | grep -qE ':8123|:9000'; then
-        warn "Ports 8123/9000 are in use by another process — this may cause ClickHouse container to restart-loop"
-        warn "Run: ss -tlnp | grep -E '8123|9000'  to identify and stop it"
+    elif ss -tlnp 2>/dev/null | grep -qE ':8123|:8124|:9000|:9001'; then
+        warn "Ports 8123/8124/9000/9001 are in use by another process — this may cause ClickHouse containers to restart-loop"
+        warn "Run: ss -tlnp | grep -E '8123|8124|9000|9001'  to identify and stop it"
     fi
 
     CLICKHOUSE_URL="http://localhost:8123"
+    CLICKHOUSE_URL_SECONDARY="http://localhost:8124"
     CLOUD_CH_USER="ndr"
     CLOUD_CH_PASS="ndr123"
     CLOUD_KAFKA="kafka1:9092,kafka2:9092,kafka3:9092"
@@ -654,6 +687,7 @@ INSTALL_DIR=$INSTALL_DIR
 IFACE=$IFACE
 DEPLOY_MODE=$DEPLOY_MODE
 CLICKHOUSE_URL=$CLICKHOUSE_URL
+CLICKHOUSE_URL_SECONDARY=$CLICKHOUSE_URL_SECONDARY
 CLICKHOUSE_USER=$CLOUD_CH_USER
 CLICKHOUSE_PASSWORD=$CLOUD_CH_PASS
 KAFKA_BROKERS=$CLOUD_KAFKA
@@ -770,15 +804,33 @@ sudo apt-get remove -y docker docker-engine \
 sudo apt-get update -qq
 sudo apt-get install -y \
     ca-certificates curl gnupg lsb-release
+
+# Re-download GPG key cleanly (previous attempts may have left an empty file)
 sudo mkdir -p /etc/apt/keyrings
+sudo rm -f /etc/apt/keyrings/docker.gpg
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
     | sudo gpg --dearmor \
     -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# Ubuntu 26.04 (resolute) — Docker hasn't published packages for it yet;
+# noble (24.04) packages are fully compatible.
+DOCKER_CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
+case "$DOCKER_CODENAME" in
+    resolute|oracular|*)
+        if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
+               --max-time 5 -o /dev/null 2>/dev/null; then
+            log "Docker repo not available for '${DOCKER_CODENAME}' — falling back to noble"
+            DOCKER_CODENAME="noble"
+        fi
+        ;;
+esac
+
 echo \
     "deb [arch=$(dpkg --print-architecture) \
     signed-by=/etc/apt/keyrings/docker.gpg] \
     https://download.docker.com/linux/ubuntu \
-    $(lsb_release -cs) stable" \
+    ${DOCKER_CODENAME} stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 sudo apt-get update -qq
 sudo apt-get install -y docker-ce docker-ce-cli \
@@ -843,10 +895,11 @@ log "✅ Docker stack started"
 
 # ── Wait for ClickHouse container to be healthy ───────────────────────
 if [ "$DEPLOY_MODE" = "local" ]; then
-    log "Waiting for ClickHouse container..."
-    for i in {1..30}; do
-        if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
-            log "✅ ClickHouse ready"
+    log "Waiting for ClickHouse cluster (ch1 + ch2)..."
+    for i in {1..40}; do
+        if curl -s http://localhost:8123/ping > /dev/null 2>&1 && \
+           curl -s http://localhost:8124/ping > /dev/null 2>&1; then
+            log "✅ ClickHouse cluster ready (both nodes up)"
             break
         fi
         echo -n "."
@@ -989,8 +1042,8 @@ log "  Docker:     $(sudo docker --version)"
 log "  Node.js:    $(node --version)"
 log "  npm:        $(npm --version)"
 if [ "$DEPLOY_MODE" = "local" ]; then
-    log "  ClickHouse: $(curl -s http://localhost:8123/ping \
-        2>/dev/null || echo 'starting...')"
+    log "  ClickHouse ch1: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
+    log "  ClickHouse ch2: $(curl -s http://localhost:8124/ping 2>/dev/null || echo 'starting...')"
 else
     log "  ClickHouse: $CLOUD_CLICKHOUSE (cloud)"
     log "  Kafka:      $CLOUD_KAFKA (cloud)"

@@ -72,18 +72,8 @@
               </div>
             </div>
             <div class="threshold-control">
-              <input
-                type="range"
-                min="0"
-                max="50"
-                step="1"
-                [(ngModel)]="thresholds.store_threshold" />
-              <input
-                type="number"
-                min="0"
-                max="50"
-                step="1"
-                [(ngModel)]="thresholds.store_threshold" />
+              <input type="range" min="0" max="50" step="1" [(ngModel)]="thresholds.store_threshold" />
+              <input type="number" min="0" max="50" step="1" [(ngModel)]="thresholds.store_threshold" />
             </div>
           </article>
 
@@ -98,18 +88,8 @@
               </div>
             </div>
             <div class="threshold-control">
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                [(ngModel)]="thresholds.alert_threshold" />
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                [(ngModel)]="thresholds.alert_threshold" />
+              <input type="range" min="0" max="100" step="1" [(ngModel)]="thresholds.alert_threshold" />
+              <input type="number" min="0" max="100" step="1" [(ngModel)]="thresholds.alert_threshold" />
             </div>
           </article>
 
@@ -124,18 +104,8 @@
               </div>
             </div>
             <div class="threshold-control">
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                [(ngModel)]="thresholds.critical_threshold" />
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                [(ngModel)]="thresholds.critical_threshold" />
+              <input type="range" min="0" max="100" step="1" [(ngModel)]="thresholds.critical_threshold" />
+              <input type="number" min="0" max="100" step="1" [(ngModel)]="thresholds.critical_threshold" />
             </div>
           </article>
 
@@ -150,18 +120,8 @@
               </div>
             </div>
             <div class="threshold-control">
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                [(ngModel)]="thresholds.soar_threshold" />
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                [(ngModel)]="thresholds.soar_threshold" />
+              <input type="range" min="0" max="100" step="1" [(ngModel)]="thresholds.soar_threshold" />
+              <input type="number" min="0" max="100" step="1" [(ngModel)]="thresholds.soar_threshold" />
             </div>
           </article>
         </div>
@@ -190,11 +150,7 @@
         </div>
 
         <button class="save-action" (click)="saveSettings()" [disabled]="saving">
-          <lucide-icon
-            [name]="saving ? LoadingIcon : SaveIcon"
-            class="w-4 h-4"
-            [class.spin]="saving">
-          </lucide-icon>
+          <lucide-icon [name]="saving ? LoadingIcon : SaveIcon" class="w-4 h-4" [class.spin]="saving"></lucide-icon>
           {{ saving ? 'Saving...' : 'Save Settings' }}
         </button>
 
@@ -208,6 +164,105 @@
           <span>{{ error }}</span>
         </div>
       </aside>
+    </div>
+
+    <!-- AI Configuration — super_admin only -->
+    <div *ngIf="isSuperAdmin" class="ai-config-section">
+      <div class="ai-config-header">
+        <div class="panel-icon ai-icon">
+          <lucide-icon [name]="BotIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <div>
+          <h3>AI Configuration</h3>
+          <p>Configure the AI provider ARIA uses for threat analysis and chat. Only visible to super admins.</p>
+        </div>
+      </div>
+
+      <div class="ai-config-grid">
+        <div class="ai-field">
+          <label>Provider</label>
+          <select [(ngModel)]="aiConfig.ai_provider" class="ai-select">
+            <option *ngFor="let p of providerOptions" [value]="p.value">{{ p.label }}</option>
+          </select>
+          <small>OpenAI and custom providers use the OpenAI Chat Completions format.</small>
+        </div>
+
+        <div class="ai-field">
+          <label>
+            API Key
+            <span *ngIf="aiConfig.ai_key_set" class="key-badge">Key saved</span>
+          </label>
+          <div class="key-input-wrap">
+            <input
+              [type]="showApiKey ? 'text' : 'password'"
+              [(ngModel)]="aiConfig.ai_api_key"
+              class="ai-input"
+              [placeholder]="aiConfig.ai_key_set ? 'Leave blank to keep existing key' : 'Paste API key here'" />
+            <button class="key-toggle" (click)="showApiKey = !showApiKey" type="button">
+              <lucide-icon [name]="showApiKey ? EyeOffIcon : EyeIcon" class="w-4 h-4"></lucide-icon>
+            </button>
+          </div>
+          <small>Stored securely in ClickHouse. Env var is used as fallback if blank.</small>
+        </div>
+
+        <div class="ai-field">
+          <label>Model <span class="optional">(optional)</span></label>
+          <input
+            type="text"
+            [(ngModel)]="aiConfig.ai_model"
+            class="ai-input"
+            [placeholder]="defaultModelHint" />
+          <small>Leave blank to use the provider default.</small>
+        </div>
+
+        <div class="ai-field" *ngIf="aiConfig.ai_provider === 'custom'">
+          <label>Base URL</label>
+          <input
+            type="text"
+            [(ngModel)]="aiConfig.ai_base_url"
+            class="ai-input"
+            placeholder="https://apifreellm.com  or  http://localhost:11434" />
+          <small>Root URL — no trailing slash. Endpoint path is set separately below.</small>
+        </div>
+
+        <div class="ai-field" *ngIf="aiConfig.ai_provider === 'custom'">
+          <label>Endpoint Path <span class="optional">(optional)</span></label>
+          <input
+            type="text"
+            [(ngModel)]="aiConfig.ai_endpoint_path"
+            class="ai-input"
+            placeholder="/v1/chat/completions" />
+          <small>Path appended to Base URL. Default: <code>/v1/chat/completions</code></small>
+        </div>
+
+        <div class="ai-field" *ngIf="aiConfig.ai_provider === 'custom'">
+          <label>Message Format</label>
+          <select [(ngModel)]="aiConfig.ai_msg_format" class="ai-select">
+            <option value="openai">OpenAI — sends messages[] array, reads choices[0].message.content</option>
+            <option value="simple">Simple — sends &#123;"message":"..."&#125;, reads "response" field (e.g. FreeLLM)</option>
+          </select>
+          <small>
+            Use <strong>OpenAI</strong> for Ollama, LM Studio, LocalAI, vLLM and most APIs.<br>
+            Use <strong>Simple</strong> for FreeLLM (<code>apifreellm.com</code>) and similar minimal APIs.
+          </small>
+        </div>
+
+        <div class="ai-save-row">
+          <button class="save-action ai-save" (click)="saveAiConfig()" [disabled]="savingAi">
+            <lucide-icon [name]="savingAi ? LoadingIcon : SaveIcon" class="w-4 h-4" [class.spin]="savingAi"></lucide-icon>
+            {{ savingAi ? 'Saving...' : 'Save AI Config' }}
+          </button>
+
+          <div *ngIf="aiMessage" class="feedback success">
+            <lucide-icon [name]="CheckIcon" class="w-4 h-4"></lucide-icon>
+            <span>{{ aiMessage }}</span>
+          </div>
+          <div *ngIf="aiError" class="feedback error">
+            <lucide-icon [name]="ErrorIcon" class="w-4 h-4"></lucide-icon>
+            <span>{{ aiError }}</span>
+          </div>
+        </div>
+      </div>
     </div>
   </ng-container>
 </section>

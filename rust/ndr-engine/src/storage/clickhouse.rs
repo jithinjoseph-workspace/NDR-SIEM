@@ -631,10 +631,10 @@ pub async fn create_tenant(
     );
     self.client.query(&query).execute().await?;
 
-    // 2. Create dedicated database for tenant
+    // 2. Create dedicated database for tenant on all cluster nodes
     let db_name = format!("ndr_{}", id.replace("-", "_"));
     self.client.query(&format!(
-        "CREATE DATABASE IF NOT EXISTS {}", db_name
+        "CREATE DATABASE IF NOT EXISTS {} ON CLUSTER ndr_cluster", db_name
     )).execute().await?;
 
     // 3. Load init.sql and create tables in the tenant DB namespace dynamically
@@ -682,6 +682,12 @@ pub async fn create_tenant(
 
             // Replace database namespace with tenant DB and set its default tenant_id
             let mut tenant_stmt = stmt.replace("ndr.", &format!("{}.", db_name));
+            // Fix ZooKeeper path: /clickhouse/tables/{shard}/ndr/ → /clickhouse/tables/{shard}/<tenant_db>/
+            // The dot-replace above only fixes the SQL table prefix, not the ZooKeeper path inside ENGINE=
+            tenant_stmt = tenant_stmt.replace(
+                "/clickhouse/tables/{shard}/ndr/",
+                &format!("/clickhouse/tables/{{shard}}/{}/", db_name),
+            );
             tenant_stmt = tenant_stmt.replace("DEFAULT 'default'", &format!("DEFAULT '{}'", id));
 
             if let Err(e) = self.client
@@ -1613,6 +1619,8 @@ pub async fn get_settings_by_tenant(&self, tenant_id: &str) -> anyhow::Result<se
     for (key, val) in result {
         if let Ok(n) = val.parse::<f64>() {
             map.insert(key, serde_json::json!(n));
+        } else {
+            map.insert(key, serde_json::json!(val));
         }
     }
     Ok(serde_json::Value::Object(map))
@@ -1622,6 +1630,13 @@ pub async fn get_settings(&self) -> anyhow::Result<serde_json::Value> {
     self.get_settings_by_tenant("default").await
 }
 
+/// Returns full AiConfig built from tenant settings.
+pub async fn get_ai_config_full(&self, tenant_id: &str) -> crate::ai::AiConfig {
+    let settings = self.get_settings_by_tenant(tenant_id).await
+        .unwrap_or_default();
+    crate::ai::AiConfig::from_settings(&settings)
+}
+
 pub async fn save_setting_by_tenant(
     &self, key: &str, value: &str, tenant_id: &str
 ) -> anyhow::Result<()> {
@@ -1629,7 +1644,7 @@ pub async fn save_setting_by_tenant(
     let query = format!(
         "INSERT INTO {}.settings (key, value) \
          VALUES ('{}', '{}')",
-        db, key, value
+        db, key, value.replace('\'', "\\'")
     );
     self.client.query(&query).execute().await?;
     Ok(())

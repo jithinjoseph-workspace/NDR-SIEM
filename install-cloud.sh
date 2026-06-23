@@ -144,7 +144,7 @@ step "Configuring ClickHouse"
 # on the first container start via /docker-entrypoint-initdb.d/.
 log "ClickHouse will start as a Docker container with the stack"
 log "  User:   ndr / ndr123  (via init.sql)"
-log "  Port:   8123 (HTTP), 9000 (native)"
+log "  Ports:  8123/8124 (HTTP), 9000/9001 (native) — 2-node cluster"
 log "  Schema: auto-created on first start via init.sql"
 log "✅ ClickHouse configured"
 
@@ -163,6 +163,7 @@ HOME_DIR=$HOME_DIR
 INSTALL_DIR=$INSTALL_DIR
 CLOUD_MODE=true
 CLICKHOUSE_URL=http://localhost:8123
+CLICKHOUSE_URL_SECONDARY=http://localhost:8124
 CLICKHOUSE_USER=ndr
 CLICKHOUSE_PASSWORD=ndr123
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
@@ -241,10 +242,11 @@ sudo docker compose up -d --build
 log "✅ Docker stack started (no --profile onpremise)"
 
 # ── Wait for ClickHouse container to be healthy ───────────────────
-log "Waiting for ClickHouse container..."
-for i in {1..30}; do
-    if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
-        log "✅ ClickHouse ready"
+log "Waiting for ClickHouse cluster (ch1 + ch2)..."
+for i in {1..40}; do
+    if curl -s http://localhost:8123/ping > /dev/null 2>&1 && \
+       curl -s http://localhost:8124/ping > /dev/null 2>&1; then
+        log "✅ ClickHouse cluster ready (both nodes up)"
         break
     fi
     echo -n "."
@@ -307,13 +309,14 @@ if command -v ufw &>/dev/null; then
     sudo ufw allow 9092/tcp comment "Kafka (sensor ingest)"
 
     # Internal-only: block from internet
-    sudo ufw deny 8123/tcp comment "ClickHouse (internal only)"
+    sudo ufw deny 8123/tcp comment "ClickHouse ch1 (internal only)"
+    sudo ufw deny 8124/tcp comment "ClickHouse ch2 (internal only)"
     sudo ufw deny 6379/tcp comment "Redis (internal only)"
 
     sudo ufw --force enable > /dev/null
     log "✅ UFW rules applied:"
     log "   OPEN  : 22 (SSH), 80 (HTTP), 443 (HTTPS), 3000 (API), 9092 (Kafka)"
-    log "   CLOSED: 8123 (ClickHouse), 6379 (Redis)"
+    log "   CLOSED: 8123/8124 (ClickHouse), 6379 (Redis)"
 else
     warn "ufw not found — skipping firewall setup"
 fi
@@ -326,9 +329,14 @@ log "Checking services..."
 
 # ClickHouse
 if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
-    log "  ✅ ClickHouse    — OK"
+    log "  ✅ ClickHouse ch1 — OK"
 else
-    warn "  ⚠️  ClickHouse    — NOT READY"
+    warn "  ⚠️  ClickHouse ch1 — NOT READY"
+fi
+if curl -s http://localhost:8124/ping > /dev/null 2>&1; then
+    log "  ✅ ClickHouse ch2 — OK"
+else
+    warn "  ⚠️  ClickHouse ch2 — NOT READY"
 fi
 
 # Kafka container
@@ -384,7 +392,7 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${BLUE}  Public IP   :${NC} $PUBLIC_IP"
 echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP:3000"
-echo -e "${BLUE}  ClickHouse  :${NC} http://localhost:8123 (internal only)"
+echo -e "${BLUE}  ClickHouse  :${NC} http://localhost:8123 + :8124 (internal only, 2-node cluster)"
 echo -e "${BLUE}  Kafka       :${NC} $PUBLIC_IP:9092 (sensors connect here)"
 echo -e "${BLUE}  Redis       :${NC} localhost:6379 (internal only)"
 echo -e "${BLUE}  SSL certs   :${NC} /etc/ssl/ndr/cert.pem + key.pem"

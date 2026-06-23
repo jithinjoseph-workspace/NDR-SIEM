@@ -621,8 +621,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                         );
 
                         // AI threat analysis — runs async, stored as annotation
-                        let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
-                        if !openai_key.is_empty() {
+                        let ai_cfg = ch.get_ai_config_full(&tenant).await;
+                        if ai_cfg.is_configured() {
                             let system_prompt = "You are a senior NDR (Network Detection & Response) \
                                 security analyst. Analyse the alert and respond in plain text with \
                                 three short sections:\n\
@@ -641,8 +641,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                  Tenant       : {tenant}\n\
                                  Provide your threat analysis.",
                             );
-                            match crate::ai::call_openai(
-                                &openai_key, system_prompt, &[], &question
+                            match crate::ai::call_ai(
+                                &ai_cfg, system_prompt, &[], &question
                             ).await {
                                 Ok((analysis, _)) => {
                                     let safe_analysis = analysis.replace('\'', "''");
@@ -758,7 +758,6 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             let cid             = hit.community_id.clone();
             let ch3             = state.ch_storage.clone();
             let tid3            = tenant_id.clone();
-            let openai_key      = std::env::var("OPENAI_API_KEY").unwrap_or_default();
 
             // Extra context extracted from raw event — gives AI enough signal
             // to distinguish sensor-to-own-infrastructure FPs from real threats.
@@ -792,7 +791,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 );
                 if already_seen { return; }
 
-                if openai_key.is_empty() { return; }
+                let ai_cfg = ch3.get_ai_config_full(&tid3).await;
+                if !ai_cfg.is_configured() { return; }
 
                 let prompt = "You are an NDR (Network Detection & Response) security analyst AI. \
                     Determine if a Suricata IDS alert is a FALSE POSITIVE. \
@@ -835,8 +835,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                     tls_sni_display = if tls_sni.is_empty() { "none".to_string() } else { tls_sni },
                 );
 
-                if let Ok((reply, _)) = crate::ai::call_openai(
-                    &openai_key, prompt, &[], &question
+                if let Ok((reply, _)) = crate::ai::call_ai(
+                    &ai_cfg, prompt, &[], &question
                 ).await {
                     // Parse AI JSON response
                     let ai: serde_json::Value = serde_json::from_str(&reply)
@@ -2146,6 +2146,19 @@ pub async fn get_scale_status(State(state): State<AppState>) -> Json<Value> {
         .and_then(|v| v.as_u64()).unwrap_or(0);
     let events_per_sec = events_1h / 3600;
 
+    let count_out = std::process::Command::new("docker")
+        .args(["ps", "-q", "--filter", "name=ndr-engine"])
+        .output()
+        .unwrap_or_else(|_| std::process::Output {
+            status: <std::process::ExitStatus as ExitStatusDefault>::default(),
+            stdout: vec![],
+            stderr: vec![],
+        });
+    let current_engines = String::from_utf8_lossy(&count_out.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .count() as u64;
+
     Json(json!({
         "events_per_sec":   events_per_sec,
         "events_1h":        events_1h,
@@ -2157,8 +2170,8 @@ pub async fn get_scale_status(State(state): State<AppState>) -> Json<Value> {
         } else {
             "optimal"
         },
-        "current_engines": 1,
-        "max_engines":     5,
+        "current_engines": current_engines,
+        "max_engines":     12,
     }))
 }
 
@@ -2261,6 +2274,62 @@ pub async fn update_settings(
     Json(json!({
         "status": "ok",
         "message": "Settings saved!"
+    }))
+}
+
+// GET /api/settings/ai — super_admin only
+pub async fn get_ai_config(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) {
+        return e;
+    }
+    let cfg = state.ch_storage.get_ai_config_full("default").await;
+    let masked_key = if cfg.api_key.is_empty() { "".to_string() } else { "****".to_string() };
+    Json(json!({
+        "status":          "ok",
+        "ai_provider":     cfg.provider,
+        "ai_api_key":      masked_key,
+        "ai_key_set":      !cfg.api_key.is_empty(),
+        "ai_model":        cfg.model,
+        "ai_base_url":     cfg.base_url,
+        "ai_endpoint_path": cfg.endpoint_path,
+        "ai_msg_format":   cfg.msg_format
+    }))
+}
+
+// POST /api/settings/ai — super_admin only
+pub async fn update_ai_config(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) {
+        return e;
+    }
+
+    let string_fields = [
+        "ai_provider", "ai_model", "ai_base_url",
+        "ai_endpoint_path", "ai_msg_format",
+    ];
+    for key in &string_fields {
+        if let Some(v) = payload[*key].as_str() {
+            let _ = state.ch_storage
+                .save_setting_by_tenant(key, v, "default").await;
+        }
+    }
+    // Only overwrite the API key if a real value is provided (not masked)
+    if let Some(v) = payload["ai_api_key"].as_str() {
+        if !v.is_empty() && !v.contains('*') {
+            let _ = state.ch_storage
+                .save_setting_by_tenant("ai_api_key", v, "default").await;
+        }
+    }
+
+    Json(json!({
+        "status": "ok",
+        "message": "AI configuration saved!"
     }))
 }
 
@@ -3985,23 +4054,31 @@ eval docker run -d --name "$NEW_ENGINE" --privileged --network "$NETWORK" $BINDS
                 Err(e) => { tracing::error!("❌ Kafka exec error: {}", e); e.to_string() }
             };
 
-            // ── Step 3: Inject new server into Nginx upstream & reload ─────────
+            // ── Step 3: Inject new server into both Nginx upstreams & reload ────
             let install_dir = std::env::var("INSTALL_DIR").unwrap_or_else(|_| ".".to_string());
             let nginx_conf = format!("{}/config/nginx/nginx.conf", install_dir);
-            let new_server = format!("        server {}:3000 max_fails=3 fail_timeout=30s;", new_name);
-            tracing::info!("Adding {} to Nginx upstream: {}", new_name, nginx_conf);
+            let api_line = format!("        server {}:3000 max_fails=3 fail_timeout=30s;", new_name);
+            let ws_line  = format!("        server {}:3000;", new_name);
+            tracing::info!("Adding {} to Nginx upstreams: {}", new_name, nginx_conf);
 
             let nginx_up_script = format!(r#"set -e
 CONF="{0}"
-NEW_LINE="{1}"
-if ! grep -qF "$NEW_LINE" "$CONF"; then
-    sed -i "/server ndr-engine.*:3000/a\\$NEW_LINE" "$CONF"
-    echo "Added $NEW_LINE"
+API_LINE="{1}"
+WS_LINE="{2}"
+if ! grep -qF "$API_LINE" "$CONF"; then
+    sed -i "/# ENGINES_MARKER/i\\$API_LINE" "$CONF"
+    echo "Added $API_LINE to ndr_engines"
 else
-    echo "Already present"
+    echo "ndr_engines: already present"
+fi
+if ! grep -qF "$WS_LINE" "$CONF"; then
+    sed -i "/# WS_ENGINES_MARKER/i\\$WS_LINE" "$CONF"
+    echo "Added $WS_LINE to ws_engines"
+else
+    echo "ws_engines: already present"
 fi
 docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
-"#, nginx_conf, new_server);
+"#, nginx_conf, api_line, ws_line);
 
             let nginx_out = std::process::Command::new("bash")
                 .args(["-c", &nginx_up_script])
@@ -4034,20 +4111,22 @@ docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
                 return Json(json!({ "status": "error", "message": "Engine name required" }));
             }
 
-            // ── Step 1: Remove from Nginx FIRST (drain traffic before stopping) ─
+            // ── Step 1: Remove from both Nginx upstreams BEFORE stopping ─────────
             let install_dir = std::env::var("INSTALL_DIR").unwrap_or_else(|_| ".".to_string());
             let nginx_conf = format!("{}/config/nginx/nginx.conf", install_dir);
-            let remove_server = format!("        server {}:3000 max_fails=3 fail_timeout=30s;", engine_name);
-            tracing::info!("Removing {} from Nginx upstream BEFORE stopping container", engine_name);
+            let api_remove = format!("        server {}:3000 max_fails=3 fail_timeout=30s;", engine_name);
+            let ws_remove  = format!("        server {}:3000;", engine_name);
+            tracing::info!("Removing {} from Nginx upstreams BEFORE stopping container", engine_name);
 
             let nginx_down_script = format!(r#"set -e
 CONF="{0}"
-REMOVE="{1}"
-ESCAPED=$(printf '%s\n' "$REMOVE" | sed 's/[\/&]/\\&/g; s/$//')
-sed -i "/$ESCAPED/d" "$CONF"
-echo "Removed $REMOVE"
+API_ESC=$(printf '%s\n' "{1}" | sed 's/[\/&[\.*^$]/\\&/g')
+WS_ESC=$(printf '%s\n' "{2}" | sed 's/[\/&[\.*^$]/\\&/g')
+sed -i "/$API_ESC/d" "$CONF"
+sed -i "/$WS_ESC/d" "$CONF"
+echo "Removed {1} and {2}"
 docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
-"#, nginx_conf, remove_server);
+"#, nginx_conf, api_remove, ws_remove);
 
             let nginx_out = std::process::Command::new("bash")
                 .args(["-c", &nginx_down_script])
@@ -4068,7 +4147,7 @@ docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
 
             // ── Step 2: Brief drain wait — let active connections finish ──────
             tracing::info!("Waiting 2s for active connections to drain from {}", engine_name);
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
             // ── Step 3: Stop the container safely ─────────────────────────────
             tracing::info!("Stopping engine container: {}", engine_name);
@@ -6830,12 +6909,15 @@ pub async fn aria_chat(
         &recent,
     );
 
-    // Call OpenAI API
-    let api_key = std::env::var("OPENAI_API_KEY")
+    // Load AI config from DB (fallback to env var inside call_ai)
+    let settings = state.ch_storage
+        .get_settings_by_tenant(&claims.tenant_id)
+        .await
         .unwrap_or_default();
+    let ai_config = crate::ai::AiConfig::from_settings(&settings);
 
-    match crate::ai::call_openai(
-        &api_key,
+    match crate::ai::call_ai(
+        &ai_config,
         &system,
         &history,
         &user_message,
@@ -6845,12 +6927,10 @@ pub async fn aria_chat(
             "emotion": emotion
         })),
         Err(e) => {
-            tracing::error!(
-                "ARIA OpenAI API error: {}", e);
+            tracing::error!("ARIA AI error: {}", e);
             Json(json!({
-                "reply": "I'm having trouble \
-                    connecting to my AI brain. \
-                    Check OPENAI_API_KEY.",
+                "reply": "I'm having trouble connecting to the AI provider. \
+                    Check AI configuration in Settings.",
                 "emotion": "sad"
             }))
         }

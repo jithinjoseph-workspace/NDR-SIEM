@@ -147,8 +147,14 @@ services:
       - /opt/ndr/pcap:/opt/ndr/pcap
       - /opt/ndr/evidence:/opt/ndr/evidence
     depends_on:
-      - kafka1
-      - redis
+      kafka1:
+        condition: service_started
+      redis:
+        condition: service_started
+      clickhouse1:
+        condition: service_healthy
+      clickhouse2:
+        condition: service_healthy
 
   ndr-engine-2:
     build: ./rust
@@ -182,8 +188,14 @@ services:
       - /opt/ndr/pcap:/opt/ndr/pcap
       - /opt/ndr/evidence:/opt/ndr/evidence
     depends_on:
-      - kafka1
-      - redis
+      kafka1:
+        condition: service_started
+      redis:
+        condition: service_started
+      clickhouse1:
+        condition: service_healthy
+      clickhouse2:
+        condition: service_healthy
 
   ndr-engine-3:
     build: ./rust
@@ -217,8 +229,14 @@ services:
       - /opt/ndr/pcap:/opt/ndr/pcap
       - /opt/ndr/evidence:/opt/ndr/evidence
     depends_on:
-      - kafka1
-      - redis
+      kafka1:
+        condition: service_started
+      redis:
+        condition: service_started
+      clickhouse1:
+        condition: service_healthy
+      clickhouse2:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -256,29 +274,88 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
 
-  # ── ClickHouse (containerized) ────────────────────────────────────────────
-  # network_mode: host — binds directly to host ports 8123/9000,
-  # same as the old bare-metal install. Engines reach it via HOST_IP:8123.
-  clickhouse:
-    build:
-      context: ${INSTALL_DIR}/config/clickhouse
-      dockerfile: Dockerfile
-    container_name: clickhouse
+  # ── ClickHouse Keeper (ZooKeeper replacement — must start first) ──────────
+  clickhouse-keeper:
+    image: clickhouse/clickhouse-keeper:24.8
+    container_name: clickhouse-keeper
+    network_mode: host
+    volumes:
+      - keeper-data:/var/lib/clickhouse
+      - keeper-logs:/var/log/clickhouse-keeper
+      - ${INSTALL_DIR}/config/clickhouse/cluster/keeper-config.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/2181 && echo ruok >&3 && timeout 2 cat <&3 | grep -q imok' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── ClickHouse Node 1 — HTTP 8123, TCP 9000 ───────────────────────────────
+  clickhouse1:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse1
     network_mode: host
     ulimits:
       nofile:
         soft: 262144
         hard: 262144
     volumes:
-      - clickhouse-data:/var/lib/clickhouse
-      - clickhouse-logs:/var/log/clickhouse-server
+      - clickhouse1-data:/var/lib/clickhouse
+      - clickhouse1-logs:/var/log/clickhouse-server
+      - ${INSTALL_DIR}/config/clickhouse/cluster/ch1-config.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ${INSTALL_DIR}/config/clickhouse/cluster/users.xml:/etc/clickhouse-server/users.d/ndr-users.xml:ro
     restart: unless-stopped
+    depends_on:
+      clickhouse-keeper:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
+  # ── ClickHouse Node 2 — HTTP 8124, TCP 9001 ───────────────────────────────
+  clickhouse2:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse2
+    network_mode: host
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse2-data:/var/lib/clickhouse
+      - clickhouse2-logs:/var/log/clickhouse-server
+      - ${INSTALL_DIR}/config/clickhouse/cluster/ch2-config.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ${INSTALL_DIR}/config/clickhouse/cluster/users.xml:/etc/clickhouse-server/users.d/ndr-users.xml:ro
+    restart: unless-stopped
+    depends_on:
+      clickhouse-keeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8124/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+
+  # ── One-shot schema initialiser — runs after both nodes are healthy ──────────
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse-init
+    network_mode: host
+    volumes:
+      - ${INSTALL_DIR}/config/clickhouse/init.sql:/init.sql:ro
+    depends_on:
+      clickhouse1:
+        condition: service_healthy
+      clickhouse2:
+        condition: service_healthy
+    entrypoint: ["bash", "-c", "clickhouse-client --host 127.0.0.1 --port 9000 --user ndr --password ndr123 --multiquery < /init.sql && echo '[NDR] ClickHouse schema ready'"]
+    restart: on-failure
 
 volumes:
   opensearch-data:
@@ -286,5 +363,9 @@ volumes:
   kafka1-data:
   kafka2-data:
   kafka3-data:
-  clickhouse-data:
-  clickhouse-logs:
+  clickhouse1-data:
+  clickhouse1-logs:
+  clickhouse2-data:
+  clickhouse2-logs:
+  keeper-data:
+  keeper-logs:

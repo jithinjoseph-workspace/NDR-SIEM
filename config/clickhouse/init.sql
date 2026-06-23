@@ -1,6 +1,6 @@
-CREATE DATABASE IF NOT EXISTS ndr;
+CREATE DATABASE IF NOT EXISTS ndr ON CLUSTER ndr_cluster;
 
-CREATE TABLE IF NOT EXISTS ndr.ndr_events (
+CREATE TABLE IF NOT EXISTS ndr.ndr_events ON CLUSTER ndr_cluster (
     timestamp    DateTime,
     source       String,
     src_ip       String,
@@ -12,11 +12,11 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_events (
     community_id String,
     raw          String,
     tenant_id    String DEFAULT 'default'
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_events', '{replica}')
 ORDER BY (timestamp, src_ip, dst_ip)
 TTL timestamp + INTERVAL 30 DAY;
 
-CREATE TABLE IF NOT EXISTS ndr.ndr_hits (
+CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
     timestamp    DateTime,
     community_id String,
     src_ip       String,
@@ -29,36 +29,34 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_hits (
     src_country  String,
     dst_country  String,
     tenant_id    String DEFAULT 'default'
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_hits', '{replica}')
 ORDER BY (timestamp, severity, score)
 TTL timestamp + INTERVAL 90 DAY;
 
-CREATE TABLE IF NOT EXISTS ndr.ndr_stats (
+CREATE TABLE IF NOT EXISTS ndr.ndr_stats ON CLUSTER ndr_cluster (
     timestamp      DateTime,
     events_per_min UInt32,
     hits_per_min   UInt32,
     top_src_ip     String,
     top_dst_ip     String
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_stats', '{replica}')
 ORDER BY timestamp
 TTL timestamp + INTERVAL 7 DAY;
 
-
-CREATE TABLE IF NOT EXISTS ndr.rules_state (
+CREATE TABLE IF NOT EXISTS ndr.rules_state ON CLUSTER ndr_cluster (
     id      String,
     enabled UInt8    DEFAULT 1,
     updated DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(updated)
+) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/rules_state', '{replica}', updated)
 ORDER BY id;
 
--- Settings table for configurable thresholds
-CREATE TABLE IF NOT EXISTS ndr.settings
+CREATE TABLE IF NOT EXISTS ndr.settings ON CLUSTER ndr_cluster
 (
     key        String,
     value      String,
     updated_at DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/settings', '{replica}', updated_at)
 ORDER BY key;
 
 -- Default thresholds
@@ -86,19 +84,54 @@ WHERE NOT EXISTS (
     SELECT 1 FROM ndr.settings FINAL WHERE key = 'soar_threshold'
 );
 
--- SOAR configuration table
-CREATE TABLE IF NOT EXISTS ndr.soar_config
+-- AI provider configuration (super_admin configurable)
+INSERT INTO ndr.settings (key, value)
+SELECT 'ai_provider', 'openai'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'ai_provider'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'ai_api_key', ''
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'ai_api_key'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'ai_model', ''
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'ai_model'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'ai_base_url', ''
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'ai_base_url'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'ai_endpoint_path', ''
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'ai_endpoint_path'
+);
+
+INSERT INTO ndr.settings (key, value)
+SELECT 'ai_msg_format', 'openai'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'ai_msg_format'
+);
+
+CREATE TABLE IF NOT EXISTS ndr.soar_config ON CLUSTER ndr_cluster
 (
     key        String,
     value      String,
     tenant_id  String DEFAULT 'default',
     updated_at DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/soar_config', '{replica}', updated_at)
 ORDER BY key;
 
--- SOAR playbooks table
-CREATE TABLE IF NOT EXISTS ndr.soar_playbooks
+CREATE TABLE IF NOT EXISTS ndr.soar_playbooks ON CLUSTER ndr_cluster
 (
     id          String,
     name        String,
@@ -112,13 +145,10 @@ CREATE TABLE IF NOT EXISTS ndr.soar_playbooks
     created_at  DateTime DEFAULT now(),
     updated_at  DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/soar_playbooks', '{replica}', updated_at)
 ORDER BY id;
 
-
-
--- SOAR integrations table
-CREATE TABLE IF NOT EXISTS ndr.soar_integrations
+CREATE TABLE IF NOT EXISTS ndr.soar_integrations ON CLUSTER ndr_cluster
 (
     id          String,
     name        String,
@@ -128,11 +158,10 @@ CREATE TABLE IF NOT EXISTS ndr.soar_integrations
     tenant_id   String DEFAULT 'default',
     created_at  DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(created_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/soar_integrations', '{replica}', created_at)
 ORDER BY id;
 
--- Users table
-CREATE TABLE IF NOT EXISTS ndr.users
+CREATE TABLE IF NOT EXISTS ndr.users ON CLUSTER ndr_cluster
 (
     id            String DEFAULT toString(generateUUIDv4()),
     username      String,
@@ -144,7 +173,7 @@ CREATE TABLE IF NOT EXISTS ndr.users
     created_at    DateTime DEFAULT now(),
     last_login    DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(created_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/users', '{replica}', created_at)
 ORDER BY username;
 
 -- Insert default admin user
@@ -152,7 +181,7 @@ ORDER BY username;
 INSERT INTO ndr.users (username, password_hash, role)
 VALUES ('admin', '$2b$12$qB5uFqakHidExby4EbdH6.tFvW34sj7CAQFZdUCzk5YSi/kV3S09.', 'super_admin');
 
-CREATE TABLE IF NOT EXISTS ndr.tenants
+CREATE TABLE IF NOT EXISTS ndr.tenants ON CLUSTER ndr_cluster
 (
     id         String,
     name       String,
@@ -160,7 +189,7 @@ CREATE TABLE IF NOT EXISTS ndr.tenants
     updated_at DateTime DEFAULT now(),
     created_at DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/tenants', '{replica}', updated_at)
 ORDER BY id;
 
 INSERT INTO ndr.tenants (id, name, active)
@@ -169,7 +198,7 @@ WHERE NOT EXISTS (
     SELECT 1 FROM ndr.tenants FINAL WHERE id = 'default'
 );
 
-CREATE TABLE IF NOT EXISTS ndr.announcements
+CREATE TABLE IF NOT EXISTS ndr.announcements ON CLUSTER ndr_cluster
 (
     id             String,
     title          String,
@@ -185,19 +214,19 @@ CREATE TABLE IF NOT EXISTS ndr.announcements
     created_at     DateTime DEFAULT now(),
     updated_at     DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/announcements', '{replica}', updated_at)
 ORDER BY id;
 
-CREATE TABLE IF NOT EXISTS ndr.announcement_reads
+CREATE TABLE IF NOT EXISTS ndr.announcement_reads ON CLUSTER ndr_cluster
 (
     announcement_id String,
     username        String,
     read_at         DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(read_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/announcement_reads', '{replica}', read_at)
 ORDER BY (announcement_id, username);
 
-CREATE TABLE IF NOT EXISTS ndr.sigma_rules
+CREATE TABLE IF NOT EXISTS ndr.sigma_rules ON CLUSTER ndr_cluster
 (
     id          String,
     name        String,
@@ -207,10 +236,10 @@ CREATE TABLE IF NOT EXISTS ndr.sigma_rules
     created_at  DateTime DEFAULT now(),
     updated_at  DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/sigma_rules', '{replica}', updated_at)
 ORDER BY id;
 
-CREATE TABLE IF NOT EXISTS ndr.sensor_keys
+CREATE TABLE IF NOT EXISTS ndr.sensor_keys ON CLUSTER ndr_cluster
 (
     id          String DEFAULT toString(generateUUIDv4()),
     key_hash    String,
@@ -230,10 +259,10 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_keys
     created_at  DateTime DEFAULT now(),
     last_seen   DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(last_seen)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/sensor_keys', '{replica}', last_seen)
 ORDER BY id;
 
-CREATE TABLE IF NOT EXISTS ndr.pcap_sessions
+CREATE TABLE IF NOT EXISTS ndr.pcap_sessions ON CLUSTER ndr_cluster
 (
     session_id   String,
     community_id String,
@@ -251,11 +280,11 @@ CREATE TABLE IF NOT EXISTS ndr.pcap_sessions
     sensor_host  String DEFAULT '',
     file_path    String DEFAULT ''
 )
-ENGINE = ReplacingMergeTree(start_time)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/pcap_sessions', '{replica}', start_time)
 ORDER BY (tenant_id, session_id)
 TTL start_time + INTERVAL 30 DAY;
 
-CREATE TABLE IF NOT EXISTS ndr.pcap_pending
+CREATE TABLE IF NOT EXISTS ndr.pcap_pending ON CLUSTER ndr_cluster
 (
     community_id      String,
     tenant_id         String   DEFAULT 'default',
@@ -268,11 +297,11 @@ CREATE TABLE IF NOT EXISTS ndr.pcap_pending
     upload_size_bytes UInt64   DEFAULT 0,
     severity          String   DEFAULT 'MEDIUM'
 )
-ENGINE = ReplacingMergeTree(requested_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/pcap_pending', '{replica}', requested_at)
 ORDER BY (tenant_id, community_id)
 TTL requested_at + INTERVAL 2 DAY;
 
-CREATE TABLE IF NOT EXISTS ndr.ai_suppressions
+CREATE TABLE IF NOT EXISTS ndr.ai_suppressions ON CLUSTER ndr_cluster
 (
     id             String   DEFAULT toString(generateUUIDv4()),
     tenant_id      String   DEFAULT 'default',
@@ -289,11 +318,11 @@ CREATE TABLE IF NOT EXISTS ndr.ai_suppressions
     active         UInt8    DEFAULT 1,
     created_at     DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(created_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ai_suppressions', '{replica}', created_at)
 ORDER BY (tenant_id, signature_id, suppress_type, suppress_ip)
 TTL created_at + INTERVAL 90 DAY;
 
-CREATE TABLE IF NOT EXISTS ndr.sensor_commands
+CREATE TABLE IF NOT EXISTS ndr.sensor_commands ON CLUSTER ndr_cluster
 (
     id          String DEFAULT toString(generateUUIDv4()),
     tenant_id   String,
@@ -302,10 +331,10 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_commands
     status      String DEFAULT 'pending',
     created_at  DateTime DEFAULT now()
 )
-ENGINE = ReplacingMergeTree(created_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/sensor_commands', '{replica}', created_at)
 ORDER BY (tenant_id, sensor_id, created_at);
 
-CREATE TABLE IF NOT EXISTS ndr.support_messages
+CREATE TABLE IF NOT EXISTS ndr.support_messages ON CLUSTER ndr_cluster
 (
     id              String DEFAULT toString(generateUUIDv4()),
     tenant_id       String,
@@ -325,17 +354,16 @@ CREATE TABLE IF NOT EXISTS ndr.support_messages
     replied_at      Nullable(DateTime),
     forwarded_at    Nullable(DateTime)
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/support_messages', '{replica}', updated_at)
 ORDER BY id;
 
--- Native SOAR Tables
-CREATE TABLE IF NOT EXISTS ndr.soar_cases
+CREATE TABLE IF NOT EXISTS ndr.soar_cases ON CLUSTER ndr_cluster
 (
     id           String DEFAULT toString(generateUUIDv4()),
     title        String,
     description  String DEFAULT '',
     severity     String DEFAULT 'MEDIUM',
-    status       String DEFAULT 'New',  -- New, Investigating, Resolved, False Positive
+    status       String DEFAULT 'New',
     assigned_to  String DEFAULT '',
     src_ip       String DEFAULT '',
     dst_ip       String DEFAULT '',
@@ -347,10 +375,10 @@ CREATE TABLE IF NOT EXISTS ndr.soar_cases
     closed_at    Nullable(DateTime),
     tenant_id    String DEFAULT 'default'
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/soar_cases', '{replica}', updated_at)
 ORDER BY (tenant_id, created_at);
 
-CREATE TABLE IF NOT EXISTS ndr.soar_case_comments
+CREATE TABLE IF NOT EXISTS ndr.soar_case_comments ON CLUSTER ndr_cluster
 (
     id         String DEFAULT toString(generateUUIDv4()),
     case_id    String,
@@ -359,32 +387,30 @@ CREATE TABLE IF NOT EXISTS ndr.soar_case_comments
     created_at DateTime DEFAULT now(),
     tenant_id  String DEFAULT 'default'
 )
-ENGINE = MergeTree()
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/soar_case_comments', '{replica}')
 ORDER BY (tenant_id, case_id, created_at);
 
-CREATE TABLE IF NOT EXISTS ndr.soar_native_playbooks
+CREATE TABLE IF NOT EXISTS ndr.soar_native_playbooks ON CLUSTER ndr_cluster
 (
     id           String DEFAULT toString(generateUUIDv4()),
     name         String,
     description  String DEFAULT '',
     enabled      UInt8 DEFAULT 1,
-    -- condition fields
-    cond_field   String,   -- 'score','severity','threat_intel','src_country','sigma_tag'
-    cond_op      String,   -- '>','>=','==','contains'
+    cond_field   String,
+    cond_op      String,
     cond_value   String,
-    -- action
-    action_type  String,   -- 'slack','teams','discord','telegram','pagerduty','jira','webhook','email','create_case','block_ip'
-    action_config String,  -- JSON config
+    action_type  String,
+    action_config String,
     run_count    UInt64 DEFAULT 0,
     last_run     Nullable(DateTime),
     created_at   DateTime DEFAULT now(),
     updated_at   DateTime DEFAULT now(),
     tenant_id    String DEFAULT 'default'
 )
-ENGINE = ReplacingMergeTree(updated_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/soar_native_playbooks', '{replica}', updated_at)
 ORDER BY (tenant_id, id);
 
-CREATE TABLE IF NOT EXISTS ndr.soar_playbook_runs
+CREATE TABLE IF NOT EXISTS ndr.soar_playbook_runs ON CLUSTER ndr_cluster
 (
     id            String DEFAULT toString(generateUUIDv4()),
     playbook_id   String,
@@ -395,11 +421,10 @@ CREATE TABLE IF NOT EXISTS ndr.soar_playbook_runs
     created_at    DateTime DEFAULT now(),
     tenant_id     String DEFAULT 'default'
 )
-ENGINE = MergeTree()
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/soar_playbook_runs', '{replica}')
 ORDER BY (tenant_id, created_at);
 
--- Evidence chain of custody log (per-tenant)
-CREATE TABLE IF NOT EXISTS ndr.evidence_log
+CREATE TABLE IF NOT EXISTS ndr.evidence_log ON CLUSTER ndr_cluster
 (
     id              String DEFAULT generateUUIDv4(),
     community_id    String,
@@ -414,11 +439,10 @@ CREATE TABLE IF NOT EXISTS ndr.evidence_log
     notes           String DEFAULT '',
     ip_address      String DEFAULT ''
 )
-ENGINE = MergeTree
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/evidence_log', '{replica}')
 ORDER BY (community_id, performed_at);
 
--- Evidence bundles (auto-captured or manual)
-CREATE TABLE IF NOT EXISTS ndr.evidence_bundles
+CREATE TABLE IF NOT EXISTS ndr.evidence_bundles ON CLUSTER ndr_cluster
 (
     id              String DEFAULT generateUUIDv4(),
     community_id    String,
@@ -437,12 +461,11 @@ CREATE TABLE IF NOT EXISTS ndr.evidence_bundles
     severity        String DEFAULT '',
     alert_id        String DEFAULT ''
 )
-ENGINE = ReplacingMergeTree(captured_at)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/evidence_bundles', '{replica}', captured_at)
 ORDER BY (community_id, id)
 TTL expires_at WHERE legal_hold = 0;
 
--- Evidence annotations (analyst notes per evidence bundle)
-CREATE TABLE IF NOT EXISTS ndr.evidence_annotations
+CREATE TABLE IF NOT EXISTS ndr.evidence_annotations ON CLUSTER ndr_cluster
 (
     id              String DEFAULT generateUUIDv4(),
     bundle_id       String,
@@ -452,12 +475,10 @@ CREATE TABLE IF NOT EXISTS ndr.evidence_annotations
     tag             String DEFAULT '',
     created_at      DateTime DEFAULT now()
 )
-ENGINE = MergeTree
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/evidence_annotations', '{replica}')
 ORDER BY (bundle_id, created_at);
 
--- Permanent immutable IOC hit log — per-tenant, written at detection time, never deleted or updated.
--- create_tenant() replaces ndr. → ndr_<tenant>. so each tenant gets their own isolated table.
-CREATE TABLE IF NOT EXISTS ndr.ioc_hits
+CREATE TABLE IF NOT EXISTS ndr.ioc_hits ON CLUSTER ndr_cluster
 (
     timestamp    DateTime DEFAULT now(),
     community_id String,
@@ -467,13 +488,11 @@ CREATE TABLE IF NOT EXISTS ndr.ioc_hits
     ioc_type     String   DEFAULT 'ip',
     feed_source  String   DEFAULT 'feodo'
 )
-ENGINE = MergeTree()
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ioc_hits', '{replica}')
 ORDER BY (timestamp, community_id, matched_ip)
-SETTINGS non_replicated_deduplication_window = 0
 COMMENT 'Immutable IOC hit log — never delete or update these records';
 
--- Global shared IOC table (not per-tenant)
-CREATE TABLE IF NOT EXISTS ndr.shared_iocs
+CREATE TABLE IF NOT EXISTS ndr.shared_iocs ON CLUSTER ndr_cluster
 (
     id                  String DEFAULT generateUUIDv4(),
     ioc_value           String,
@@ -485,5 +504,5 @@ CREATE TABLE IF NOT EXISTS ndr.shared_iocs
     tags                String DEFAULT '',
     description         String DEFAULT ''
 )
-ENGINE = ReplacingMergeTree(last_seen)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/shared_iocs', '{replica}', last_seen)
 ORDER BY (ioc_type, ioc_value);

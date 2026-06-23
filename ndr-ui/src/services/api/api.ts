@@ -217,6 +217,14 @@ export class Api {
     return this.http.post(`${this.baseUrl}/settings`, data);
   }
 
+  getAiConfig(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/settings/ai`);
+  }
+
+  updateAiConfig(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings/ai`, data);
+  }
+
   togglePlaybook(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/soar/playbook/toggle`, data);
   }
