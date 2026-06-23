@@ -22,6 +22,7 @@ parsed, err = parse_json(.message)
 if err == null {
   . = parsed
   .source = "suricata"
+  .tenant_id = get_env_var("TENANT_ID") ?? "default"
 } else {
   abort
 }
@@ -35,6 +36,7 @@ parsed, err = parse_json(.message)
 if err == null {
   . = parsed
   .source = "zeek"
+  .tenant_id = get_env_var("TENANT_ID") ?? "default"
 } else {
   abort
 }
@@ -79,6 +81,18 @@ glob_minimum_cooldown_ms = 100
 [sources.zeek_quic]
 type = "file"
 include = ["/logs/zeek/quic.log"]
+read_from = "end"
+glob_minimum_cooldown_ms = 100
+
+[sources.zeek_arp]
+type = "file"
+include = ["/logs/zeek/arp.log"]
+read_from = "end"
+glob_minimum_cooldown_ms = 100
+
+[sources.zeek_software]
+type = "file"
+include = ["/logs/zeek/software.log"]
 read_from = "end"
 glob_minimum_cooldown_ms = 100
 
@@ -138,9 +152,25 @@ parsed, err = parse_json(.message)
 if err == null { . = parsed; .source = "zeek"; .log_type = "quic" } else { abort }
 '''
 
+[transforms.zeek_arp_json]
+type = "remap"
+inputs = ["zeek_arp"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null { . = parsed; .source = "zeek"; .log_type = "arp" } else { abort }
+'''
+
+[transforms.zeek_software_json]
+type = "remap"
+inputs = ["zeek_software"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null { . = parsed; .source = "zeek"; .log_type = "software" } else { abort }
+'''
+
 [sinks.kafka]
 type = "kafka"
-inputs = ["suricata_json", "zeek_json", "zeek_http_json", "zeek_dns_json", "zeek_ssl_json", "zeek_files_json", "zeek_dhcp_json", "zeek_weird_json", "zeek_quic_json"]
+inputs = ["suricata_json", "zeek_json", "zeek_http_json", "zeek_dns_json", "zeek_ssl_json", "zeek_files_json", "zeek_dhcp_json", "zeek_weird_json", "zeek_quic_json", "zeek_arp_json", "zeek_software_json"]
 bootstrap_servers = "kafka1:9092,kafka2:9092,kafka3:9092"
 topic = "ndr-events"
 encoding.codec = "json"

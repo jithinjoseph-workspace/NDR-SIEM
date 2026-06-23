@@ -139,8 +139,21 @@ export class Api {
     return this.http.get(`${this.baseUrl}/severity`);
   }
 
-  getNetworkMap(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/network-map`);
+  getNetworkMap(mode?: string, limit?: number): Observable<any> {
+    let url = `${this.baseUrl}/network-map`;
+    const params: string[] = [];
+    if (mode) params.push(`mode=${encodeURIComponent(mode)}`);
+    if (limit !== undefined) params.push(`limit=${limit}`);
+    if (params.length) url += '?' + params.join('&');
+    return this.http.get(url);
+  }
+
+  getNetworkMapNode(ip: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/network-map/node/${encodeURIComponent(ip)}`);
+  }
+
+  searchNetworkMap(query: string): Observable<string[]> {
+    return this.http.get<string[]>(`${this.baseUrl}/network-map/search?q=${encodeURIComponent(query)}`);
   }
 
   getScaleStatus(): Observable<any> {
@@ -223,6 +236,14 @@ export class Api {
 
   updateAiConfig(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/settings/ai`, data);
+  }
+
+  getAssets(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/assets`);
+  }
+
+  updateAsset(ip: string, payload: any): Observable<any> {
+    return this.http.put(`${this.baseUrl}/assets/${ip}`, payload);
   }
 
   togglePlaybook(data: any): Observable<any> {

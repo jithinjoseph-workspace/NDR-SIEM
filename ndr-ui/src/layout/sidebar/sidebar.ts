@@ -17,6 +17,7 @@ import {
   Users,
   FolderSearch,
   Bot,
+  Server,
   LucideAngularModule
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
@@ -75,6 +76,7 @@ export class Sidebar implements OnInit, OnDestroy {
         { label: 'Network Logs', route: '/logs', icon: FileText, permission: 'logs' },
         { label: 'Live Stream', route: '/live', icon: Activity, permission: 'live' },
         { label: 'Network Map', route: '/network-map', icon: Network, permission: 'network-map' },
+        { label: 'Assets', route: '/assets', icon: Server, permission: 'alerts' },
         { label: 'Rules', route: '/rules', icon: ShieldAlert, permission: 'rules' },
         { label: 'Threat Intel', route: '/intel', icon: Search, permission: 'intel' },
         { label: 'System Health', route: '/health', icon: Database, permission: 'health' },

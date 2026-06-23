@@ -23,7 +23,7 @@ use axum::extract::DefaultBodyLimit;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
-use enrichment::{AsnLookup, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
+use enrichment::{AsnLookup, AssetIdentifier, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
@@ -176,7 +176,8 @@ async fn main() {
         enrichment: Arc::new(EnrichmentPipeline {
             geoip,
             asn,
-            threat_intel: ti_ref.clone(), // use same instance that gets refreshed, // separate instance for sync use
+            threat_intel: ti_ref.clone(),
+            asset_id: Arc::new(AssetIdentifier::new()),
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
         detection:  Arc::new(tokio::sync::RwLock::new(detection::DetectionEngine::new("rules"))),
@@ -190,6 +191,9 @@ async fn main() {
         sensor_key_cache,
         ingest_tx,
     };
+
+    // ── Background: OUI vendor database auto-updater ─────────────────────
+    state.enrichment.asset_id.clone().spawn_auto_updater();
 
     // ── Background: session reaper (every 30s) ────────────────────────────
     {
@@ -323,6 +327,8 @@ async fn main() {
         .route("/api/severity",      get(api::get_severity))
         .route("/api/hits",          get(api::get_hits))
         .route("/api/network-map", get(api::get_network_map))
+        .route("/api/network-map/node/:ip", get(api::get_network_map_node))
+        .route("/api/network-map/search", get(api::search_network_map))
         .route("/api/scale-status", get(api::get_scale_status))
         .route("/api/rules",          get(api::get_rules).post(api::create_rule))
         .route("/api/rules/reload",   post(api::reload_rules_api))     // ← MUST be before /:id
@@ -335,6 +341,8 @@ async fn main() {
         .route("/api/soar/status",  get(api::get_soar_status))
         .route("/api/settings", get(api::get_settings).post(api::update_settings))
         .route("/api/settings/ai", get(api::get_ai_config).post(api::update_ai_config))
+        .route("/api/assets",     get(api::get_assets))
+        .route("/api/assets/:ip", get(api::get_asset_by_ip).put(api::update_asset_name))
         .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
         .route("/api/soar/playbook/create",post(api::create_playbook))
         .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))

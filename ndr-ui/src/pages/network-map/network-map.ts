@@ -1,7 +1,9 @@
-import { Component, OnInit, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../services/api/api';
 import { ArkimeService } from '../../services/arkime/arkime';
+import { NetworkDataService } from './services/network-data.service';
+import { NetworkPhysicsService } from './services/network-physics.service';
 import * as d3 from 'd3';
 import {
   CircleDot,
@@ -17,30 +19,63 @@ import {
   Server,
   TriangleAlert,
   X,
+  Laptop,
+  Monitor,
+  Smartphone,
+  Tablet,
+  Cpu,
+  Printer,
+  Tv,
+  HelpCircle,
+  Users,
+  ArrowLeft
 } from 'lucide-angular';
+
+const DEVICE_PATHS: Record<string, string> = {
+  laptop: 'M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16',
+  mobile: 'M5 4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4zm7 14h.01',
+  phone: 'M5 4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4zm7 14h.01',
+  router: 'M4 14v7m16-7v7m-8-7v7M2 10h20a2 2 0 0 1 2 2v2H0v-2a2 2 0 0 1 2-2zM8 2v2m8-2v2',
+  server: 'M4 4h16v8H4zm0 8h16v8H4zm4-4h.01M8 16h.01',
+  printer: 'M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2m-4-6h.01M6 14h12v8H6z',
+  tv: 'm16 3-4 4-4-4m13 6H3a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2Z',
+  desktop: 'M2 5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V5zm6 12v4m8-4v4m-8 0h8',
+  iot: 'M12 2v4m-4-3.5L9.5 5.5M16 2.5 14.5 5.5M6 8a6 6 0 1 0 12 0H6z',
+  globe: 'M22 12A10 10 0 1 1 12 2a10 10 0 0 1 10 10z M2 12h20 M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z',
+  cluster: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M23 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75',
+  github: 'M15 22v-4a4.8 4.8 0 0 0-1-3.2c3 0 6-2 6-5.9 0-1.4-.5-2.5-1.3-3.4l.1-1.2s-.5-1.5-1.5-2.2L12 7l-2.3-1c-1 .7-1.5 2.2-1.5 2.2l.1 1.2A5 5 0 0 0 7 12.9c0 4 3 6 6 6-.5.4-1 .9-1.2 1.8-1 .4-2 .4-3-1s-1.5-1.6-1.5-1.6c-.9-.2-1.4.1-1.4.1l.1.3c.4.1.7.5 1 1s1.3 1.5 2.5 1.5c1.4.2 2.5-.2 2.5-.2v3.1',
+  youtube: 'M2.5 17a24.1 24.1 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.5 49.5 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.1 24.1 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.5 49.5 0 0 1-16.2 0A2 2 0 0 1 2.5 17 M10 15l5-3-5-3z',
+  cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z',
+  apple: 'M12 20.94c1.5 0 2.75 1.06 4 1.06 3 0 6-8 6-12.22A4.91 4.91 0 0 0 17 5c-2.22 0-4 1.44-5 2-1-.56-2.78-2-5-2a4.9 4.9 0 0 0-5 4.78C2 14 5 22 8 22c1.25 0 2.5-1.06 4-1.06Z M10 2c1 .5 2 2 2 5'
+};
+
+import { DeviceDrawer } from '../../components/device-drawer/device-drawer';
 
 @Component({
   selector: 'app-network-map',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule],
+  imports: [CommonModule, LucideAngularModule, DeviceDrawer],
   templateUrl: './network-map.html',
   styleUrl: './network-map.css',
 })
-export class NetworkMap implements OnInit {
+export class NetworkMap implements OnInit, OnDestroy {
   @ViewChild('mapSvg', { static: true }) svgRef!: ElementRef;
+  zoomBehavior: any;
 
   nodeCount: number = 0;
   edgeCount: number = 0;
-  loading: boolean = true;
+  viewState: 'loading' | 'loaded' | 'error' | 'empty' = 'loading';
+  errorMessage: string = '';
   selectedNode: any = null;
   lastUpdated: string = '--';
 
-  // PCAP sessions panel
-  pcapSessions: any[] = [];
-  pcapLoading = false;
-  pcapError = '';
-  showPcapPanel = false;
-  pcapIp = '';
+  nodesData: any[] = [];
+  edgesData: any[] = [];
+
+  searchQuery: string = '';
+  searchDebounce: any;
+  isSearchActive: boolean = false;
+  searchMatches: Set<string> = new Set();
 
   CircleDotIcon = CircleDot;
   DownloadIcon = Download;
@@ -54,278 +89,626 @@ export class NetworkMap implements OnInit {
   ServerIcon = Server;
   ThreatIcon = TriangleAlert;
   XIcon = X;
+  ArrowLeftIcon = ArrowLeft;
 
   constructor(
     private api: Api,
     private cdr: ChangeDetectorRef,
     private arkime: ArkimeService,
+    private dataService: NetworkDataService,
+    private physics: NetworkPhysicsService
   ) {}
+
+  ngOnDestroy() {
+    this.physics.destroy();
+    clearTimeout(this.searchDebounce);
+  }
 
   ngOnInit() {
     this.loadMap();
   }
 
-  getNodeIcon(node: any): string {
-    if (node.threat) return '!';
-    if (node.type === 'internal') return 'IN';
-    if (node.id?.includes(':443') || node.dstPort === 443) return 'TLS';
-    if (node.id?.includes(':53') || node.dstPort === 53) return 'DNS';
-    return 'EX';
+  getDrawerIcon(node: any): any {
+    if (node?.type === 'cluster') return Users;
+    if (node?.type === 'laptop') return Laptop;
+    if (node?.type === 'desktop') return Monitor;
+    if (node?.type === 'phone' || node?.type === 'mobile') return Smartphone;
+    if (node?.type === 'tablet') return Tablet;
+    if (node?.type === 'iot') return Cpu;
+    if (node?.type === 'printer') return Printer;
+    if (node?.type === 'tv' || node?.type === 'media') return Tv;
+    if (node?.type === 'server') return Server;
+    if (node?.type === 'router' || node?.type === 'gateway' || node?.type === 'firewall' || node?.type === 'switch') return Router;
+    if (node?.is_internal) return Router;
+    if (node?.threat) return TriangleAlert;
+    return node?.is_internal ? HelpCircle : Globe;
   }
 
-  getNodeKindLabel(node: any): string {
-    if (node?.threat) return 'Threat Indicator';
-    return node?.type === 'internal' ? 'Internal Host' : 'External Server';
+  getNodeIconPath(node: any): string {
+    if (node?.type === 'cluster') return DEVICE_PATHS['cluster'];
+    if (node?.threat) return DEVICE_PATHS['globe'];
+
+    const type = node?.type || '';
+    if ((type === 'phone' || type === 'mobile') && DEVICE_PATHS['phone']) return DEVICE_PATHS['phone'];
+    if ((type === 'tv' || type === 'media') && DEVICE_PATHS['tv']) return DEVICE_PATHS['tv'];
+    if ((type === 'router' || type === 'gateway' || type === 'firewall' || type === 'switch') && DEVICE_PATHS['router']) return DEVICE_PATHS['router'];
+
+    if (node?.type && DEVICE_PATHS[node.type]) return DEVICE_PATHS[node.type];
+    if (node.is_internal) return DEVICE_PATHS['router'];
+
+    const label = (node.label || node.id || '').toLowerCase();
+    if (label.includes('github')) return DEVICE_PATHS['github'];
+    if (label.includes('youtube') || label.includes('googlevideo')) return DEVICE_PATHS['youtube'];
+    if (label.includes('apple') || label.includes('icloud') || label.includes('mzstatic')) return DEVICE_PATHS['apple'];
+    if (label.includes('aws') || label.includes('amazonaws') || label.includes('cloudfront')) return DEVICE_PATHS['cloud'];
+    if (label.includes('google')) return DEVICE_PATHS['cloud'];
+
+    return DEVICE_PATHS['globe'];
+  }
+
+  hasFavicon(node: any): boolean {
+    return node.type === 'domain' || (!node.is_internal && node.type !== 'cluster' && node.label && node.label !== node.id);
+  }
+
+  getDomain(node: any): string {
+    if (!node || !node.label) return '';
+    return node.label.split(' ')[0];
   }
 
   getNodeTypeClass(node: any): string {
     if (node?.threat) return 'threat';
-    return node?.type === 'internal' ? 'internal' : 'external';
+    return node?.is_internal ? 'internal' : 'external';
   }
 
   clearSelection() {
     this.selectedNode = null;
+    this.focusMode = false;
     d3.select(this.svgRef.nativeElement).selectAll('.topology-node').classed('is-selected', false);
   }
 
-  loadMap() {
-    this.loading = true;
-    this.selectedNode = null;
-    this.api.getNetworkMap().subscribe({
-      next: (data: any) => {
-        const nodes = data.nodes || [];
-        const edges = data.edges || [];
-        this.nodeCount = data.total_nodes ?? nodes.length;
-        this.edgeCount = data.total_edges ?? edges.length;
+  focusMode: boolean = false;
+
+  toggleFocus() {
+    this.focusMode = !this.focusMode;
+    if (this.focusMode && this.selectedNode) {
+      this.loadFocusMode(this.selectedNode.id);
+    } else {
+      this.loadMap(true);
+    }
+  }
+
+  onSearchChange(event: any) {
+    this.searchQuery = event.target.value;
+    clearTimeout(this.searchDebounce);
+
+    if (!this.searchQuery.trim()) {
+      this.isSearchActive = false;
+      this.searchMatches.clear();
+      this.renderGraph(this.nodesData, this.edgesData);
+      return;
+    }
+
+    this.searchDebounce = setTimeout(() => {
+      this.isSearchActive = true;
+      this.searchMatches.clear();
+
+      const q = this.searchQuery.trim().toLowerCase();
+      this.nodesData.forEach(n => {
+        const idMatch = n.id && n.id.toLowerCase().includes(q);
+        const labelMatch = n.label && n.label.toLowerCase().includes(q);
+        const activeIpMatch = n.active_ip && n.active_ip.toLowerCase().includes(q);
+        const macMatch = n.mac && n.mac.toLowerCase().includes(q);
+
+        let historyMatch = false;
+        if (n.ip_history && n.ip_history !== '[]') {
+          try {
+            const history: Array<{ip: string}> = JSON.parse(n.ip_history);
+            historyMatch = history.some(entry => entry.ip && entry.ip.toLowerCase().includes(q));
+          } catch { /* ignore */ }
+        }
+
+        const primaryDomainMatch = n.primary_domain && n.primary_domain.toLowerCase().includes(q);
+        const allDomainsMatch = n.all_domains && n.all_domains.some((d: string) => d.toLowerCase().includes(q));
+        const membersMatch = n.member_ips && n.member_ips.some((m: string) => m.toLowerCase().includes(q));
+
+        if (idMatch || labelMatch || activeIpMatch || macMatch || historyMatch || primaryDomainMatch || allDomainsMatch || membersMatch) {
+          this.searchMatches.add(n.id);
+        }
+      });
+
+      this.renderGraph(this.nodesData, this.edgesData);
+
+      this.api.searchNetworkMap(this.searchQuery).subscribe({
+        next: (ids: string[]) => {
+          let hasNewMatches = false;
+          ids.forEach(id => {
+            if (!this.searchMatches.has(id)) {
+              this.searchMatches.add(id);
+              hasNewMatches = true;
+            }
+            this.nodesData.forEach((n: any) => {
+              if (n.type === 'cluster' && n.member_ips && n.member_ips.includes(id)) {
+                if (!this.searchMatches.has(n.id)) {
+                  this.searchMatches.add(n.id);
+                  hasNewMatches = true;
+                }
+              }
+            });
+          });
+
+          if (hasNewMatches) {
+            this.renderGraph(this.nodesData, this.edgesData);
+          }
+
+          if (ids.length > 0) {
+            let matchedNode = this.nodesData.find((n: any) => n.id === ids[0]);
+            let clusterToExpand = null;
+            if (!matchedNode) {
+              clusterToExpand = this.nodesData.find((n: any) => n.type === 'cluster' && n.member_ips?.includes(ids[0]));
+            }
+
+            if (clusterToExpand) {
+              this.expandCluster(clusterToExpand);
+              setTimeout(() => {
+                let expandedMatch = this.nodesData.find((n: any) => n.id === ids[0]);
+                if (expandedMatch) this.zoomToNode(expandedMatch);
+              }, 400);
+            } else if (matchedNode) {
+              this.zoomToNode(matchedNode);
+            }
+          }
+        }
+      });
+    }, 300);
+  }
+
+  zoomToNode(node: any, targetScale: number = 2) {
+    if (node.x === undefined || node.y === undefined || !this.zoomBehavior) return;
+    const svgEl = this.svgRef.nativeElement;
+    const width = svgEl.clientWidth || 1000;
+    const height = svgEl.clientHeight || 600;
+
+    const transform = d3.zoomIdentity
+      .translate(width / 2, height / 2)
+      .scale(targetScale)
+      .translate(-node.x, -node.y);
+
+    d3.select(svgEl).transition().duration(800).call(this.zoomBehavior.transform, transform);
+  }
+
+  expandCluster(clusterNode: any) {
+    if (!clusterNode.member_ips || clusterNode.member_ips.length === 0) return;
+
+    const anchorX = clusterNode.x;
+    const anchorY = clusterNode.y;
+
+    this.viewState = 'loading';
+    this.errorMessage = '';
+    this.dataService.expandCluster(clusterNode, this.nodesData, this.edgesData).subscribe({
+      next: (data) => {
+        const oldNodesMap = new Map(this.nodesData.map((n: any) => [n.id, n]));
+        this.nodesData = data.nodes.map((newNode: any) => {
+          const oldNode = oldNodesMap.get(newNode.id);
+          if (oldNode) {
+            newNode.x = oldNode.x;
+            newNode.y = oldNode.y;
+            newNode.vx = oldNode.vx;
+            newNode.vy = oldNode.vy;
+          } else {
+            newNode.x = anchorX;
+            newNode.y = anchorY;
+            newNode.vx = 0;
+            newNode.vy = 0;
+          }
+          return newNode;
+        });
+
+        this.edgesData = data.edges;
+        this.nodeCount = data.nodeCount;
+        this.edgeCount = data.edgeCount;
+        this.viewState = this.nodeCount === 0 ? 'empty' : 'loaded';
+        this.cdr.detectChanges();
+
+        this.renderGraph(this.nodesData, this.edgesData, true);
+
+        if (anchorX !== undefined && anchorY !== undefined) {
+          setTimeout(() => this.zoomToNode({ x: anchorX, y: anchorY }, 0.75), 80);
+        }
+      },
+      error: () => {
+        this.viewState = 'error';
+        this.errorMessage = 'Failed to expand cluster.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  loadMap(resetCameraAfterLoad: boolean = false) {
+    this.viewState = 'loading';
+    this.errorMessage = '';
+    const previousSelection = this.selectedNode;
+    this.dataService.loadMap().subscribe({
+      next: (data) => {
         this.lastUpdated = new Date().toLocaleTimeString('en-US', {
           hour: '2-digit',
           minute: '2-digit',
           second: '2-digit',
         });
-        this.loading = false;
+
+        const oldNodesMap = new Map(this.nodesData.map((n: any) => [n.id, n]));
+        this.nodesData = data.nodes.map((newNode: any) => {
+          const oldNode = oldNodesMap.get(newNode.id);
+          if (oldNode) {
+            newNode.x = oldNode.x;
+            newNode.y = oldNode.y;
+            newNode.vx = oldNode.vx;
+            newNode.vy = oldNode.vy;
+          }
+          return newNode;
+        });
+
+        this.edgesData = data.edges;
+        this.nodeCount = data.nodeCount;
+        this.edgeCount = data.edgeCount;
+        this.viewState = this.nodeCount === 0 ? 'empty' : 'loaded';
+
+        if (previousSelection) {
+          this.selectedNode = this.nodesData.find((n: any) => n.id === previousSelection.id) || previousSelection;
+        }
+
         this.cdr.detectChanges();
-        setTimeout(() => this.renderGraph(nodes, edges), 100);
+        setTimeout(() => {
+          this.renderGraph(this.nodesData, this.edgesData);
+          if (resetCameraAfterLoad) {
+            setTimeout(() => this.resetCamera(), 50);
+          }
+        }, 100);
       },
       error: () => {
-        this.loading = false;
+        this.viewState = 'error';
+        this.errorMessage = 'Failed to load network topology.';
         this.cdr.detectChanges();
       },
     });
   }
 
-  viewPcapSessions(ip: string) {
-    this.pcapIp = ip;
-    this.pcapSessions = [];
-    this.pcapError = '';
-    this.pcapLoading = true;
-    this.showPcapPanel = true;
-    this.arkime.getSessions({ ip, limit: 10 }).subscribe({
-      next: (data: any) => {
-        this.pcapSessions = data.sessions || [];
-        this.pcapLoading = false;
+  loadFocusMode(ip: string) {
+    this.viewState = 'loading';
+    this.errorMessage = '';
+    const previousSelection = this.selectedNode;
+    this.dataService.loadFocusMode(ip).subscribe({
+      next: (data) => {
+        this.lastUpdated = new Date().toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+
+        const oldNodesMap = new Map(this.nodesData.map((n: any) => [n.id, n]));
+        this.nodesData = data.nodes.map((newNode: any) => {
+          const oldNode = oldNodesMap.get(newNode.id);
+          if (oldNode) {
+            newNode.x = oldNode.x;
+            newNode.y = oldNode.y;
+            newNode.vx = oldNode.vx;
+            newNode.vy = oldNode.vy;
+          }
+          return newNode;
+        });
+
+        this.edgesData = data.edges;
+        this.nodeCount = data.nodeCount;
+        this.edgeCount = data.edgeCount;
+        this.viewState = this.nodeCount === 0 ? 'empty' : 'loaded';
+
+        if (previousSelection) {
+          this.selectedNode = this.nodesData.find((n: any) => n.id === previousSelection.id) || previousSelection;
+        }
+
         this.cdr.detectChanges();
+        setTimeout(() => {
+          this.renderGraph(this.nodesData, this.edgesData, true);
+
+          const focusedNode = this.nodesData.find((n: any) => n.id === ip);
+          if (focusedNode && focusedNode.x !== undefined && focusedNode.y !== undefined) {
+            this.zoomToNode(focusedNode, 1.2);
+          } else {
+            this.resetCamera();
+          }
+        }, 100);
       },
       error: () => {
-        this.pcapError = 'Failed to load sessions';
-        this.pcapLoading = false;
+        this.viewState = 'error';
+        this.errorMessage = 'Failed to load specific node data.';
         this.cdr.detectChanges();
       },
     });
   }
 
-  openArkime(cid: string) {
-    if (!cid) return;
-    this.arkime.getSessionLink(cid).subscribe({
-      next: (data: any) => {
-        if (data.link) window.open(data.link, '_blank');
-      },
-    });
-  }
-
-  downloadPcap(sessionId: string) {
-    this.arkime.downloadPcap(sessionId);
-  }
-
-  formatBytes(bytes: number): string {
-    if (!bytes) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
-  }
-
-  closePcapPanel() {
-    this.showPcapPanel = false;
-    this.pcapSessions = [];
-  }
-
-  renderGraph(nodes: any[], edges: any[]) {
+  resetCamera() {
+    if (!this.zoomBehavior || !this.svgRef) return;
     const svgEl = this.svgRef.nativeElement;
     const svg = d3.select(svgEl);
-    svg.selectAll('*').remove();
 
     const width = svgEl.clientWidth || 1000;
     const height = svgEl.clientHeight || 600;
 
-    const defs = svg.append('defs');
+    let targetScale = 1;
+    if (this.nodeCount > 50) targetScale = 0.3;
+    else if (this.nodeCount > 20) targetScale = 0.5;
+    else targetScale = 0.8;
 
-    const glowFilter = defs.append('filter').attr('id', 'glow');
-    glowFilter.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'coloredBlur');
-    const feMerge = glowFilter.append('feMerge');
-    feMerge.append('feMergeNode').attr('in', 'coloredBlur');
-    feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+    const transform = d3.zoomIdentity
+      .translate(width / 2 * (1 - targetScale), height / 2 * (1 - targetScale))
+      .scale(targetScale);
 
-    defs
-      .append('marker')
-      .attr('id', 'arrow')
-      .attr('viewBox', '0 -5 10 10')
-      .attr('refX', 20)
-      .attr('refY', 0)
-      .attr('markerWidth', 6)
-      .attr('markerHeight', 6)
-      .attr('orient', 'auto')
-      .append('path')
-      .attr('d', 'M0,-5L10,0L0,5')
-      .attr('fill', '#7ca3ff70');
+    svg.transition().duration(750).call(this.zoomBehavior.transform, transform);
+  }
 
-    const g = svg.append('g');
-    svg.call(
-      d3
+  renderGraph(nodes: any[], edges: any[], isClusterExpand: boolean = false) {
+    const svgEl = this.svgRef.nativeElement;
+    const svg = d3.select(svgEl);
+
+    const width = svgEl.clientWidth || 1000;
+    const height = svgEl.clientHeight || 600;
+
+    let g = svg.select<SVGGElement>('g.main-container');
+    if (g.empty()) {
+      const defs = svg.append('defs');
+
+      const glowFilter = defs.append('filter').attr('id', 'glow');
+      glowFilter.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'coloredBlur');
+      const feMerge = glowFilter.append('feMerge');
+      feMerge.append('feMergeNode').attr('in', 'coloredBlur');
+      feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+      defs
+        .append('marker')
+        .attr('id', 'arrow')
+        .attr('viewBox', '0 -5 10 10')
+        .attr('refX', 20)
+        .attr('refY', 0)
+        .attr('markerWidth', 6)
+        .attr('markerHeight', 6)
+        .attr('orient', 'auto')
+        .append('path')
+        .attr('d', 'M0,-5L10,0L0,5')
+        .attr('fill', '#7ca3ff70');
+
+      g = svg.append('g').attr('class', 'main-container');
+
+      this.zoomBehavior = d3
         .zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.1, 8])
-        .on('zoom', (event) => g.attr('transform', event.transform))
-    );
+        .on('zoom', (event) => {
+          g.attr('transform', event.transform);
+          svg.classed('zoomed-out', event.transform.k < 0.6);
+        });
 
-    const simulation = d3
-      .forceSimulation(nodes)
-      .force(
-        'link',
-        d3
-          .forceLink(edges)
-          .id((d: any) => d.id)
-          .distance((d: any) => {
+      svg.call(this.zoomBehavior);
+
+      g.append('g').attr('class', 'links-layer');
+      g.append('g').attr('class', 'labels-layer');
+      g.append('g').attr('class', 'nodes-layer');
+    }
+
+    const linksLayer = g.select('.links-layer');
+    const labelsLayer = g.select('.labels-layer');
+    const nodesLayer = g.select('.nodes-layer');
+
+    const link = linksLayer
+      .selectAll<SVGLineElement, any>('line')
+      .data(edges, (d: any) => `${d.source.id || d.source}-${d.target.id || d.target}`)
+      .join(
+        enter => enter.append('line')
+          .attr('class', (d: any) => (d.connections > 10 ? 'traffic-flow' : ''))
+          .attr('stroke', (d: any) => {
             const w = Math.log((d.connections || 1) + 1);
-            return Math.max(60, 150 - w * 10);
+            return w > 3 ? '#f8a01080' : '#7ca3ff46';
           })
-      )
-      .force(
-        'charge',
-        d3.forceManyBody().strength((d: any) => (d.type === 'internal' ? -440 : -220))
-      )
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide(40));
+          .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1), 4))
+          .attr('stroke-linecap', 'round')
+          .attr('marker-end', 'url(#arrow)')
+          .style('opacity', (d: any) => {
+            if (!this.isSearchActive) return 1;
+            const s = d.source?.id || d.source;
+            const t = d.target?.id || d.target;
+            return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
+          }),
+        update => {
+          update.style('opacity', (d: any) => {
+            if (!this.isSearchActive) return 1;
+            const s = d.source?.id || d.source;
+            const t = d.target?.id || d.target;
+            return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
+          });
+          return update;
+        },
+        exit => exit.remove()
+      );
 
-    const link = g
-      .append('g')
-      .selectAll('line')
-      .data(edges)
-      .join('line')
-      .attr('stroke', (d: any) => {
-        const w = Math.log((d.connections || 1) + 1);
-        return w > 3 ? '#f8a01080' : '#7ca3ff46';
-      })
-      .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1), 4))
-      .attr('stroke-linecap', 'round')
-      .attr('marker-end', 'url(#arrow)');
+    const edgeLabel = labelsLayer
+      .selectAll<SVGTextElement, any>('text')
+      .data(edges.filter((d: any) => d.connections > 5), (d: any) => `${d.source.id || d.source}-${d.target.id || d.target}`)
+      .join(
+        enter => enter.append('text')
+          .attr('fill', '#f8a010b0')
+          .attr('font-size', '8px')
+          .attr('font-family', 'monospace')
+          .attr('font-weight', '700')
+          .text((d: any) => d.connections)
+          .style('opacity', (d: any) => {
+            if (!this.isSearchActive) return 1;
+            const s = d.source?.id || d.source;
+            const t = d.target?.id || d.target;
+            return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0;
+          }),
+        update => {
+          update.text((d: any) => d.connections)
+            .style('opacity', (d: any) => {
+              if (!this.isSearchActive) return 1;
+              const s = d.source?.id || d.source;
+              const t = d.target?.id || d.target;
+              return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0;
+            });
+          return update;
+        },
+        exit => exit.remove()
+      );
 
-    const edgeLabel = g
-      .append('g')
-      .selectAll('text')
-      .data(edges.filter((d: any) => d.connections > 5))
-      .join('text')
-      .attr('fill', '#f8a010b0')
-      .attr('font-size', '8px')
-      .attr('font-family', 'monospace')
-      .attr('font-weight', '700')
-      .text((d: any) => d.connections);
+    const node = nodesLayer
+      .selectAll<SVGGElement, any>('g.topology-node')
+      .data(nodes, (d: any) => d.id)
+      .join(
+        enter => {
+          const nodeEnter = enter.append('g')
+            .attr('class', (d: any) => {
+              let base = `topology-node node-${d.id.replace(/[^a-zA-Z0-9_-]/g, '-')} ${this.getNodeTypeClass(d)}`;
+              if (this.selectedNode && this.selectedNode.id === d.id) base += ' is-selected';
+              if (this.isSearchActive && this.searchMatches.has(d.id)) base += ' search-match';
+              return base;
+            })
+            .style('cursor', 'pointer')
+            .style('opacity', 0)
+            .call(this.physics.dragBehavior)
+            .on('click', (event, d: any) => {
+              if (d.type === 'cluster' && !this.focusMode) {
+                this.expandCluster(d);
+                return;
+              }
+              this.selectedNode = d;
+              nodesLayer.selectAll('.topology-node').classed('is-selected', (n: any) => n.id === d.id);
+              if (this.focusMode) { /* apply focus */ }
+              this.cdr.detectChanges();
+            })
+            .on('mouseover', function() {
+              d3.select(this).raise();
+            });
 
-    const node = g
-      .append('g')
-      .selectAll<SVGGElement, any>('g')
-      .data(nodes)
-      .join('g')
-      .attr('class', (d: any) => `topology-node ${this.getNodeTypeClass(d)}`)
-      .style('cursor', 'pointer')
-      .call(
-        d3
-          .drag<SVGGElement, any>()
-          .on('start', (event, d: any) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            d.fx = d.x;
-            d.fy = d.y;
-          })
-          .on('drag', (event, d: any) => {
-            d.fx = event.x;
-            d.fy = event.y;
-          })
-          .on('end', (event, d: any) => {
-            if (!event.active) simulation.alphaTarget(0);
-            d.fx = null;
-            d.fy = null;
-          })
-      )
-      .on('click', (event, d: any) => {
-        this.selectedNode = d;
-        node.classed('is-selected', (n: any) => n.id === d.id);
-        this.cdr.detectChanges();
-      });
+          nodeEnter.append('circle')
+            .attr('r', (d: any) => {
+              const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
+              const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
+              return base + bonus;
+            })
+            .attr('fill', (d: any) => {
+              if (d.threat) return '#2b1214';
+              return d.is_internal ? '#0c2a2c' : '#101c35';
+            })
+            .attr('stroke', (d: any) => {
+              if (d.threat) return '#ff716a';
+              return d.is_internal ? '#69f6b8' : '#7ca3ff';
+            })
+            .attr('stroke-width', 1.4)
+            .attr('filter', (d: any) => (d.is_internal ? 'url(#glow)' : ''));
 
-    node
-      .append('circle')
-      .attr('r', (d: any) => (d.type === 'internal' ? 22 : 18))
-      .attr('fill', (d: any) => {
-        if (d.threat) return '#2b1214';
-        return d.type === 'internal' ? '#0c2a2c' : '#101c35';
-      })
-      .attr('stroke', (d: any) => {
-        if (d.threat) return '#ff716a';
-        return d.type === 'internal' ? '#69f6b8' : '#7ca3ff';
-      })
-      .attr('stroke-width', 1.4)
-      .attr('filter', (d: any) => (d.type === 'internal' ? 'url(#glow)' : ''));
+          nodeEnter.append('path')
+            .attr('d', (d: any) => this.getNodeIconPath(d))
+            .attr('transform', (d: any) => (d.type === 'cluster' ? 'translate(-12, -12) scale(1)' : 'translate(-9, -9) scale(0.75)'))
+            .attr('fill', 'none')
+            .attr('stroke', (d: any) => {
+              if (d.threat) return '#ffb3ad';
+              return d.is_internal ? '#9ffbd0' : '#b8ccff';
+            })
+            .attr('stroke-width', 2)
+            .attr('stroke-linecap', 'round')
+            .attr('stroke-linejoin', 'round')
+            .style('display', (d: any) => (this.hasFavicon(d) ? 'none' : 'block'));
 
-    node
-      .append('text')
-      .attr('text-anchor', 'middle')
-      .attr('dominant-baseline', 'central')
-      .attr('fill', (d: any) => {
-        if (d.threat) return '#ffb3ad';
-        return d.type === 'internal' ? '#9ffbd0' : '#b8ccff';
-      })
-      .attr('font-size', (d: any) => (this.getNodeIcon(d).length > 2 ? '8px' : '10px'))
-      .attr('font-family', 'monospace')
-      .attr('font-weight', '800')
-      .text((d: any) => this.getNodeIcon(d));
+          nodeEnter.append('image')
+            .attr('href', (d: any) => this.hasFavicon(d) ? `https://www.google.com/s2/favicons?domain=${this.getDomain(d)}&sz=64` : '')
+            .attr('width', 20)
+            .attr('height', 20)
+            .attr('x', -10)
+            .attr('y', -10)
+            .style('display', (d: any) => (this.hasFavicon(d) ? 'block' : 'none'));
 
-    node
-      .append('text')
-      .attr('text-anchor', 'middle')
-      .attr('y', 30)
-      .attr('fill', (d: any) => {
-        if (d.threat) return '#ff918b';
-        return d.type === 'internal' ? '#69f6b8' : '#9bb7ff';
-      })
-      .attr('font-size', '9px')
-      .attr('font-family', 'monospace')
-      .text((d: any) => {
-        if (d.id?.includes(':') && d.id?.length > 15) {
-          return d.id.substring(0, 12) + '...';
-        }
-        return d.id;
-      });
+          nodeEnter.append('text')
+            .attr('text-anchor', 'middle')
+            .attr('y', 34)
+            .attr('stroke', '#0a101d')
+            .attr('stroke-width', 3)
+            .attr('stroke-linejoin', 'round')
+            .attr('paint-order', 'stroke')
+            .attr('fill', (d: any) => {
+              if (d.threat) return '#ff918b';
+              return d.is_internal ? '#69f6b8' : '#9bb7ff';
+            })
+            .attr('font-size', '10px')
+            .attr('font-weight', '700')
+            .attr('font-family', 'var(--font-mono)')
+            .text((d: any) => {
+              const t = d.label || d.id;
+              if (t.length > 20) return t.substring(0, 18) + '...';
+              return t;
+            });
 
-    node
-      .filter((d: any) => (d.connections || 0) > 0)
-      .append('text')
-      .attr('x', 16)
-      .attr('y', -16)
-      .attr('text-anchor', 'middle')
-      .attr('fill', '#d8deec')
-      .attr('font-size', '8px')
-      .attr('font-family', 'monospace')
-      .attr('font-weight', '800')
-      .text((d: any) => (d.connections > 0 ? `${d.connections}` : ''));
+          nodeEnter.append('text')
+            .attr('text-anchor', 'middle')
+            .attr('y', 46)
+            .attr('fill', '#6e7588')
+            .attr('font-size', '8px')
+            .attr('font-family', 'var(--font-mono)')
+            .text((d: any) => {
+              if (d.type === 'cluster') return '';
+              return d.type && d.type !== 'unknown' ? d.type : (d.is_internal ? 'internal' : 'external');
+            });
 
-    simulation.on('tick', () => {
+          nodeEnter.filter((d: any) => (d.connections || 0) > 0)
+            .append('text')
+            .attr('class', 'connection-count')
+            .attr('x', 16)
+            .attr('y', -16)
+            .attr('text-anchor', 'middle')
+            .attr('fill', '#d8deec')
+            .attr('font-size', '8px')
+            .attr('font-family', 'monospace')
+            .attr('font-weight', '800')
+            .text((d: any) => (d.connections > 0 ? `${d.connections}` : ''));
+
+          nodeEnter.transition().duration(500).style('opacity', (d: any) => {
+            if (!this.isSearchActive) return 1;
+            return this.searchMatches.has(d.id) ? 1 : 0.15;
+          });
+          return nodeEnter;
+        },
+        update => {
+          update.attr('class', (d: any) => {
+            let base = `topology-node node-${d.id.replace(/[^a-zA-Z0-9_-]/g, '-')} ${this.getNodeTypeClass(d)}`;
+            if (this.selectedNode && this.selectedNode.id === d.id) base += ' is-selected';
+            if (this.isSearchActive && this.searchMatches.has(d.id)) base += ' search-match';
+            return base;
+          });
+
+          update.style('opacity', (d: any) => {
+            if (!this.isSearchActive) return 1;
+            return this.searchMatches.has(d.id) ? 1 : 0.15;
+          });
+
+          update.select('circle')
+            .attr('r', (d: any) => {
+              const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
+              const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
+              return base + bonus;
+            });
+
+          update.select('path')
+            .attr('d', (d: any) => this.getNodeIconPath(d))
+            .style('display', (d: any) => (this.hasFavicon(d) ? 'none' : 'block'));
+
+          update.select('image')
+            .attr('href', (d: any) => this.hasFavicon(d) ? `https://www.google.com/s2/favicons?domain=${this.getDomain(d)}&sz=64` : '')
+            .style('display', (d: any) => (this.hasFavicon(d) ? 'block' : 'none'));
+
+          update.select('.connection-count')
+            .text((d: any) => (d.connections > 0 ? `${d.connections}` : ''));
+
+          return update;
+        },
+        exit => exit.transition().duration(500).style('opacity', 0).remove()
+      );
+
+    const tickFn = () => {
       link
         .attr('x1', (d: any) => d.source.x)
         .attr('y1', (d: any) => d.source.y)
@@ -337,6 +720,12 @@ export class NetworkMap implements OnInit {
         .attr('y', (d: any) => (d.source.y + d.target.y) / 2);
 
       node.attr('transform', (d: any) => `translate(${d.x},${d.y})`);
-    });
+    };
+
+    if (isClusterExpand) {
+      this.physics.updateSimulation(nodes, edges, tickFn);
+    } else {
+      this.physics.initSimulation(nodes, edges, width, height, tickFn);
+    }
   }
 }

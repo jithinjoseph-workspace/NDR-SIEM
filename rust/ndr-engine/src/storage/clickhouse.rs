@@ -140,6 +140,21 @@ pub struct SensorKeyRow {
     pub last_seen: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, clickhouse::Row)]
+pub struct AssetRow {
+    pub ip: String,
+    pub mac: String,
+    pub hostname: String,
+    pub vendor: String,
+    pub os_guess: String,
+    pub device_type: String,
+    pub custom_name: String,
+    pub tenant_id: String,
+    pub first_seen: u32,
+    pub last_seen: u32,
+    pub ip_history: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct AnnouncementRow {
     pub id: String,
@@ -254,6 +269,21 @@ fn tenant_db(tenant_id: &str) -> String {
 
 pub fn tenant_db_pub(tenant_id: &str) -> String {
     tenant_db(tenant_id)
+}
+
+fn get_base_domain(domain: &str) -> String {
+    let parts: Vec<&str> = domain.split('.').collect();
+    if parts.len() <= 2 {
+        return domain.to_string();
+    }
+    let second_to_last = parts[parts.len() - 2];
+    let short_tlds = ["co", "com", "org", "net", "gov", "ac", "edu"];
+    if second_to_last.len() <= 3 && short_tlds.contains(&second_to_last) {
+        if parts.len() >= 3 {
+            return format!("{}.{}.{}", parts[parts.len()-3], parts[parts.len()-2], parts[parts.len()-1]);
+        }
+    }
+    format!("{}.{}", parts[parts.len()-2], parts[parts.len()-1])
 }
 
 #[allow(dead_code)]
@@ -1966,70 +1996,339 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         }))
     }
 
+    pub async fn insert_passive_dns(&self, ip: &str, domain: &str) -> anyhow::Result<()> {
+        if ip.is_empty() || domain.is_empty() { return Ok(()); }
+        let query = format!(
+            "INSERT INTO ndr.passive_dns (ip, domain, hit_count, first_seen, last_seen) VALUES ('{}', '{}', 1, now(), now())",
+            sql_escape(ip), sql_escape(domain)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
     pub async fn get_network_map_by_tenant(
-        &self, tenant_id: &str
+        &self, tenant_id: &str, mode: Option<&str>, limit: Option<usize>
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let recent_query = format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
                 groupArray(DISTINCT proto) as protocols
-            FROM {}.ndr_events 
-            WHERE src_ip != '' AND dst_ip != ''
-              AND timestamp > now() - INTERVAL 1 HOUR
+            FROM {db_name}.ndr_events
+            WHERE tenant_id = '{tenant_escaped}' AND src_ip != '' AND dst_ip != ''
+              AND timestamp >= (SELECT subtractHours(max(timestamp), 1) FROM {db_name}.ndr_events WHERE tenant_id = '{tenant_escaped}')
             GROUP BY src_ip, dst_ip
             ORDER BY connections DESC
-            LIMIT 100", db_name);
+            LIMIT 1000", db_name=db_name, tenant_escaped=sql_escape(tenant_id));
         let fallback_query = format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
                 groupArray(DISTINCT proto) as protocols
-            FROM {}.ndr_events
-            WHERE src_ip != '' AND dst_ip != ''
+            FROM {db_name}.ndr_events
+            WHERE tenant_id = '{tenant_escaped}' AND src_ip != '' AND dst_ip != ''
             GROUP BY src_ip, dst_ip
             ORDER BY connections DESC
-            LIMIT 100", db_name);
+            LIMIT 1000", db_name=db_name, tenant_escaped=sql_escape(tenant_id));
 
-        let mut pairs = self.client.query(&recent_query)
-            .fetch_all::<NetworkPair>()
-            .await.unwrap_or_default();
+        let mut pairs = self.client.query(&recent_query).fetch_all::<NetworkPair>().await.unwrap_or_default();
         if pairs.is_empty() {
-            pairs = self.client.query(&fallback_query)
-                .fetch_all::<NetworkPair>()
-                .await.unwrap_or_default();
+            pairs = self.client.query(&fallback_query).fetch_all::<NetworkPair>().await.unwrap_or_default();
         }
-        let mut nodes: std::collections::HashMap<String, serde_json::Value> = 
-            std::collections::HashMap::new();
-        let mut edges: Vec<serde_json::Value> = Vec::new();
+
+        let mut asset_map: std::collections::HashMap<String, AssetRow> = std::collections::HashMap::new();
+        let mut historical_to_active: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        if let Ok(assets) = self.get_assets_by_tenant(tenant_id).await {
+            for asset in assets {
+                asset_map.insert(asset.ip.clone(), asset.clone());
+                if !asset.ip_history.is_empty() && asset.ip_history != "[]" {
+                    if let Ok(history) = serde_json::from_str::<Vec<serde_json::Value>>(&asset.ip_history) {
+                        for h in history {
+                            if let Some(old_ip) = h.get("ip").and_then(|v| v.as_str()) {
+                                historical_to_active.insert(old_ip.to_string(), asset.ip.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let resolve_ip = |raw_ip: &String| -> String {
+            historical_to_active.get(raw_ip).cloned().unwrap_or_else(|| raw_ip.clone())
+        };
+
+        let mut pair_map: std::collections::HashMap<(String, String), NetworkPair> = std::collections::HashMap::new();
+        for p in pairs {
+            let src = resolve_ip(&p.src_ip);
+            let dst = resolve_ip(&p.dst_ip);
+            if src == dst { continue; }
+            let entry = pair_map.entry((src.clone(), dst.clone())).or_insert_with(|| NetworkPair {
+                src_ip: src, dst_ip: dst, connections: 0, protocols: Vec::new()
+            });
+            entry.connections += p.connections;
+            for proto in p.protocols {
+                if !entry.protocols.contains(&proto) { entry.protocols.push(proto); }
+            }
+        }
+        let pairs: Vec<NetworkPair> = pair_map.into_values().collect();
+
+        let is_internal_fn = |ip: &str| -> bool {
+            if ip.starts_with("10.") || ip.starts_with("192.168.") { return true; }
+            if ip.starts_with("172.") {
+                let parts: Vec<&str> = ip.split('.').collect();
+                if parts.len() >= 2 {
+                    if let Ok(second) = parts[1].parse::<u8>() {
+                        return second >= 16 && second <= 31;
+                    }
+                }
+            }
+            false
+        };
+
+        let is_top_mode = mode.unwrap_or("") == "top";
+        let mut top_ips = std::collections::HashSet::new();
+
+        if is_top_mode {
+            let limit_n = limit.unwrap_or(25);
+            let mut ip_counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+            for p in &pairs {
+                *ip_counts.entry(p.src_ip.clone()).or_insert(0) += p.connections;
+                *ip_counts.entry(p.dst_ip.clone()).or_insert(0) += p.connections;
+            }
+            let mut ip_list: Vec<_> = ip_counts.into_iter().collect();
+            ip_list.sort_by(|a, b| b.1.cmp(&a.1));
+            top_ips = ip_list.into_iter().take(limit_n).map(|(ip, _)| ip).collect();
+        }
+
+        let mut internal_members = std::collections::HashSet::new();
+        let mut external_members = std::collections::HashSet::new();
+
+        let mut external_ips: Vec<String> = Vec::new();
         for pair in &pairs {
-            nodes.entry(pair.src_ip.clone()).or_insert(serde_json::json!({
-                "id": pair.src_ip, "label": pair.src_ip,
-                "type": if pair.src_ip.starts_with("10.") || 
-                    pair.src_ip.starts_with("192.168.") ||
-                    pair.src_ip.starts_with("172.")
-                    { "internal" } else { "external" }
-            }));
-            nodes.entry(pair.dst_ip.clone()).or_insert(serde_json::json!({
-                "id": pair.dst_ip, "label": pair.dst_ip,
-                "type": if pair.dst_ip.starts_with("10.") ||
-                    pair.dst_ip.starts_with("192.168.") ||
-                    pair.dst_ip.starts_with("172.")
-                    { "internal" } else { "external" }
-            }));
-            edges.push(serde_json::json!({
-                "source": pair.src_ip, "target": pair.dst_ip,
-                "connections": pair.connections,
-                "protocols": pair.protocols
-            }));
+            if !is_internal_fn(&pair.src_ip) { external_ips.push(pair.src_ip.clone()); }
+            if !is_internal_fn(&pair.dst_ip) { external_ips.push(pair.dst_ip.clone()); }
         }
+
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct PassiveDnsRow {
+            ip: String,
+            primary_domain: String,
+            all_domains: Vec<String>,
+        }
+        let mut passive_dns_map: std::collections::HashMap<String, PassiveDnsRow> = std::collections::HashMap::new();
+
+        if !external_ips.is_empty() {
+            let items = external_ips.iter().map(|v| format!("'{}'", sql_escape(v))).collect::<Vec<_>>().join(",");
+            let dns_query = format!("
+                SELECT ip,
+                    argMax(domain, total_hits) AS primary_domain,
+                    groupUniqArray(domain) AS all_domains
+                FROM (
+                    SELECT ip, domain, sum(hit_count) AS total_hits
+                    FROM ndr.passive_dns
+                    WHERE ip IN ({}) AND last_seen > now() - INTERVAL 30 DAY
+                    GROUP BY ip, domain
+                )
+                GROUP BY ip
+            ", items);
+            if let Ok(dns_rows) = self.client.query(&dns_query).fetch_all::<PassiveDnsRow>().await {
+                for r in dns_rows {
+                    passive_dns_map.insert(r.ip.clone(), r);
+                }
+            }
+        }
+
+        struct DomainGroup {
+            base_domain: String,
+            observed_domains: std::collections::HashSet<String>,
+            member_ips: std::collections::HashSet<String>,
+        }
+        let mut domain_groups: std::collections::HashMap<String, DomainGroup> = std::collections::HashMap::new();
+
+        let mut remap_ip = |ip: &String| -> String {
+            if is_internal_fn(ip) {
+                if is_top_mode && !top_ips.contains(ip) {
+                    internal_members.insert(ip.clone());
+                    return "cluster:internal".to_string();
+                }
+                return ip.clone();
+            } else {
+                let group_id = if let Some(dns) = passive_dns_map.get(ip) {
+                    let base = get_base_domain(&dns.primary_domain);
+                    let gid = format!("domain:{}", base);
+                    let group = domain_groups.entry(gid.clone()).or_insert_with(|| DomainGroup {
+                        base_domain: base.clone(),
+                        observed_domains: std::collections::HashSet::new(),
+                        member_ips: std::collections::HashSet::new(),
+                    });
+                    group.member_ips.insert(ip.clone());
+                    group.observed_domains.insert(dns.primary_domain.clone());
+                    for d in &dns.all_domains { group.observed_domains.insert(d.clone()); }
+                    gid
+                } else {
+                    ip.clone()
+                };
+                if is_top_mode && !top_ips.contains(ip) {
+                    external_members.insert(group_id.clone());
+                    return "cluster:external".to_string();
+                }
+                return group_id;
+            }
+        };
+
+        let mut clustered_pairs: std::collections::HashMap<(String, String), (u64, std::collections::HashSet<String>)> = std::collections::HashMap::new();
+        for pair in &pairs {
+            let src = remap_ip(&pair.src_ip);
+            let dst = remap_ip(&pair.dst_ip);
+            if src == dst { continue; }
+            let entry = clustered_pairs.entry((src.clone(), dst.clone())).or_insert_with(|| (0, std::collections::HashSet::new()));
+            entry.0 += pair.connections;
+            for p in &pair.protocols { entry.1.insert(p.clone()); }
+        }
+
+        let mut nodes: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        let mut edges: Vec<serde_json::Value> = Vec::new();
+
+        let enrich_node = |id: &str| -> serde_json::Value {
+            let is_internal = is_internal_fn(id);
+            if id == "cluster:internal" {
+                return serde_json::json!({"id": id, "label": format!("{} more internal hosts", internal_members.len()), "type": "cluster", "is_internal": true, "member_ips": internal_members.iter().collect::<Vec<_>>()});
+            } else if id == "cluster:external" {
+                return serde_json::json!({"id": id, "label": format!("{} more external hosts", external_members.len()), "type": "cluster", "is_internal": false, "member_ips": external_members.iter().collect::<Vec<_>>()});
+            }
+            if id.starts_with("domain:") {
+                if let Some(group) = domain_groups.get(id) {
+                    return serde_json::json!({"id": id, "label": group.base_domain, "type": "domain", "is_internal": false, "primary_domain": group.base_domain, "all_domains": group.observed_domains.iter().collect::<Vec<_>>(), "member_ips": group.member_ips.iter().collect::<Vec<_>>()});
+                }
+            }
+            if let Some(asset) = asset_map.get(id) {
+                let label = if !asset.custom_name.is_empty() { asset.custom_name.clone() } else if !asset.hostname.is_empty() { asset.hostname.clone() } else { id.to_string() };
+                serde_json::json!({"id": id, "label": label, "active_ip": id, "ip_history": asset.ip_history, "mac": asset.mac, "type": asset.device_type, "vendor": asset.vendor, "os_guess": asset.os_guess, "is_internal": is_internal})
+            } else {
+                serde_json::json!({"id": id, "label": id, "active_ip": id, "ip_history": "[]", "type": if is_internal { "unknown" } else { "external" }, "is_internal": is_internal, "primary_domain": null, "all_domains": []})
+            }
+        };
+
+        for ((src, dst), (conn, protos)) in clustered_pairs {
+            nodes.entry(src.clone()).or_insert_with(|| enrich_node(&src));
+            nodes.entry(dst.clone()).or_insert_with(|| enrich_node(&dst));
+            edges.push(serde_json::json!({"source": src, "target": dst, "connections": conn, "protocols": protos.into_iter().collect::<Vec<_>>()}));
+        }
+
         let total_nodes = nodes.len();
         let total_edges = edges.len();
-        Ok(serde_json::json!({
-            "nodes": nodes.values().collect::<Vec<_>>(),
-            "edges": edges,
-            "total_nodes": total_nodes,
-            "total_edges": total_edges
-        }))
+        Ok(serde_json::json!({"nodes": nodes.values().collect::<Vec<_>>(), "edges": edges, "total_nodes": total_nodes, "total_edges": total_edges}))
+    }
+
+    pub async fn get_network_map_node(
+        &self, tenant_id: &str, target_ip: &str
+    ) -> anyhow::Result<serde_json::Value> {
+        let db_name = tenant_db(tenant_id);
+        let safe_ip = sql_escape(target_ip);
+        let query = format!("
+            SELECT src_ip, dst_ip,
+                count() as connections,
+                groupArray(DISTINCT proto) as protocols
+            FROM {}.ndr_events
+            WHERE tenant_id = '{}' AND (src_ip = '{}' OR dst_ip = '{}')
+              AND src_ip != '' AND dst_ip != ''
+            GROUP BY src_ip, dst_ip
+            ORDER BY connections DESC
+            LIMIT 500", db_name, sql_escape(tenant_id), safe_ip, safe_ip);
+
+        let pairs = self.client.query(&query).fetch_all::<NetworkPair>().await.unwrap_or_default();
+
+        let mut asset_map: std::collections::HashMap<String, AssetRow> = std::collections::HashMap::new();
+        let mut historical_to_active: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        if let Ok(assets) = self.get_assets_by_tenant(tenant_id).await {
+            for asset in assets {
+                asset_map.insert(asset.ip.clone(), asset.clone());
+                if !asset.ip_history.is_empty() && asset.ip_history != "[]" {
+                    if let Ok(history) = serde_json::from_str::<Vec<serde_json::Value>>(&asset.ip_history) {
+                        for h in history {
+                            if let Some(old_ip) = h.get("ip").and_then(|v| v.as_str()) {
+                                historical_to_active.insert(old_ip.to_string(), asset.ip.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let resolve_ip = |raw_ip: &String| -> String {
+            historical_to_active.get(raw_ip).cloned().unwrap_or_else(|| raw_ip.clone())
+        };
+
+        let mut pair_map: std::collections::HashMap<(String, String), NetworkPair> = std::collections::HashMap::new();
+        for p in pairs {
+            let src = resolve_ip(&p.src_ip);
+            let dst = resolve_ip(&p.dst_ip);
+            if src == dst { continue; }
+            let entry = pair_map.entry((src.clone(), dst.clone())).or_insert_with(|| NetworkPair {
+                src_ip: src, dst_ip: dst, connections: 0, protocols: Vec::new()
+            });
+            entry.connections += p.connections;
+            for proto in p.protocols {
+                if !entry.protocols.contains(&proto) { entry.protocols.push(proto); }
+            }
+        }
+        let pairs: Vec<NetworkPair> = pair_map.into_values().collect();
+
+        let is_internal_fn = |ip: &str| -> bool {
+            if ip.starts_with("10.") || ip.starts_with("192.168.") { return true; }
+            if ip.starts_with("172.") {
+                let parts: Vec<&str> = ip.split('.').collect();
+                if parts.len() >= 2 {
+                    if let Ok(second) = parts[1].parse::<u8>() {
+                        return second >= 16 && second <= 31;
+                    }
+                }
+            }
+            false
+        };
+
+        let mut nodes: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        let mut edges: Vec<serde_json::Value> = Vec::new();
+
+        let enrich_node = |ip: &str| -> serde_json::Value {
+            let is_internal = is_internal_fn(ip);
+            if let Some(asset) = asset_map.get(ip) {
+                let label = if !asset.custom_name.is_empty() { asset.custom_name.clone() } else if !asset.hostname.is_empty() { asset.hostname.clone() } else { ip.to_string() };
+                serde_json::json!({"id": ip, "label": label, "active_ip": ip, "ip_history": asset.ip_history, "mac": asset.mac, "type": asset.device_type, "vendor": asset.vendor, "os_guess": asset.os_guess, "is_internal": is_internal})
+            } else {
+                serde_json::json!({"id": ip, "label": ip, "active_ip": ip, "ip_history": "[]", "type": if is_internal { "unknown" } else { "external" }, "is_internal": is_internal})
+            }
+        };
+
+        for pair in pairs {
+            nodes.entry(pair.src_ip.clone()).or_insert_with(|| enrich_node(&pair.src_ip));
+            nodes.entry(pair.dst_ip.clone()).or_insert_with(|| enrich_node(&pair.dst_ip));
+            edges.push(serde_json::json!({"source": pair.src_ip, "target": pair.dst_ip, "connections": pair.connections, "protocols": pair.protocols}));
+        }
+
+        Ok(serde_json::json!({"nodes": nodes.values().collect::<Vec<_>>(), "edges": edges, "total_nodes": nodes.len(), "total_edges": edges.len()}))
+    }
+
+    pub async fn search_network_map(
+        &self, tenant_id: &str, q: &str
+    ) -> anyhow::Result<Vec<String>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct SearchRow { ip: String }
+
+        let db_name = tenant_db(tenant_id);
+        let safe_q = sql_escape(q);
+        let query = format!("
+            SELECT ip FROM (
+                SELECT DISTINCT ip FROM {}.assets
+                WHERE ip ILIKE '%{}%' OR hostname ILIKE '%{}%' OR custom_name ILIKE '%{}%' OR ip_history ILIKE '%{}%'
+                UNION ALL
+                SELECT DISTINCT ip FROM ndr.passive_dns
+                WHERE domain ILIKE '%{}%'
+            ) LIMIT 50", db_name, safe_q, safe_q, safe_q, safe_q, safe_q);
+
+        let rows = self.client.query(&query).fetch_all::<SearchRow>().await.unwrap_or_default();
+        Ok(rows.into_iter().map(|r| r.ip).collect())
     }
 
 pub async fn create_sensor_key(
@@ -3649,5 +3948,116 @@ pub async fn get_ioc_hits(
         "feed_source":  r.feed_source,
     })).collect())
 }
+
+    // ── Asset Management ──────────────────────────────────────────────────────
+
+    pub async fn upsert_asset(&self, asset: &AssetRow) -> anyhow::Result<()> {
+        let db = tenant_db(&asset.tenant_id);
+        let safe_history = sql_escape(&asset.ip_history);
+        let query = format!(
+            "INSERT INTO {}.assets (ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, first_seen, last_seen, ip_history) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', toDateTime({}), toDateTime({}), '{}')",
+            db,
+            sql_escape(&asset.ip), sql_escape(&asset.mac), sql_escape(&asset.hostname),
+            sql_escape(&asset.vendor), sql_escape(&asset.os_guess), sql_escape(&asset.device_type),
+            sql_escape(&asset.custom_name), sql_escape(&asset.tenant_id),
+            asset.first_seen, asset.last_seen,
+            safe_history
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn update_asset_os(&self, ip: &str, os_name: &str, tenant_id: &str) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "ALTER TABLE {}.assets UPDATE os_guess = '{}' WHERE tenant_id = '{}' AND ip = '{}'",
+            db, sql_escape(os_name), sql_escape(tenant_id), sql_escape(ip)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn get_assets_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<AssetRow>> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' ORDER BY ip",
+            db, sql_escape(tenant_id)
+        );
+        let rows = self.client.query(&query).fetch_all::<AssetRow>().await?;
+        Ok(rows)
+    }
+
+    pub async fn get_asset_by_mac(&self, tenant_id: &str, mac: &str) -> anyhow::Result<Option<AssetRow>> {
+        if mac.is_empty() { return Ok(None); }
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
+            db, sql_escape(tenant_id), sql_escape(mac)
+        );
+        let result = self.client.query(&query).fetch_optional::<AssetRow>().await?;
+        Ok(result)
+    }
+
+    pub async fn get_assets_with_counts_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db = tenant_db(tenant_id);
+        let assets = self.get_assets_by_tenant(tenant_id).await?;
+
+        let q_conns = format!(
+            "SELECT arrayJoin([src_ip, dst_ip]) as ip, count() as c \
+             FROM {}.ndr_events WHERE tenant_id = '{}' AND timestamp > now() - INTERVAL 1 DAY GROUP BY ip",
+            db, sql_escape(tenant_id)
+        );
+        let conns: Vec<(String, u64)> = self.client.query(&q_conns).fetch_all().await.unwrap_or_default();
+        let mut conn_map = std::collections::HashMap::new();
+        for (ip, c) in conns { conn_map.insert(ip, c); }
+
+        let q_hits = format!(
+            "SELECT arrayJoin([src_ip, dst_ip]) as ip, count() as c \
+             FROM {}.ndr_hits WHERE tenant_id = '{}' AND timestamp > now() - INTERVAL 1 DAY GROUP BY ip",
+            db, sql_escape(tenant_id)
+        );
+        let hits: Vec<(String, u64)> = self.client.query(&q_hits).fetch_all().await.unwrap_or_default();
+        let mut hit_map = std::collections::HashMap::new();
+        for (ip, c) in hits { hit_map.insert(ip, c); }
+
+        let mut result = Vec::new();
+        for a in assets {
+            let mut val = serde_json::to_value(&a).unwrap();
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("connections_24h".into(), serde_json::json!(conn_map.get(&a.ip).unwrap_or(&0)));
+                obj.insert("alerts_24h".into(),      serde_json::json!(hit_map.get(&a.ip).unwrap_or(&0)));
+            }
+            result.push(val);
+        }
+        Ok(result)
+    }
+
+    pub async fn get_asset_by_ip(&self, tenant_id: &str, ip: &str) -> anyhow::Result<Option<AssetRow>> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}'",
+            db, sql_escape(tenant_id), sql_escape(ip)
+        );
+        let asset = self.client.query(&query).fetch_optional::<AssetRow>().await?;
+        Ok(asset)
+    }
+
+    pub async fn update_asset_name(&self, tenant_id: &str, ip: &str, custom_name: &str) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "ALTER TABLE {}.assets UPDATE custom_name = '{}', last_seen = now() \
+             WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
+            db, sql_escape(custom_name), sql_escape(tenant_id), sql_escape(ip)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
 
 }

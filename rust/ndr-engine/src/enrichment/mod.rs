@@ -7,12 +7,14 @@
 pub mod geoip;
 pub mod asn;
 pub mod threat_intel;
+pub mod asset_id;
 use std::sync::Arc;
 
 
 pub use geoip::{GeoIpLookup, GeoInfo};
 pub use asn::{AsnLookup, AsnInfo};
 pub use threat_intel::ThreatIntel;
+pub use asset_id::AssetIdentifier;
 
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -81,6 +83,7 @@ pub struct EnrichmentPipeline {
     pub geoip:        Option<GeoIpLookup>,
     pub asn:          Option<AsnLookup>,
     pub threat_intel: Arc<ThreatIntel>,
+    pub asset_id:     Arc<AssetIdentifier>,
 }
 
 impl EnrichmentPipeline {

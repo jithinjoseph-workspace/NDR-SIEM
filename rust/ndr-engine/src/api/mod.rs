@@ -466,11 +466,50 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
 
 
 //network map
-pub async fn get_network_map(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+#[derive(serde::Deserialize)]
+pub struct NetworkMapQuery {
+    pub mode: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+}
+
+pub async fn get_network_map(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<NetworkMapQuery>
+) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_network_map_by_tenant(&tenant_id).await {
+    match state.ch_storage.get_network_map_by_tenant(&tenant_id, query.mode.as_deref(), query.limit).await {
         Ok(data) => Json(data),
         Err(_) => Json(json!({"nodes": [], "edges": []}))
+    }
+}
+
+pub async fn get_network_map_node(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(ip): axum::extract::Path<String>
+) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_network_map_node(&tenant_id, &ip).await {
+        Ok(data) => Json(data),
+        Err(_) => Json(json!({"nodes": [], "edges": []}))
+    }
+}
+
+pub async fn search_network_map(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<SearchQuery>
+) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.search_network_map(&tenant_id, &query.q).await {
+        Ok(data) => Json(json!(data)),
+        Err(_) => Json(json!([]))
     }
 }
 
@@ -5694,6 +5733,54 @@ pub async fn pcap_pending(
         "details": pending,
         "count":   plain.len()
     }))
+}
+
+// ── Asset Management Endpoints ────────────────────────────────────────────────
+
+pub async fn get_assets(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::Json<serde_json::Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_assets_with_counts_by_tenant(&tenant_id).await {
+        Ok(assets) => axum::Json(json!(assets)),
+        Err(e)     => axum::Json(json!({"error": e.to_string()})),
+    }
+}
+
+pub async fn get_asset_by_ip(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(ip): axum::extract::Path<String>,
+) -> axum::Json<serde_json::Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_asset_by_ip(&tenant_id, &ip).await {
+        Ok(Some(asset)) => axum::Json(json!(asset)),
+        Ok(None)        => axum::Json(json!({"error": "not found"})),
+        Err(e)          => axum::Json(json!({"error": e.to_string()})),
+    }
+}
+
+pub async fn update_asset_name(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(ip): axum::extract::Path<String>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    let custom_name = payload.get("custom_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    match state.ch_storage.update_asset_name(&tenant_id, &ip, custom_name).await {
+        Ok(_)  => axum::Json(json!({"status": "ok"})),
+        Err(e) => axum::Json(json!({"error": e.to_string()})),
+    }
 }
 
 pub async fn pcap_upload_failed(

@@ -605,6 +605,18 @@ include = ["/var/log/ndr/zeek/quic.log"]
 read_from = "end"
 glob_minimum_cooldown_ms = 100
 
+[sources.zeek_arp]
+type = "file"
+include = ["/var/log/ndr/zeek/arp.log"]
+read_from = "end"
+glob_minimum_cooldown_ms = 100
+
+[sources.zeek_software]
+type = "file"
+include = ["/var/log/ndr/zeek/software.log"]
+read_from = "end"
+glob_minimum_cooldown_ms = 100
+
 [sources.suricata]
 type = "file"
 include = ["/var/log/ndr/suricata/eve.json"]
@@ -737,6 +749,34 @@ if err == null {
 } else { abort }
 '''
 
+[transforms.zeek_arp_json]
+type = "remap"
+inputs = ["zeek_arp"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null {
+  . = parsed
+  .source = "zeek"
+  .log_type = "arp"
+  .tenant_id = "${TENANT_ID}"
+  .sensor_host = "${HOSTNAME_VAL}"
+} else { abort }
+'''
+
+[transforms.zeek_software_json]
+type = "remap"
+inputs = ["zeek_software"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null {
+  . = parsed
+  .source = "zeek"
+  .log_type = "software"
+  .tenant_id = "${TENANT_ID}"
+  .sensor_host = "${HOSTNAME_VAL}"
+} else { abort }
+'''
+
 # ── SINK: HTTP POST to cloud /api/ingest ─────────
 # Works through ngrok, reverse proxy, or direct IP.
 # Sends NDJSON batches; ingest endpoint handles it.
@@ -751,7 +791,9 @@ inputs = [
   "zeek_files_json",
   "zeek_weird_json",
   "zeek_dhcp_json",
-  "zeek_quic_json"
+  "zeek_quic_json",
+  "zeek_arp_json",
+  "zeek_software_json"
 ]
 uri = "${CLOUD_URL}/api/ingest"
 method = "post"

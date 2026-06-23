@@ -20,7 +20,7 @@
       </div>
 
       <button class="primary-action" type="button" (click)="loadMap()">
-        <lucide-icon [name]="RefreshIcon" class="w-4 h-4" [class.spin]="loading"></lucide-icon>
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4" [class.spin]="viewState === 'loading'"></lucide-icon>
         Refresh
       </button>
     </div>
@@ -58,9 +58,18 @@
         </div>
 
         <div class="map-hint">Drag nodes. Scroll to zoom.</div>
+        <div class="search-container" *ngIf="!focusMode">
+          <input type="search" placeholder="Search IP, hostname..." (input)="onSearchChange($event)" />
+        </div>
+        <div class="search-container" *ngIf="focusMode">
+          <button class="back-to-map-btn" (click)="clearSelection()">
+            <lucide-icon [name]="ArrowLeftIcon" class="w-4 h-4"></lucide-icon>
+            Back to full map
+          </button>
+        </div>
       </div>
 
-      <div *ngIf="loading" class="state-overlay">
+      <div *ngIf="viewState === 'loading'" class="state-overlay">
         <div class="state-icon">
           <lucide-icon [name]="CircleDotIcon" class="w-6 h-6"></lucide-icon>
         </div>
@@ -68,7 +77,15 @@
         <span>Collecting hosts and communication paths.</span>
       </div>
 
-      <div *ngIf="!loading && nodeCount === 0" class="state-overlay">
+      <div *ngIf="viewState === 'error'" class="state-overlay error">
+        <div class="state-icon error-icon" style="color: #ff716a;">
+          <lucide-icon [name]="ThreatIcon" class="w-6 h-6"></lucide-icon>
+        </div>
+        <strong style="color: #ff918b;">Connection Lost</strong>
+        <span style="color: #d8deec;">{{ errorMessage || 'Failed to load network topology.' }}</span>
+      </div>
+
+      <div *ngIf="viewState === 'empty'" class="state-overlay">
         <div class="state-icon muted">
           <lucide-icon [name]="ServerIcon" class="w-6 h-6"></lucide-icon>
         </div>
@@ -79,91 +96,13 @@
       <svg #mapSvg class="map-canvas"></svg>
     </section>
 
-    <aside class="node-inspector" *ngIf="selectedNode">
-      <div class="inspector-header">
-        <div class="node-avatar" [ngClass]="getNodeTypeClass(selectedNode)">
-          {{ getNodeIcon(selectedNode) }}
-        </div>
-        <div>
-          <span>Selected Node</span>
-          <h3>{{ selectedNode.id }}</h3>
-        </div>
-        <button class="icon-button" type="button" (click)="clearSelection()" title="Close">
-          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
-        </button>
-      </div>
-
-      <div class="node-badge" [ngClass]="getNodeTypeClass(selectedNode)">
-        {{ getNodeKindLabel(selectedNode) }}
-      </div>
-
-      <div class="inspector-grid">
-        <div>
-          <span>Connections</span>
-          <strong>{{ selectedNode.connections || 0 }}</strong>
-        </div>
-        <div>
-          <span>Type</span>
-          <strong>{{ selectedNode.type }}</strong>
-        </div>
-      </div>
-
-      <div class="inspector-detail">
-        <span>Identifier</span>
-        <code>{{ selectedNode.id }}</code>
-      </div>
-
-      <button class="pcap-sessions-btn"
-        type="button"
-        (click)="viewPcapSessions(selectedNode.id)">
-        <lucide-icon [name]="PackageIcon" class="w-4 h-4"></lucide-icon>
-        View PCAP Sessions
-      </button>
-    </aside>
+    <app-device-drawer 
+      *ngIf="selectedNode"
+      [node]="selectedNode" 
+      [focusModeActive]="focusMode" 
+      (closeDrawer)="clearSelection()" 
+      (focusRequested)="toggleFocus()">
+    </app-device-drawer>
   </div>
 
-  <!-- PCAP sessions panel -->
-  <div class="pcap-drawer" *ngIf="showPcapPanel">
-    <div class="pcap-drawer-header">
-      <div class="pcap-drawer-title">
-        <lucide-icon [name]="PackageIcon" class="w-4 h-4"></lucide-icon>
-        <span>Sessions for <code>{{ pcapIp }}</code></span>
-      </div>
-      <button class="icon-button" type="button" (click)="closePcapPanel()">
-        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
-      </button>
-    </div>
-
-    <div *ngIf="pcapLoading" class="pcap-drawer-state">Loading...</div>
-    <div *ngIf="pcapError && !pcapLoading" class="pcap-drawer-state error">{{ pcapError }}</div>
-
-    <div *ngIf="!pcapLoading && !pcapError && pcapSessions.length === 0" class="pcap-drawer-state">
-      No sessions found.
-    </div>
-
-    <div *ngIf="!pcapLoading && pcapSessions.length > 0" class="pcap-session-list">
-      <div *ngFor="let s of pcapSessions" class="pcap-session-row">
-        <div class="session-flow">
-          <span>{{ s.src_ip }}:{{ s.src_port }}</span>
-          <span class="arrow">→</span>
-          <span>{{ s.dst_ip }}:{{ s.dst_port }}</span>
-          <span class="proto-tag">{{ s.proto }}</span>
-        </div>
-        <div class="session-meta">
-          <span>{{ formatBytes(s.bytes) }}</span>
-          <span>{{ s.packets }} pkts</span>
-          <div class="session-actions">
-            <button class="icon-button sm" title="Download PCAP"
-              type="button" (click)="downloadPcap(s.session_id)">
-              <lucide-icon [name]="DownloadIcon" class="w-3.5 h-3.5"></lucide-icon>
-            </button>
-            <button class="icon-button sm" title="Open in Arkime"
-              type="button" (click)="openArkime(s.community_id)">
-              <lucide-icon [name]="ExternalLinkIcon" class="w-3.5 h-3.5"></lucide-icon>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 </section>

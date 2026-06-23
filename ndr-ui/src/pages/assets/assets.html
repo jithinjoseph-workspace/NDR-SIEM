@@ -1,0 +1,186 @@
+<div class="assets-page">
+  <div class="page-header">
+    <div class="title-group">
+      <h2>Asset Inventory</h2>
+      <p>Discovered devices, identities, and hostnames.</p>
+    </div>
+
+    <div class="header-actions">
+      <div class="filter-group">
+        <div class="custom-dropdown-wrapper">
+          <div class="dropdown-backdrop" *ngIf="isDropdownOpen" (click)="isDropdownOpen = false"></div>
+          <div class="styled-dropdown" (click)="isDropdownOpen = !isDropdownOpen" [class.open]="isDropdownOpen">
+            <span>{{ getFilterLabel() }}</span>
+            <lucide-icon [name]="ChevronDownIcon" class="dropdown-arrow" [class.rotate]="isDropdownOpen"></lucide-icon>
+          </div>
+
+          <div class="dropdown-menu" *ngIf="isDropdownOpen">
+            <div class="dropdown-item"
+                 *ngFor="let option of deviceTypeOptions"
+                 (click)="setFilter(option.value)"
+                 [class.active]="filterDeviceType === option.value">
+              {{ option.label }}
+            </div>
+          </div>
+        </div>
+
+        <label class="checkbox-label">
+          <input type="checkbox" [(ngModel)]="filterLast24h" (ngModelChange)="filterAssets()">
+          <span>Seen in last 24h</span>
+        </label>
+      </div>
+
+      <div class="search-box">
+        <lucide-icon [name]="SearchIcon" class="w-4 h-4 text-slate-400"></lucide-icon>
+        <input type="text"
+               [(ngModel)]="searchTerm"
+               (ngModelChange)="filterAssets()"
+               placeholder="Search IPs, names, vendors...">
+      </div>
+    </div>
+  </div>
+
+  <div class="top-dashboard" *ngIf="!loading && totalAssets > 0">
+    <div class="donut-container">
+      <div class="donut-label">ASSET TYPE DISTRIBUTION</div>
+      <div class="donut-chart-wrapper">
+        <svg viewBox="0 0 120 120" class="donut-svg">
+          <circle cx="60" cy="60" r="50" class="donut-bg"></circle>
+        </svg>
+        <div class="donut-css" [style.background]="'conic-gradient(var(--md-sys-color-primary) 0% ' + stats.workstations.percent + '%, var(--md-sys-color-tertiary) ' + stats.workstations.percent + '% ' + (stats.workstations.percent + stats.iot.percent) + '%, var(--md-sys-color-error) ' + (stats.workstations.percent + stats.iot.percent) + '% ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '%, var(--md-sys-color-secondary) ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '% 100%)'">
+        </div>
+        <div class="donut-inner">
+          <span class="total-number">{{ totalAssets }}</span>
+          <span class="total-label">Assets</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-container">
+      <div class="stats-header">Asset Type Distribution</div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon-wrapper blue">
+            <lucide-icon [name]="MonitorIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-title">Workstations</div>
+            <div class="stat-count">{{ stats.workstations.count }} assets</div>
+          </div>
+          <div class="stat-percent">{{ stats.workstations.percent }}%</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon-wrapper orange">
+            <lucide-icon [name]="LightbulbIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-title">IoT Devices</div>
+            <div class="stat-count">{{ stats.iot.count }} assets</div>
+          </div>
+          <div class="stat-percent">{{ stats.iot.percent }}%</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon-wrapper green">
+            <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-title">Servers</div>
+            <div class="stat-count">{{ stats.servers.count }} assets</div>
+          </div>
+          <div class="stat-percent">{{ stats.servers.percent }}%</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon-wrapper purple">
+            <lucide-icon [name]="RouterIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-title">Networking</div>
+            <div class="stat-count">{{ stats.networking.count }} assets</div>
+          </div>
+          <div class="stat-percent">{{ stats.networking.percent }}%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="data-grid">
+    <div class="grid-header">
+      <div class="col-type">Type</div>
+      <div class="col-ip">IP Address</div>
+      <div class="col-name">Name</div>
+      <div class="col-vendor">Vendor</div>
+      <div class="col-os">OS</div>
+      <div class="col-mac">MAC Address</div>
+      <div class="col-conns">Conns (24h)</div>
+      <div class="col-alerts">Alerts (24h)</div>
+      <div class="col-seen">Last Seen</div>
+    </div>
+
+    <div class="loading-state" *ngIf="loading">
+      Loading assets...
+    </div>
+
+    <div class="empty-state" *ngIf="!loading && filteredAssets.length === 0">
+      <lucide-icon [name]="SearchIcon" class="empty-state-icon"></lucide-icon>
+      <h3>No assets found</h3>
+      <p>Try adjusting your search criteria or filters to see more devices.</p>
+    </div>
+
+    <div class="grid-body" *ngIf="!loading">
+      <div class="grid-row" *ngFor="let asset of filteredAssets" (click)="selectAsset(asset)" [class.selected]="selectedAsset?.ip === asset.ip">
+        <div class="col-type">
+          <div class="type-badge" [title]="asset.device_type">
+            <lucide-icon [name]="getDeviceIcon(asset.device_type)" class="w-4 h-4"></lucide-icon>
+          </div>
+        </div>
+
+        <div class="col-ip">
+          <code>{{ asset.ip }}</code>
+        </div>
+
+        <div class="col-name" (dblclick)="startEdit(asset)">
+          <div *ngIf="editingIp !== asset.ip" class="name-display">
+            <strong>{{ asset.custom_name || asset.hostname || 'Unknown' }}</strong>
+            <button class="icon-btn edit-btn" (click)="startEdit(asset)">
+              <lucide-icon [name]="EditIcon" class="w-3 h-3"></lucide-icon>
+            </button>
+          </div>
+          <div *ngIf="editingIp === asset.ip" class="name-edit">
+            <input type="text" [(ngModel)]="editNameValue" (keyup.enter)="saveEdit(asset)" (keyup.escape)="cancelEdit()" autoFocus>
+            <button class="icon-btn success" (click)="saveEdit(asset)">
+              <lucide-icon [name]="CheckIcon" class="w-3.5 h-3.5"></lucide-icon>
+            </button>
+            <button class="icon-btn danger" (click)="cancelEdit()">
+              <lucide-icon [name]="XIcon" class="w-3.5 h-3.5"></lucide-icon>
+            </button>
+          </div>
+        </div>
+
+        <div class="col-vendor">{{ asset.vendor || '--' }}</div>
+        <div class="col-os">{{ asset.os_guess || '--' }}</div>
+
+        <div class="col-mac">
+          <code>{{ asset.mac || '--' }}</code>
+        </div>
+
+        <div class="col-conns">{{ asset.connections_24h || 0 }}</div>
+        <div class="col-alerts">
+          <span *ngIf="asset.alerts_24h > 0" class="alert-badge">{{ asset.alerts_24h }}</span>
+          <span *ngIf="!asset.alerts_24h || asset.alerts_24h === 0">0</span>
+        </div>
+
+        <div class="col-seen">{{ formatLastSeen(asset.last_seen) }}</div>
+      </div>
+    </div>
+  </div>
+
+  <app-device-drawer
+    *ngIf="selectedAsset"
+    [node]="selectedAsset"
+    (closeDrawer)="closeDrawer()"
+    (focusRequested)="handleFocus($event)">
+  </app-device-drawer>
+</div>

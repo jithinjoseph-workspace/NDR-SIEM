@@ -506,3 +506,32 @@ CREATE TABLE IF NOT EXISTS ndr.shared_iocs ON CLUSTER ndr_cluster
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/shared_iocs', '{replica}', last_seen)
 ORDER BY (ioc_type, ioc_value);
+
+CREATE TABLE IF NOT EXISTS ndr.assets ON CLUSTER ndr_cluster
+(
+    ip          String,
+    mac         String DEFAULT '',
+    hostname    String DEFAULT '',
+    vendor      String DEFAULT '',
+    os_guess    String DEFAULT '',
+    device_type String DEFAULT 'unknown',
+    custom_name String DEFAULT '',
+    tenant_id   String DEFAULT 'default',
+    first_seen  DateTime DEFAULT now(),
+    last_seen   DateTime DEFAULT now(),
+    ip_history  String DEFAULT '[]'
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/assets', '{replica}', last_seen)
+ORDER BY (tenant_id, ip);
+
+CREATE TABLE IF NOT EXISTS ndr.passive_dns ON CLUSTER ndr_cluster
+(
+    ip          String,
+    domain      String,
+    hit_count   SimpleAggregateFunction(sum, UInt64) DEFAULT 1,
+    first_seen  SimpleAggregateFunction(min, DateTime) DEFAULT now(),
+    last_seen   SimpleAggregateFunction(max, DateTime) DEFAULT now()
+)
+ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/tables/{shard}/ndr/passive_dns', '{replica}')
+ORDER BY (ip, domain)
+TTL last_seen + INTERVAL 90 DAY;

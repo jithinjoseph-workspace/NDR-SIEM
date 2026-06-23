@@ -68,10 +68,6 @@
       <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
       Telemetry
     </button>
-    <button type="button" (click)="switchTab('kafka')" [class.active]="activeTab === 'kafka'">
-      <lucide-icon [name]="ServerIcon" class="w-4 h-4"></lucide-icon>
-      Kafka
-    </button>
   </div>
 
   <section *ngIf="activeTab === 'tenants'" class="admin-panel">
@@ -307,7 +303,7 @@
   </section>
 
   <!-- ── Kafka Cluster Monitor ───────────────────────────────────────── -->
-  <section *ngIf="activeTab === 'kafka'" class="admin-panel">
+  <section *ngIf="activeTab === 'engines'" class="admin-panel">
     <div class="panel-head">
       <div>
         <h3>Kafka Cluster</h3>

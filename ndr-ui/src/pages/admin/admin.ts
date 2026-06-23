@@ -282,7 +282,7 @@ export class Admin implements OnInit, OnDestroy {
         this.telemetryInterval = null;
       }
     }
-    if (tab === 'kafka') {
+    if (tab === 'engines') {
       this.loadKafkaStatus();
       if (!this.kafkaInterval) {
         this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 10000);
