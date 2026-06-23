@@ -1,152 +1,158 @@
-<aside class="device-drawer" *ngIf="node">
-  <div class="drawer-header">
-    <div class="drawer-title-area">
-      <div class="node-avatar" [ngClass]="getNodeTypeClass(node)">
-        <lucide-icon [name]="getDrawerIcon(node)" class="w-6 h-6"></lucide-icon>
-      </div>
-      <div style="flex: 1; min-width: 0;">
-        <div class="name-display" *ngIf="!isEditingName" style="display: flex; align-items: center; gap: 8px;">
-          <h3 title="{{ node.label || node.custom_name || node.hostname || node.id || node.ip }}">{{ node.label || node.custom_name || node.hostname || node.id || node.ip }}</h3>
-          <button *ngIf="node.type !== 'domain'" class="icon-button" style="width: 20px; height: 20px; padding: 2px;" (click)="startEditName()" title="Edit Name">
-            <lucide-icon [name]="EditIcon" class="w-3 h-3"></lucide-icon>
-          </button>
+    <aside class="device-drawer" *ngIf="node">
+      <div class="drawer-header">
+        <div class="drawer-title-area">
+          <div class="node-avatar" [ngClass]="getNodeTypeClass(node)">
+            <lucide-icon [name]="getDrawerIcon(node)" class="w-6 h-6"></lucide-icon>
+          </div>
+          <div style="flex: 1; min-width: 0;">
+            <div class="name-display" *ngIf="!isEditingName" style="display: flex; align-items: center; gap: 8px;">
+              <h3 title="{{ node.label || node.custom_name || node.hostname || node.id || node.ip }}">{{ node.label || node.custom_name || node.hostname || node.id || node.ip }}</h3>
+              <button *ngIf="node.type !== 'domain'" class="icon-button" style="width: 20px; height: 20px; padding: 2px;" (click)="startEditName()" title="Edit Name">
+                <lucide-icon [name]="EditIcon" class="w-3 h-3"></lucide-icon>
+              </button>
+            </div>
+            <div class="name-edit" *ngIf="isEditingName" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+               <input type="text" [(ngModel)]="editNameValue" (keyup.enter)="saveName()" (keyup.escape)="cancelEditName()" autoFocus style="flex: 1; padding: 4px 8px; border-radius: 4px; border: 1px solid #7ca3ff; background: rgba(11, 19, 35, 0.85); color: #fff; font-size: 13px; outline: none;">
+               <button class="icon-button" (click)="saveName()" style="color: #10b981; width: 24px; height: 24px;">
+                 <lucide-icon [name]="CheckIcon" class="w-3.5 h-3.5"></lucide-icon>
+               </button>
+               <button class="icon-button" (click)="cancelEditName()" style="color: #ef4444; width: 24px; height: 24px;">
+                 <lucide-icon [name]="XIcon" class="w-3.5 h-3.5"></lucide-icon>
+               </button>
+            </div>
+            <span *ngIf="node.type === 'domain'">Root Domain &bull; External</span>
+            <span *ngIf="node.type !== 'domain'">{{ node.id || node.ip }} &bull; {{ node.type || node.device_type }}</span>
+          </div>
         </div>
-        <div class="name-edit" *ngIf="isEditingName" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
-          <input type="text" [(ngModel)]="editNameValue" (keyup.enter)="saveName()" (keyup.escape)="cancelEditName()" autoFocus style="flex: 1; padding: 4px 8px; border-radius: 4px; border: 1px solid #7ca3ff; background: rgba(11, 19, 35, 0.85); color: #fff; font-size: 13px; outline: none;">
-          <button class="icon-button" (click)="saveName()" style="color: #10b981; width: 24px; height: 24px;">
-            <lucide-icon [name]="CheckIcon" class="w-3.5 h-3.5"></lucide-icon>
-          </button>
-          <button class="icon-button" (click)="cancelEditName()" style="color: #ef4444; width: 24px; height: 24px;">
-            <lucide-icon [name]="XIcon" class="w-3.5 h-3.5"></lucide-icon>
-          </button>
+        <button class="icon-button" type="button" (click)="onClose()" title="Close">
+          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+
+      <div class="drawer-focus-action">
+        <button class="primary-action w-full" type="button" (click)="toggleFocus()" [class.active]="focusModeActive" style="width: 100%; justify-content: center;">
+          <lucide-icon [name]="NetworkIcon" class="w-4 h-4"></lucide-icon>
+          {{ focusModeActive ? 'Exit Focus Mode' : '🔎 Focus on this device' }}
+        </button>
+      </div>
+
+      <div class="drawer-tabs">
+        <button [class.active]="drawerTab === 'overview'" (click)="setDrawerTab('overview')">Overview</button>
+        <button [class.active]="drawerTab === 'connections'" (click)="setDrawerTab('connections')">Connections</button>
+        <button [class.active]="drawerTab === 'alerts'" (click)="setDrawerTab('alerts')">Alerts</button>
+        <button [class.active]="drawerTab === 'pcaps'" (click)="setDrawerTab('pcaps')">PCAPs</button>
+      </div>
+
+      <div class="drawer-content" *ngIf="drawerTab === 'overview'">
+        <div class="inspector-grid">
+          <div>
+            <span>Connections</span>
+            <strong>{{ node.connections_24h !== undefined ? node.connections_24h : (node.connections || 0) }}</strong>
+          </div>
+          <div>
+            <span>Type</span>
+            <strong>{{ node.type || node.device_type }}</strong>
+          </div>
         </div>
-        <span *ngIf="node.type === 'domain'">Root Domain &bull; External</span>
-        <span *ngIf="node.type !== 'domain'">{{ node.id || node.ip }} &bull; {{ node.type || node.device_type }}</span>
-      </div>
-    </div>
-    <button class="icon-button" type="button" (click)="onClose()" title="Close">
-      <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
-    </button>
-  </div>
 
-  <div class="drawer-focus-action">
-    <button class="primary-action w-full" type="button" (click)="toggleFocus()" [class.active]="focusModeActive" style="width: 100%; justify-content: center;">
-      <lucide-icon [name]="NetworkIcon" class="w-4 h-4"></lucide-icon>
-      {{ focusModeActive ? 'Exit Focus Mode' : '🔎 Focus on this device' }}
-    </button>
-  </div>
-
-  <div class="drawer-tabs">
-    <button [class.active]="drawerTab === 'overview'" (click)="setDrawerTab('overview')">Overview</button>
-    <button [class.active]="drawerTab === 'connections'" (click)="setDrawerTab('connections')">Connections</button>
-    <button [class.active]="drawerTab === 'alerts'" (click)="setDrawerTab('alerts')">Alerts</button>
-    <button [class.active]="drawerTab === 'pcaps'" (click)="setDrawerTab('pcaps')">PCAPs</button>
-  </div>
-
-  <div class="drawer-content" *ngIf="drawerTab === 'overview'">
-    <div class="inspector-grid">
-      <div>
-        <span>Connections</span>
-        <strong>{{ node.connections_24h !== undefined ? node.connections_24h : (node.connections || 0) }}</strong>
-      </div>
-      <div>
-        <span>Type</span>
-        <strong>{{ node.type || node.device_type }}</strong>
-      </div>
-    </div>
-
-    <div class="inspector-detail" *ngIf="node.type !== 'domain'">
-      <span>Identifier</span>
-      <code>{{ node.id || node.ip }}</code>
-    </div>
-    <div class="inspector-detail" *ngIf="node.primary_domain">
-      <span>Primary Domain</span>
-      <code style="word-break: break-all; white-space: normal;">{{ node.primary_domain }}</code>
-    </div>
-    <div class="inspector-detail" *ngIf="node.type === 'domain' && node.all_domains && node.all_domains.length > 0">
-      <span>Observed Domains</span>
-      <ul style="list-style: none; padding: 0; margin: 4px 0 0 0; text-align: left;">
-        <li *ngFor="let d of node.all_domains" style="margin-bottom: 2px;">
-          <code style="word-break: break-all;">{{ d }}</code>
-        </li>
-      </ul>
-    </div>
-    <div class="inspector-detail" *ngIf="node.type === 'domain' && node.member_ips && node.member_ips.length > 0">
-      <span>External IPs</span>
-      <ul style="list-style: none; padding: 0; margin: 4px 0 0 0; text-align: left;">
-        <li *ngFor="let ip of node.member_ips" style="margin-bottom: 2px;">
-          <code>{{ ip }}</code>
-        </li>
-      </ul>
-    </div>
-    <div class="inspector-detail" *ngIf="node.vendor">
-      <span>Vendor</span>
-      <code>{{ node.vendor }}</code>
-    </div>
-    <div class="inspector-detail" *ngIf="node.os_guess">
-      <span>OS</span>
-      <code>{{ node.os_guess }}</code>
-    </div>
-    <div class="inspector-detail" *ngIf="node.mac">
-      <span>MAC Address</span>
-      <code>{{ node.mac }}</code>
-    </div>
-  </div>
-
-  <div class="drawer-content" *ngIf="drawerTab === 'connections'">
-    <div *ngIf="loadingConnections" class="pcap-drawer-state">Loading...</div>
-    <div *ngIf="!loadingConnections && selectedNodeConnections.length === 0" class="pcap-drawer-state" style="color: #6e7588; text-align: center; padding: 2rem;">
-      No connections found.
-    </div>
-    <div *ngIf="!loadingConnections && selectedNodeConnections.length > 0" class="pcap-session-list">
-      <div *ngFor="let conn of selectedNodeConnections" class="pcap-session-row">
-        <div class="session-flow">
-          <span>{{ conn.peer }}</span>
-          <span class="proto-tag" *ngFor="let p of conn.protocols">{{ p }}</span>
+        <div class="inspector-detail" *ngIf="node.type !== 'domain'">
+          <span>Identifier</span>
+          <code>{{ node.id || node.ip }}</code>
         </div>
-        <div class="session-meta">
-          <span>{{ conn.connections }} conns</span>
+        <div class="inspector-detail" *ngIf="node.primary_domain">
+          <span>Primary Domain</span>
+          <code style="word-break: break-all; white-space: normal;">{{ node.primary_domain }}</code>
+        </div>
+        <div class="inspector-detail" *ngIf="node.type === 'domain' && node.all_domains && node.all_domains.length > 0">
+          <span>Observed Domains</span>
+          <ul style="list-style: none; padding: 0; margin: 4px 0 0 0; text-align: left;">
+            <li *ngFor="let d of node.all_domains" style="margin-bottom: 2px;">
+              <code style="word-break: break-all;">{{ d }}</code>
+            </li>
+          </ul>
+        </div>
+        <div class="inspector-detail" *ngIf="node.type === 'domain' && node.member_ips && node.member_ips.length > 0">
+          <span>External IPs</span>
+          <ul style="list-style: none; padding: 0; margin: 4px 0 0 0; text-align: left;">
+            <li *ngFor="let ip of node.member_ips" style="margin-bottom: 2px;">
+              <code>{{ ip }}</code>
+            </li>
+          </ul>
+        </div>
+        <div class="inspector-detail" *ngIf="node.type !== 'domain' && node.all_domains && node.all_domains.length > 1">
+          <span>Other Domains</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-start;">
+            <code *ngFor="let d of node.all_domains" [ngStyle]="{'display': d === node.primary_domain ? 'none' : 'inline-block'}" style="word-break: break-all;">{{ d }}</code>
+          </div>
+        </div>
+        <div class="inspector-detail" *ngIf="node.vendor">
+          <span>Vendor</span>
+          <code>{{ node.vendor }}</code>
+        </div>
+        <div class="inspector-detail" *ngIf="node.os_guess">
+          <span>OS</span>
+          <code>{{ node.os_guess }}</code>
+        </div>
+        <div class="inspector-detail" *ngIf="node.mac">
+          <span>MAC Address</span>
+          <code>{{ node.mac }}</code>
         </div>
       </div>
-    </div>
-  </div>
 
-  <div class="drawer-content" *ngIf="drawerTab === 'alerts'">
-    <div *ngIf="loadingAlerts" class="pcap-drawer-state">Loading...</div>
-    <div *ngIf="!loadingAlerts && selectedNodeAlerts.length === 0" class="pcap-drawer-state" style="color: #6e7588; text-align: center; padding: 2rem;">
-      No alerts found for this device.
-    </div>
-    <div *ngIf="!loadingAlerts && selectedNodeAlerts.length > 0" class="pcap-session-list">
-      <div *ngFor="let alert of selectedNodeAlerts" class="pcap-session-row">
-        <div class="session-flow">
-          <span [style.color]="'#ff716a'">{{ alert.rule_name || alert.event_type }}</span>
+      <div class="drawer-content" *ngIf="drawerTab === 'connections'">
+        <div *ngIf="loadingConnections" class="pcap-drawer-state">Loading...</div>
+        <div *ngIf="!loadingConnections && selectedNodeConnections.length === 0" class="pcap-drawer-state" style="color: #6e7588; text-align: center; padding: 2rem;">
+          No connections found.
         </div>
-        <div class="session-meta">
-          <span>{{ alert.timestamp | date:'short' }}</span>
+        <div *ngIf="!loadingConnections && selectedNodeConnections.length > 0" class="pcap-session-list">
+          <div *ngFor="let conn of selectedNodeConnections" class="pcap-session-row">
+            <div class="session-flow">
+              <span>{{ conn.peer }}</span>
+              <span class="proto-tag" *ngFor="let p of conn.protocols">{{ p }}</span>
+            </div>
+            <div class="session-meta">
+              <span>{{ conn.connections }} conns</span>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  </div>
 
-  <div class="drawer-content" *ngIf="drawerTab === 'pcaps'">
-    <div *ngIf="pcapLoading" class="pcap-drawer-state">Loading PCAPs...</div>
-    <div *ngIf="!pcapLoading && pcapSessions.length === 0" class="pcap-drawer-state" style="color: #6e7588; text-align: center; padding: 2rem;">
-      No PCAP sessions found.
-    </div>
-    <div *ngIf="!pcapLoading && pcapSessions.length > 0" class="pcap-session-list">
-      <div *ngFor="let s of pcapSessions" class="pcap-session-row">
-        <div class="session-flow">
-          <span>{{ s.srcIp }}</span>
-          <span class="proto-tag">{{ s.protocol }}</span>
-          <span>{{ s.dstIp }}</span>
+      <div class="drawer-content" *ngIf="drawerTab === 'alerts'">
+        <div *ngIf="loadingAlerts" class="pcap-drawer-state">Loading...</div>
+        <div *ngIf="!loadingAlerts && selectedNodeAlerts.length === 0" class="pcap-drawer-state" style="color: #6e7588; text-align: center; padding: 2rem;">
+          No alerts found for this device.
         </div>
-        <div class="session-meta">
-          <span>{{ s.firstPacket | date:'short' }}</span>
-          <button class="icon-button" (click)="downloadPcap(s.id)" title="Download PCAP">
-            <lucide-icon [name]="DownloadIcon" class="w-4 h-4"></lucide-icon>
-          </button>
+        <div *ngIf="!loadingAlerts && selectedNodeAlerts.length > 0" class="pcap-session-list">
+           <div *ngFor="let alert of selectedNodeAlerts" class="pcap-session-row">
+             <div class="session-flow">
+               <span [style.color]="'#ff716a'">{{ alert.rule_name || alert.event_type }}</span>
+             </div>
+             <div class="session-meta">
+               <span>{{ alert.timestamp | date:'short' }}</span>
+             </div>
+           </div>
         </div>
       </div>
-    </div>
-  </div>
-</aside>
+
+      <div class="drawer-content" *ngIf="drawerTab === 'pcaps'">
+        <div *ngIf="pcapLoading" class="pcap-drawer-state">Loading PCAPs...</div>
+        <div *ngIf="!pcapLoading && pcapSessions.length === 0" class="pcap-drawer-state" style="color: #6e7588; text-align: center; padding: 2rem;">
+          No PCAP sessions found.
+        </div>
+        <div *ngIf="!pcapLoading && pcapSessions.length > 0" class="pcap-session-list">
+          <div *ngFor="let s of pcapSessions" class="pcap-session-row">
+            <div class="session-flow">
+              <span>{{ s.srcIp }}</span>
+              <span class="proto-tag">{{ s.protocol }}</span>
+              <span>{{ s.dstIp }}</span>
+            </div>
+            <div class="session-meta">
+              <span>{{ s.firstPacket | date:'short' }}</span>
+              <button class="icon-button" (click)="downloadPcap(s.id)" title="Download PCAP">
+                <lucide-icon [name]="DownloadIcon" class="w-4 h-4"></lucide-icon>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>

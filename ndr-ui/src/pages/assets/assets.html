@@ -4,7 +4,7 @@
       <h2>Asset Inventory</h2>
       <p>Discovered devices, identities, and hostnames.</p>
     </div>
-
+    
     <div class="header-actions">
       <div class="filter-group">
         <div class="custom-dropdown-wrapper">
@@ -13,17 +13,17 @@
             <span>{{ getFilterLabel() }}</span>
             <lucide-icon [name]="ChevronDownIcon" class="dropdown-arrow" [class.rotate]="isDropdownOpen"></lucide-icon>
           </div>
-
+          
           <div class="dropdown-menu" *ngIf="isDropdownOpen">
-            <div class="dropdown-item"
-                 *ngFor="let option of deviceTypeOptions"
+            <div class="dropdown-item" 
+                 *ngFor="let option of deviceTypeOptions" 
                  (click)="setFilter(option.value)"
                  [class.active]="filterDeviceType === option.value">
               {{ option.label }}
             </div>
           </div>
         </div>
-
+        
         <label class="checkbox-label">
           <input type="checkbox" [(ngModel)]="filterLast24h" (ngModelChange)="filterAssets()">
           <span>Seen in last 24h</span>
@@ -32,8 +32,8 @@
 
       <div class="search-box">
         <lucide-icon [name]="SearchIcon" class="w-4 h-4 text-slate-400"></lucide-icon>
-        <input type="text"
-               [(ngModel)]="searchTerm"
+        <input type="text" 
+               [(ngModel)]="searchTerm" 
                (ngModelChange)="filterAssets()"
                placeholder="Search IPs, names, vendors...">
       </div>
@@ -46,6 +46,7 @@
       <div class="donut-chart-wrapper">
         <svg viewBox="0 0 120 120" class="donut-svg">
           <circle cx="60" cy="60" r="50" class="donut-bg"></circle>
+          <!-- The strokes will be set via CSS or we can just use a conic gradient background on a div for easier dynamic sizing. Let's use a pure CSS glowing conic gradient approach instead of complex SVG calculations for easier dynamic binding. -->
         </svg>
         <div class="donut-css" [style.background]="'conic-gradient(var(--md-sys-color-primary) 0% ' + stats.workstations.percent + '%, var(--md-sys-color-tertiary) ' + stats.workstations.percent + '% ' + (stats.workstations.percent + stats.iot.percent) + '%, var(--md-sys-color-error) ' + (stats.workstations.percent + stats.iot.percent) + '% ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '%, var(--md-sys-color-secondary) ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '% 100%)'">
         </div>
@@ -136,11 +137,11 @@
             <lucide-icon [name]="getDeviceIcon(asset.device_type)" class="w-4 h-4"></lucide-icon>
           </div>
         </div>
-
+        
         <div class="col-ip">
           <code>{{ asset.ip }}</code>
         </div>
-
+        
         <div class="col-name" (dblclick)="startEdit(asset)">
           <div *ngIf="editingIp !== asset.ip" class="name-display">
             <strong>{{ asset.custom_name || asset.hostname || 'Unknown' }}</strong>
@@ -158,26 +159,26 @@
             </button>
           </div>
         </div>
-
+        
         <div class="col-vendor">{{ asset.vendor || '--' }}</div>
         <div class="col-os">{{ asset.os_guess || '--' }}</div>
-
+        
         <div class="col-mac">
           <code>{{ asset.mac || '--' }}</code>
         </div>
-
+        
         <div class="col-conns">{{ asset.connections_24h || 0 }}</div>
         <div class="col-alerts">
-          <span *ngIf="asset.alerts_24h > 0" class="alert-badge">{{ asset.alerts_24h }}</span>
-          <span *ngIf="!asset.alerts_24h || asset.alerts_24h === 0">0</span>
+            <span *ngIf="asset.alerts_24h > 0" class="alert-badge">{{ asset.alerts_24h }}</span>
+            <span *ngIf="!asset.alerts_24h || asset.alerts_24h === 0">0</span>
         </div>
-
+        
         <div class="col-seen">{{ formatLastSeen(asset.last_seen) }}</div>
       </div>
     </div>
   </div>
 
-  <app-device-drawer
+  <app-device-drawer 
     *ngIf="selectedAsset"
     [node]="selectedAsset"
     (closeDrawer)="closeDrawer()"

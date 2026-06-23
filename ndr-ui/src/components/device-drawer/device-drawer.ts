@@ -41,7 +41,7 @@ export class DeviceDrawer implements OnChanges {
   @Output() focusRequested = new EventEmitter<string>();
 
   drawerTab: string = 'overview';
-
+  
   selectedNodeConnections: any[] = [];
   loadingConnections = false;
 
@@ -67,6 +67,7 @@ export class DeviceDrawer implements OnChanges {
 
   ngOnChanges(changes: SimpleChanges) {
     if (changes['node']) {
+      // Refresh active tab data when node changes
       this.setDrawerTab(this.drawerTab);
     }
   }
@@ -125,14 +126,14 @@ export class DeviceDrawer implements OnChanges {
     this.pcapLoading = true;
     this.pcapSessions = [];
     this.pcapError = '';
-
+    
     this.arkime.getSessions({ ip, limit: 10 }).subscribe({
       next: (res: any) => {
         this.pcapSessions = res.sessions || res.data || [];
         this.pcapLoading = false;
         this.cdr.detectChanges();
       },
-      error: () => {
+      error: (err: any) => {
         this.pcapError = 'Failed to load PCAP sessions';
         this.pcapLoading = false;
         this.cdr.detectChanges();
@@ -159,6 +160,7 @@ export class DeviceDrawer implements OnChanges {
   }
 
   saveName() {
+    // Uses the IP explicitly to ensure backend API route matches
     const ip = this.node.active_ip || this.node.ip || this.node.id;
     if (!ip) return;
 
@@ -169,7 +171,8 @@ export class DeviceDrawer implements OnChanges {
         this.isEditingName = false;
         this.cdr.detectChanges();
       },
-      error: () => {
+      error: (err: any) => {
+        console.error('Failed to update asset name:', err);
         this.isEditingName = false;
         this.cdr.detectChanges();
       }
@@ -207,7 +210,7 @@ export class DeviceDrawer implements OnChanges {
     if (type === 'tv' || type === 'media') return Tv;
     if (type === 'server') return Server;
     if (type === 'router' || type === 'gateway' || type === 'firewall' || type === 'switch') return Router;
-
+    
     const isInternal = this.isInternalNode(node);
     if (isInternal) return Router;
     if (node?.threat) return TriangleAlert;

@@ -12,11 +12,10 @@ fn now_ms() -> u64 {
 
 /// Normalise a raw Suricata eve.json event from Vector.
 pub fn normalize_suricata(raw: Value) -> Option<NormalizedEvent> {
-    // community_id is mandatory — drop without it
     let community_id = raw.get("community_id")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty() && *s != "-")
-        .map(String::from)?;
+        .map(String::from);
 
     let event_type = raw.get("event_type")
         .and_then(|v| v.as_str())
@@ -72,7 +71,7 @@ pub fn normalize_suricata(raw: Value) -> Option<NormalizedEvent> {
         dest_port,
         proto,
         network_protocol,
-        community_id: Some(community_id),
+        community_id,
         event_source: EventSource::Suricata,
         log_source: event_type.clone(),
         timestamp,

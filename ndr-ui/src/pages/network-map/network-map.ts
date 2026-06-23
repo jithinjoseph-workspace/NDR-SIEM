@@ -69,6 +69,7 @@ export class NetworkMap implements OnInit, OnDestroy {
   selectedNode: any = null;
   lastUpdated: string = '--';
 
+
   nodesData: any[] = [];
   edgesData: any[] = [];
 
@@ -126,8 +127,9 @@ export class NetworkMap implements OnInit, OnDestroy {
 
   getNodeIconPath(node: any): string {
     if (node?.type === 'cluster') return DEVICE_PATHS['cluster'];
-    if (node?.threat) return DEVICE_PATHS['globe'];
-
+    if (node?.threat) return DEVICE_PATHS['unknown'];
+    
+    // Handle synonyms
     const type = node?.type || '';
     if ((type === 'phone' || type === 'mobile') && DEVICE_PATHS['phone']) return DEVICE_PATHS['phone'];
     if ((type === 'tv' || type === 'media') && DEVICE_PATHS['tv']) return DEVICE_PATHS['tv'];
@@ -135,24 +137,36 @@ export class NetworkMap implements OnInit, OnDestroy {
 
     if (node?.type && DEVICE_PATHS[node.type]) return DEVICE_PATHS[node.type];
     if (node.is_internal) return DEVICE_PATHS['router'];
-
+    
+    // We now use full-color favicons for most brands, but keep these as fallbacks
     const label = (node.label || node.id || '').toLowerCase();
     if (label.includes('github')) return DEVICE_PATHS['github'];
     if (label.includes('youtube') || label.includes('googlevideo')) return DEVICE_PATHS['youtube'];
     if (label.includes('apple') || label.includes('icloud') || label.includes('mzstatic')) return DEVICE_PATHS['apple'];
     if (label.includes('aws') || label.includes('amazonaws') || label.includes('cloudfront')) return DEVICE_PATHS['cloud'];
     if (label.includes('google')) return DEVICE_PATHS['cloud'];
-
+    
     return DEVICE_PATHS['globe'];
   }
 
   hasFavicon(node: any): boolean {
+    // Return true if it's an external domain group
     return node.type === 'domain' || (!node.is_internal && node.type !== 'cluster' && node.label && node.label !== node.id);
   }
 
   getDomain(node: any): string {
     if (!node || !node.label) return '';
+    // Extract just the domain part before the space/IP address (legacy support)
     return node.label.split(' ')[0];
+  }
+
+  getNodeKindLabel(node: any): string {
+    if (node?.threat) return 'Threat Indicator';
+    if (node?.type === 'domain') return 'External Domain';
+    if (node?.type && node.type !== 'unknown' && node.type !== 'external') {
+      return node.type.charAt(0).toUpperCase() + node.type.slice(1);
+    }
+    return node?.is_internal ? 'Internal Host' : 'External Server';
   }
 
   getNodeTypeClass(node: any): string {
@@ -164,10 +178,11 @@ export class NetworkMap implements OnInit, OnDestroy {
     this.selectedNode = null;
     this.focusMode = false;
     d3.select(this.svgRef.nativeElement).selectAll('.topology-node').classed('is-selected', false);
+    this.applyFocus();
   }
 
   focusMode: boolean = false;
-
+  
   toggleFocus() {
     this.focusMode = !this.focusMode;
     if (this.focusMode && this.selectedNode) {
@@ -177,10 +192,14 @@ export class NetworkMap implements OnInit, OnDestroy {
     }
   }
 
+  applyFocus() {
+    // Legacy local focus behavior can be skipped since we now fetch the sub-graph
+  }
+
   onSearchChange(event: any) {
     this.searchQuery = event.target.value;
     clearTimeout(this.searchDebounce);
-
+    
     if (!this.searchQuery.trim()) {
       this.isSearchActive = false;
       this.searchMatches.clear();
@@ -191,53 +210,62 @@ export class NetworkMap implements OnInit, OnDestroy {
     this.searchDebounce = setTimeout(() => {
       this.isSearchActive = true;
       this.searchMatches.clear();
-
+      
+      // 1. Client-side instant match (bulletproof for visible nodes)
       const q = this.searchQuery.trim().toLowerCase();
       this.nodesData.forEach(n => {
-        const idMatch = n.id && n.id.toLowerCase().includes(q);
-        const labelMatch = n.label && n.label.toLowerCase().includes(q);
-        const activeIpMatch = n.active_ip && n.active_ip.toLowerCase().includes(q);
-        const macMatch = n.mac && n.mac.toLowerCase().includes(q);
+         const idMatch      = n.id        && n.id.toLowerCase().includes(q);
+         const labelMatch   = n.label     && n.label.toLowerCase().includes(q);
+         const activeIpMatch = n.active_ip && n.active_ip.toLowerCase().includes(q);
+         const macMatch     = n.mac       && n.mac.toLowerCase().includes(q);
 
-        let historyMatch = false;
-        if (n.ip_history && n.ip_history !== '[]') {
-          try {
-            const history: Array<{ip: string}> = JSON.parse(n.ip_history);
-            historyMatch = history.some(entry => entry.ip && entry.ip.toLowerCase().includes(q));
-          } catch { /* ignore */ }
-        }
+         // Hybrid Asset Model: also search through ip_history timestamps
+         let historyMatch = false;
+         if (n.ip_history && n.ip_history !== '[]') {
+           try {
+             const history: Array<{ip: string}> = JSON.parse(n.ip_history);
+             historyMatch = history.some(entry => entry.ip && entry.ip.toLowerCase().includes(q));
+           } catch { /* ignore malformed JSON */ }
+         }
 
-        const primaryDomainMatch = n.primary_domain && n.primary_domain.toLowerCase().includes(q);
-        const allDomainsMatch = n.all_domains && n.all_domains.some((d: string) => d.toLowerCase().includes(q));
-        const membersMatch = n.member_ips && n.member_ips.some((m: string) => m.toLowerCase().includes(q));
+         // Passive DNS: search through domains
+         const primaryDomainMatch = n.primary_domain && n.primary_domain.toLowerCase().includes(q);
+         const allDomainsMatch    = n.all_domains && n.all_domains.some((d: string) => d.toLowerCase().includes(q));
+         
+         // Search inside clusters
+         const membersMatch       = n.member_ips && n.member_ips.some((m: string) => m.toLowerCase().includes(q));
 
-        if (idMatch || labelMatch || activeIpMatch || macMatch || historyMatch || primaryDomainMatch || allDomainsMatch || membersMatch) {
-          this.searchMatches.add(n.id);
-        }
+         if (idMatch || labelMatch || activeIpMatch || macMatch || historyMatch || primaryDomainMatch || allDomainsMatch || membersMatch) {
+             this.searchMatches.add(n.id);
+         }
       });
-
+      
+      // Paint immediately for instant UX feedback
       this.renderGraph(this.nodesData, this.edgesData);
 
+      // 2. Server-side deep search (for clustered/unrendered nodes)
       this.api.searchNetworkMap(this.searchQuery).subscribe({
         next: (ids: string[]) => {
           let hasNewMatches = false;
           ids.forEach(id => {
-            if (!this.searchMatches.has(id)) {
-              this.searchMatches.add(id);
-              hasNewMatches = true;
-            }
-            this.nodesData.forEach((n: any) => {
-              if (n.type === 'cluster' && n.member_ips && n.member_ips.includes(id)) {
-                if (!this.searchMatches.has(n.id)) {
-                  this.searchMatches.add(n.id);
+              if (!this.searchMatches.has(id)) {
+                  this.searchMatches.add(id);
                   hasNewMatches = true;
-                }
               }
-            });
+              // Check if this ID is hidden inside a cluster on the current map
+              this.nodesData.forEach((n: any) => {
+                  if (n.type === 'cluster' && n.member_ips && n.member_ips.includes(id)) {
+                      if (!this.searchMatches.has(n.id)) {
+                          this.searchMatches.add(n.id);
+                          hasNewMatches = true;
+                      }
+                  }
+              });
           });
 
+          // Apply backend search state if there are new out-of-bounds nodes
           if (hasNewMatches) {
-            this.renderGraph(this.nodesData, this.edgesData);
+             this.renderGraph(this.nodesData, this.edgesData);
           }
 
           if (ids.length > 0) {
@@ -250,8 +278,8 @@ export class NetworkMap implements OnInit, OnDestroy {
             if (clusterToExpand) {
               this.expandCluster(clusterToExpand);
               setTimeout(() => {
-                let expandedMatch = this.nodesData.find((n: any) => n.id === ids[0]);
-                if (expandedMatch) this.zoomToNode(expandedMatch);
+                 let expandedMatch = this.nodesData.find((n: any) => n.id === ids[0]);
+                 if (expandedMatch) this.zoomToNode(expandedMatch);
               }, 400);
             } else if (matchedNode) {
               this.zoomToNode(matchedNode);
@@ -279,6 +307,9 @@ export class NetworkMap implements OnInit, OnDestroy {
   expandCluster(clusterNode: any) {
     if (!clusterNode.member_ips || clusterNode.member_ips.length === 0) return;
 
+    // ── Step 1: Capture graph-space coordinates NOW, before anything changes.
+    // clusterNode is a live D3 datum — it has the settled x/y from the simulation.
+    // Once we call renderGraph / updateSimulation these may drift, so freeze them.
     const anchorX = clusterNode.x;
     const anchorY = clusterNode.y;
 
@@ -286,17 +317,20 @@ export class NetworkMap implements OnInit, OnDestroy {
     this.errorMessage = '';
     this.dataService.expandCluster(clusterNode, this.nodesData, this.edgesData).subscribe({
       next: (data) => {
+        // ── Step 2: Preserve ALL existing node positions (no scatter).
         const oldNodesMap = new Map(this.nodesData.map((n: any) => [n.id, n]));
         this.nodesData = data.nodes.map((newNode: any) => {
           const oldNode = oldNodesMap.get(newNode.id);
           if (oldNode) {
-            newNode.x = oldNode.x;
-            newNode.y = oldNode.y;
+            // Existing node — keep its exact settled position
+            newNode.x  = oldNode.x;
+            newNode.y  = oldNode.y;
             newNode.vx = oldNode.vx;
             newNode.vy = oldNode.vy;
           } else {
-            newNode.x = anchorX;
-            newNode.y = anchorY;
+            // Brand new node — seed at the cluster's frozen anchor position
+            newNode.x  = anchorX;
+            newNode.y  = anchorY;
             newNode.vx = 0;
             newNode.vy = 0;
           }
@@ -309,8 +343,12 @@ export class NetworkMap implements OnInit, OnDestroy {
         this.viewState = this.nodeCount === 0 ? 'empty' : 'loaded';
         this.cdr.detectChanges();
 
+        // ── Step 3: Hot-update the render — preserving positions, not restarting simulation.
         this.renderGraph(this.nodesData, this.edgesData, true);
 
+        // ── Step 4: Zoom to the frozen anchor coordinates.
+        // Since we use graph-space coords (not screen-space), this is immune to
+        // any camera transform already applied by the user.
         if (anchorX !== undefined && anchorY !== undefined) {
           setTimeout(() => this.zoomToNode({ x: anchorX, y: anchorY }, 0.75), 80);
         }
@@ -334,7 +372,8 @@ export class NetworkMap implements OnInit, OnDestroy {
           minute: '2-digit',
           second: '2-digit',
         });
-
+        
+        // Preserve D3 physics coordinates across updates to prevent shuffling
         const oldNodesMap = new Map(this.nodesData.map((n: any) => [n.id, n]));
         this.nodesData = data.nodes.map((newNode: any) => {
           const oldNode = oldNodesMap.get(newNode.id);
@@ -346,25 +385,25 @@ export class NetworkMap implements OnInit, OnDestroy {
           }
           return newNode;
         });
-
+        
         this.edgesData = data.edges;
         this.nodeCount = data.nodeCount;
         this.edgeCount = data.edgeCount;
         this.viewState = this.nodeCount === 0 ? 'empty' : 'loaded';
-
+        
         if (previousSelection) {
-          this.selectedNode = this.nodesData.find((n: any) => n.id === previousSelection.id) || previousSelection;
+           this.selectedNode = this.nodesData.find((n: any) => n.id === previousSelection.id) || previousSelection;
         }
 
         this.cdr.detectChanges();
         setTimeout(() => {
-          this.renderGraph(this.nodesData, this.edgesData);
-          if (resetCameraAfterLoad) {
-            setTimeout(() => this.resetCamera(), 50);
-          }
+           this.renderGraph(this.nodesData, this.edgesData);
+           if (resetCameraAfterLoad) {
+               setTimeout(() => this.resetCamera(), 50);
+           }
         }, 100);
       },
-      error: () => {
+      error: (err) => {
         this.viewState = 'error';
         this.errorMessage = 'Failed to load network topology.';
         this.cdr.detectChanges();
@@ -384,6 +423,7 @@ export class NetworkMap implements OnInit, OnDestroy {
           second: '2-digit',
         });
 
+        // Preserve D3 physics coordinates across updates to prevent shuffling
         const oldNodesMap = new Map(this.nodesData.map((n: any) => [n.id, n]));
         this.nodesData = data.nodes.map((newNode: any) => {
           const oldNode = oldNodesMap.get(newNode.id);
@@ -402,22 +442,24 @@ export class NetworkMap implements OnInit, OnDestroy {
         this.viewState = this.nodeCount === 0 ? 'empty' : 'loaded';
 
         if (previousSelection) {
-          this.selectedNode = this.nodesData.find((n: any) => n.id === previousSelection.id) || previousSelection;
+           this.selectedNode = this.nodesData.find((n: any) => n.id === previousSelection.id) || previousSelection;
         }
 
         this.cdr.detectChanges();
         setTimeout(() => {
-          this.renderGraph(this.nodesData, this.edgesData, true);
-
-          const focusedNode = this.nodesData.find((n: any) => n.id === ip);
-          if (focusedNode && focusedNode.x !== undefined && focusedNode.y !== undefined) {
-            this.zoomToNode(focusedNode, 1.2);
-          } else {
-            this.resetCamera();
-          }
+           // Hot-update the simulation so preserved node coordinates aren't scattered
+           this.renderGraph(this.nodesData, this.edgesData, true);
+           
+           // Zoom to the focused node if it exists, otherwise reset camera
+           const focusedNode = this.nodesData.find((n: any) => n.id === ip);
+           if (focusedNode && focusedNode.x !== undefined && focusedNode.y !== undefined) {
+             this.zoomToNode(focusedNode, 1.2);
+           } else {
+             this.resetCamera();
+           }
         }, 100);
       },
-      error: () => {
+      error: (err) => {
         this.viewState = 'error';
         this.errorMessage = 'Failed to load specific node data.';
         this.cdr.detectChanges();
@@ -429,7 +471,7 @@ export class NetworkMap implements OnInit, OnDestroy {
     if (!this.zoomBehavior || !this.svgRef) return;
     const svgEl = this.svgRef.nativeElement;
     const svg = d3.select(svgEl);
-
+    
     const width = svgEl.clientWidth || 1000;
     const height = svgEl.clientHeight || 600;
 
@@ -439,11 +481,12 @@ export class NetworkMap implements OnInit, OnDestroy {
     else targetScale = 0.8;
 
     const transform = d3.zoomIdentity
-      .translate(width / 2 * (1 - targetScale), height / 2 * (1 - targetScale))
-      .scale(targetScale);
+        .translate(width / 2 * (1 - targetScale), height / 2 * (1 - targetScale))
+        .scale(targetScale);
 
     svg.transition().duration(750).call(this.zoomBehavior.transform, transform);
   }
+
 
   renderGraph(nodes: any[], edges: any[], isClusterExpand: boolean = false) {
     const svgEl = this.svgRef.nativeElement;
@@ -476,15 +519,15 @@ export class NetworkMap implements OnInit, OnDestroy {
         .attr('fill', '#7ca3ff70');
 
       g = svg.append('g').attr('class', 'main-container');
-
+      
       this.zoomBehavior = d3
-        .zoom<SVGSVGElement, unknown>()
-        .scaleExtent([0.1, 8])
-        .on('zoom', (event) => {
-          g.attr('transform', event.transform);
-          svg.classed('zoomed-out', event.transform.k < 0.6);
-        });
-
+          .zoom<SVGSVGElement, unknown>()
+          .scaleExtent([0.1, 8])
+          .on('zoom', (event) => {
+             g.attr('transform', event.transform);
+             svg.classed('zoomed-out', event.transform.k < 0.6);
+          });
+          
       svg.call(this.zoomBehavior);
 
       g.append('g').attr('class', 'links-layer');
@@ -510,17 +553,17 @@ export class NetworkMap implements OnInit, OnDestroy {
           .attr('stroke-linecap', 'round')
           .attr('marker-end', 'url(#arrow)')
           .style('opacity', (d: any) => {
-            if (!this.isSearchActive) return 1;
-            const s = d.source?.id || d.source;
-            const t = d.target?.id || d.target;
-            return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
+             if (!this.isSearchActive) return 1;
+             const s = d.source?.id || d.source;
+             const t = d.target?.id || d.target;
+             return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
           }),
         update => {
           update.style('opacity', (d: any) => {
-            if (!this.isSearchActive) return 1;
-            const s = d.source?.id || d.source;
-            const t = d.target?.id || d.target;
-            return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
+             if (!this.isSearchActive) return 1;
+             const s = d.source?.id || d.source;
+             const t = d.target?.id || d.target;
+             return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
           });
           return update;
         },
@@ -531,29 +574,29 @@ export class NetworkMap implements OnInit, OnDestroy {
       .selectAll<SVGTextElement, any>('text')
       .data(edges.filter((d: any) => d.connections > 5), (d: any) => `${d.source.id || d.source}-${d.target.id || d.target}`)
       .join(
-        enter => enter.append('text')
+         enter => enter.append('text')
           .attr('fill', '#f8a010b0')
           .attr('font-size', '8px')
           .attr('font-family', 'monospace')
           .attr('font-weight', '700')
           .text((d: any) => d.connections)
           .style('opacity', (d: any) => {
-            if (!this.isSearchActive) return 1;
-            const s = d.source?.id || d.source;
-            const t = d.target?.id || d.target;
-            return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0;
+             if (!this.isSearchActive) return 1;
+             const s = d.source?.id || d.source;
+             const t = d.target?.id || d.target;
+             return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0;
           }),
-        update => {
+         update => {
           update.text((d: any) => d.connections)
-            .style('opacity', (d: any) => {
-              if (!this.isSearchActive) return 1;
-              const s = d.source?.id || d.source;
-              const t = d.target?.id || d.target;
-              return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0;
-            });
+                .style('opacity', (d: any) => {
+                   if (!this.isSearchActive) return 1;
+                   const s = d.source?.id || d.source;
+                   const t = d.target?.id || d.target;
+                   return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0;
+                });
           return update;
-        },
-        exit => exit.remove()
+         },
+         exit => exit.remove()
       );
 
     const node = nodesLayer
@@ -563,33 +606,35 @@ export class NetworkMap implements OnInit, OnDestroy {
         enter => {
           const nodeEnter = enter.append('g')
             .attr('class', (d: any) => {
-              let base = `topology-node node-${d.id.replace(/[^a-zA-Z0-9_-]/g, '-')} ${this.getNodeTypeClass(d)}`;
-              if (this.selectedNode && this.selectedNode.id === d.id) base += ' is-selected';
-              if (this.isSearchActive && this.searchMatches.has(d.id)) base += ' search-match';
-              return base;
+               let base = `topology-node node-${d.id.replace(/[^a-zA-Z0-9_-]/g, '-')} ${this.getNodeTypeClass(d)}`;
+               if (this.selectedNode && this.selectedNode.id === d.id) base += ' is-selected';
+               if (this.isSearchActive && this.searchMatches.has(d.id)) base += ' search-match';
+               return base;
             })
             .style('cursor', 'pointer')
             .style('opacity', 0)
             .call(this.physics.dragBehavior)
             .on('click', (event, d: any) => {
               if (d.type === 'cluster' && !this.focusMode) {
-                this.expandCluster(d);
-                return;
+                  this.expandCluster(d);
+                  return;
               }
               this.selectedNode = d;
               nodesLayer.selectAll('.topology-node').classed('is-selected', (n: any) => n.id === d.id);
-              if (this.focusMode) { /* apply focus */ }
+              if (this.focusMode) {
+                this.applyFocus();
+              }
               this.cdr.detectChanges();
             })
-            .on('mouseover', function() {
-              d3.select(this).raise();
+            .on('mouseover', function(event, d) {
+              d3.select(this).raise(); // Bring node to front when hovered
             });
 
           nodeEnter.append('circle')
             .attr('r', (d: any) => {
-              const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
-              const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
-              return base + bonus;
+               const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
+               const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
+               return base + bonus;
             })
             .attr('fill', (d: any) => {
               if (d.threat) return '#2b1214';
@@ -650,8 +695,8 @@ export class NetworkMap implements OnInit, OnDestroy {
             .attr('font-size', '8px')
             .attr('font-family', 'var(--font-mono)')
             .text((d: any) => {
-              if (d.type === 'cluster') return '';
-              return d.type && d.type !== 'unknown' ? d.type : (d.is_internal ? 'internal' : 'external');
+                if (d.type === 'cluster') return '';
+                return d.type && d.type !== 'unknown' ? d.type : (d.is_internal ? 'internal' : 'external');
             });
 
           nodeEnter.filter((d: any) => (d.connections || 0) > 0)
@@ -667,29 +712,30 @@ export class NetworkMap implements OnInit, OnDestroy {
             .text((d: any) => (d.connections > 0 ? `${d.connections}` : ''));
 
           nodeEnter.transition().duration(500).style('opacity', (d: any) => {
-            if (!this.isSearchActive) return 1;
-            return this.searchMatches.has(d.id) ? 1 : 0.15;
+             if (!this.isSearchActive) return 1;
+             return this.searchMatches.has(d.id) ? 1 : 0.15;
           });
           return nodeEnter;
         },
         update => {
           update.attr('class', (d: any) => {
-            let base = `topology-node node-${d.id.replace(/[^a-zA-Z0-9_-]/g, '-')} ${this.getNodeTypeClass(d)}`;
-            if (this.selectedNode && this.selectedNode.id === d.id) base += ' is-selected';
-            if (this.isSearchActive && this.searchMatches.has(d.id)) base += ' search-match';
-            return base;
+             let base = `topology-node node-${d.id.replace(/[^a-zA-Z0-9_-]/g, '-')} ${this.getNodeTypeClass(d)}`;
+             if (this.selectedNode && this.selectedNode.id === d.id) base += ' is-selected';
+             if (this.isSearchActive && this.searchMatches.has(d.id)) base += ' search-match';
+             return base;
           });
-
+          
           update.style('opacity', (d: any) => {
-            if (!this.isSearchActive) return 1;
-            return this.searchMatches.has(d.id) ? 1 : 0.15;
+             if (!this.isSearchActive) return 1;
+             return this.searchMatches.has(d.id) ? 1 : 0.15;
           });
-
+          
+          // Ensure dynamic elements update if data changes mid-session
           update.select('circle')
             .attr('r', (d: any) => {
-              const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
-              const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
-              return base + bonus;
+               const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
+               const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
+               return base + bonus;
             });
 
           update.select('path')
@@ -723,8 +769,11 @@ export class NetworkMap implements OnInit, OnDestroy {
     };
 
     if (isClusterExpand) {
+      // Hot-path: update the existing simulation in-place.
+      // Old nodes keep their settled positions; only new nodes (seeded at anchor) drift outward.
       this.physics.updateSimulation(nodes, edges, tickFn);
     } else {
+      // Cold-path: full restart (initial load, focus mode, manual refresh).
       this.physics.initSimulation(nodes, edges, width, height, tickFn);
     }
   }

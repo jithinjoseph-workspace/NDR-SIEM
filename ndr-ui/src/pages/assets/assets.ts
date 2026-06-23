@@ -49,11 +49,11 @@ export class Assets implements OnInit {
   filterLast24h = false;
   editingIp: string | null = null;
   editNameValue = '';
-
+  
   selectedAsset: any = null;
-
+  
   isDropdownOpen = false;
-
+  
   deviceTypeOptions = [
     { value: 'all', label: 'All Devices' },
     { value: 'laptop', label: 'Laptop' },
@@ -79,6 +79,7 @@ export class Assets implements OnInit {
     this.filterAssets();
   }
 
+  // Dashboard Stats
   totalAssets = 0;
   stats = {
     workstations: { count: 0, percent: 0 },
@@ -95,13 +96,17 @@ export class Assets implements OnInit {
 
   loadAssets() {
     this.loading = true;
+    console.log("Loading assets...");
     this.api.getAssets().subscribe({
       next: (data: any) => {
+        console.log("Assets data received:", data);
         if (data && Array.isArray(data)) {
           this.assets = data;
         } else if (data && data.error) {
+          console.error("Backend error:", data.error);
           this.assets = [];
         } else {
+          console.warn("Unexpected data format:", data);
           this.assets = [];
         }
         this.calculateStats();
@@ -109,7 +114,8 @@ export class Assets implements OnInit {
         this.loading = false;
         this.cdr.detectChanges();
       },
-      error: () => {
+      error: (err) => {
+        console.error("HTTP error:", err);
         this.assets = [];
         this.filterAssets();
         this.loading = false;
@@ -120,7 +126,7 @@ export class Assets implements OnInit {
 
   calculateStats() {
     this.totalAssets = this.assets.length;
-
+    
     let workstations = 0;
     let servers = 0;
     let iot = 0;
@@ -166,21 +172,30 @@ export class Assets implements OnInit {
   filterAssets() {
     const term = (this.searchTerm || '').toLowerCase();
     const now = Date.now() / 1000;
-
+    
     this.filteredAssets = this.assets.filter(a => {
+      // 1. Device Type Filter
       if (this.filterDeviceType !== 'all') {
         const type = (a.device_type || '').toLowerCase();
         let isMatch = type === this.filterDeviceType;
+        
+        // Handle synonyms for multi-term categories
         if (this.filterDeviceType === 'phone' && type === 'mobile') isMatch = true;
         if (this.filterDeviceType === 'tv' && type === 'media') isMatch = true;
         if (this.filterDeviceType === 'router' && (type === 'gateway' || type === 'firewall' || type === 'switch')) isMatch = true;
+        
         if (!isMatch) return false;
       }
-
+      
+      // 2. 24h Filter
       if (this.filterLast24h) {
-        if (!a.last_seen || (now - a.last_seen) > 86400) return false;
+        // last_seen is a unix timestamp in seconds
+        if (!a.last_seen || (now - a.last_seen) > 86400) {
+          return false;
+        }
       }
-
+      
+      // 3. Search Term Filter
       if (term) {
         const ip = (a.ip || '').toLowerCase();
         const mac = (a.mac || '').toLowerCase();
@@ -188,7 +203,8 @@ export class Assets implements OnInit {
         const custom_name = (a.custom_name || '').toLowerCase();
         const vendor = (a.vendor || '').toLowerCase();
         const device_type = (a.device_type || '').toLowerCase();
-
+        
+        // Hybrid Asset Model: also search inside ip_history JSON for historical IPs
         let historyMatch = false;
         if (a.ip_history && a.ip_history !== '[]') {
           try {
@@ -196,13 +212,18 @@ export class Assets implements OnInit {
             historyMatch = history.some((entry: {ip: string}) =>
               entry.ip && entry.ip.toLowerCase().includes(term)
             );
-          } catch { /* ignore */ }
+          } catch { /* ignore malformed JSON */ }
         }
-
-        return ip.includes(term) || mac.includes(term) || hostname.includes(term) ||
-               custom_name.includes(term) || vendor.includes(term) || device_type.includes(term) || historyMatch;
+        
+        return ip.includes(term) ||
+               mac.includes(term) ||
+               hostname.includes(term) ||
+               custom_name.includes(term) ||
+               vendor.includes(term) ||
+               device_type.includes(term) ||
+               historyMatch;
       }
-
+      
       return true;
     });
   }
@@ -237,7 +258,8 @@ export class Assets implements OnInit {
         asset.custom_name = this.editNameValue;
         this.editingIp = null;
       },
-      error: () => {
+      error: (err) => {
+        console.error('Failed to update asset name:', err);
         alert('Failed to update name. Please try again.');
         this.editingIp = null;
       }
@@ -257,5 +279,8 @@ export class Assets implements OnInit {
     this.selectedAsset = null;
   }
 
-  handleFocus(_ip: string) {}
+  handleFocus(ip: string) {
+    // If we wanted to link to the map focus mode, we could use the Router.
+    // For now, in assets page, it could just be an alert or redirect.
+  }
 }
