@@ -1130,6 +1130,53 @@ pub async fn delete_announcement(
                 }
             }
             tracing::info!("✅ tenant_id columns verified");
+
+            // --- AUTO-MIGRATE EXISTING TENANTS ---
+            if let Ok(sql) = std::fs::read_to_string(sql_path) {
+                if let Ok(tenant_ids) = self.get_all_tenants().await {
+                    for tenant_id in tenant_ids {
+                        if tenant_id == "default" { continue; }
+                        let db_name = format!("ndr_{}", tenant_id.replace("-", "_"));
+                        tracing::info!("Auto-migrating tenant DB: {}", db_name);
+
+                        for stmt in sql.split(';') {
+                            let stmt = stmt.trim()
+                                .lines()
+                                .filter(|l| !l.trim().starts_with("--"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                                .trim()
+                                .to_string();
+
+                            if stmt.is_empty() { continue; }
+                            if stmt.contains("CREATE DATABASE IF NOT EXISTS ndr")
+                                || stmt.contains("ndr.users")
+                                || stmt.contains("ndr.tenants")
+                                || stmt.contains("ndr.announcements")
+                                || stmt.contains("ndr.announcement_reads")
+                                || stmt.contains("ndr.rules_state")
+                            {
+                                continue;
+                            }
+
+                            if stmt.trim_start().to_uppercase().starts_with("INSERT") { continue; }
+
+                            let mut tenant_stmt = stmt.replace("ndr.", &format!("{}.", db_name));
+                            tenant_stmt = tenant_stmt.replace(
+                                "/clickhouse/tables/{shard}/ndr/",
+                                &format!("/clickhouse/tables/{{shard}}/{}/", db_name),
+                            );
+                            tenant_stmt = tenant_stmt.replace("DEFAULT 'default'", &format!("DEFAULT '{}'", tenant_id));
+
+                            if let Err(e) = self.client.query(&tenant_stmt).execute().await {
+                                tracing::debug!("Auto-migrate statement skipped for {}: {}", db_name, e);
+                            }
+                        }
+                    }
+                }
+            }
+            // -------------------------------------
+
             return;
         }
     }

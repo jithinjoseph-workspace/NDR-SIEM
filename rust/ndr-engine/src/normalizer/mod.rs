@@ -73,8 +73,12 @@ impl NormalizedEvent {
     /// Parse a raw JSON value arriving from Vector into a NormalizedEvent.
     /// Returns None if the event is missing a community_id or is totally malformed.
     pub fn from_raw(raw: Value) -> Option<Self> {
-        // Zeek heuristic: uid present  OR  (proto AND conn_state both present)
-        let is_zeek = raw.get("uid").is_some()
+        let source = raw.get("source").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Use explicit source tag from Vector, fallback to heuristic
+        let is_zeek = source == "zeek"
+            || raw.get("uid").is_some()
+            || raw.get("_path").is_some()
             || (raw.get("proto").is_some() && raw.get("conn_state").is_some());
 
         if is_zeek {

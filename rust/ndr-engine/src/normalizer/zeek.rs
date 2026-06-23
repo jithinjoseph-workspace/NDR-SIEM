@@ -18,7 +18,7 @@ pub fn normalize_zeek(raw: Value) -> Option<NormalizedEvent> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty() && *s != "-")
         .or_else(|| raw.get("uid").and_then(|v| v.as_str()))
-        .map(String::from)?;
+        .map(String::from);
 
     // Malcolm maps id.orig_h → source.ip; Vector renames it to src_ip
     let source_ip = raw.get("src_ip")
@@ -86,7 +86,7 @@ pub fn normalize_zeek(raw: Value) -> Option<NormalizedEvent> {
         dest_port,
         proto,
         network_protocol,
-        community_id: Some(community_id),
+        community_id,
         event_source: EventSource::Zeek,
         log_source,
         timestamp,
