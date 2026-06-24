@@ -242,6 +242,10 @@ export class Api {
     return this.http.get<any[]>(`${this.baseUrl}/assets`);
   }
 
+  getIpamSubnets(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/ipam/subnets`);
+  }
+
   updateAsset(ip: string, payload: any): Observable<any> {
     return this.http.put(`${this.baseUrl}/assets/${ip}`, payload);
   }

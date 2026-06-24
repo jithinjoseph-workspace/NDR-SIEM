@@ -162,6 +162,7 @@ async fn main() {
     let ch_storage_arc = {
         let ch = Arc::new(storage::ClickhouseStorage::new());
         ch.init_tables().await;
+        ch.migrate_ipam_subnets().await;
         ch
     };
 
@@ -220,28 +221,69 @@ async fn main() {
         }
     });
 }
-    // ── Background: vendor backfill (every 10 min) ───────────────────────
-    // Finds assets with empty/Unknown vendor and fills from OUI map.
-    // Needed because vendor is only set when an ARP/DHCP event arrives —
-    // quiet devices (routers, etc.) may never trigger another event.
+    // ── Background: vendor backfill via Redis SET ─────────────────────────
+    // On startup: seed Redis SET with all existing Unknown-vendor assets.
+    // Worker: SPOP one item, OUI lookup, write DB. Sleeps 1s when set empty.
+    // SADD in consumer ensures no duplicates; SPOP is atomic across instances.
     {
-        let ch = state.ch_storage.clone();
-        let asset_id = state.enrichment.asset_id.clone();
+        let ch_seed = state.ch_storage.clone();
+        let mut redis_seed = state.redis_mux.clone();
         tokio::spawn(async move {
-            loop {
-                if let Ok(assets) = ch.get_assets_by_tenant("default").await {
-                    for asset in assets {
-                        if (asset.vendor.is_empty() || asset.vendor == "Unknown") && !asset.mac.is_empty() {
-                            let vendor = asset_id.lookup_vendor(&asset.mac);
-                            if !vendor.is_empty() && vendor != "Unknown" {
-                                let mut updated = asset;
-                                updated.vendor = vendor;
-                                let _ = ch.upsert_asset(&updated).await;
+            if let Ok(tenants) = ch_seed.get_all_tenants().await {
+                for tenant in &tenants {
+                    if let Ok(assets) = ch_seed.get_assets_by_tenant(tenant).await {
+                        for asset in assets {
+                            if (asset.vendor.is_empty() || asset.vendor == "Unknown") && !asset.mac.is_empty() {
+                                let qi = format!("{}|{}|{}", asset.tenant_id, asset.ip, asset.mac);
+                                let _: Result<i64, _> = redis::cmd("SADD")
+                                    .arg("ndr:vendor_pending").arg(qi)
+                                    .query_async(&mut redis_seed).await;
                             }
                         }
                     }
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(600)).await;
+            }
+        });
+    }
+    {
+        let ch = state.ch_storage.clone();
+        let asset_id = state.enrichment.asset_id.clone();
+        let redis_client_vb = redis_client.clone();
+        tokio::spawn(async move {
+            let mut conn = match redis_client_vb.get_async_connection().await {
+                Ok(c) => c,
+                Err(e) => { tracing::warn!("Vendor backfill: Redis connect failed: {}", e); return; }
+            };
+            loop {
+                let item: Option<String> = redis::cmd("SPOP")
+                    .arg("ndr:vendor_pending")
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap_or(None);
+
+                match item {
+                    Some(entry) => {
+                        let parts: Vec<&str> = entry.splitn(3, '|').collect();
+                        if parts.len() == 3 {
+                            let (tenant, ip, mac) = (parts[0], parts[1], parts[2]);
+                            let vendor = asset_id.lookup_vendor(mac);
+                            if !vendor.is_empty() && vendor != "Unknown" {
+                                if let Ok(Some(mut asset)) = ch.get_asset_by_ip(tenant, ip).await {
+                                    if asset.vendor.is_empty() || asset.vendor == "Unknown" {
+                                        asset.vendor = vendor.clone();
+                                        let _ = ch.upsert_asset(&asset).await;
+                                        info!("Vendor backfill: {} → {}", ip, vendor);
+                                    }
+                                }
+                            }
+                            // Randomized MACs (no OUI) are silently dropped — correct
+                        }
+                    }
+                    None => {
+                        // Set empty — all vendors resolved, sleep until new unknown arrives
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
             }
         });
     }
@@ -369,6 +411,7 @@ async fn main() {
         .route("/api/settings/ai", get(api::get_ai_config).post(api::update_ai_config))
         .route("/api/assets",     get(api::get_assets))
         .route("/api/assets/:ip", get(api::get_asset_by_ip).put(api::update_asset_name))
+        .route("/api/ipam/subnets", get(api::get_ipam_subnets))
         .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
         .route("/api/soar/playbook/create",post(api::create_playbook))
         .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))

@@ -46,12 +46,16 @@ export class Assets implements OnInit {
   loading = true;
   searchTerm = '';
   filterDeviceType = 'all';
+  filterSubnet = 'all';
   filterLast24h = false;
   editingIp: string | null = null;
   editNameValue = '';
-  
+
+  subnets: any[] = [];
+  isSubnetDropdownOpen = false;
+
   selectedAsset: any = null;
-  
+
   isDropdownOpen = false;
   
   deviceTypeOptions = [
@@ -92,6 +96,33 @@ export class Assets implements OnInit {
 
   ngOnInit() {
     this.loadAssets();
+    this.loadSubnets();
+  }
+
+  loadSubnets() {
+    this.api.getIpamSubnets().subscribe({
+      next: (data: any) => { this.subnets = Array.isArray(data) ? data : []; },
+      error: () => { this.subnets = []; }
+    });
+  }
+
+  setSubnetFilter(cidr: string) {
+    this.filterSubnet = cidr;
+    this.isSubnetDropdownOpen = false;
+    this.filterAssets();
+  }
+
+  getSubnetLabel(): string {
+    if (this.filterSubnet === 'all') return 'All Subnets';
+    return this.filterSubnet;
+  }
+
+  isIpInCidr(ip: string, cidr: string): boolean {
+    const [net, prefixStr] = cidr.split('/');
+    const prefix = parseInt(prefixStr, 10);
+    const ipToNum = (s: string) => s.split('.').reduce((acc, o) => (acc << 8) | parseInt(o, 10), 0) >>> 0;
+    const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+    return (ipToNum(ip) & mask) === (ipToNum(net) & mask);
   }
 
   loadAssets() {
@@ -172,6 +203,11 @@ export class Assets implements OnInit {
     const now = Date.now() / 1000;
     
     this.filteredAssets = this.assets.filter(a => {
+      // 0. Subnet Filter
+      if (this.filterSubnet !== 'all') {
+        if (!a.ip || !this.isIpInCidr(a.ip, this.filterSubnet)) return false;
+      }
+
       // 1. Device Type Filter
       if (this.filterDeviceType !== 'all') {
         const type = (a.device_type || '').toLowerCase();

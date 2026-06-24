@@ -692,6 +692,12 @@ include = ["/var/log/ndr/zeek/software.log"]
 read_from = "end"
 glob_minimum_cooldown_ms = 100
 
+[sources.zeek_ipam]
+type = "file"
+include = ["/var/log/ndr/zeek/ipam.log"]
+read_from = "beginning"
+glob_minimum_cooldown_ms = 500
+
 [sources.suricata]
 type = "file"
 include = ["/var/log/ndr/suricata/eve.json"]
@@ -852,6 +858,20 @@ if err == null {
 } else { abort }
 '''
 
+[transforms.zeek_ipam_json]
+type = "remap"
+inputs = ["zeek_ipam"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null {
+  . = parsed
+  .source = "zeek"
+  .log_type = "ipam"
+  .tenant_id = "${TENANT_ID}"
+  .sensor_host = "${HOSTNAME_VAL}"
+} else { abort }
+'''
+
 # ── SINK: HTTP POST to cloud /api/ingest ─────────
 # Works through ngrok, reverse proxy, or direct IP.
 # Sends NDJSON batches; ingest endpoint handles it.
@@ -868,7 +888,8 @@ inputs = [
   "zeek_dhcp_json",
   "zeek_quic_json",
   "zeek_arp_json",
-  "zeek_software_json"
+  "zeek_software_json",
+  "zeek_ipam_json"
 ]
 uri = "${CLOUD_URL}/api/ingest"
 method = "post"
@@ -1012,6 +1033,43 @@ def start_capture():
     except Exception as e:
         print(f"[NDR] Arkime capture failed: {e}")
         return False
+
+def discover_subnets():
+    """Read network interface CIDRs and write to ipam.log so the engine
+    can build per-tenant subnet maps and detect IP conflicts."""
+    ipam_log = "/var/log/ndr/zeek/ipam.log"
+    try:
+        import ipaddress as _ipaddress
+        out = subprocess.run(["ip", "addr", "show"], capture_output=True, text=True).stdout
+        now = time.time()
+        iface = None
+        entries = []
+        for line in out.splitlines():
+            m = re.match(r'^\d+:\s+(\S+):', line)
+            if m:
+                iface = m.group(1).rstrip(':')
+                continue
+            m = re.match(r'\s+inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)', line)
+            if m and iface:
+                ip, prefix = m.group(1), int(m.group(2))
+                if ip.startswith('127.') or ip.startswith('169.254.'):
+                    continue
+                network = _ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
+                cidr = str(network)
+                gateway = str(network.network_address + 1)
+                entries.append(json.dumps({
+                    "ts": now, "log_type": "ipam",
+                    "interface": iface, "cidr": cidr,
+                    "local_ip": ip, "gateway": gateway
+                }))
+        if entries:
+            os.makedirs(os.path.dirname(ipam_log), exist_ok=True)
+            with open(ipam_log, 'a') as f:
+                for e in entries:
+                    f.write(e + '\n')
+        print(f"[NDR] Subnet discovery: {len(entries)} subnets written")
+    except Exception as e:
+        print(f"[NDR] discover_subnets error: {e}")
 
 def arp_scan(iface):
     """ARP scan the local subnet on startup.
@@ -1294,6 +1352,7 @@ def execute_command(cmd):
         print("[NDR] All services stopped")
     elif cmd == 'start':
         MANUALLY_STOPPED = False
+        discover_subnets()
         bootstrap_from_arp_cache()
         snmp_router_discovery()
         start_zeek()
@@ -1462,6 +1521,7 @@ if __name__ == '__main__':
 
     # Start all services
     print("[NDR] Starting all services...")
+    discover_subnets()
     bootstrap_from_arp_cache()
     start_zeek()
     start_suricata()

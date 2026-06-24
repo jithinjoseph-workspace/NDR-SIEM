@@ -535,3 +535,17 @@ CREATE TABLE IF NOT EXISTS ndr.passive_dns ON CLUSTER ndr_cluster
 ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/tables/{shard}/ndr/passive_dns', '{replica}')
 ORDER BY (ip, domain)
 TTL last_seen + INTERVAL 90 DAY;
+
+CREATE TABLE IF NOT EXISTS ndr.ipam_subnets ON CLUSTER ndr_cluster
+(
+    tenant_id  String   DEFAULT 'default',
+    interface  String   DEFAULT '',
+    cidr       String,
+    local_ip   String   DEFAULT '',
+    gateway    String   DEFAULT '',
+    sensor_id  String   DEFAULT '',
+    first_seen DateTime DEFAULT now(),
+    last_seen  DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ipam_subnets', '{replica}', last_seen)
+ORDER BY (tenant_id, cidr);

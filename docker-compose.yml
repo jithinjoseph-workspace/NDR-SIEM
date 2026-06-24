@@ -146,10 +146,16 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/ndr/pcap:/opt/ndr/pcap
       - /opt/ndr/evidence:/opt/ndr/evidence
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       kafka1:
         condition: service_started
-      redis:
+      ndr-redis:
         condition: service_started
       clickhouse1:
         condition: service_healthy
@@ -187,10 +193,16 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/ndr/pcap:/opt/ndr/pcap
       - /opt/ndr/evidence:/opt/ndr/evidence
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       kafka1:
         condition: service_started
-      redis:
+      ndr-redis:
         condition: service_started
       clickhouse1:
         condition: service_healthy
@@ -228,17 +240,23 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/ndr/pcap:/opt/ndr/pcap
       - /opt/ndr/evidence:/opt/ndr/evidence
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       kafka1:
         condition: service_started
-      redis:
+      ndr-redis:
         condition: service_started
       clickhouse1:
         condition: service_healthy
       clickhouse2:
         condition: service_healthy
 
-  redis:
+  ndr-redis:
     image: redis:7-alpine
     container_name: ndr-redis
     ports:
@@ -255,9 +273,12 @@ services:
     volumes:
       - ${INSTALL_DIR}/config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - ndr-engine-1
-      - ndr-engine-2
-      - ndr-engine-3
+      ndr-engine-1:
+        condition: service_healthy
+      ndr-engine-2:
+        condition: service_healthy
+      ndr-engine-3:
+        condition: service_healthy
     restart: unless-stopped
 
   opensearch:

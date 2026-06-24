@@ -32,10 +32,38 @@
 
       <div class="search-box">
         <lucide-icon [name]="SearchIcon" class="w-4 h-4 text-slate-400"></lucide-icon>
-        <input type="text" 
-               [(ngModel)]="searchTerm" 
+        <input type="text"
+               [(ngModel)]="searchTerm"
                (ngModelChange)="filterAssets()"
                placeholder="Search IPs, names, vendors...">
+      </div>
+
+      <div class="custom-dropdown-wrapper" *ngIf="subnets.length > 0">
+        <div class="dropdown-backdrop" *ngIf="isSubnetDropdownOpen" (click)="isSubnetDropdownOpen = false"></div>
+        <div class="styled-dropdown" (click)="isSubnetDropdownOpen = !isSubnetDropdownOpen" [class.open]="isSubnetDropdownOpen">
+          <span>{{ getSubnetLabel() }}</span>
+          <lucide-icon [name]="ChevronDownIcon" class="dropdown-arrow" [class.rotate]="isSubnetDropdownOpen"></lucide-icon>
+        </div>
+        <div class="dropdown-menu" *ngIf="isSubnetDropdownOpen">
+          <div class="dropdown-item" (click)="setSubnetFilter('all')" [class.active]="filterSubnet === 'all'">All Subnets</div>
+          <div class="dropdown-item" *ngFor="let s of subnets" (click)="setSubnetFilter(s.cidr)" [class.active]="filterSubnet === s.cidr">
+            {{ s.cidr }} &mdash; {{ s.used_ips }}/{{ s.total_ips }} used
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="subnet-stats-row" *ngIf="subnets.length > 0 && !loading">
+    <div class="subnet-card" *ngFor="let s of subnets" (click)="setSubnetFilter(s.cidr)" [class.active]="filterSubnet === s.cidr">
+      <div class="subnet-cidr">{{ s.cidr }}</div>
+      <div class="subnet-iface">{{ s.interface }}{{ s.sensor_id ? ' · ' + s.sensor_id : '' }}</div>
+      <div class="subnet-bar-wrap">
+        <div class="subnet-bar" [style.width.%]="s.total_ips ? (s.used_ips / s.total_ips * 100) : 0"></div>
+      </div>
+      <div class="subnet-counts">
+        <span class="used">{{ s.used_ips }} used</span>
+        <span class="free">{{ s.free_ips }} free</span>
       </div>
     </div>
   </div>

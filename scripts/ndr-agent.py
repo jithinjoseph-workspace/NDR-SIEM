@@ -181,6 +181,42 @@ def snmp_router_discovery():
         with open(arp_log, "a") as f:
             f.write("\n".join(entries) + "\n")
 
+def discover_subnets():
+    """Read network interface CIDRs and write to ipam.log so the engine
+    can build per-tenant subnet maps and detect IP conflicts."""
+    ipam_log = f"{LOGDIR}/zeek/ipam.log"
+    try:
+        out = subprocess.run(["ip", "addr", "show"], capture_output=True, text=True).stdout
+        now = time.time()
+        iface = None
+        entries = []
+        for line in out.splitlines():
+            m = re.match(r'^\d+:\s+(\S+):', line)
+            if m:
+                iface = m.group(1).rstrip(':')
+                continue
+            m = re.match(r'\s+inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)', line)
+            if m and iface:
+                ip, prefix = m.group(1), int(m.group(2))
+                if ip.startswith('127.') or ip.startswith('169.254.'):
+                    continue
+                network = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
+                cidr = str(network)
+                gateway = str(network.network_address + 1)
+                entries.append(json.dumps({
+                    "ts": now, "log_type": "ipam",
+                    "interface": iface, "cidr": cidr,
+                    "local_ip": ip, "gateway": gateway
+                }))
+        if entries:
+            os.makedirs(os.path.dirname(ipam_log), exist_ok=True)
+            with open(ipam_log, 'a') as f:
+                for e in entries:
+                    f.write(e + '\n')
+        print(f"[NDR] Subnet discovery: {len(entries)} subnets written")
+    except Exception as e:
+        print(f"[NDR] discover_subnets error: {e}")
+
 def arp_scan(iface: str):
     """ARP scan the local subnet on startup.
     Only real devices reply to ARP — no ghost placeholders possible.
@@ -353,6 +389,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 capture_output=True)            
             os.makedirs(f"{HOME_DIR}/.vector/data/suricata", exist_ok=True)
             os.makedirs(f"{HOME_DIR}/.vector/data/zeek", exist_ok=True)
+            # Write subnet CIDRs to ipam.log for IPAM engine
+            discover_subnets()
             # Seed arp.log with existing ARP cache — instant asset bootstrap
             bootstrap_from_arp_cache()
             # Query router ARP table via SNMP

@@ -7119,3 +7119,16 @@ pub async fn get_ai_activity(
         "analyses": analyses
     }))
 }
+
+pub async fn get_ipam_subnets(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_ipam_subnets(&tenant_id).await {
+        Ok(subnets) => Json(json!(subnets)),
+        Err(e)      => Json(json!({"error": e.to_string()})),
+    }
+}

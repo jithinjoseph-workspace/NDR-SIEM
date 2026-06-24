@@ -1000,12 +1000,18 @@ pub async fn delete_announcement(
             .unwrap_or_else(|_| "ndr".to_string());
         let password = std::env::var("CLICKHOUSE_PASSWORD")
             .unwrap_or_else(|_| "ndr123".to_string());
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("reqwest client");
         Self {
             client: Client::default()
                 .with_url(url)
                 .with_user(user)
                 .with_password(password)
-                .with_database("ndr"),
+                .with_database("ndr")
+                .with_http_client(http),
         }
     }
 
@@ -4107,4 +4113,122 @@ pub async fn get_ioc_hits(
         Ok(())
     }
 
+    pub async fn upsert_ipam_subnet(
+        &self,
+        tenant_id: &str,
+        interface: &str,
+        cidr: &str,
+        local_ip: &str,
+        gateway: &str,
+        sensor_id: &str,
+    ) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "INSERT INTO {}.ipam_subnets \
+             (tenant_id, interface, cidr, local_ip, gateway, sensor_id, first_seen, last_seen) \
+             VALUES ('{}','{}','{}','{}','{}','{}', now(), now())",
+            db,
+            sql_escape(tenant_id), sql_escape(interface), sql_escape(cidr),
+            sql_escape(local_ip), sql_escape(gateway), sql_escape(sensor_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn get_ipam_subnets(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db = tenant_db(tenant_id);
+        let assets = self.get_assets_by_tenant(tenant_id).await.unwrap_or_default();
+
+        let query = format!(
+            "SELECT interface, cidr, local_ip, gateway, sensor_id, \
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen \
+             FROM {}.ipam_subnets FINAL WHERE tenant_id = '{}' ORDER BY cidr",
+            db, sql_escape(tenant_id)
+        );
+
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct SubnetRow {
+            interface:  String,
+            cidr:       String,
+            local_ip:   String,
+            gateway:    String,
+            sensor_id:  String,
+            first_seen: u32,
+            last_seen:  u32,
+        }
+
+        let rows = self.client.query(&query).fetch_all::<SubnetRow>().await.unwrap_or_default();
+
+        let mut result = Vec::new();
+        for row in rows {
+            // Count confirmed assets (have MAC) whose IP falls inside this subnet
+            let used: Vec<&AssetRow> = assets.iter().filter(|a| {
+                !a.mac.is_empty() && is_ip_in_cidr(&a.ip, &row.cidr)
+            }).collect();
+
+            // Calculate total IPs in subnet
+            let total_ips = cidr_host_count(&row.cidr);
+
+            result.push(serde_json::json!({
+                "interface":  row.interface,
+                "cidr":       row.cidr,
+                "local_ip":   row.local_ip,
+                "gateway":    row.gateway,
+                "sensor_id":  row.sensor_id,
+                "first_seen": row.first_seen,
+                "last_seen":  row.last_seen,
+                "used_ips":   used.len(),
+                "total_ips":  total_ips,
+                "free_ips":   total_ips.saturating_sub(used.len()),
+            }));
+        }
+        Ok(result)
+    }
+
+    /// Migrate existing tenant DBs: create ipam_subnets if not present.
+    pub async fn migrate_ipam_subnets(&self) {
+        if let Ok(tenants) = self.get_all_tenants().await {
+            for tenant in &tenants {
+                let db = tenant_db(tenant);
+                let q = format!(
+                    "CREATE TABLE IF NOT EXISTS {}.ipam_subnets \
+                     (tenant_id String DEFAULT '{}', interface String DEFAULT '', \
+                      cidr String, local_ip String DEFAULT '', gateway String DEFAULT '', \
+                      sensor_id String DEFAULT '', \
+                      first_seen DateTime DEFAULT now(), last_seen DateTime DEFAULT now()) \
+                     ENGINE = ReplacingMergeTree(last_seen) ORDER BY (tenant_id, cidr)",
+                    db, tenant
+                );
+                if let Err(e) = self.client.query(&q).execute().await {
+                    tracing::debug!("ipam_subnets migrate {}: {}", tenant, e);
+                }
+            }
+        }
+    }
+
+}
+
+fn is_ip_in_cidr(ip: &str, cidr: &str) -> bool {
+    let parts: Vec<&str> = cidr.split('/').collect();
+    if parts.len() != 2 { return false; }
+    let prefix_len: u32 = match parts[1].parse() { Ok(v) => v, Err(_) => return false };
+    let net_ip: u32 = match ip_to_u32(parts[0]) { Some(v) => v, None => return false };
+    let host_ip: u32 = match ip_to_u32(ip) { Some(v) => v, None => return false };
+    if prefix_len == 0 { return true; }
+    let mask = !((1u32 << (32 - prefix_len)) - 1);
+    (net_ip & mask) == (host_ip & mask)
+}
+
+fn ip_to_u32(ip: &str) -> Option<u32> {
+    let parts: Vec<u8> = ip.split('.').filter_map(|p| p.parse().ok()).collect();
+    if parts.len() != 4 { return None; }
+    Some(((parts[0] as u32) << 24) | ((parts[1] as u32) << 16) | ((parts[2] as u32) << 8) | parts[3] as u32)
+}
+
+fn cidr_host_count(cidr: &str) -> usize {
+    let parts: Vec<&str> = cidr.split('/').collect();
+    if parts.len() != 2 { return 0; }
+    let prefix_len: u32 = match parts[1].parse() { Ok(v) => v, Err(_) => return 0 };
+    if prefix_len >= 32 { return 1; }
+    ((1u32 << (32 - prefix_len)) as usize).saturating_sub(2) // exclude network + broadcast
 }

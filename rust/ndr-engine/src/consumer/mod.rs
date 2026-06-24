@@ -118,8 +118,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     tenant_id: tenant_id.clone(),
                 };
 
-                // Non-blocking send to batch writer — zero overhead in consumer loop
-                let _ = ch_tx.send((ch_event, tenant_id.clone()));
+                // ARP events are only used for asset discovery — never store as ndr_events
+                if event.log_source.as_deref() == Some("arp") {
+                    // fall through to ARP asset handler below
+                } else {
+                    let _ = ch_tx.send((ch_event, tenant_id.clone()));
+                }
 
                 // --- Asset Identification (DHCP) ---
                 if event.log_source.as_deref() == Some("dhcp") {
@@ -137,6 +141,16 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     if !mac.is_empty() && !ip.is_empty() {
                         let is_gateway = ip.ends_with(".1") || ip.ends_with(".254");
                         let vendor = state.enrichment.asset_id.lookup_vendor(mac);
+                        // Queue for vendor backfill if OUI not resolved
+                        if vendor == "Unknown" {
+                            let mut rc = state.redis_mux.clone();
+                            let qi = format!("{}|{}|{}", tenant_id, ip, mac);
+                            tokio::spawn(async move {
+                                let _: Result<i64, _> = redis::cmd("SADD")
+                                    .arg("ndr:vendor_pending").arg(qi)
+                                    .query_async(&mut rc).await;
+                            });
+                        }
                         let device_type = state.enrichment.asset_id.guess_device_type(hostname, &vendor, is_gateway);
                         let asset = crate::storage::clickhouse::AssetRow {
                             ip: ip.to_string(),
@@ -242,6 +256,16 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     if !mac.is_empty() && !ip.is_empty() {
                         let is_gateway = ip.ends_with(".1") || ip.ends_with(".254");
                         let vendor = state.enrichment.asset_id.lookup_vendor(mac);
+                        // Queue for vendor backfill if OUI not resolved
+                        if vendor == "Unknown" {
+                            let mut rc = state.redis_mux.clone();
+                            let qi = format!("{}|{}|{}", tenant_id, ip, mac);
+                            tokio::spawn(async move {
+                                let _: Result<i64, _> = redis::cmd("SADD")
+                                    .arg("ndr:vendor_pending").arg(qi)
+                                    .query_async(&mut rc).await;
+                            });
+                        }
                         let device_type = state.enrichment.asset_id.guess_device_type("", &vendor, is_gateway);
                         let asset = crate::storage::clickhouse::AssetRow {
                             ip: ip.to_string(),
@@ -257,6 +281,39 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             ip_history: "[]".to_string(),
                         };
                         let ch_clone = state.ch_storage.clone();
+                        let conflict_ch = state.ch_storage.clone();
+                        let conflict_tenant = tenant_id.clone();
+                        let conflict_ip = ip.to_string();
+                        let conflict_mac = mac.to_string();
+                        // IP conflict detection: two different MACs claiming the same IP = ARP spoofing
+                        tokio::spawn(async move {
+                            if let Ok(Some(existing)) = conflict_ch.get_asset_by_ip(&conflict_tenant, &conflict_ip).await {
+                                if !existing.mac.is_empty()
+                                    && existing.mac != conflict_mac
+                                    && !existing.mac.contains("00:00:00")
+                                {
+                                    warn!(
+                                        "IP CONFLICT: {} claimed by {} and {} — possible ARP spoofing",
+                                        conflict_ip, existing.mac, conflict_mac
+                                    );
+                                    let hit = crate::storage::clickhouse::NdrHit {
+                                        timestamp: chrono::Utc::now().timestamp() as u32,
+                                        community_id: format!("arp-conflict-{}", conflict_ip),
+                                        src_ip: conflict_mac.clone(),
+                                        dst_ip: conflict_ip.clone(),
+                                        score: 85.0,
+                                        severity: "HIGH".to_string(),
+                                        tags: vec!["ip-conflict".to_string(), "arp-spoofing".to_string()],
+                                        sigma_hits: vec![],
+                                        threat_intel: 0,
+                                        src_country: "".to_string(),
+                                        dst_country: "".to_string(),
+                                        tenant_id: conflict_tenant.clone(),
+                                    };
+                                    let _ = conflict_ch.insert_hit_for_tenant(hit, &conflict_tenant).await;
+                                }
+                            }
+                        });
                         tokio::spawn(async move {
                             let mut final_asset = asset;
                             if let Ok(Some(existing)) = ch_clone.get_asset_by_ip(&final_asset.tenant_id, &final_asset.ip).await {
@@ -271,6 +328,23 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             }
                             if let Err(e) = ch_clone.upsert_asset(&final_asset).await {
                                 warn!("Asset ARP upsert error: {}", e);
+                            }
+                        });
+                    }
+                } else if event.log_source.as_deref() == Some("ipam") {
+                    let cidr      = raw.get("cidr").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let interface = raw.get("interface").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let local_ip  = raw.get("local_ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let gateway   = raw.get("gateway").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let sensor_id = raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if !cidr.is_empty() {
+                        let ch_clone = state.ch_storage.clone();
+                        let tid = tenant_id.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = ch_clone.upsert_ipam_subnet(&tid, &interface, &cidr, &local_ip, &gateway, &sensor_id).await {
+                                tracing::debug!("IPAM subnet upsert: {}", e);
+                            } else {
+                                info!("IPAM: {} {} → {}", sensor_id, interface, cidr);
                             }
                         });
                     }
@@ -344,9 +418,11 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 }
 
                 // --- Placeholder Asset Creation ---
-                let check_placeholder = |ip: &str, tenant: &str| {
+                // Update last_seen for confirmed assets (MAC-verified) seen in traffic.
+                // Never create new placeholder rows — assets only enter the table via
+                // ARP/DHCP events that carry a real MAC address.
+                let update_last_seen = |ip: &str, tenant: &str| {
                     if ip.is_empty() { return; }
-                    // Skip broadcast, multicast and special addresses
                     if ip.ends_with(".255") || ip.ends_with(".0")
                         || ip.starts_with("224.") || ip.starts_with("239.")
                         || ip == "255.255.255.255" { return; }
@@ -354,77 +430,40 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         || ip.starts_with("192.168.")
                         || (ip.starts_with("172.") && {
                             let parts: Vec<&str> = ip.split('.').collect();
-                            if parts.len() >= 2 {
-                                if let Ok(second) = parts[1].parse::<u8>() {
-                                    second >= 16 && second <= 31
-                                } else { false }
-                            } else { false }
+                            parts.len() >= 2 && parts[1].parse::<u8>().map(|n| n >= 16 && n <= 31).unwrap_or(false)
                         });
-                    if is_internal {
-                        let cache_key = format!("{}:{}", tenant, ip);
-                        let now = chrono::Utc::now().timestamp() as u32;
-                        let mut needs_db_sync = false;
-                        if let Some(mut last_sync) = known_assets.get_mut(&cache_key) {
-                            if now.saturating_sub(*last_sync) > 300 {
-                                *last_sync = now;
-                                needs_db_sync = true;
-                            }
-                        } else {
-                            known_assets.insert(cache_key.clone(), now);
+                    if !is_internal { return; }
+                    let cache_key = format!("{}:{}", tenant, ip);
+                    let now = chrono::Utc::now().timestamp() as u32;
+                    let mut needs_db_sync = false;
+                    if let Some(mut last_sync) = known_assets.get_mut(&cache_key) {
+                        if now.saturating_sub(*last_sync) > 300 {
+                            *last_sync = now;
                             needs_db_sync = true;
                         }
-                        if needs_db_sync {
-                            let ch_clone = state.ch_storage.clone();
-                            let ip_clone = ip.to_string();
-                            let tenant_clone = tenant.to_string();
-                            let state_clone = state.clone();
-                            tokio::spawn(async move {
-                                match ch_clone.get_asset_by_ip(&tenant_clone, &ip_clone).await {
-                                    Ok(Some(mut existing)) => {
-                                        existing.last_seen = chrono::Utc::now().timestamp() as u32;
-                                        let _ = ch_clone.upsert_asset(&existing).await;
-                                    }
-                                    Ok(None) => {
-                                        let is_gateway = ip_clone.ends_with(".1") || ip_clone.ends_with(".254");
-                                        let device_type = state_clone.enrichment.asset_id.guess_device_type("", "", is_gateway);
-                                        let placeholder = crate::storage::clickhouse::AssetRow {
-                                            ip: ip_clone,
-                                            mac: "".to_string(),
-                                            hostname: "".to_string(),
-                                            vendor: "".to_string(),
-                                            os_guess: "".to_string(),
-                                            device_type,
-                                            custom_name: "".to_string(),
-                                            tenant_id: tenant_clone,
-                                            first_seen: chrono::Utc::now().timestamp() as u32,
-                                            last_seen: chrono::Utc::now().timestamp() as u32,
-                                            ip_history: "[]".to_string(),
-                                        };
-                                        if let Err(e) = ch_clone.upsert_asset(&placeholder).await {
-                                            warn!("Placeholder asset insert error: {}", e);
-                                        } else {
-                                            info!("Created placeholder asset for unknown internal IP: {}", placeholder.ip);
-                                        }
-                                    }
-                                    Err(_) => {}
+                    } else {
+                        known_assets.insert(cache_key.clone(), now);
+                        needs_db_sync = true;
+                    }
+                    if needs_db_sync {
+                        let ch_clone = state.ch_storage.clone();
+                        let ip_clone = ip.to_string();
+                        let tenant_clone = tenant.to_string();
+                        tokio::spawn(async move {
+                            if let Ok(Some(mut existing)) = ch_clone.get_asset_by_ip(&tenant_clone, &ip_clone).await {
+                                if !existing.mac.is_empty() {
+                                    existing.last_seen = chrono::Utc::now().timestamp() as u32;
+                                    let _ = ch_clone.upsert_asset(&existing).await;
                                 }
-                            });
-                        }
+                            }
+                        });
                     }
                 };
                 if let Some(src) = &event.source_ip {
-                    check_placeholder(src, &tenant_id);
+                    update_last_seen(src, &tenant_id);
                 }
                 if let Some(dst) = &event.dest_ip {
-                    // For ICMP, only create a placeholder if the destination actually replied
-                    // (conn_state "SF"). Ping sweeps to non-existent hosts get "OTH"/"S0"/""
-                    // and would otherwise flood the assets table with ghost entries.
-                    let proto = event.proto.as_deref().unwrap_or("");
-                    let conn_state = raw.get("conn_state").and_then(|v| v.as_str()).unwrap_or("");
-                    let is_icmp_no_reply = proto == "icmp" && conn_state != "SF";
-                    if !is_icmp_no_reply {
-                        check_placeholder(dst, &tenant_id);
-                    }
+                    update_last_seen(dst, &tenant_id);
                 }
                 // -----------------------------------
 
