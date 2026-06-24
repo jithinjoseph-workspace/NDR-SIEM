@@ -69,7 +69,7 @@ glob_minimum_cooldown_ms = 100
 [sources.zeek_dhcp]
 type = "file"
 include = ["/logs/zeek/dhcp.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_weird]
@@ -87,7 +87,7 @@ glob_minimum_cooldown_ms = 100
 [sources.zeek_arp]
 type = "file"
 include = ["/logs/zeek/arp.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_software]

@@ -144,7 +144,7 @@
         
         <div class="col-name" (dblclick)="startEdit(asset)">
           <div *ngIf="editingIp !== asset.ip" class="name-display">
-            <strong>{{ asset.custom_name || asset.hostname || 'Unknown' }}</strong>
+            <strong>{{ asset.custom_name || asset.hostname || asset.vendor || 'Unknown' }}</strong>
             <button class="icon-btn edit-btn" (click)="startEdit(asset)">
               <lucide-icon [name]="EditIcon" class="w-3 h-3"></lucide-icon>
             </button>

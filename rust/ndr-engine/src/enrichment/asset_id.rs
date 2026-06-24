@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +14,7 @@ impl AssetIdentifier {
         let oui_map = DashMap::new();
         let oui_path = std::env::var("OUI_JSON").unwrap_or_else(|_| "data/oui_vendors.json".to_string());
         if let Ok(content) = fs::read_to_string(&oui_path) {
-            if let Ok(json) = serde_json::from_str::<std::collections::HashMap<String, String>>(&content) {
+            if let Ok(json) = serde_json::from_str::<HashMap<String, String>>(&content) {
                 for (k, v) in json {
                     oui_map.insert(k.to_uppercase(), v);
                 }
@@ -22,7 +23,7 @@ impl AssetIdentifier {
                 tracing::warn!("Failed to parse OUI JSON at {}", oui_path);
             }
         } else {
-            tracing::warn!("OUI JSON file not found at {} — vendor lookup will be empty until first update.", oui_path);
+            tracing::warn!("OUI JSON not found at {} — vendor lookup empty until first update.", oui_path);
         }
         Self { oui_map }
     }
@@ -31,8 +32,8 @@ impl AssetIdentifier {
         let clean_mac = mac.replace('-', ":").to_uppercase();
         if clean_mac.len() >= 8 {
             let oui = &clean_mac[0..8];
-            if let Some(vendor_ref) = self.oui_map.get(oui) {
-                return vendor_ref.value().clone();
+            if let Some(v) = self.oui_map.get(oui) {
+                return v.value().clone();
             }
         }
         "Unknown".to_string()
@@ -57,60 +58,162 @@ impl AssetIdentifier {
         "unknown".to_string()
     }
 
-    /// Spawns a background task to update the OUI database monthly from the IEEE registry.
+    /// Spawns a background task that merges OUI data from multiple sources monthly.
+    /// Tries all sources — partial failures are fine, results are merged together.
     pub fn spawn_auto_updater(self: Arc<Self>) {
         tokio::spawn(async move {
-            let oui_path = std::env::var("OUI_JSON").unwrap_or_else(|_| "data/oui_vendors.json".to_string());
+            let oui_path = std::env::var("OUI_JSON")
+                .unwrap_or_else(|_| "data/oui_vendors.json".to_string());
 
-            // Wait 10s on boot before first fetch
             tokio::time::sleep(Duration::from_secs(10)).await;
 
             loop {
-                info!("Fetching latest IEEE OUI Registry...");
+                info!("Updating OUI vendor database from multiple sources...");
+
                 let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(30))
+                    .timeout(Duration::from_secs(60))
+                    .user_agent("NDR-Engine/1.0")
                     .build()
                     .unwrap_or_default();
 
-                let mut success = false;
-                if let Ok(resp) = client.get("http://standards-oui.ieee.org/oui/oui.csv").send().await {
-                    if let Ok(text) = resp.text().await {
-                        let mut reader = csv::ReaderBuilder::new().from_reader(text.as_bytes());
-                        let mut new_map = std::collections::HashMap::new();
+                let mut merged: HashMap<String, String> = HashMap::new();
+                let mut sources_ok = 0u32;
 
-                        for result in reader.records() {
-                            if let Ok(record) = result {
-                                if record.len() >= 3 {
-                                    let assignment = record[1].trim();
-                                    let org = record[2].trim();
-                                    if assignment.len() == 6 {
-                                        let formatted = format!("{}:{}:{}", &assignment[0..2], &assignment[2..4], &assignment[4..6]);
-                                        new_map.insert(formatted.to_uppercase(), org.to_string());
-                                        self.oui_map.insert(formatted.to_uppercase(), org.to_string());
+                // ── Source 1: maclookup.app JSON ──────────────────────────────
+                // Format: [{"macPrefix":"XX:XX:XX","vendorName":"..."},...]
+                match client.get("https://maclookup.app/downloads/json-database/get-db").send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(text) = resp.text().await {
+                            if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+                                let before = merged.len();
+                                for entry in &entries {
+                                    let prefix = entry.get("macPrefix")
+                                        .and_then(|v| v.as_str()).unwrap_or("").trim().to_uppercase();
+                                    let vendor = entry.get("vendorName")
+                                        .and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                                    if prefix.len() == 8 && !vendor.is_empty() {
+                                        merged.entry(prefix).or_insert(vendor);
                                     }
                                 }
-                            }
-                        }
-
-                        if !new_map.is_empty() {
-                            info!("Parsed {} OUI prefixes from IEEE.", new_map.len());
-                            if let Ok(json_str) = serde_json::to_string_pretty(&new_map) {
-                                // Ensure data dir exists
-                                let _ = fs::create_dir_all(std::path::Path::new(&oui_path).parent().unwrap_or(std::path::Path::new(".")));
-                                if fs::write(&oui_path, json_str).is_ok() {
-                                    info!("OUI database updated at {}", oui_path);
-                                    success = true;
-                                }
+                                info!("Source 1 (maclookup.app): +{} OUI entries", merged.len() - before);
+                                sources_ok += 1;
                             }
                         }
                     }
+                    _ => tracing::warn!("Source 1 (maclookup.app): unreachable"),
                 }
 
-                let sleep_secs = if success {
-                    30 * 24 * 3600 // 30 days
+                // ── Source 2: IEEE OUI CSV ────────────────────────────────────
+                // Format: Registry,Assignment,Organization Name,...
+                // Assignment is 6-char hex (no colons), e.g. "AABBCC"
+                match client.get("http://standards-oui.ieee.org/oui/oui.csv").send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(text) = resp.text().await {
+                            let mut rdr = csv::ReaderBuilder::new()
+                                .has_headers(true)
+                                .from_reader(text.as_bytes());
+                            let before = merged.len();
+                            for result in rdr.records().flatten() {
+                                if result.len() >= 3 {
+                                    let assignment = result[1].trim();
+                                    let org = result[2].trim().to_string();
+                                    if assignment.len() == 6 && !org.is_empty() {
+                                        let prefix = format!(
+                                            "{}:{}:{}",
+                                            &assignment[0..2], &assignment[2..4], &assignment[4..6]
+                                        ).to_uppercase();
+                                        merged.entry(prefix).or_insert(org);
+                                    }
+                                }
+                            }
+                            info!("Source 2 (IEEE CSV): +{} OUI entries", merged.len() - before);
+                            sources_ok += 1;
+                        }
+                    }
+                    _ => tracing::warn!("Source 2 (IEEE CSV): unreachable"),
+                }
+
+                // ── Source 3: Wireshark manuf file ────────────────────────────
+                // Format: XX:XX:XX\tShortName\tFull Organization Name
+                match client.get("https://www.wireshark.org/download/automated/data/manuf").send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(text) = resp.text().await {
+                            let before = merged.len();
+                            for line in text.lines() {
+                                let line = line.trim();
+                                if line.starts_with('#') || line.is_empty() { continue; }
+                                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                                if parts.len() >= 2 {
+                                    let mac_field = parts[0].trim();
+                                    // Only 3-byte OUIs (XX:XX:XX), skip longer entries
+                                    if mac_field.len() == 8 && mac_field.chars().filter(|&c| c == ':').count() == 2 {
+                                        let prefix = mac_field.to_uppercase();
+                                        // Prefer the long name (parts[2]) over short name (parts[1])
+                                        let vendor = if parts.len() >= 3 && !parts[2].trim().is_empty() {
+                                            parts[2].trim().to_string()
+                                        } else {
+                                            parts[1].trim().to_string()
+                                        };
+                                        if !vendor.is_empty() {
+                                            merged.entry(prefix).or_insert(vendor);
+                                        }
+                                    }
+                                }
+                            }
+                            info!("Source 3 (Wireshark manuf): +{} OUI entries", merged.len() - before);
+                            sources_ok += 1;
+                        }
+                    }
+                    _ => tracing::warn!("Source 3 (Wireshark manuf): unreachable"),
+                }
+
+                // ── Source 4: GitHub silverwind/oui JSON ──────────────────────
+                // Format: {"AABBCC": "Vendor Name",...} (no colons in key)
+                match client.get("https://raw.githubusercontent.com/silverwind/oui/master/oui.json").send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(text) = resp.text().await {
+                            if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&text) {
+                                let before = merged.len();
+                                for (k, v) in map {
+                                    if k.len() == 6 {
+                                        let prefix = format!(
+                                            "{}:{}:{}",
+                                            &k[0..2], &k[2..4], &k[4..6]
+                                        ).to_uppercase();
+                                        merged.entry(prefix).or_insert(v);
+                                    }
+                                }
+                                info!("Source 4 (silverwind/oui): +{} OUI entries", merged.len() - before);
+                                sources_ok += 1;
+                            }
+                        }
+                    }
+                    _ => tracing::warn!("Source 4 (silverwind/oui): unreachable"),
+                }
+
+                // ── Flush merged map into live oui_map and persist ────────────
+                if sources_ok > 0 {
+                    info!("OUI update complete: {} total entries from {}/4 sources", merged.len(), sources_ok);
+                    for (k, v) in &merged {
+                        self.oui_map.insert(k.clone(), v.clone());
+                    }
+                    if let Ok(json_str) = serde_json::to_string(&merged) {
+                        let _ = fs::create_dir_all(
+                            std::path::Path::new(&oui_path).parent()
+                                .unwrap_or(std::path::Path::new("."))
+                        );
+                        if fs::write(&oui_path, json_str).is_ok() {
+                            info!("OUI database saved to {}", oui_path);
+                        }
+                    }
                 } else {
-                    tracing::warn!("Failed to fetch OUI registry. Will retry in 7 days.");
-                    7 * 24 * 3600
+                    tracing::warn!("All OUI sources unreachable — keeping existing database");
+                }
+
+                let sleep_secs = if sources_ok > 0 {
+                    30 * 24 * 3600u64 // retry in 30 days
+                } else {
+                    7 * 24 * 3600u64  // retry sooner if all failed
                 };
                 tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
             }

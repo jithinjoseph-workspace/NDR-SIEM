@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 pub struct AiConfig {
     /// "openai" | "anthropic" | "custom"
     pub provider:      String,
-    /// API key stored in DB (empty = fall back to env var)
+    /// API key stored in DB — must be set explicitly; no env var fallback
     pub api_key:       String,
     /// Model override (empty = use provider default)
     pub model:         String,
@@ -39,19 +39,13 @@ impl AiConfig {
         }
     }
 
-    /// Resolve the effective API key: DB config first, then env var fallback.
+    /// Returns the DB-configured API key only — no env var fallback.
     pub fn effective_key(&self) -> String {
-        if !self.api_key.is_empty() {
-            return self.api_key.clone();
-        }
-        match self.provider.as_str() {
-            "anthropic" => std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-            _ => std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-        }
+        self.api_key.clone()
     }
 
     pub fn is_configured(&self) -> bool {
-        !self.effective_key().is_empty()
+        !self.api_key.is_empty()
     }
 }
 
@@ -155,7 +149,6 @@ pub fn extract_emotion(text: &str)
 }
 
 /// Route AI call to the correct provider based on config.
-/// Falls back to env var if no DB key is configured.
 pub async fn call_ai(
     config: &AiConfig,
     system_prompt: &str,

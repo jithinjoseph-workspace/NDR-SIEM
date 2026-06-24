@@ -96,10 +96,8 @@ export class Assets implements OnInit {
 
   loadAssets() {
     this.loading = true;
-    console.log("Loading assets...");
     this.api.getAssets().subscribe({
       next: (data: any) => {
-        console.log("Assets data received:", data);
         if (data && Array.isArray(data)) {
           this.assets = data;
         } else if (data && data.error) {

@@ -110,8 +110,11 @@ export class Logs implements OnInit, OnDestroy {
   }
 
   applyFilter() {
+    const MAX_DISPLAY = 100;
     if (!this.searchText) {
-      this.filteredLogs = this.logs;
+      // Slice so the DOM never renders more than MAX_DISPLAY rows;
+      // the full buffer (up to 200) is kept in memory for searches.
+      this.filteredLogs = this.logs.slice(0, MAX_DISPLAY);
     } else {
       const s = this.searchText.toLowerCase();
       this.filteredLogs = this.logs.filter(l =>
@@ -119,8 +122,13 @@ export class Logs implements OnInit, OnDestroy {
         l.dst?.toLowerCase().includes(s) ||
         l.proto?.toLowerCase().includes(s) ||
         l.source?.toLowerCase().includes(s)
-      );
+      ).slice(0, MAX_DISPLAY);
     }
+  }
+
+  trackByLog(_: number, log: any): string {
+    // Composite key: timestamp + src + dst gives a stable identity per entry.
+    return `${log.ts}|${log.src}|${log.dst}|${log.proto}`;
   }
 
   onSearch() {

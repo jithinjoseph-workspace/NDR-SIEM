@@ -220,6 +220,32 @@ async fn main() {
         }
     });
 }
+    // ── Background: vendor backfill (every 10 min) ───────────────────────
+    // Finds assets with empty/Unknown vendor and fills from OUI map.
+    // Needed because vendor is only set when an ARP/DHCP event arrives —
+    // quiet devices (routers, etc.) may never trigger another event.
+    {
+        let ch = state.ch_storage.clone();
+        let asset_id = state.enrichment.asset_id.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Ok(assets) = ch.get_assets_by_tenant("default").await {
+                    for asset in assets {
+                        if (asset.vendor.is_empty() || asset.vendor == "Unknown") && !asset.mac.is_empty() {
+                            let vendor = asset_id.lookup_vendor(&asset.mac);
+                            if !vendor.is_empty() && vendor != "Unknown" {
+                                let mut updated = asset;
+                                updated.vendor = vendor;
+                                let _ = ch.upsert_asset(&updated).await;
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(600)).await;
+            }
+        });
+    }
+
     // ── Kafka consumer (replaces HTTP /event endpoint) ────────────────────
     {
         let consumer_state = state.clone();

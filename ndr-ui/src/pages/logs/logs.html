@@ -64,7 +64,7 @@
       </div>
 
       <div class="log-list">
-        <div *ngFor="let log of filteredLogs" class="log-grid log-row">
+        <div *ngFor="let log of filteredLogs; trackBy: trackByLog" class="log-grid log-row">
           <span class="log-time">{{ log.ts }}</span>
           <span [class]="'source-badge ' + (log.source === 'suricata' ? 'source-suricata' : 'source-zeek')">
             {{ log.source?.toUpperCase() }}

@@ -286,12 +286,9 @@ export class Rules implements OnInit {
   }
 
   deleteRule(rule: any) {
-    console.log('Deleting rule id:', rule.id); // ← add this
     if (!confirm(`Delete rule "${rule.name}"?`)) return;
     this.api.deleteRule(rule.id).subscribe({
-      next: () => {
-        this.api.reloadRules().subscribe();
-        this.showMessage(`Rule "${rule.name}" deleted`, 'success');
+      next: () =>
         this.api.reloadRules().subscribe({
           next: () => {
             // Remove from local array immediately — no need to fetch
@@ -299,10 +296,8 @@ export class Rules implements OnInit {
             this.showMessage(`Rule "${rule.name}" deleted`, 'success');
             this.cdr.detectChanges();
           }
-        });
-      },
-      error: (err) => {
-        console.log('Delete error:', err); // ← add this
+        }),
+      error: () => {
         this.showMessage('Failed to delete rule', 'error');
       }
     });

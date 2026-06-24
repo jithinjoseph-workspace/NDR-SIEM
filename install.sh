@@ -167,6 +167,7 @@ sudo apt-get install -y \
     curl wget git jq python3 \
     net-tools iproute2 \
     netcat-traditional \
+    arp-scan iputils-arping snmp \
     libpcre3 2>/dev/null || true
 # libpcre3 may not be in repos on Ubuntu 24+ — fallback to direct download
 if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
@@ -435,8 +436,22 @@ if [ "$DEPLOY_MODE" = "local" ]; then
             log "Keeping ClickHouse packages installed (service remains disabled)"
         fi
     elif ss -tlnp 2>/dev/null | grep -qE ':8123|:8124|:9000|:9001'; then
-        warn "Ports 8123/8124/9000/9001 are in use by another process — this may cause ClickHouse containers to restart-loop"
-        warn "Run: ss -tlnp | grep -E '8123|8124|9000|9001'  to identify and stop it"
+        warn "Ports 8123/8124/9000/9001 are in use — killing conflicting processes..."
+        PIDS=$(ss -tlnp 2>/dev/null | grep -E ':8123|:8124|:9000|:9001' \
+            | grep -oP 'pid=\K[0-9]+' | sort -u)
+        if [ -n "$PIDS" ]; then
+            for PID in $PIDS; do
+                PNAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
+                log "  Killing PID $PID ($PNAME) holding ClickHouse ports..."
+                sudo kill -9 "$PID" 2>/dev/null || true
+            done
+            sleep 2
+            if ss -tlnp 2>/dev/null | grep -qE ':8123|:8124|:9000|:9001'; then
+                warn "Some ports still in use after kill — containers may still conflict"
+            else
+                log "✅ Ports 8123/8124/9000/9001 are now free"
+            fi
+        fi
     fi
 
     CLICKHOUSE_URL="http://localhost:8123"
@@ -571,8 +586,14 @@ sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
 @load frameworks/files/detect-MHR
 @load policy/frameworks/software/vulnerable
 @load policy/frameworks/software/version-changes
+@load policy/frameworks/software/windows-version-detection
 @load policy/protocols/conn/known-hosts
 @load policy/protocols/conn/known-services
+@load policy/tuning/track-all-assets.zeek
+@load policy/protocols/http/software.zeek
+@load policy/protocols/dhcp/software.zeek
+@load policy/protocols/ssh/software.zeek
+@load ndr-arp
 
 # Reduce inactivity timeouts so idle connections are logged quickly
 redef tcp_inactivity_timeout = 15 secs;
@@ -580,13 +601,66 @@ redef udp_inactivity_timeout = 15 secs;
 redef icmp_inactivity_timeout = 10 secs;
 ZEEKCONF
 
+# Write custom ARP logger — uses Zeek's built-in arp_request/arp_reply events.
+# The zkg ARP package requires internet access and fails silently; this inline
+# script has zero external dependencies.
+sudo tee /opt/zeek/share/zeek/site/ndr-arp.zeek > /dev/null << 'ARPSCRIPT'
+module ARP;
+
+export {
+    redef enum Log::ID += { LOG };
+
+    type Info: record {
+        ts:        time    &log;
+        operation: string  &log;
+        mac:       string  &log;
+        dst_mac:   string  &log;
+        ip:        addr    &log;
+        dst_ip:    addr    &log;
+    };
+}
+
+event zeek_init() &priority=5
+{
+    Log::create_stream(ARP::LOG, [$columns=Info, $path="arp"]);
+}
+
+event arp_request(mac_src: string, mac_dst: string,
+                  SPA: addr, SHA: string,
+                  TPA: addr, THA: string)
+{
+    Log::write(ARP::LOG, Info(
+        $ts        = network_time(),
+        $operation = "request",
+        $mac       = SHA,
+        $dst_mac   = mac_dst,
+        $ip        = SPA,
+        $dst_ip    = TPA
+    ));
+}
+
+event arp_reply(mac_src: string, mac_dst: string,
+                SPA: addr, SHA: string,
+                TPA: addr, THA: string)
+{
+    Log::write(ARP::LOG, Info(
+        $ts        = network_time(),
+        $operation = "reply",
+        $mac       = SHA,
+        $dst_mac   = THA,
+        $ip        = SPA,
+        $dst_ip    = TPA
+    ));
+}
+ARPSCRIPT
+
 /opt/zeek/bin/zkg install zeek/corelight/zeek-community-id \
     --force 2>/dev/null || true
 log "✅ Zeek configured"
 
 
 sudo tee /etc/logrotate.d/zeek-ndr > /dev/null << 'EOF'
-/home/user/logs/zeek/conn.log {
+/home/user/logs/zeek/*.log {
     su root root
     daily
     rotate 30

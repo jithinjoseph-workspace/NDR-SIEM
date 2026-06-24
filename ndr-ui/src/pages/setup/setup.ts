@@ -229,9 +229,7 @@ export class Setup implements OnInit, OnDestroy {
 
   applyInterface() {
     this.api.setInterface(this.selectedInterface).subscribe({
-      next: () => {
-        console.log('Interface set to', this.selectedInterface);
-      },
+      next: () => { /* interface applied silently */ },
       error: (error) => {
         this.showError('Apply Interface Failed', error?.error?.message || 'Could not apply interface to local sensor. Please verify connection and try again.');
       }

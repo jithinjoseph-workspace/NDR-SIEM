@@ -46,7 +46,6 @@ export class Websocket {
       this.socket = null;
     }
 
-    console.log('Connecting to websocket...');
     try {
       const token = localStorage.getItem('ndr_token') || '';
       if (!token) {
@@ -64,7 +63,6 @@ export class Websocket {
           try {
             const data = JSON.parse(event.data);
             this.messages$.next(data);
-            console.log(data);
             if (data.type === 'agent_status') this.lastAgentStatus$.next(data);
             if (data.type === 'interfaces') this.lastInterfaces$.next(data);
           } catch (e) {
@@ -74,7 +72,7 @@ export class Websocket {
       };
 
       this.socket.onopen = () =>
-        this.zone.run(() => console.log('WebSocket Connected'));
+        this.zone.run(() => {});
 
       this.socket.onerror = (e) => console.error('WebSocket Error:', e);
 

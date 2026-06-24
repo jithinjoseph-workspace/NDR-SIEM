@@ -128,7 +128,8 @@ apt-get install -y -qq \
   apt-transport-https gnupg2 \
   software-properties-common \
   libpcre3 libpcre3-dev \
-  ethtool docker.io > /dev/null 2>&1 || true
+  ethtool docker.io \
+  arp-scan iputils-arping snmp > /dev/null 2>&1 || true
 
 log "Installing tshark (>= 3.4 required for community-id filter) and zstd..."
 # communityid.id dissector requires tshark >= 3.4.0 AND --enable-protocol communityid.
@@ -307,6 +308,22 @@ chmod -R 777 /var/log/ndr/ \
              /var/run/suricata
 chmod 755 /opt/arkime/raw
 
+# ── Zeek log rotation for all logs ───────────────
+cat > /etc/logrotate.d/zeek-ndr << 'EOF'
+/var/log/ndr/zeek/*.log {
+    su root root
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    dateext
+    dateformat -%Y%m%d
+}
+EOF
+
 # ── Save sensor config ────────────────────────────
 log "Saving sensor config..."
 cat > /etc/ndr/sensor.conf << EOF
@@ -465,7 +482,65 @@ EOF
 @load frameworks/files/hash-all-files
 @load policy/protocols/conn/known-hosts
 @load policy/protocols/conn/known-services
+@load policy/frameworks/software/vulnerable
+@load policy/frameworks/software/version-changes
+@load policy/frameworks/software/windows-version-detection
+@load policy/tuning/track-all-assets.zeek
+@load policy/protocols/http/software.zeek
+@load policy/protocols/dhcp/software.zeek
+@load policy/protocols/ssh/software.zeek
+@load ndr-arp
 ZEEKCONF
+
+  cat > /opt/zeek/share/zeek/site/ndr-arp.zeek << 'ARPSCRIPT'
+module ARP;
+
+export {
+    redef enum Log::ID += { LOG };
+
+    type Info: record {
+        ts:        time    &log;
+        operation: string  &log;
+        mac:       string  &log;
+        dst_mac:   string  &log;
+        ip:        addr    &log;
+        dst_ip:    addr    &log;
+    };
+}
+
+event zeek_init() &priority=5
+{
+    Log::create_stream(ARP::LOG, [$columns=Info, $path="arp"]);
+}
+
+event arp_request(mac_src: string, mac_dst: string,
+                  SPA: addr, SHA: string,
+                  TPA: addr, THA: string)
+{
+    Log::write(ARP::LOG, Info(
+        $ts        = network_time(),
+        $operation = "request",
+        $mac       = SHA,
+        $dst_mac   = mac_dst,
+        $ip        = SPA,
+        $dst_ip    = TPA
+    ));
+}
+
+event arp_reply(mac_src: string, mac_dst: string,
+                SPA: addr, SHA: string,
+                TPA: addr, THA: string)
+{
+    Log::write(ARP::LOG, Info(
+        $ts        = network_time(),
+        $operation = "reply",
+        $mac       = SHA,
+        $dst_mac   = THA,
+        $ip        = SPA,
+        $dst_ip    = TPA
+    ));
+}
+ARPSCRIPT
 
   /opt/zeek/bin/zkg install \
     zeek/corelight/zeek-community-id \
@@ -823,7 +898,7 @@ log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
 """NDR Sensor Agent v2 — monitors and restarts all services"""
-import os, time, subprocess, requests, json, hashlib
+import os, time, subprocess, threading, requests, json, hashlib
 from datetime import datetime
 
 config = {}
@@ -937,6 +1012,147 @@ def start_capture():
     except Exception as e:
         print(f"[NDR] Arkime capture failed: {e}")
         return False
+
+def arp_scan(iface):
+    """ARP scan the local subnet on startup.
+    Only real devices reply to ARP — no ghost placeholders possible.
+    Zeek captures the ARP replies via ndr-arp.zeek and enriches assets."""
+    try:
+        subprocess.run(
+            ['sudo', 'arp-scan', f'--interface={iface}', '--localnet', '--quiet'],
+            capture_output=True, timeout=60
+        )
+        print("[NDR] ✅ ARP scan complete")
+    except Exception as e:
+        print(f"[NDR] ARP scan error: {e}")
+
+def arp_probe_unknown():
+    """Background loop: every 5 min, ARP-probe internal IPs seen in traffic
+    that have no ARP entry — so Zeek captures the reply and enriches the asset.
+    Uses arping (Layer 2) instead of ping to avoid creating ghost placeholders."""
+    import ipaddress
+    conn_log = "/var/log/ndr/zeek/conn.log"
+    while True:
+        time.sleep(300)
+        try:
+            arp_out = subprocess.run(["ip", "neigh", "show"],
+                                     capture_output=True, text=True).stdout
+            known = {line.split()[0] for line in arp_out.splitlines() if line}
+
+            seen = set()
+            if os.path.exists(conn_log):
+                with open(conn_log) as f:
+                    for line in f.readlines()[-500:]:
+                        try:
+                            obj = json.loads(line)
+                            for key in ("id.orig_h", "id.resp_h"):
+                                ip = obj.get(key, "")
+                                if ip:
+                                    seen.add(ip)
+                        except Exception:
+                            pass
+
+            for ip in seen - known:
+                try:
+                    if ipaddress.IPv4Address(ip).is_private:
+                        subprocess.run(
+                            ['sudo', 'arping', '-c', '1', '-w', '1', '-I', IFACE, ip],
+                            capture_output=True, timeout=3
+                        )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+def snmp_router_discovery():
+    """Query the router's ARP table via SNMP to get all connected devices.
+    Auto-detects gateway, tries common community strings."""
+    import re as _re
+    arp_log = "/var/log/ndr/zeek/arp.log"
+    try:
+        gw_out = subprocess.run(["ip", "route", "show", "default"],
+                                capture_output=True, text=True).stdout
+        m = _re.search(r'default via (\d+\.\d+\.\d+\.\d+)', gw_out)
+        if not m:
+            return
+        gateway = m.group(1)
+    except Exception:
+        return
+
+    entries = []
+    for community in ["public", "private", "community", "admin"]:
+        try:
+            result = subprocess.run(
+                ["snmpwalk", "-v2c", "-c", community, "-t", "3", "-r", "0",
+                 gateway, "1.3.6.1.2.1.4.22.1.2"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                continue
+            now = time.time()
+            for line in result.stdout.splitlines():
+                ip_m = _re.search(r'\.(\d+\.\d+\.\d+\.\d+)\s*=', line)
+                mac_m = _re.search(r'(?:Hex-STRING:|STRING:)\s*([0-9A-Fa-f :]+)', line)
+                if not ip_m or not mac_m:
+                    continue
+                ip = ip_m.group(1)
+                mac_raw = mac_m.group(1).strip()
+                mac = ":".join(mac_raw.split()).lower() if " " in mac_raw else mac_raw.lower()
+                if len(mac) != 17:
+                    continue
+                entries.append(json.dumps({
+                    "ts": now, "operation": "reply",
+                    "mac": mac, "dst_mac": "", "ip": ip, "dst_ip": ""
+                }))
+            if entries:
+                print(f"[NDR] SNMP: {len(entries)} devices from router {gateway} (community={community})")
+                break
+        except Exception:
+            continue
+
+    if entries:
+        os.makedirs(os.path.dirname(arp_log), exist_ok=True)
+        with open(arp_log, "a") as f:
+            f.write("\n".join(entries) + "\n")
+
+def bootstrap_from_arp_cache():
+    """On startup, read the kernel ARP cache and write entries to arp.log
+    so Vector ships them instantly — existing devices appear without any scanning."""
+    arp_log = "/var/log/ndr/zeek/arp.log"
+    try:
+        out = subprocess.run(["ip", "neigh", "show"],
+                             capture_output=True, text=True).stdout
+        now = time.time()
+        entries = []
+        for line in out.splitlines():
+            parts = line.split()
+            if "lladdr" not in parts:
+                continue
+            idx = parts.index("lladdr")
+            ip_str = parts[0]
+            mac = parts[idx + 1] if idx + 1 < len(parts) else ""
+            state = parts[-1]
+            if state in ("FAILED", "INCOMPLETE") or not mac:
+                continue
+            try:
+                import ipaddress as _ip
+                addr = _ip.ip_address(ip_str)
+                if not addr.is_private or addr.is_loopback:
+                    continue
+            except Exception:
+                continue
+            entries.append(json.dumps({
+                "ts": now, "operation": "reply",
+                "mac": mac, "dst_mac": "",
+                "ip": ip_str, "dst_ip": ""
+            }))
+        if entries:
+            os.makedirs(os.path.dirname(arp_log), exist_ok=True)
+            with open(arp_log, "a") as f:
+                f.write("\n".join(entries) + "\n")
+            print(f"[NDR] Bootstrapped {len(entries)} known devices from ARP cache")
+    except Exception as e:
+        print(f"[NDR] ARP cache bootstrap error: {e}")
 
 def check_and_restart():
     statuses = {}
@@ -1078,10 +1294,14 @@ def execute_command(cmd):
         print("[NDR] All services stopped")
     elif cmd == 'start':
         MANUALLY_STOPPED = False
+        bootstrap_from_arp_cache()
+        snmp_router_discovery()
         start_zeek()
         start_suricata()
         start_vector()
         start_capture()
+        threading.Thread(target=arp_scan, args=(IFACE,), daemon=True).start()
+        threading.Thread(target=arp_probe_unknown, daemon=True).start()
         print("[NDR] All services started")
     elif cmd == 'restart':
         MANUALLY_STOPPED = False
@@ -1242,10 +1462,13 @@ if __name__ == '__main__':
 
     # Start all services
     print("[NDR] Starting all services...")
+    bootstrap_from_arp_cache()
     start_zeek()
     start_suricata()
     start_vector()
     start_capture()
+    threading.Thread(target=arp_scan, args=(IFACE,), daemon=True).start()
+    threading.Thread(target=arp_probe_unknown, daemon=True).start()
     time.sleep(10)  # wait for capture to init
 
     checkin_interval = 30  # server will update this on first response

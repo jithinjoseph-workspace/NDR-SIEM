@@ -124,8 +124,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 // --- Asset Identification (DHCP) ---
                 if event.log_source.as_deref() == Some("dhcp") {
                     let mac = raw.get("mac").and_then(|v| v.as_str()).unwrap_or("");
-                    let ip = raw.get("assigned_ip")
-                        .or_else(|| raw.get("requested_ip"))
+                    let ip = raw.get("assigned_addr")
+                        .or_else(|| raw.get("requested_addr"))
                         .or_else(|| raw.get("client_addr"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
@@ -346,6 +346,10 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 // --- Placeholder Asset Creation ---
                 let check_placeholder = |ip: &str, tenant: &str| {
                     if ip.is_empty() { return; }
+                    // Skip broadcast, multicast and special addresses
+                    if ip.ends_with(".255") || ip.ends_with(".0")
+                        || ip.starts_with("224.") || ip.starts_with("239.")
+                        || ip == "255.255.255.255" { return; }
                     let is_internal = ip.starts_with("10.")
                         || ip.starts_with("192.168.")
                         || (ip.starts_with("172.") && {
@@ -412,7 +416,15 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     check_placeholder(src, &tenant_id);
                 }
                 if let Some(dst) = &event.dest_ip {
-                    check_placeholder(dst, &tenant_id);
+                    // For ICMP, only create a placeholder if the destination actually replied
+                    // (conn_state "SF"). Ping sweeps to non-existent hosts get "OTH"/"S0"/""
+                    // and would otherwise flood the assets table with ghost entries.
+                    let proto = event.proto.as_deref().unwrap_or("");
+                    let conn_state = raw.get("conn_state").and_then(|v| v.as_str()).unwrap_or("");
+                    let is_icmp_no_reply = proto == "icmp" && conn_state != "SF";
+                    if !is_icmp_no_reply {
+                        check_placeholder(dst, &tenant_id);
+                    }
                 }
                 // -----------------------------------
 

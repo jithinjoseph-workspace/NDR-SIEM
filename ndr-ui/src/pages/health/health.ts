@@ -56,7 +56,6 @@ export class Health implements OnInit, OnDestroy {
   }
 
   loadHealth() {
-    this.loadArkimeStatus();
     // Single API call — /api/health returns everything
     this.api.getDashboardStats().subscribe({
       next: (data: any) => {
