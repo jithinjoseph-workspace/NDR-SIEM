@@ -328,65 +328,55 @@ pub async fn auth_middleware(
     match extract_claims(&headers) {
         Some(claims) => {
             if claims.role != "super_admin" {
-                // ── Tenant-level gate ─────────────────────────────────────────
-                match state.ch_storage.is_tenant_active(&claims.tenant_id).await {
-                    Ok(false) => {
+                let mut rc = state.redis_mux.clone();
+
+                // ── Tenant-level gate (Redis-cached 60s) ──────────────────────
+                let t_key = format!("ndr:active:tenant:{}", claims.tenant_id);
+                let t_cached: Option<String> = redis::cmd("GET").arg(&t_key).query_async(&mut rc).await.ok().flatten();
+                let tenant_active = match t_cached.as_deref() {
+                    Some("1") => true,
+                    Some("0") => false,
+                    _ => {
+                        let active = state.ch_storage.is_tenant_active(&claims.tenant_id).await.unwrap_or(true);
+                        let v = if active { "1" } else { "0" };
+                        let _: Result<(), _> = redis::cmd("SET").arg(&t_key).arg(v).arg("EX").arg(60u64).query_async(&mut rc).await;
+                        active
+                    }
+                };
+                if !tenant_active {
+                    return axum::response::Response::builder()
+                        .status(403)
+                        .header("Content-Type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"status":"error","message":"Tenant has been deactivated"}"#
+                        ))
+                        .unwrap();
+                }
+
+                // ── Per-user active gate (Redis-cached 30s) ───────────────────
+                let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
+                if blockable_roles.contains(&claims.role.as_str()) {
+                    let u_key = format!("ndr:active:user:{}", claims.sub);
+                    let u_cached: Option<String> = redis::cmd("GET").arg(&u_key).query_async(&mut rc).await.ok().flatten();
+                    let user_active = match u_cached.as_deref() {
+                        Some("1") => true,
+                        Some("0") => false,
+                        _ => {
+                            let active = state.ch_storage.is_user_active(&claims.sub).await.unwrap_or(true);
+                            let v = if active { "1" } else { "0" };
+                            let _: Result<(), _> = redis::cmd("SET").arg(&u_key).arg(v).arg("EX").arg(30u64).query_async(&mut rc).await;
+                            active
+                        }
+                    };
+                    if !user_active {
+                        tracing::info!("🚫 Blocked user '{}' attempted API access — rejecting", claims.sub);
                         return axum::response::Response::builder()
                             .status(403)
                             .header("Content-Type", "application/json")
                             .body(axum::body::Body::from(
-                                r#"{"status":"error","message":"Tenant has been deactivated"}"#
+                                r#"{"status":"error","message":"Your account has been disabled by your administrator.","code":"USER_DISABLED"}"#
                             ))
                             .unwrap();
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Tenant active check failed for {}: {}",
-                            claims.tenant_id,
-                            e
-                        );
-                        return axum::response::Response::builder()
-                            .status(503)
-                            .header("Content-Type", "application/json")
-                            .body(axum::body::Body::from(
-                                r#"{"status":"error","message":"Unable to verify tenant status"}"#
-                            ))
-                            .unwrap();
-                    }
-                    Ok(true) => {}
-                }
-
-                // ── Per-user active gate ──────────────────────────────────────
-                // Only enforce for roles that Tenant Admin can block.
-                // super_admin is skipped above; tenant_admin, admin are
-                // excluded here because they manage others and must not lock
-                // themselves out via a DB race.
-                let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
-                if blockable_roles.contains(&claims.role.as_str()) {
-                    match state.ch_storage.is_user_active(&claims.sub).await {
-                        Ok(false) => {
-                            tracing::info!(
-                                "🚫 Blocked user '{}' attempted API access — rejecting",
-                                claims.sub
-                            );
-                            return axum::response::Response::builder()
-                                .status(403)
-                                .header("Content-Type", "application/json")
-                                .body(axum::body::Body::from(
-                                    r#"{"status":"error","message":"Your account has been disabled by your administrator.","code":"USER_DISABLED"}"#
-                                ))
-                                .unwrap();
-                        }
-                        Err(e) => {
-                            // Log but don't block — fail-open to avoid disrupting
-                            // legitimate users if ClickHouse has a transient fault.
-                            tracing::warn!(
-                                "User active check failed for '{}': {}",
-                                claims.sub,
-                                e
-                            );
-                        }
-                        Ok(true) => {}
                     }
                 }
             }

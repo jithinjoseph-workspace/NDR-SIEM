@@ -70,6 +70,57 @@ pub async fn start_consumer(state: Arc<AppState>) {
     use dashmap::DashMap;
     let known_assets: Arc<DashMap<String, u32>> = Arc::new(DashMap::new());
 
+    // Background flush: dirty assets in Redis → ClickHouse every 30s
+    {
+        let ch_flush = state.ch_storage.clone();
+        let mut redis_flush = state.redis_mux.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                let dirty_keys: Vec<String> = redis::cmd("KEYS")
+                    .arg("ndr:assets_dirty:*")
+                    .query_async(&mut redis_flush).await.unwrap_or_default();
+                for dirty_key in dirty_keys {
+                    let tenant_id = dirty_key.trim_start_matches("ndr:assets_dirty:").to_string();
+                    let ips: Vec<String> = redis::cmd("SPOP")
+                        .arg(&dirty_key).arg(200u64)
+                        .query_async(&mut redis_flush).await.unwrap_or_default();
+                    for ip in ips {
+                        let hash_key = format!("ndr:asset:{}:{}", tenant_id, ip);
+                        // HGETALL returns [field, value, field, value, ...]
+                        let pairs: Vec<String> = redis::cmd("HGETALL")
+                            .arg(&hash_key)
+                            .query_async(&mut redis_flush).await.unwrap_or_default();
+                        let mut m: std::collections::HashMap<String,String> = std::collections::HashMap::new();
+                        let mut i = 0;
+                        while i + 1 < pairs.len() { m.insert(pairs[i].clone(), pairs[i+1].clone()); i += 2; }
+                        if m.get("mac").map(|s| s.is_empty()).unwrap_or(true) { continue; }
+                        let asset = crate::storage::clickhouse::AssetRow {
+                            ip:          ip.clone(),
+                            mac:         m.get("mac").cloned().unwrap_or_default(),
+                            hostname:    m.get("hostname").cloned().unwrap_or_default(),
+                            vendor:      m.get("vendor").cloned().unwrap_or_default(),
+                            os_guess:    m.get("os_guess").cloned().unwrap_or_default(),
+                            device_type: m.get("device_type").cloned().unwrap_or_default(),
+                            custom_name: m.get("custom_name").cloned().unwrap_or_default(),
+                            tenant_id:   tenant_id.clone(),
+                            first_seen:  m.get("first_seen").and_then(|s| s.parse().ok()).unwrap_or(0),
+                            last_seen:   m.get("last_seen").and_then(|s| s.parse().ok()).unwrap_or(0),
+                            ip_history:  m.get("ip_history").cloned().unwrap_or_else(|| "[]".to_string()),
+                        };
+                        let ch2 = ch_flush.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = ch2.upsert_asset(&asset).await {
+                                warn!("Asset flush error {}: {}", ip, e);
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
+
     loop {
         match consumer.recv().await {
             Ok(msg) => {
@@ -251,84 +302,95 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     }
                 } else if event.log_source.as_deref() == Some("arp") {
                     let mac = raw.get("mac").or_else(|| raw.get("SHA")).and_then(|v| v.as_str()).unwrap_or("");
-                    let ip = raw.get("SPA").or_else(|| raw.get("ip")).and_then(|v| v.as_str()).unwrap_or("");
+                    let ip  = raw.get("SPA").or_else(|| raw.get("ip")).and_then(|v| v.as_str()).unwrap_or("");
 
                     if !mac.is_empty() && !ip.is_empty() {
+                        let now        = chrono::Utc::now().timestamp() as u32;
+                        let hash_key   = format!("ndr:asset:{}:{}", tenant_id, ip);
+                        let dirty_key  = format!("ndr:assets_dirty:{}", tenant_id);
+                        let mut rc     = state.redis_mux.clone();
+                        let ip_s       = ip.to_string();
+                        let mac_s      = mac.to_string();
+                        let tid        = tenant_id.clone();
                         let is_gateway = ip.ends_with(".1") || ip.ends_with(".254");
-                        let vendor = state.enrichment.asset_id.lookup_vendor(mac);
-                        // Queue for vendor backfill if OUI not resolved
+                        let vendor     = state.enrichment.asset_id.lookup_vendor(mac);
+                        let device_type = state.enrichment.asset_id.guess_device_type("", &vendor, is_gateway);
+                        let conflict_ch = state.ch_storage.clone();
+
+                        // Vendor backfill if unresolved
                         if vendor == "Unknown" {
-                            let mut rc = state.redis_mux.clone();
+                            let mut rc2 = state.redis_mux.clone();
                             let qi = format!("{}|{}|{}", tenant_id, ip, mac);
                             tokio::spawn(async move {
                                 let _: Result<i64, _> = redis::cmd("SADD")
                                     .arg("ndr:vendor_pending").arg(qi)
-                                    .query_async(&mut rc).await;
+                                    .query_async(&mut rc2).await;
                             });
                         }
-                        let device_type = state.enrichment.asset_id.guess_device_type("", &vendor, is_gateway);
-                        let asset = crate::storage::clickhouse::AssetRow {
-                            ip: ip.to_string(),
-                            mac: mac.to_string(),
-                            hostname: "".to_string(),
-                            vendor,
-                            os_guess: "".to_string(),
-                            device_type,
-                            custom_name: "".to_string(),
-                            tenant_id: tenant_id.clone(),
-                            first_seen: chrono::Utc::now().timestamp() as u32,
-                            last_seen: chrono::Utc::now().timestamp() as u32,
-                            ip_history: "[]".to_string(),
-                        };
-                        let ch_clone = state.ch_storage.clone();
-                        let conflict_ch = state.ch_storage.clone();
-                        let conflict_tenant = tenant_id.clone();
-                        let conflict_ip = ip.to_string();
-                        let conflict_mac = mac.to_string();
-                        // IP conflict detection: two different MACs claiming the same IP = ARP spoofing
+
                         tokio::spawn(async move {
-                            if let Ok(Some(existing)) = conflict_ch.get_asset_by_ip(&conflict_tenant, &conflict_ip).await {
-                                if !existing.mac.is_empty()
-                                    && existing.mac != conflict_mac
-                                    && !existing.mac.contains("00:00:00")
-                                {
-                                    warn!(
-                                        "IP CONFLICT: {} claimed by {} and {} — possible ARP spoofing",
-                                        conflict_ip, existing.mac, conflict_mac
-                                    );
-                                    let hit = crate::storage::clickhouse::NdrHit {
-                                        timestamp: chrono::Utc::now().timestamp() as u32,
-                                        community_id: format!("arp-conflict-{}", conflict_ip),
-                                        src_ip: conflict_mac.clone(),
-                                        dst_ip: conflict_ip.clone(),
-                                        score: 85.0,
-                                        severity: "HIGH".to_string(),
-                                        tags: vec!["ip-conflict".to_string(), "arp-spoofing".to_string()],
-                                        sigma_hits: vec![],
-                                        threat_intel: 0,
-                                        src_country: "".to_string(),
-                                        dst_country: "".to_string(),
-                                        tenant_id: conflict_tenant.clone(),
-                                    };
-                                    let _ = conflict_ch.insert_hit_for_tenant(hit, &conflict_tenant).await;
-                                }
+                            // Read existing asset from Redis (pure in-memory, no ClickHouse)
+                            let pairs: Vec<String> = redis::cmd("HGETALL")
+                                .arg(&hash_key)
+                                .query_async(&mut rc).await.unwrap_or_default();
+                            let mut existing: std::collections::HashMap<String,String> = std::collections::HashMap::new();
+                            let mut i = 0;
+                            while i + 1 < pairs.len() { existing.insert(pairs[i].clone(), pairs[i+1].clone()); i += 2; }
+
+                            let existing_mac = existing.get("mac").cloned().unwrap_or_default();
+
+                            // IP conflict detection — purely from Redis, zero ClickHouse calls
+                            if !existing_mac.is_empty() && existing_mac != mac_s && !existing_mac.contains("00:00:00") {
+                                warn!("IP CONFLICT: {} claimed by {} and {} — possible ARP spoofing", ip_s, existing_mac, mac_s);
+                                let hit = crate::storage::clickhouse::NdrHit {
+                                    timestamp:    now,
+                                    community_id: format!("arp-conflict-{}", ip_s),
+                                    src_ip:       mac_s.clone(),
+                                    dst_ip:       ip_s.clone(),
+                                    score:        85.0,
+                                    severity:     "HIGH".to_string(),
+                                    tags:         vec!["ip-conflict".to_string(), "arp-spoofing".to_string()],
+                                    sigma_hits:   vec![],
+                                    threat_intel: 0,
+                                    src_country:  "".to_string(),
+                                    dst_country:  "".to_string(),
+                                    tenant_id:    tid.clone(),
+                                };
+                                let _ = conflict_ch.insert_hit_for_tenant(hit, &tid).await;
                             }
-                        });
-                        tokio::spawn(async move {
-                            let mut final_asset = asset;
-                            if let Ok(Some(existing)) = ch_clone.get_asset_by_ip(&final_asset.tenant_id, &final_asset.ip).await {
-                                if !existing.os_guess.is_empty() { final_asset.os_guess = existing.os_guess; }
-                                if !existing.hostname.is_empty() { final_asset.hostname = existing.hostname; }
-                                if !existing.device_type.is_empty() && existing.device_type != "unknown" { final_asset.device_type = existing.device_type; }
-                                if !existing.vendor.is_empty() && existing.vendor != "Unknown" { final_asset.vendor = existing.vendor; }
-                                if existing.first_seen > 0 { final_asset.first_seen = existing.first_seen; }
-                                if !existing.ip_history.is_empty() && existing.ip_history != "[]" {
-                                    final_asset.ip_history = existing.ip_history;
-                                }
-                            }
-                            if let Err(e) = ch_clone.upsert_asset(&final_asset).await {
-                                warn!("Asset ARP upsert error: {}", e);
-                            }
+
+                            // Merge: preserve existing enriched fields, update last_seen
+                            let final_vendor      = if existing.get("vendor").map(|v| v != "Unknown" && !v.is_empty()).unwrap_or(false) { existing["vendor"].clone() } else { vendor };
+                            let final_os          = existing.get("os_guess").cloned().unwrap_or_default();
+                            let final_hostname    = existing.get("hostname").cloned().unwrap_or_default();
+                            let final_device_type = if existing.get("device_type").map(|v| v != "unknown" && !v.is_empty()).unwrap_or(false) { existing["device_type"].clone() } else { device_type };
+                            let final_custom      = existing.get("custom_name").cloned().unwrap_or_default();
+                            let first_seen        = existing.get("first_seen").and_then(|s| s.parse::<u32>().ok()).unwrap_or(now);
+                            let ip_history        = existing.get("ip_history").cloned().unwrap_or_else(|| "[]".to_string());
+
+                            // Write back to Redis (hot store)
+                            let _: Result<(), _> = redis::cmd("HSET")
+                                .arg(&hash_key)
+                                .arg("mac").arg(&mac_s)
+                                .arg("hostname").arg(&final_hostname)
+                                .arg("vendor").arg(&final_vendor)
+                                .arg("os_guess").arg(&final_os)
+                                .arg("device_type").arg(&final_device_type)
+                                .arg("custom_name").arg(&final_custom)
+                                .arg("first_seen").arg(first_seen)
+                                .arg("last_seen").arg(now)
+                                .arg("ip_history").arg(&ip_history)
+                                .query_async(&mut rc).await;
+
+                            // 24h TTL so stale assets auto-expire
+                            let _: Result<(), _> = redis::cmd("EXPIRE")
+                                .arg(&hash_key).arg(86400u64)
+                                .query_async(&mut rc).await;
+
+                            // Mark as dirty for next 30s flush to ClickHouse
+                            let _: Result<i64, _> = redis::cmd("SADD")
+                                .arg(&dirty_key).arg(&ip_s)
+                                .query_async(&mut rc).await;
                         });
                     }
                 } else if event.log_source.as_deref() == Some("ipam") {

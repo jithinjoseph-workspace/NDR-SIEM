@@ -303,9 +303,9 @@ pub async fn verify_user(
     let rows = self.client
         .query(&format!(
             "SELECT id, username, password_hash, role, tenant_id, permissions, active \
-             FROM ndr.users FINAL \
+             FROM ndr.users \
              WHERE username = '{}' \
-             LIMIT 1",
+             ORDER BY created_at DESC LIMIT 1",
             esc
         ))
         .fetch_all::<(String, String, String, String, String, String, u8)>()
@@ -387,9 +387,9 @@ pub async fn get_user_identity(
     let id = sql_escape(id);
     let query = format!(
         "SELECT username, role, tenant_id
-         FROM ndr.users FINAL
+         FROM ndr.users
          WHERE id = '{}'
-         LIMIT 1",
+         ORDER BY created_at DESC LIMIT 1",
         id
     );
     let result = self.client
@@ -406,9 +406,9 @@ pub async fn get_user_by_id(
     let id = sql_escape(id);
     let query = format!(
         "SELECT id, username, role, tenant_id, permissions, toString(created_at)
-         FROM ndr.users FINAL
+         FROM ndr.users
          WHERE id = '{}'
-         LIMIT 1",
+         ORDER BY created_at DESC LIMIT 1",
         id
     );
     let result = self.client
@@ -433,9 +433,9 @@ pub async fn get_user_by_username(
     let username = sql_escape(username);
     let query = format!(
         "SELECT id, username, role, tenant_id, permissions, toString(created_at)
-         FROM ndr.users FINAL
+         FROM ndr.users
          WHERE username = '{}'
-         LIMIT 1",
+         ORDER BY created_at DESC LIMIT 1",
         username
     );
     let result = self.client
@@ -568,8 +568,8 @@ pub async fn is_user_active(
     let esc = sql_escape(username);
     let rows = self.client
         .query(&format!(
-            "SELECT active FROM ndr.users FINAL \
-             WHERE username = '{}' LIMIT 1",
+            "SELECT active FROM ndr.users \
+             WHERE username = '{}' ORDER BY created_at DESC LIMIT 1",
             esc
         ))
         .fetch_all::<u8>()
@@ -637,7 +637,7 @@ pub async fn is_tenant_active(
     let id = sql_escape(id);
     let rows = self.client
         .query(&format!(
-            "SELECT active FROM ndr.tenants FINAL WHERE id = '{}' LIMIT 1",
+            "SELECT active FROM ndr.tenants WHERE id = '{}' ORDER BY updated_at DESC LIMIT 1",
             id
         ))
         .fetch_all::<u8>()
@@ -1000,18 +1000,12 @@ pub async fn delete_announcement(
             .unwrap_or_else(|_| "ndr".to_string());
         let password = std::env::var("CLICKHOUSE_PASSWORD")
             .unwrap_or_else(|_| "ndr123".to_string());
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .build()
-            .expect("reqwest client");
         Self {
             client: Client::default()
                 .with_url(url)
                 .with_user(user)
                 .with_password(password)
-                .with_database("ndr")
-                .with_http_client(http),
+                .with_database("ndr"),
         }
     }
 
@@ -1877,28 +1871,25 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
-        let et: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_events", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let ht: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let e1h: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_events WHERE timestamp > now() - INTERVAL 1 HOUR", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let h1h: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE timestamp > now() - INTERVAL 1 HOUR", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let zeek: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_events WHERE source='zeek'", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let suri: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_events WHERE source='suricata'", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
+        // 6 sequential queries → 2 parallel queries using countIf
+        let (events_row, hits_row) = tokio::try_join!(
+            self.client.query(&format!(
+                "SELECT count() as events_total, \
+                 countIf(timestamp > now() - INTERVAL 1 HOUR) as events_1h, \
+                 countIf(source='zeek') as zeek_events, \
+                 countIf(source='suricata') as suricata_events \
+                 FROM {}.ndr_events", db_name))
+                .fetch_one::<(u64, u64, u64, u64)>(),
+            self.client.query(&format!(
+                "SELECT count() as hits_total, \
+                 countIf(timestamp > now() - INTERVAL 1 HOUR) as hits_1h \
+                 FROM {}.ndr_hits", db_name))
+                .fetch_one::<(u64, u64)>()
+        )?;
         Ok(serde_json::json!({
-            "events_total": et, "hits_total": ht,
-            "events_1h": e1h, "hits_1h": h1h,
-            "zeek_events": zeek, "suricata_events": suri
+            "events_total": events_row.0, "hits_total": hits_row.0,
+            "events_1h": events_row.1,   "hits_1h": hits_row.1,
+            "zeek_events": events_row.2,  "suricata_events": events_row.3
         }))
     }
 
@@ -2031,21 +2022,19 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         &self, tenant_id: &str
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
-        let critical: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='CRITICAL' OR severity='critical'", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let high: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='HIGH' OR severity='high'", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let medium: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='MEDIUM' OR severity='medium'", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let low: u64 = self.client.query(&format!(
-            "SELECT count() FROM {}.ndr_hits WHERE severity='LOW' OR severity='low'", db_name))
-            .fetch_one::<u64>().await.unwrap_or(0);
+        // 4 sequential queries → 1 query using countIf
+        let row = self.client.query(&format!(
+            "SELECT \
+             countIf(lower(severity)='critical') as critical, \
+             countIf(lower(severity)='high') as high, \
+             countIf(lower(severity)='medium') as medium, \
+             countIf(lower(severity)='low') as low \
+             FROM {}.ndr_hits", db_name))
+            .fetch_one::<(u64, u64, u64, u64)>()
+            .await.unwrap_or((0, 0, 0, 0));
         Ok(serde_json::json!({
-            "critical":critical,"high":high,
-            "medium":medium,"low":low
+            "critical": row.0, "high": row.1,
+            "medium": row.2,   "low": row.3
         }))
     }
 
@@ -4035,8 +4024,12 @@ pub async fn get_ioc_hits(
         let db = tenant_db(tenant_id);
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
-             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
-             FROM {}.assets FINAL WHERE tenant_id = '{}' ORDER BY ip",
+             toUnixTimestamp(first_seen) as first_seen, \
+             toUnixTimestamp(last_seen) as last_seen, \
+             ip_history \
+             FROM {}.assets WHERE tenant_id = '{}' \
+             ORDER BY ip ASC, last_seen DESC \
+             LIMIT 1 BY ip",
             db, sql_escape(tenant_id)
         );
         let rows = self.client.query(&query).fetch_all::<AssetRow>().await?;
@@ -4049,7 +4042,7 @@ pub async fn get_ioc_hits(
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
-             FROM {}.assets FINAL WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
+             FROM {}.assets WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(mac)
         );
         let result = self.client.query(&query).fetch_optional::<AssetRow>().await?;
@@ -4095,7 +4088,7 @@ pub async fn get_ioc_hits(
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
-             FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}'",
+             FROM {}.assets WHERE tenant_id = '{}' AND ip = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(ip)
         );
         let asset = self.client.query(&query).fetch_optional::<AssetRow>().await?;
@@ -4141,8 +4134,9 @@ pub async fn get_ioc_hits(
 
         let query = format!(
             "SELECT interface, cidr, local_ip, gateway, sensor_id, \
-             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen \
-             FROM {}.ipam_subnets FINAL WHERE tenant_id = '{}' ORDER BY cidr",
+             toUnixTimestamp(min(first_seen)) as first_seen, toUnixTimestamp(max(last_seen)) as last_seen \
+             FROM {}.ipam_subnets WHERE tenant_id = '{}' \
+             GROUP BY interface, cidr, local_ip, gateway, sensor_id ORDER BY cidr",
             db, sql_escape(tenant_id)
         );
 
