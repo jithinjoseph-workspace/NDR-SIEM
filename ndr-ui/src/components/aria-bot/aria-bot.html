@@ -1,4 +1,4 @@
-<div class="aria-wrapper">
+<div class="aria-wrapper" *ngIf="isVisible" [style.right.px]="currentRight" [style.bottom.px]="currentBottom">
 
   <!-- ══ ALERT BANNER ══ -->
   <div class="alert-banner" *ngIf="showAlertBanner && latestAlert">
@@ -123,6 +123,7 @@
   <!-- ══ BOT CHARACTER ══ -->
   <div class="bot-wrap"
        [class.pulsing]="unreadCount > 0 && !isOpen"
+       (pointerdown)="onBotPointerDown($event)"
        (click)="toggleChat()">
 
     <canvas #lottieCanvas class="lottie-canvas" width="180" height="220"></canvas>

@@ -1,6 +1,6 @@
 import {
   Component, OnInit, OnDestroy, AfterViewInit,
-  ViewChild, ElementRef, ChangeDetectorRef
+  ViewChild, ElementRef, ChangeDetectorRef, HostListener
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -81,6 +81,17 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   showSpeech = false;
   showAlertBanner = false;
   latestAlert: AlertCard | null = null;
+  isVisible = true;
+
+  // ── Drag state ──
+  isDragging = false;
+  hasMoved = false;
+  dragStartX = 0;
+  dragStartY = 0;
+  currentRight = 24;
+  currentBottom = 24;
+  startRight = 24;
+  startBottom = 24;
 
   // ── Alert tracking ──
   criticalCount = 0;
@@ -125,6 +136,16 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   // ── LIFECYCLE ──
 
   ngOnInit() {
+    this.router.events.subscribe((e: any) => {
+      const url = e.urlAfterRedirects || e.url;
+      if (url) {
+        this.isVisible = !url.includes('/admin');
+        this.cdr.detectChanges();
+      }
+    });
+    const initUrl = this.router.url;
+    this.isVisible = !initUrl.includes('/admin');
+
     this.fetchStatus();
     this.pollSub = interval(30000).pipe(
       switchMap(() => this.httpGet('/api/aria/status'))
@@ -422,12 +443,51 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   // ── UI HELPERS ──
 
   toggleChat() {
+    if (this.hasMoved) {
+      this.hasMoved = false;
+      return;
+    }
     this.isOpen = !this.isOpen;
     if (this.isOpen) {
       this.unreadCount = 0;
       this.showSpeech = false;
       setTimeout(() => this.scrollToBottom(), 100);
     }
+  }
+
+  // ── DRAGGING ──
+
+  @HostListener('document:pointermove', ['$event'])
+  onPointerMove(event: PointerEvent) {
+    if (!this.isDragging) return;
+    const dx = event.clientX - this.dragStartX;
+    const dy = event.clientY - this.dragStartY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      this.hasMoved = true;
+    }
+    this.currentRight = this.startRight - dx;
+    this.currentBottom = this.startBottom - dy;
+    this.cdr.detectChanges();
+  }
+
+  @HostListener('document:pointerup', ['$event'])
+  onPointerUp(event: PointerEvent) {
+    if (this.isDragging) {
+      this.isDragging = false;
+    }
+  }
+
+  onBotPointerDown(event: PointerEvent) {
+    if (event.button !== 0) return;
+    this.isDragging = true;
+    this.hasMoved = false;
+    this.dragStartX = event.clientX;
+    this.dragStartY = event.clientY;
+    this.startRight = this.currentRight;
+    this.startBottom = this.currentBottom;
+    const target = event.currentTarget as HTMLElement;
+    if (target.setPointerCapture) target.setPointerCapture(event.pointerId);
+    event.preventDefault();
   }
 
   startTalking(textLen: number) {

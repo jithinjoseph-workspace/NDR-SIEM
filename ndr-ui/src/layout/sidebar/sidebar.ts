@@ -68,6 +68,7 @@ export class Sidebar implements OnInit, OnDestroy {
         { label: 'Sensors', route: '/admin', queryParams: { tab: 'sensors' }, icon: KeyRound },
         { label: 'Announcements', route: '/admin', queryParams: { tab: 'announcements' }, icon: Megaphone },
         { label: 'Telemetry', route: '/admin', queryParams: { tab: 'telemetry' }, icon: Activity },
+        { label: 'AI Providers', route: '/admin', queryParams: { tab: 'ai-providers' }, icon: Bot },
       ];
     } else if (user?.role === 'tenant_admin') {
       this.navItems = [
@@ -103,10 +104,11 @@ export class Sidebar implements OnInit, OnDestroy {
       }
     }
 
-    this.bottomItems = [
-      { label: 'Settings', route: '/settings', icon: Settings },
-      { label: 'Support', route: '/support', icon: HelpCircle },
-    ];
+    this.bottomItems = [];
+    if (!this.auth.isAdmin()) {
+      this.bottomItems.push({ label: 'Settings', route: '/settings', icon: Settings });
+    }
+    this.bottomItems.push({ label: 'Support', route: '/support', icon: HelpCircle });
   }
 
   isActive(item: any): boolean {

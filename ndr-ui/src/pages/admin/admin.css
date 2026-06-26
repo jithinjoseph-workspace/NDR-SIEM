@@ -1091,3 +1091,13 @@ code,
   font-size: 0.78rem; color: var(--color-muted);
   padding: 0.5rem 0.25rem;
 }
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

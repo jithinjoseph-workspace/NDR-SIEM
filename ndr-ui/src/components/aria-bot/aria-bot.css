@@ -322,7 +322,7 @@
   box-shadow: 0 6px 24px rgba(0,80,160,0.16);
   animation: popIn .35s cubic-bezier(.34,1.56,.64,1);
   position: relative;
-  margin-bottom: 2px;
+  margin-bottom: -15px;
 }
 .speech-bubble::after {
   content: '';
@@ -355,15 +355,15 @@
 }
 .bot-wrap:hover { transform: scale(1.06); }
 
-.lottie-canvas { display: block; width: 140px; height: 180px; }
+.lottie-canvas { display: block; width: 100px; height: 130px; }
 
 /* Talking mouth overlay */
 .talk-overlay {
-  position: absolute; bottom: 52px; left: 50%;
+  position: absolute; bottom: 37px; left: 50%;
   transform: translateX(-50%); pointer-events: none;
 }
 .talk-mouth {
-  width: 28px; height: 4px;
+  width: 20px; height: 4px;
   background: #00e5ff;
   border-radius: 0 0 14px 14px;
   filter: blur(0.5px);
