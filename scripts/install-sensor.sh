@@ -1714,17 +1714,81 @@ def extract_with_tshark(pcap_files, cid, output):
             f'communityid.id == "{cid}"',
             '-w', output, '-F', 'pcap'])
     try:
-        subprocess.run(cmd,
+        result = subprocess.run(cmd,
             capture_output=True, timeout=60)
         if (os.path.exists(output) and
                 os.path.getsize(output) >= 24):
+            out_size = os.path.getsize(output)
+            # If tshark output is suspiciously close
+            # to the source file size, the communityid
+            # filter didn't work — treat as failure so
+            # tcpdump fallback runs instead
+            src_size = sum(
+                os.path.getsize(f)
+                for f in decompressed
+                if os.path.exists(f))
+            if src_size > 0 and out_size > src_size * 0.9:
+                print(f"[UPLOADER] tshark filter "
+                      f"ineffective "
+                      f"({out_size}≈{src_size}B) "
+                      f"— trying tcpdump")
+                try: os.remove(output)
+                except: pass
+                return False
             print(f"[UPLOADER] tshark "
-                  f"{os.path.getsize(output)}B")
+                  f"{out_size}B")
             return True
     except FileNotFoundError:
         pass
     except Exception as e:
         print(f"[UPLOADER] tshark: {e}")
+    return False
+
+def extract_with_tcpdump(pcap_files, meta, output):
+    """Filter by src/dst IP + port using tcpdump BPF.
+    Works on any Linux sensor without special tshark plugins."""
+    if not pcap_files or not meta:
+        return False
+    src_ip   = meta.get('src_ip','')
+    dst_ip   = meta.get('dst_ip','')
+    src_port = meta.get('src_port','0')
+    dst_port = meta.get('dst_port','0')
+    if not src_ip or not dst_ip:
+        return False
+    tmp_dir = os.path.dirname(output)
+    decompressed = []
+    for f in pcap_files:
+        d = decompress_if_needed(f, tmp_dir)
+        if d:
+            decompressed.append(d)
+    if not decompressed:
+        return False
+    # BPF: match both directions of the flow
+    bpf = (f"(host {src_ip} and host {dst_ip} "
+           f"and port {src_port} and port {dst_port})")
+    try:
+        cmd = ['tcpdump', '-r', decompressed[0],
+               '-w', output, bpf]
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=60)
+        if (os.path.exists(output) and
+                os.path.getsize(output) >= 24):
+            sz = os.path.getsize(output)
+            src_sz = os.path.getsize(decompressed[0])
+            # Same sanity check: if output ≈ full file,
+            # filter didn't work
+            if src_sz > 0 and sz > src_sz * 0.9:
+                print(f"[UPLOADER] tcpdump filter "
+                      f"ineffective — falling back")
+                try: os.remove(output)
+                except: pass
+                return False
+            print(f"[UPLOADER] tcpdump {sz}B")
+            return True
+    except FileNotFoundError:
+        print("[UPLOADER] tcpdump not found")
+    except Exception as e:
+        print(f"[UPLOADER] tcpdump: {e}")
     return False
 
 def extract_with_mergecap(pcap_files, output):
@@ -1874,7 +1938,8 @@ if __name__ == '__main__':
         '/','_').replace(':','_')
     tmp  = "/opt/ndr-sensor/pcap-tmp"
     os.makedirs(tmp, exist_ok=True)
-    raw_out = f"{tmp}/raw_{safe}.pcap"
+    raw_out    = f"{tmp}/raw_{safe}.pcap"
+    retry_file = f"{tmp}/.retry_{safe}"
 
     try:
         print(f"[UPLOADER] Processing: "
@@ -1884,24 +1949,59 @@ if __name__ == '__main__':
             find_session_in_opensearch(cid)
 
         if not meta:
-            # Arkime hasn't indexed this session
-            # yet — exit silently so pcap_pending
-            # stays unfulfilled and retries later
-            print(f"[UPLOADER] not in Arkime "
-                  f"yet, will retry: "
-                  f"{cid[:20]}")
+            # Count local "not in Arkime" retries.
+            # Normal: Arkime is still writing the file
+            # — the pending queue retries every 30s.
+            # After 5 misses (~2.5 min), the session
+            # will never appear; report failure so the
+            # server stops retrying (retry_count → 3).
+            try:
+                attempts = int(
+                    open(retry_file).read().strip())
+            except Exception:
+                attempts = 0
+            attempts += 1
+            with open(retry_file, 'w') as f:
+                f.write(str(attempts))
+
+            if attempts >= 5:
+                print(f"[UPLOADER] giving up after "
+                      f"{attempts} misses: "
+                      f"{cid[:20]}")
+                try: os.remove(retry_file)
+                except: pass
+                report_failure(
+                    cid, url, key,
+                    f"not indexed by Arkime "
+                    f"after {attempts} retries")
+            else:
+                print(f"[UPLOADER] not in Arkime "
+                      f"yet (attempt {attempts}/5), "
+                      f"will retry: {cid[:20]}")
             sys.exit(0)
+
+        # Session found — clear retry counter
+        try: os.remove(retry_file)
+        except: pass
 
         extracted = False
         pcap_files = get_arkime_files(
             meta.get('file_ids', []))
         if pcap_files:
+            # 1. tshark with communityid filter
             extracted = extract_with_tshark(
                 pcap_files, cid, raw_out)
+            # 2. tcpdump BPF filter (no plugin needed)
             if not extracted:
-                extracted = \
-                    extract_with_mergecap(
-                        pcap_files, raw_out)
+                extracted = extract_with_tcpdump(
+                    pcap_files, meta, raw_out)
+            # 3. mergecap (multi-file merge)
+            if not extracted:
+                extracted = extract_with_mergecap(
+                    pcap_files, raw_out)
+            # 4. raw copy — last resort, uploads full
+            # Arkime PCAP rotation file. Acceptable for
+            # rare cases; server stores it per-session.
             if not extracted:
                 extracted = extract_raw_copy(
                     pcap_files, raw_out)

@@ -549,3 +549,176 @@ CREATE TABLE IF NOT EXISTS ndr.ipam_subnets ON CLUSTER ndr_cluster
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ipam_subnets', '{replica}', last_seen)
 ORDER BY (tenant_id, cidr);
+
+-- ── Threat Prediction Engine tables ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS ndr.threat_intel ON CLUSTER ndr_cluster
+(
+    id           String   DEFAULT generateUUIDv4(),
+    source       String,
+    attack_type  String,
+    severity     String   DEFAULT 'MEDIUM',
+    ioc_type     String   DEFAULT '',
+    ioc_value    String   DEFAULT '',
+    description  String   DEFAULT '',
+    raw          String   DEFAULT '{}',
+    collected_at DateTime DEFAULT now(),
+    expires_at   DateTime DEFAULT now() + INTERVAL 7 DAY
+)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/threat_intel', '{replica}')
+ORDER BY (attack_type, collected_at)
+TTL collected_at + INTERVAL 30 DAY;
+
+CREATE TABLE IF NOT EXISTS ndr.exposure_profile ON CLUSTER ndr_cluster
+(
+    id               String   DEFAULT generateUUIDv4(),
+    tenant_id        String,
+    snapshot_at      DateTime DEFAULT now(),
+    rdp_exposed      UInt8    DEFAULT 0,
+    smb_exposed      UInt8    DEFAULT 0,
+    ssh_exposed      UInt8    DEFAULT 0,
+    http_exposed     UInt8    DEFAULT 0,
+    dns_anomalies    UInt64   DEFAULT 0,
+    port_scans       UInt64   DEFAULT 0,
+    failed_logins    UInt64   DEFAULT 0,
+    lateral_movement UInt64   DEFAULT 0,
+    c2_beacons       UInt64   DEFAULT 0,
+    data_exfil_bytes UInt64   DEFAULT 0,
+    brute_force_attempts UInt64 DEFAULT 0,
+    unique_src_ips   UInt64   DEFAULT 0,
+    raw              String   DEFAULT '{}'
+)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/exposure_profile', '{replica}')
+ORDER BY (tenant_id, snapshot_at)
+TTL snapshot_at + INTERVAL 90 DAY;
+
+CREATE TABLE IF NOT EXISTS ndr.threat_predictions ON CLUSTER ndr_cluster
+(
+    id                  String   DEFAULT generateUUIDv4(),
+    tenant_id           String,
+    predicted_at        DateTime DEFAULT now(),
+    attack_type         String,
+    probability         Float32,
+    confidence          Float32,
+    trend               String,
+    trend_delta         Float32,
+    intel_signal_count  UInt32   DEFAULT 0,
+    exposure_score      Float32  DEFAULT 0.0,
+    internal_hit_count  UInt32   DEFAULT 0,
+    explanation         String   DEFAULT '',
+    recommendations     String   DEFAULT '[]',
+    aria_briefing       String   DEFAULT '',
+    alert_level         String   DEFAULT 'info',
+    notified            UInt8    DEFAULT 0
+)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/threat_predictions', '{replica}')
+ORDER BY (tenant_id, predicted_at, attack_type)
+TTL predicted_at + INTERVAL 90 DAY;
+
+CREATE TABLE IF NOT EXISTS ndr.ioc_watchlist ON CLUSTER ndr_cluster
+(
+    id          String   DEFAULT generateUUIDv4(),
+    tenant_id   String,
+    ioc_type    String,
+    ioc_value   String,
+    source      String,
+    attack_type String,
+    added_at    DateTime DEFAULT now(),
+    expires_at  DateTime DEFAULT now() + INTERVAL 7 DAY,
+    active      UInt8    DEFAULT 1
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ioc_watchlist', '{replica}', added_at)
+ORDER BY (tenant_id, ioc_value)
+TTL expires_at;
+
+-- ── Pattern Matching Engine ───────────────────────────────────────────────────
+
+ALTER TABLE ndr.threat_intel ON CLUSTER ndr_cluster
+    ADD COLUMN IF NOT EXISTS threat_pattern String DEFAULT '';
+
+ALTER TABLE ndr.threat_predictions ON CLUSTER ndr_cluster
+    ADD COLUMN IF NOT EXISTS ai_model String DEFAULT '';
+
+ALTER TABLE ndr.threat_predictions ON CLUSTER ndr_cluster
+    ADD COLUMN IF NOT EXISTS source String DEFAULT 'predictor';
+
+-- MITRE ATT&CK technique definitions
+CREATE TABLE IF NOT EXISTS ndr.attack_patterns ON CLUSTER ndr_cluster
+(
+    technique_id     String,
+    technique_name   String,
+    tactic           String   DEFAULT '',
+    description      String   DEFAULT '',
+    detection        String   DEFAULT '',
+    platforms        String   DEFAULT '',
+    kill_chain_phase UInt8    DEFAULT 0,
+    severity         String   DEFAULT 'MEDIUM',
+    updated_at       DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/attack_patterns', '{replica}', updated_at)
+ORDER BY technique_id;
+
+-- Ordered attack chain definitions (ransomware, APT, credential, etc.)
+CREATE TABLE IF NOT EXISTS ndr.attack_chains ON CLUSTER ndr_cluster
+(
+    chain_id               String,
+    chain_name             String,
+    threat_actor           String   DEFAULT '',
+    attack_type            String,
+    description            String   DEFAULT '',
+    severity               String   DEFAULT 'HIGH',
+    steps                  String   DEFAULT '[]',
+    typical_duration_hours UInt8    DEFAULT 24,
+    source                 String   DEFAULT 'builtin',
+    created_at             DateTime DEFAULT now(),
+    mitre_group_id         String   DEFAULT '',
+    mitre_campaign_id      String   DEFAULT '',
+    is_dynamic             UInt8    DEFAULT 0
+)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/attack_chains', '{replica}')
+ORDER BY (attack_type, chain_id);
+
+-- Live pattern match detections — when your traffic follows a known chain
+CREATE TABLE IF NOT EXISTS ndr.pattern_matches ON CLUSTER ndr_cluster
+(
+    id                  String   DEFAULT generateUUIDv4(),
+    tenant_id           String,
+    chain_id            String,
+    chain_name          String,
+    attack_type         String,
+    steps_observed      UInt8    DEFAULT 0,
+    steps_total         UInt8    DEFAULT 0,
+    completion_pct      Float32  DEFAULT 0,
+    evidence            String   DEFAULT '[]',
+    next_step           String   DEFAULT '',
+    predicted_eta_hours Float32  DEFAULT 0,
+    src_ip              String   DEFAULT '',
+    severity            String   DEFAULT 'HIGH',
+    confidence          Float32  DEFAULT 0,
+    first_seen          DateTime DEFAULT now(),
+    last_updated        DateTime DEFAULT now(),
+    status              String   DEFAULT 'active',
+    ai_assessment       String   DEFAULT '',
+    recommendations     String   DEFAULT '[]'
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/pattern_matches', '{replica}', last_updated)
+ORDER BY (tenant_id, chain_id, src_ip)
+TTL first_seen + INTERVAL 7 DAY;
+
+-- AI provider registry — multiple providers per tenant, tried in priority order
+CREATE TABLE IF NOT EXISTS ndr.ai_providers ON CLUSTER ndr_cluster
+(
+    name          String,
+    provider_type String   DEFAULT 'custom',
+    api_key       String   DEFAULT '',
+    model         String   DEFAULT '',
+    base_url      String   DEFAULT '',
+    endpoint_path String   DEFAULT '/v1/chat/completions',
+    msg_format    String   DEFAULT 'openai',
+    use_case      String   DEFAULT 'all',
+    priority      UInt8    DEFAULT 10,
+    enabled       UInt8    DEFAULT 1,
+    created_at    DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ai_providers', '{replica}', created_at)
+ORDER BY name;

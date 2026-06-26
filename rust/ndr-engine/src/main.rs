@@ -15,6 +15,8 @@ mod evidence;
 mod ai;
 pub mod soar;
 mod monitor;
+mod threat;
+mod leader;
 
 use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
@@ -71,7 +73,7 @@ async fn main() {
 
     let redis_url = std::env::var("REDIS_URL")
         .unwrap_or_else(|_| "redis://localhost:6379".to_string());
-    let redis_client = redis::Client::open(redis_url)
+    let redis_client = redis::Client::open(redis_url.clone())
         .expect("Redis connection failed");
     // Shared multiplexed connection for publishing — avoids opening a new
     // TCP connection on every event (was causing per-event latency spikes)
@@ -165,6 +167,9 @@ async fn main() {
         ch.migrate_ipam_subnets().await;
         ch
     };
+
+    // ── Background: Threat tasks with Redis leader election ───────────────
+    let election = threat::spawn_all(ch_storage_arc.clone(), &redis_url);
 
     // Start sensor key cache refresh loop (after ch_storage is ready)
     auth::sensor_cache::spawn_refresh_loop(
@@ -409,6 +414,9 @@ async fn main() {
         .route("/api/soar/status",  get(api::get_soar_status))
         .route("/api/settings", get(api::get_settings).post(api::update_settings))
         .route("/api/settings/ai", get(api::get_ai_config).post(api::update_ai_config))
+        .route("/api/settings/ai/providers", get(api::list_ai_providers).post(api::save_ai_provider))
+        .route("/api/settings/ai/providers/test", post(api::test_ai_provider))
+        .route("/api/settings/ai/providers/:name", delete(api::delete_ai_provider))
         .route("/api/assets",     get(api::get_assets))
         .route("/api/assets/:ip", get(api::get_asset_by_ip).put(api::update_asset_name))
         .route("/api/ipam/subnets", get(api::get_ipam_subnets))
@@ -493,10 +501,15 @@ async fn main() {
  .route("/api/aria/chat",   post(api::aria_chat))
 .route("/api/aria/status", get(api::aria_status))
 .route("/api/ai-activity", get(api::get_ai_activity))
+.route("/api/threat/predictions",         get(api::get_threat_predictions))
+.route("/api/threat/predictions/history", get(api::get_threat_predictions_history))
+.route("/api/threat/exposure",            get(api::get_threat_exposure))
+.route("/api/threat/patterns",            get(api::get_threat_patterns))
+.route("/api/admin/leader-status",        get(api::get_leader_status))
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB for PCAP uploads
+        .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB for PCAP uploads
         .layer(RequestDecompressionLayer::new())
         .layer(cors);
 
@@ -556,9 +569,20 @@ async fn main() {
         });
     }
 
-    // ── THIS MUST BE LAST — blocks forever ───────────────────────────────
+    // ── Start server + graceful shutdown with leader release ─────────────
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let server   = axum::serve(listener, app);
+
+    tokio::select! {
+        res = server => {
+            if let Err(e) = res { tracing::error!("Server error: {}", e); }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Shutdown signal received — releasing leadership...");
+            election.release().await;
+            tracing::info!("Leadership released. Shutting down.");
+        }
+    }
 }
 
 /// Delete PCAP files older than 30 days from disk and remove their pcap_sessions rows.

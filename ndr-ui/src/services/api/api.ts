@@ -238,6 +238,22 @@ export class Api {
     return this.http.post(`${this.baseUrl}/settings/ai`, data);
   }
 
+  listAiProviders(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/settings/ai/providers`);
+  }
+
+  saveAiProvider(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings/ai/providers`, data);
+  }
+
+  deleteAiProvider(name: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/settings/ai/providers/${encodeURIComponent(name)}`);
+  }
+
+  testAiProvider(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings/ai/providers/test`, data);
+  }
+
   getAssets(): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/assets`);
   }
@@ -498,5 +514,13 @@ export class Api {
 
   updateIntegration(id: string, data: any): Observable<any> {
     return this.http.put(`${this.baseUrl}/soar/integrations/${id}`, data);
+  }
+
+  getThreatPredictions(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat/predictions`);
+  }
+
+  getThreatExposure(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat/exposure`);
   }
 }

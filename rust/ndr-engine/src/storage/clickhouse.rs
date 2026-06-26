@@ -1707,6 +1707,94 @@ pub async fn get_settings(&self) -> anyhow::Result<serde_json::Value> {
     self.get_settings_by_tenant("default").await
 }
 
+// ── AI Provider registry ───────────────────────────────────────────────────
+
+fn _esc_ai(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Load enabled providers for a use_case ('threat'|'chat'), sorted by priority.
+pub async fn get_ai_providers(&self, use_case: &str) -> anyhow::Result<Vec<crate::ai::provider::AiProvider>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row {
+        name: String, provider_type: String, api_key: String,
+        model: String, base_url: String, endpoint_path: String,
+        msg_format: String, priority: u8,
+    }
+    let rows = self.client.query(&format!(
+        "SELECT name, provider_type, api_key, model, base_url, endpoint_path, \
+         msg_format, priority \
+         FROM ndr.ai_providers FINAL \
+         WHERE enabled = 1 AND (use_case = 'all' OR use_case = '{}') \
+         ORDER BY priority ASC LIMIT 10",
+        Self::_esc_ai(use_case)
+    )).fetch_all::<Row>().await.unwrap_or_default();
+
+    Ok(rows.into_iter().map(|r| crate::ai::provider::AiProvider {
+        name: r.name, provider_type: r.provider_type, api_key: r.api_key,
+        model: r.model, base_url: r.base_url, endpoint_path: r.endpoint_path,
+        msg_format: r.msg_format, priority: r.priority,
+    }).collect())
+}
+
+/// List all providers for the settings UI (api_key masked).
+pub async fn list_ai_providers(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row {
+        name: String, provider_type: String, model: String,
+        base_url: String, use_case: String, priority: u8,
+        enabled: u8, key_set: u8,
+    }
+    let rows = self.client.query(
+        "SELECT name, provider_type, model, base_url, use_case, priority, enabled, \
+         if(length(api_key) > 0, 1, 0) as key_set \
+         FROM ndr.ai_providers FINAL ORDER BY priority ASC"
+    ).fetch_all::<Row>().await.unwrap_or_default();
+
+    Ok(rows.into_iter().map(|r| serde_json::json!({
+        "name": r.name, "provider_type": r.provider_type, "model": r.model,
+        "base_url": r.base_url, "use_case": r.use_case, "priority": r.priority,
+        "enabled": r.enabled == 1, "key_set": r.key_set == 1,
+    })).collect())
+}
+
+/// Upsert a provider (ReplacingMergeTree deduplicates by name).
+pub async fn save_ai_provider(
+    &self, name: &str, provider_type: &str, api_key: &str,
+    model: &str, base_url: &str, endpoint_path: &str,
+    msg_format: &str, use_case: &str, priority: u8, enabled: bool,
+) -> anyhow::Result<()> {
+    self.client.query(&format!(
+        "INSERT INTO ndr.ai_providers \
+         (name,provider_type,api_key,model,base_url,endpoint_path,msg_format,use_case,priority,enabled) \
+         VALUES ('{}','{}','{}','{}','{}','{}','{}','{}',{},{})",
+        Self::_esc_ai(name), Self::_esc_ai(provider_type), Self::_esc_ai(api_key), Self::_esc_ai(model),
+        Self::_esc_ai(base_url), Self::_esc_ai(endpoint_path), Self::_esc_ai(msg_format),
+        Self::_esc_ai(use_case), priority, if enabled { 1 } else { 0 }
+    )).execute().await?;
+    Ok(())
+}
+
+/// Hard-delete a provider by name.
+pub async fn delete_ai_provider(&self, name: &str) -> anyhow::Result<()> {
+    self.client.query(&format!(
+        "ALTER TABLE ndr.ai_providers DELETE WHERE name = '{}'", Self::_esc_ai(name)
+    )).execute().await?;
+    Ok(())
+}
+
+/// Get the raw API key for an existing provider (used when updating without re-entering key).
+pub async fn get_ai_provider_key(&self, name: &str) -> anyhow::Result<String> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row { api_key: String }
+    let rows = self.client.query(&format!(
+        "SELECT api_key FROM ndr.ai_providers FINAL WHERE name = '{}' LIMIT 1", Self::_esc_ai(name)
+    )).fetch_all::<Row>().await.unwrap_or_default();
+    Ok(rows.into_iter().next().map(|r| r.api_key).unwrap_or_default())
+}
+
+// ── Legacy single-config helpers ───────────────────────────────────────────
+
 /// Returns full AiConfig built from tenant settings.
 pub async fn get_ai_config_full(&self, tenant_id: &str) -> crate::ai::AiConfig {
     let settings = self.get_settings_by_tenant(tenant_id).await
@@ -1969,6 +2057,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 community_id, src_ip, dst_ip, score, severity, \
                 tags, sigma_hits, threat_intel, src_country, dst_country \
              FROM {}.ndr_hits \
+             WHERE community_id LIKE '1:%' \
              ORDER BY timestamp DESC LIMIT {}", db_name, limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
@@ -2718,17 +2807,22 @@ pub async fn queue_pcap_request(
     tenant_id: &str,
     community_id: &str,
 ) -> anyhow::Result<()> {
+    // Only valid network community IDs (format: "1:<base64>=")
+    if !community_id.starts_with("1:") {
+        return Ok(());
+    }
+
     let db = tenant_db(tenant_id);
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct CntRow { cnt: u64 }
     let rows = self.client.query(&format!(
-        "SELECT count() as cnt FROM {}.pcap_pending \
+        "SELECT count() as cnt FROM {}.pcap_pending FINAL \
          WHERE community_id = '{}' AND tenant_id = '{}' \
          AND requested_at > now() - INTERVAL 24 HOUR",
         db, sql_escape(community_id), sql_escape(tenant_id)
     )).fetch_all::<CntRow>().await.unwrap_or_default();
     if rows.first().map(|r| r.cnt).unwrap_or(0) > 0 {
-        return Ok(()); // already queued — skip duplicate
+        return Ok(());
     }
 
     self.client
@@ -2766,13 +2860,18 @@ pub async fn mark_pcap_fulfilled(
     tenant_id: &str,
     community_id: &str,
 ) -> anyhow::Result<()> {
+    // INSERT a new row with fulfilled=1 and requested_at=now().
+    // ReplacingMergeTree(requested_at) keeps the row with the largest
+    // requested_at — this row wins over the original request row, so
+    // FINAL queries immediately see fulfilled=1 without waiting for
+    // async ALTER TABLE mutations to complete.
     let db = tenant_db(tenant_id);
     self.client
         .query(&format!(
-            "ALTER TABLE {}.pcap_pending \
-             UPDATE fulfilled = 1, fulfilled_at = now() \
-             WHERE tenant_id = '{}' AND community_id = '{}'",
-            db, sql_escape(tenant_id), sql_escape(community_id)
+            "INSERT INTO {}.pcap_pending \
+             (community_id, tenant_id, requested_at, fulfilled, fulfilled_at) \
+             VALUES ('{}', '{}', now(), 1, now())",
+            db, sql_escape(community_id), sql_escape(tenant_id)
         ))
         .execute()
         .await?;
@@ -3685,21 +3784,69 @@ pub async fn get_all_ai_annotations(
     tenant_id: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let db = tenant_db(tenant_id);
+    // One row per community_id — most recent comprehensive analysis
     let rows = self.client.query(&format!(
-        "SELECT ea.id, ea.bundle_id, ea.community_id, ea.author, ea.note,
-         toString(ea.created_at) as created_at,
-         eb.severity, eb.src_ip, eb.dst_ip
+        "SELECT
+             argMax(ea.id,         ea.created_at) as id,
+             argMax(ea.bundle_id,  ea.created_at) as bundle_id,
+             ea.community_id,
+             argMax(ea.note,       ea.created_at) as analysis,
+             toString(max(ea.created_at))          as created_at,
+             argMax(if(eb.severity != '' AND eb.severity != 'UNKNOWN', eb.severity, ''),
+                    ea.created_at)                 as severity,
+             argMax(if(eb.src_ip  != '' AND eb.src_ip  != 'UNKNOWN', eb.src_ip,  ''),
+                    ea.created_at)                 as src_ip,
+             argMax(if(eb.dst_ip  != '' AND eb.dst_ip  != 'UNKNOWN', eb.dst_ip,  ''),
+                    ea.created_at)                 as dst_ip
          FROM {db}.evidence_annotations ea
          LEFT JOIN {db}.evidence_bundles eb ON ea.bundle_id = eb.id
          WHERE ea.tag = 'ai_analysis'
-         ORDER BY ea.created_at DESC LIMIT 200",
+         GROUP BY ea.community_id
+         ORDER BY max(ea.created_at) DESC
+         LIMIT 50",
         db = db
-    )).fetch_all::<(String,String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
+    )).fetch_all::<(String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
     Ok(rows.iter().map(|r| serde_json::json!({
         "id": r.0, "bundle_id": r.1, "community_id": r.2,
-        "author": r.3, "analysis": r.4, "created_at": r.5,
-        "severity": r.6, "src_ip": r.7, "dst_ip": r.8
+        "analysis": r.3, "created_at": r.4,
+        "severity": r.5, "src_ip": r.6, "dst_ip": r.7
     })).collect())
+}
+
+/// Returns all evidence bundles for a given community_id (used for grouped AI analysis).
+pub async fn get_bundles_for_cid(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT id, severity, src_ip, dst_ip, alert_id,
+         toString(captured_at) as captured_at
+         FROM {}.evidence_bundles FINAL
+         WHERE community_id = '{}'
+         ORDER BY captured_at DESC LIMIT 30",
+        db, community_id
+    )).fetch_all::<(String,String,String,String,String,String)>().await.unwrap_or_default();
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "id": r.0, "severity": r.1, "src_ip": r.2,
+        "dst_ip": r.3, "alert_id": r.4, "captured_at": r.5
+    })).collect())
+}
+
+/// Deletes old ai_analysis annotations for a community_id before saving a fresh one.
+pub async fn delete_ai_annotations_for_cid(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "ALTER TABLE {}.evidence_annotations DELETE
+         WHERE community_id = '{}' AND tag = 'ai_analysis'",
+        db, community_id
+    )).execute().await?;
+    Ok(())
 }
 
 // ---- SHARED IOCs ----
@@ -3817,9 +3964,10 @@ pub async fn get_related_hits_by_ip(
          severity, rule_name
          FROM {}.ndr_hits
          WHERE src_ip = '{}'
+         AND community_id LIKE '1:%'
          AND timestamp BETWEEN
-             toDateTime('{}') - INTERVAL {} MINUTE
-             AND toDateTime('{}') + INTERVAL {} MINUTE
+             parseDateTimeBestEffort('{}') - INTERVAL {} MINUTE
+             AND parseDateTimeBestEffort('{}') + INTERVAL {} MINUTE
          ORDER BY timestamp ASC
          LIMIT 20",
         db, src_ip, around_time, window_minutes,
@@ -3829,6 +3977,32 @@ pub async fn get_related_hits_by_ip(
     Ok(rows.iter().map(|r| serde_json::json!({
         "community_id": r.0, "src_ip": r.1, "dst_ip": r.2,
         "timestamp": r.3, "severity": r.4, "rule_name": r.5
+    })).collect())
+}
+
+pub async fn get_rule_hits_by_community_id(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    let rows = self.client.query(&format!(
+        "SELECT rule_name, severity,
+         formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp,
+         src_ip, dst_ip
+         FROM {}.ndr_hits
+         WHERE community_id = '{}'
+         ORDER BY timestamp DESC
+         LIMIT 50",
+        db, sql_escape(community_id)
+    )).fetch_all::<(String,String,String,String,String)>()
+    .await?;
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "rule_name": r.0,
+        "severity":  r.1,
+        "timestamp": r.2,
+        "src_ip":    r.3,
+        "dst_ip":    r.4,
     })).collect())
 }
 
@@ -3891,6 +4065,80 @@ pub async fn get_recent_hits_for_aria(
     })).collect())
 }
 
+/// Returns the latest CRITICAL-only hit — used by aria_status to drive proactive bot alerts.
+pub async fn get_latest_critical_hit_for_aria(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct HitRow {
+        community_id: String,
+        src_ip:       String,
+        dst_ip:       String,
+        rule_name:    String,
+        score:        f64,
+        timestamp:    String,
+    }
+    let rows = self.client.query(&format!(
+        "SELECT community_id, src_ip, dst_ip, rule_name, score,
+         formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
+         FROM {db}.ndr_hits
+         WHERE severity = 'CRITICAL'
+         ORDER BY timestamp DESC LIMIT 1",
+        db = db
+    )).fetch_all::<HitRow>().await?;
+
+    Ok(rows.first().map(|r| serde_json::json!({
+        "community_id": r.community_id,
+        "src_ip":       r.src_ip,
+        "dst_ip":       r.dst_ip,
+        "severity":     "CRITICAL",
+        "rule_name":    r.rule_name,
+        "score":        r.score,
+        "timestamp":    r.timestamp
+    })))
+}
+
+/// Returns the latest rising CRITICAL/HIGH prediction — used by aria_status for proactive prediction alerts.
+pub async fn get_rising_critical_prediction(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row {
+        id:          String,
+        attack_type: String,
+        probability: f32,
+        alert_level: String,
+        trend:       String,
+        explanation: String,
+        predicted_at: String,
+    }
+    let rows = self.client.query(&format!(
+        "SELECT id, attack_type, probability, alert_level, trend, explanation,
+         toString(predicted_at) as predicted_at
+         FROM {db}.threat_predictions
+         WHERE trend = 'rising'
+         AND alert_level IN ('critical', 'high')
+         AND predicted_at >= now() - INTERVAL 7 HOUR
+         ORDER BY probability DESC, predicted_at DESC
+         LIMIT 1",
+        db = db
+    )).fetch_all::<Row>().await?;
+
+    Ok(rows.first().map(|r| serde_json::json!({
+        "id":           r.id,
+        "attack_type":  r.attack_type,
+        "probability":  r.probability,
+        "alert_level":  r.alert_level,
+        "trend":        r.trend,
+        "explanation":  r.explanation,
+        "predicted_at": r.predicted_at,
+    })))
+}
+
 /// Count hits by severity last 24h
 pub async fn count_hits_by_severity_aria(
     &self,
@@ -3924,6 +4172,176 @@ pub async fn count_evidence_bundles_aria(
         db
     )).fetch_all::<CountRow>().await?;
     Ok(rows.first().map(|r| r.cnt).unwrap_or(0))
+}
+
+/// Fetches real tenant data relevant to the user's question for ARIA chat.
+/// Detects keywords in the message and queries matching data from the tenant DB.
+/// Returns a formatted string injected into the system prompt — no hallucination possible.
+pub async fn fetch_aria_context(
+    &self,
+    tenant_id: &str,
+    user_message: &str,
+) -> String {
+    let db = tenant_db(tenant_id);
+    let msg = user_message.to_lowercase();
+    let mut ctx = String::new();
+
+    // ── Always: recent 15 hits with full detail ──────────────────────────────
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct HitRow {
+        community_id: String,
+        src_ip:       String,
+        dst_ip:       String,
+        severity:     String,
+        score:        f64,
+        tags:         String,
+        rule_name:    String,
+        timestamp:    String,
+    }
+    if let Ok(hits) = self.client.query(&format!(
+        "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+         formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
+         FROM {db}.ndr_hits
+         ORDER BY timestamp DESC LIMIT 15",
+        db = db
+    )).fetch_all::<HitRow>().await {
+        ctx.push_str("=== RECENT ALERTS (last 15, newest first) ===\n");
+        if hits.is_empty() {
+            ctx.push_str("No alerts found.\n");
+        }
+        for h in &hits {
+            ctx.push_str(&format!(
+                "[{}] {} {} -> {} score={:.0} tags={} rule={}\n",
+                h.timestamp, h.severity, h.src_ip, h.dst_ip,
+                h.score, h.tags, h.rule_name
+            ));
+        }
+        ctx.push('\n');
+    }
+
+    // ── IP-specific: if user mentions an IP ─────────────────────────────────
+    let ip_re = regex::Regex::new(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b").unwrap();
+    if let Some(cap) = ip_re.captures(&msg) {
+        let ip = cap[1].to_string();
+        if let Ok(ip_hits) = self.client.query(&format!(
+            "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+             formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
+             FROM {db}.ndr_hits
+             WHERE src_ip='{ip}' OR dst_ip='{ip}'
+             ORDER BY timestamp DESC LIMIT 20",
+            db = db, ip = ip
+        )).fetch_all::<HitRow>().await {
+            ctx.push_str(&format!("=== ALERTS INVOLVING IP {} ===\n", ip));
+            if ip_hits.is_empty() {
+                ctx.push_str(&format!("No alerts found for IP {}.\n", ip));
+            }
+            for h in &ip_hits {
+                ctx.push_str(&format!(
+                    "[{}] {} {} -> {} score={:.0} tags={} rule={}\n",
+                    h.timestamp, h.severity, h.src_ip, h.dst_ip,
+                    h.score, h.tags, h.rule_name
+                ));
+            }
+            ctx.push('\n');
+        }
+    }
+
+    // ── Lateral movement ────────────────────────────────────────────────────
+    if msg.contains("lateral") || msg.contains("spread") || msg.contains("movement") {
+        if let Ok(lat) = self.client.query(&format!(
+            "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+             formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
+             FROM {db}.ndr_hits
+             WHERE lower(tags) LIKE '%lateral%' OR lower(rule_name) LIKE '%lateral%'
+             ORDER BY timestamp DESC LIMIT 10",
+            db = db
+        )).fetch_all::<HitRow>().await {
+            ctx.push_str("=== LATERAL MOVEMENT ALERTS ===\n");
+            if lat.is_empty() {
+                ctx.push_str("No lateral movement alerts found in this tenant's data.\n");
+            }
+            for h in &lat {
+                ctx.push_str(&format!(
+                    "[{}] {} {} -> {} rule={}\n",
+                    h.timestamp, h.severity, h.src_ip, h.dst_ip, h.rule_name
+                ));
+            }
+            ctx.push('\n');
+        }
+    }
+
+    // ── Evidence bundles ────────────────────────────────────────────────────
+    if msg.contains("evidence") || msg.contains("bundle") || msg.contains("pcap") {
+        if let Ok(bundles) = self.client.query(&format!(
+            "SELECT id, community_id, src_ip, dst_ip, severity,
+             formatDateTime(captured_at, '%Y-%m-%dT%H:%i:%SZ') as captured_at
+             FROM {db}.evidence_bundles FINAL
+             ORDER BY captured_at DESC LIMIT 10",
+            db = db
+        )).fetch_all::<(String,String,String,String,String,String)>().await {
+            ctx.push_str("=== EVIDENCE BUNDLES ===\n");
+            if bundles.is_empty() {
+                ctx.push_str("No evidence bundles found.\n");
+            }
+            for b in &bundles {
+                ctx.push_str(&format!(
+                    "[{}] {} {} -> {} bundle_id={}\n",
+                    b.5, b.4, b.2, b.3, b.0
+                ));
+            }
+            ctx.push('\n');
+        }
+    }
+
+    // ── Suppression decisions ────────────────────────────────────────────────
+    if msg.contains("suppress") || msg.contains("false positive") || msg.contains("whitelist") {
+        if let Ok(sups) = self.client.query(&format!(
+            "SELECT signature_name, suppress_type, suppress_ip, src_ip, dst_ip, ai_confidence,
+             toString(created_at) as created_at
+             FROM {db}.ai_suppressions FINAL
+             ORDER BY created_at DESC LIMIT 10",
+            db = db
+        )).fetch_all::<(String,String,String,String,String,u8,String)>().await {
+            ctx.push_str("=== SUPPRESSION DECISIONS ===\n");
+            if sups.is_empty() {
+                ctx.push_str("No suppression decisions found.\n");
+            }
+            for s in &sups {
+                ctx.push_str(&format!(
+                    "[{}] {} suppress_type={} target={} confidence={}%\n",
+                    s.6, s.0, s.1, s.2, s.5
+                ));
+            }
+            ctx.push('\n');
+        }
+    }
+
+    // ── Critical/High detail on demand ──────────────────────────────────────
+    if msg.contains("critical") || msg.contains("high") || msg.contains("severe") {
+        let sev = if msg.contains("critical") { "CRITICAL" } else { "HIGH" };
+        if let Ok(sev_hits) = self.client.query(&format!(
+            "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+             formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
+             FROM {db}.ndr_hits
+             WHERE severity='{sev}' AND timestamp >= now() - INTERVAL 24 HOUR
+             ORDER BY timestamp DESC LIMIT 10",
+            db = db, sev = sev
+        )).fetch_all::<HitRow>().await {
+            ctx.push_str(&format!("=== {} ALERTS (last 24h) ===\n", sev));
+            if sev_hits.is_empty() {
+                ctx.push_str(&format!("No {} alerts in the last 24 hours.\n", sev));
+            }
+            for h in &sev_hits {
+                ctx.push_str(&format!(
+                    "[{}] {} -> {} score={:.0} rule={}\n",
+                    h.timestamp, h.src_ip, h.dst_ip, h.score, h.rule_name
+                ));
+            }
+            ctx.push('\n');
+        }
+    }
+
+    ctx
 }
 
 /// Write a permanent IOC hit record — immutable, never updated or deleted.

@@ -157,3 +157,78 @@
 }
 .status-badge.active   { background: #1a2e1a; color: #4ade80; }
 .status-badge.inactive { background: #2e2a1a; color: #888; }
+
+/* ── Threat Predictions ─────────────────────────────────────── */
+.predictions-grid {
+  display: flex; flex-direction: column; gap: 0.75rem;
+}
+.prediction-card {
+  background: var(--card-bg, #161b22);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.prediction-card:hover { border-color: var(--accent, #6366f1); }
+
+.pred-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+}
+.pred-title {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+}
+.pred-icon { color: var(--accent, #6366f1); flex-shrink: 0; }
+.pred-attack-type { font-weight: 600; font-size: 0.95rem; text-transform: capitalize; }
+.pred-right { display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted, #888); font-size: 0.8rem; white-space: nowrap; }
+.pred-time { font-size: 0.78rem; }
+
+.alert-badge {
+  padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700;
+}
+.alert-critical { background: #3b0f0f; color: #f87171; }
+.alert-high     { background: #2d1b00; color: #fb923c; }
+.alert-medium   { background: #2d2200; color: #fbbf24; }
+.alert-info     { background: #1a2035; color: #818cf8; }
+
+.prob-row {
+  display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem;
+}
+.prob-label { font-size: 0.78rem; color: var(--text-muted, #888); white-space: nowrap; }
+.prob-bar-track {
+  flex: 1; height: 6px; background: var(--border, #30363d); border-radius: 3px; overflow: hidden;
+}
+.prob-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.prob-pct { font-size: 0.85rem; font-weight: 700; white-space: nowrap; }
+
+.trend-chip {
+  display: flex; align-items: center; gap: 0.2rem;
+  font-size: 0.72rem; padding: 0.15rem 0.45rem; border-radius: 4px; white-space: nowrap;
+}
+.trend-up     { background: #1f2d1f; color: #f87171; }
+.trend-down   { background: #1a2535; color: #60a5fa; }
+.trend-stable { background: #1e1e1e; color: #888; }
+
+.pred-detail {
+  margin-top: 1rem; padding-top: 1rem;
+  border-top: 1px solid var(--border, #30363d);
+  display: flex; flex-direction: column; gap: 0.75rem;
+}
+.pred-section-label {
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em;
+  color: var(--text-muted, #888); text-transform: uppercase; margin-bottom: 0.35rem;
+}
+.pred-briefing {
+  margin: 0; font-size: 0.88rem; line-height: 1.55; color: var(--text, #ccc);
+}
+.pred-recs {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem;
+}
+.pred-recs li {
+  display: flex; align-items: flex-start; gap: 0.4rem;
+  font-size: 0.85rem; color: var(--text, #ccc);
+}
+.rec-icon { color: #4ade80; flex-shrink: 0; margin-top: 0.15rem; }
+.pred-meta {
+  display: flex; gap: 1.5rem; font-size: 0.75rem; color: var(--text-muted, #888);
+}

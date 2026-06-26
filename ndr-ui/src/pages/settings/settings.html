@@ -166,101 +166,140 @@
       </aside>
     </div>
 
-    <!-- AI Configuration — super_admin only -->
-    <div *ngIf="isSuperAdmin" class="ai-config-section">
-      <div class="ai-config-header">
+    <!-- AI Providers — super_admin only -->
+    <div *ngIf="isSuperAdmin" class="ai-providers-section">
+      <div class="ai-providers-header">
         <div class="panel-icon ai-icon">
           <lucide-icon [name]="BotIcon" class="w-5 h-5"></lucide-icon>
         </div>
         <div>
-          <h3>AI Configuration</h3>
-          <p>Configure the AI provider ARIA uses for threat analysis and chat. Only visible to super admins.</p>
+          <h3>AI Providers</h3>
+          <p>Add multiple providers — tried in priority order. Falls back to env vars (GROQ_API_KEY → OPENAI_API_KEY) if all fail.</p>
+        </div>
+        <button class="add-provider-btn" (click)="showAddForm = !showAddForm">
+          <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+          Add Provider
+        </button>
+      </div>
+
+      <!-- Feedback -->
+      <div *ngIf="providerMessage" class="feedback success prov-feedback">
+        <lucide-icon [name]="CheckIcon" class="w-4 h-4"></lucide-icon>
+        <span>{{ providerMessage }}</span>
+      </div>
+      <div *ngIf="providerError" class="feedback error prov-feedback">
+        <lucide-icon [name]="ErrorIcon" class="w-4 h-4"></lucide-icon>
+        <span>{{ providerError }}</span>
+      </div>
+      <div *ngIf="testResult" class="feedback" [class.success]="testResult.startsWith('✓')" [class.error]="testResult.startsWith('✗')" style="margin-bottom:12px">
+        <span>{{ testResult }}</span>
+      </div>
+
+      <!-- Provider list -->
+      <div *ngIf="loadingProviders" class="prov-loading">
+        <lucide-icon [name]="LoadingIcon" class="w-4 h-4 spin"></lucide-icon> Loading...
+      </div>
+
+      <div *ngIf="!loadingProviders && providers.length === 0 && !showAddForm" class="prov-empty">
+        No providers configured. Add one below — or set GROQ_API_KEY / OPENAI_API_KEY in your .env as a fallback.
+      </div>
+
+      <div *ngIf="providers.length > 0" class="prov-table">
+        <div class="prov-table-head">
+          <span>Name</span>
+          <span>Type</span>
+          <span>Model</span>
+          <span>Use For</span>
+          <span>Priority</span>
+          <span>Status</span>
+          <span></span>
+        </div>
+        <div class="prov-row" *ngFor="let p of providers">
+          <span class="prov-name">{{ p.name }}</span>
+          <span class="prov-type">{{ p.provider_type }}</span>
+          <span class="prov-model">{{ p.model || '—' }}</span>
+          <span class="prov-usecase">
+            <span class="uc-badge" [class.uc-all]="p.use_case==='all'" [class.uc-chat]="p.use_case==='chat'" [class.uc-threat]="p.use_case==='threat'">
+              {{ useCaseLabel(p.use_case) }}
+            </span>
+          </span>
+          <span class="prov-priority">{{ p.priority }}</span>
+          <span class="prov-status">
+            <span class="status-dot" [class.active]="p.enabled" [class.inactive]="!p.enabled"></span>
+            <span class="key-badge" *ngIf="p.key_set">Key set</span>
+          </span>
+          <span class="prov-actions">
+            <button class="prov-btn test-btn" (click)="testProvider(p)" [disabled]="testingProvider === p.name" title="Test">
+              <lucide-icon [name]="testingProvider === p.name ? LoadingIcon : TestIcon" class="w-3 h-3" [class.spin]="testingProvider === p.name"></lucide-icon>
+            </button>
+            <button class="prov-btn del-btn" (click)="deleteProvider(p.name)" title="Delete">
+              <lucide-icon [name]="TrashIcon" class="w-3 h-3"></lucide-icon>
+            </button>
+          </span>
         </div>
       </div>
 
-      <div class="ai-config-grid">
-        <div class="ai-field">
-          <label>Provider</label>
-          <select [(ngModel)]="aiConfig.ai_provider" class="ai-select">
-            <option *ngFor="let p of providerOptions" [value]="p.value">{{ p.label }}</option>
-          </select>
-          <small>OpenAI and custom providers use the OpenAI Chat Completions format.</small>
-        </div>
-
-        <div class="ai-field">
-          <label>
-            API Key
-            <span *ngIf="aiConfig.ai_key_set" class="key-badge">Key saved</span>
-          </label>
-          <div class="key-input-wrap">
-            <input
-              [type]="showApiKey ? 'text' : 'password'"
-              [(ngModel)]="aiConfig.ai_api_key"
-              class="ai-input"
-              [placeholder]="aiConfig.ai_key_set ? 'Leave blank to keep existing key' : 'Paste API key here'" />
-            <button class="key-toggle" (click)="showApiKey = !showApiKey" type="button">
-              <lucide-icon [name]="showApiKey ? EyeOffIcon : EyeIcon" class="w-4 h-4"></lucide-icon>
-            </button>
+      <!-- Add provider form -->
+      <div *ngIf="showAddForm" class="add-provider-form">
+        <div class="add-form-title">Add Provider</div>
+        <div class="add-form-grid">
+          <div class="ai-field">
+            <label>Name</label>
+            <input type="text" [(ngModel)]="newProvider.name" class="ai-input" placeholder="e.g. Groq-70B" />
           </div>
-          <small>Stored securely in ClickHouse. Env var is used as fallback if blank.</small>
+          <div class="ai-field">
+            <label>Type</label>
+            <select [(ngModel)]="newProvider.provider_type" class="ai-select">
+              <option *ngFor="let t of providerTypeOptions" [value]="t.value">{{ t.label }}</option>
+            </select>
+          </div>
+          <div class="ai-field">
+            <label>
+              API Key
+              <span class="optional">required</span>
+            </label>
+            <div class="key-input-wrap">
+              <input [type]="showProviderKey ? 'text' : 'password'" [(ngModel)]="newProvider.api_key" class="ai-input" placeholder="Paste API key" />
+              <button class="key-toggle" (click)="showProviderKey = !showProviderKey" type="button">
+                <lucide-icon [name]="showProviderKey ? EyeOffIcon : EyeIcon" class="w-4 h-4"></lucide-icon>
+              </button>
+            </div>
+          </div>
+          <div class="ai-field">
+            <label>Model <span class="optional">optional</span></label>
+            <input type="text" [(ngModel)]="newProvider.model" class="ai-input" [placeholder]="defaultModelPlaceholder" />
+          </div>
+          <div class="ai-field">
+            <label>Base URL</label>
+            <input type="text" [(ngModel)]="newProvider.base_url" class="ai-input" [placeholder]="newProvider.provider_type === 'custom' ? 'https://api.groq.com/openai' : defaultBaseUrl" />
+            <small>For Groq: <code>https://api.groq.com/openai</code></small>
+          </div>
+          <div class="ai-field">
+            <label>Endpoint Path</label>
+            <input type="text" [(ngModel)]="newProvider.endpoint_path" class="ai-input" placeholder="/v1/chat/completions" />
+          </div>
+          <div class="ai-field">
+            <label>Use For</label>
+            <select [(ngModel)]="newProvider.use_case" class="ai-select">
+              <option *ngFor="let u of useCaseOptions" [value]="u.value">{{ u.label }}</option>
+            </select>
+          </div>
+          <div class="ai-field">
+            <label>Priority <small>(lower = tried first)</small></label>
+            <input type="number" [(ngModel)]="newProvider.priority" class="ai-input" min="1" max="99" />
+          </div>
         </div>
 
-        <div class="ai-field">
-          <label>Model <span class="optional">(optional)</span></label>
-          <input
-            type="text"
-            [(ngModel)]="aiConfig.ai_model"
-            class="ai-input"
-            [placeholder]="defaultModelHint" />
-          <small>Leave blank to use the provider default.</small>
-        </div>
-
-        <div class="ai-field" *ngIf="aiConfig.ai_provider === 'custom'">
-          <label>Base URL</label>
-          <input
-            type="text"
-            [(ngModel)]="aiConfig.ai_base_url"
-            class="ai-input"
-            placeholder="https://apifreellm.com  or  http://localhost:11434" />
-          <small>Root URL — no trailing slash. Endpoint path is set separately below.</small>
-        </div>
-
-        <div class="ai-field" *ngIf="aiConfig.ai_provider === 'custom'">
-          <label>Endpoint Path <span class="optional">(optional)</span></label>
-          <input
-            type="text"
-            [(ngModel)]="aiConfig.ai_endpoint_path"
-            class="ai-input"
-            placeholder="/v1/chat/completions" />
-          <small>Path appended to Base URL. Default: <code>/v1/chat/completions</code></small>
-        </div>
-
-        <div class="ai-field" *ngIf="aiConfig.ai_provider === 'custom'">
-          <label>Message Format</label>
-          <select [(ngModel)]="aiConfig.ai_msg_format" class="ai-select">
-            <option value="openai">OpenAI — sends messages[] array, reads choices[0].message.content</option>
-            <option value="simple">Simple — sends &#123;"message":"..."&#125;, reads "response" field (e.g. FreeLLM)</option>
-          </select>
-          <small>
-            Use <strong>OpenAI</strong> for Ollama, LM Studio, LocalAI, vLLM and most APIs.<br>
-            Use <strong>Simple</strong> for FreeLLM (<code>apifreellm.com</code>) and similar minimal APIs.
-          </small>
-        </div>
-
-        <div class="ai-save-row">
-          <button class="save-action ai-save" (click)="saveAiConfig()" [disabled]="savingAi">
-            <lucide-icon [name]="savingAi ? LoadingIcon : SaveIcon" class="w-4 h-4" [class.spin]="savingAi"></lucide-icon>
-            {{ savingAi ? 'Saving...' : 'Save AI Config' }}
+        <div class="add-form-actions">
+          <button class="prov-test-new-btn" (click)="testNewProvider()" [disabled]="testingProvider === '__new__' || !newProvider.api_key">
+            <lucide-icon [name]="testingProvider === '__new__' ? LoadingIcon : TestIcon" class="w-4 h-4" [class.spin]="testingProvider === '__new__'"></lucide-icon>
+            Test Connection
           </button>
-
-          <div *ngIf="aiMessage" class="feedback success">
-            <lucide-icon [name]="CheckIcon" class="w-4 h-4"></lucide-icon>
-            <span>{{ aiMessage }}</span>
-          </div>
-          <div *ngIf="aiError" class="feedback error">
-            <lucide-icon [name]="ErrorIcon" class="w-4 h-4"></lucide-icon>
-            <span>{{ aiError }}</span>
-          </div>
+          <button class="save-action ai-save" (click)="saveProvider()" [disabled]="savingProvider || !newProvider.name || !newProvider.api_key">
+            <lucide-icon [name]="savingProvider ? LoadingIcon : SaveIcon" class="w-4 h-4" [class.spin]="savingProvider"></lucide-icon>
+            {{ savingProvider ? 'Saving...' : 'Save Provider' }}
+          </button>
+          <button class="cancel-btn" (click)="showAddForm = false; resetNewProvider()">Cancel</button>
         </div>
       </div>
     </div>

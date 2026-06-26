@@ -108,6 +108,7 @@ else
     log "✅ Docker already installed"
 fi
 
+# ── Docker daemon config ──────────────────────────────────────────────────────
 sudo tee /etc/docker/daemon.json > /dev/null << 'DOCKEREOF'
 {
   "log-driver": "json-file",
@@ -157,6 +158,18 @@ else
     JWT_SECRET=$(openssl rand -hex 32)
 fi
 
+# Prompt for Groq API key
+GROQ_API_KEY=""
+if [ -f "$INSTALL_DIR/.env" ]; then
+    GROQ_API_KEY=$(grep "^GROQ_API_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2- 2>/dev/null || echo "")
+fi
+if [ -z "$GROQ_API_KEY" ]; then
+    echo ""
+    info "  NDR uses Groq for AI threat analysis (free at console.groq.com)"
+    read -rp "  Enter your Groq API key (or press Enter to skip): " GROQ_API_KEY
+    GROQ_API_KEY="${GROQ_API_KEY:-}"
+fi
+
 cat > "$INSTALL_DIR/.env" << ENVEOF
 HOST_IP=$PUBLIC_IP
 HOME_DIR=$HOME_DIR
@@ -171,9 +184,17 @@ JWT_SECRET=$JWT_SECRET
 OPENSEARCH_URL=
 ARKIME_URL=
 ARKIME_PASS=
+# AI — add providers in Settings > AI Providers (super admin). Env vars are the fallback.
+GROQ_API_KEY=$GROQ_API_KEY
+GROQ_MODEL=llama-3.3-70b-versatile
 ENVEOF
 log "✅ Cloud .env generated"
 info "  CLOUD_MODE=true — Zeek/Suricata/Arkime/OpenSearch are disabled"
+if [ -n "$GROQ_API_KEY" ]; then
+    info "  AI: Groq llama-3.3-70b-versatile (fallback). Add providers in Settings for full control."
+else
+    warn "  AI: No Groq key set — add a provider in Settings > AI Providers after install."
+fi
 
 # ── Step 5: Cloud nginx config ────────────────
 step "Writing cloud nginx configuration"
@@ -254,7 +275,7 @@ for i in {1..40}; do
 done
 echo ""
 
-# ── Step 7: Create Kafka topic ────────────────
+# ── Step 7: Create Kafka topic ───────────────
 step "Creating Kafka topics (3 partitions, replication-factor 3)"
 
 log "Waiting for Kafka to be ready..."
@@ -321,7 +342,7 @@ else
     warn "ufw not found — skipping firewall setup"
 fi
 
-# ── Step 9: Health checks ─────────────────────
+# ── Step 9: Health checks ────────────────────
 step "Running health checks"
 
 echo ""
@@ -395,6 +416,7 @@ echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP:3000"
 echo -e "${BLUE}  ClickHouse  :${NC} http://localhost:8123 + :8124 (internal only, 2-node cluster)"
 echo -e "${BLUE}  Kafka       :${NC} $PUBLIC_IP:9092 (sensors connect here)"
 echo -e "${BLUE}  Redis       :${NC} localhost:6379 (internal only)"
+echo -e "${BLUE}  Ollama AI   :${NC} http://localhost:11434 (deepseek-r1, local inference)"
 echo -e "${BLUE}  SSL certs   :${NC} /etc/ssl/ndr/cert.pem + key.pem"
 echo ""
 echo -e "${YELLOW}  Next steps:${NC}"

@@ -583,7 +583,9 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 
     // Auto-capture evidence for HIGH, CRITICAL, and MEDIUM hits
     let severity_str = risk.severity.as_str().to_string();
-    if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM") {
+    if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM")
+        && hit.community_id.starts_with("1:")
+    {
         let cid = hit.community_id.clone();
         let tenant = tenant_id.clone();
         let ch = state.ch_storage.clone();
@@ -649,38 +651,69 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                             bundle_id, cid
                         );
 
-                        // AI threat analysis — runs async, stored as annotation
-                        let ai_cfg = ch.get_ai_config_full(&tenant).await;
-                        if ai_cfg.is_configured() {
+                        // AI threat analysis — gathers ALL bundles for this CID,
+                        // sends grouped prompt, deletes old analyses, saves one result.
+                        {
+                            let bundles = ch.get_bundles_for_cid(&tenant, &cid).await
+                                .unwrap_or_default();
+
+                            // Group alerts by severity in priority order
+                            let sev_order = ["CRITICAL","HIGH","MEDIUM","LOW","INFO","UNKNOWN"];
+                            let mut by_sev: std::collections::HashMap<String, Vec<String>> =
+                                std::collections::HashMap::new();
+                            for b in &bundles {
+                                let sev = b["severity"].as_str().unwrap_or("UNKNOWN").to_string();
+                                let src  = b["src_ip"].as_str().unwrap_or("?");
+                                let dst  = b["dst_ip"].as_str().unwrap_or("?");
+                                let rule = b["alert_id"].as_str().unwrap_or("?");
+                                by_sev.entry(sev).or_default()
+                                    .push(format!("  {}→{}  rule={}", src, dst, rule));
+                            }
+
+                            let mut grouped = String::new();
+                            for sev in sev_order {
+                                if let Some(entries) = by_sev.get(sev) {
+                                    grouped.push_str(&format!(
+                                        "{} ({} alert{}):\n", sev, entries.len(),
+                                        if entries.len() == 1 { "" } else { "s" }
+                                    ));
+                                    for e in entries { grouped.push_str(e); grouped.push('\n'); }
+                                    grouped.push('\n');
+                                }
+                            }
+
                             let system_prompt = "You are a senior NDR (Network Detection & Response) \
-                                security analyst. Analyse the alert and respond in plain text with \
-                                three short sections:\n\
-                                THREAT: what this alert indicates (1-2 sentences)\n\
-                                RISK: why it matters and potential impact (1-2 sentences)\n\
+                                security analyst. You are given ALL alerts captured for a single \
+                                network session grouped by severity. Analyse the full picture and \
+                                respond in plain text with three short sections:\n\
+                                THREAT: what this session indicates overall (2-3 sentences)\n\
+                                RISK: combined impact across all severity levels (1-2 sentences)\n\
                                 ACTION: recommended immediate response steps (2-3 bullet points)\n\
                                 Be concise and actionable. No markdown headers.";
+
                             let question = format!(
-                                "Alert details:\n\
-                                 Severity     : {severity_str}\n\
-                                 Community ID : {cid}\n\
-                                 Source IP    : {src_ip_str}\n\
-                                 Destination  : {dst_ip_str}\n\
-                                 Rule/Reason  : {rule_name_str}\n\
-                                 Captured at  : {now_str}\n\
-                                 Tenant       : {tenant}\n\
-                                 Provide your threat analysis.",
+                                "Session community_id: {cid}\n\
+                                 All captured alerts grouped by severity:\n\
+                                 {grouped}\n\
+                                 Tenant: {tenant}\n\
+                                 Provide your comprehensive threat analysis.",
                             );
-                            match crate::ai::call_ai(
-                                &ai_cfg, system_prompt, &[], &question
+
+                            match crate::ai::provider::generate_chat(
+                                &ch, system_prompt, &[], &question
                             ).await {
                                 Ok((analysis, _)) => {
                                     let safe_analysis = analysis.replace('\'', "''");
+                                    // Delete old individual analyses for this CID
+                                    let _ = ch.delete_ai_annotations_for_cid(&tenant, &cid).await;
+                                    // Save one comprehensive analysis
                                     let _ = ch.add_evidence_annotation(
                                         &tenant, &bundle_id, &cid,
                                         "ARIA-AI", &safe_analysis, "ai_analysis",
                                     ).await;
                                     tracing::info!(
-                                        "AI analysis saved for bundle {}", bundle_id
+                                        "AI analysis saved for cid {} ({} bundles)",
+                                        cid, bundles.len()
                                     );
                                 }
                                 Err(e) => {
@@ -820,9 +853,6 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 );
                 if already_seen { return; }
 
-                let ai_cfg = ch3.get_ai_config_full(&tid3).await;
-                if !ai_cfg.is_configured() { return; }
-
                 let prompt = "You are an NDR (Network Detection & Response) security analyst AI. \
                     Determine if a Suricata IDS alert is a FALSE POSITIVE. \
                     Respond ONLY with valid JSON (no markdown): \
@@ -834,11 +864,21 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                     by_src = source is a trusted internal device (sensor, scanner, management host); \
                     by_sid = the entire Suricata rule is globally broken/noisy regardless of IP; \
                     none = real threat, do not suppress. \
-                    Critical hints: \
+                    ABSOLUTE RULES — these override everything else: \
+                    (A) If threat_intel=true (destination IP is in a threat feed like Feodo, abuse.ch, etc.), \
+                    this is ALWAYS a real threat — set false_positive=false, suppress_type=none, confidence=0. \
+                    An internal device communicating with a known C2/malicious IP means it is INFECTED. \
+                    (B) If the rule name or category contains ANY of: 'CNC', 'CnC', 'C&C', 'Feodo', \
+                    'Trojan', 'Malware', 'Ransomware', 'Backdoor', 'RAT', 'Botnet', 'Exploit', \
+                    set false_positive=false, suppress_type=none regardless of source IP. \
+                    Internal source IPs for these categories indicate a compromised host — NOT a false positive. \
+                    (C) If the rule name contains 'HUNTING' and threat_intel=true, treat as real threat. \
+                    General hints (only apply when ABSOLUTE RULES above do not match): \
                     (1) Rules starting with 'SURICATA STREAM' or 'SURICATA ENGINE' are Suricata internal \
                     TCP/IP stack checks — they fire on NAT, VPN, and tunnel traffic; almost always FP. \
                     (2) If direction is 'to_client', the alert fired on RESPONSE traffic from server to sensor. \
-                    (3) Private/internal IPs (10.x, 172.x, 192.168.x) are your own network devices. \
+                    (3) Private/internal source IPs alone are NOT sufficient reason to suppress — internal \
+                    devices can be infected and beacon to external C2 servers. \
                     (4) TLS SNI reveals the actual domain — if it matches known infrastructure or monitoring \
                     tools it is almost certainly a FP. \
                     (5) If threat_intel=false and the rule category is 'Generic Protocol Command Decode', \
@@ -864,8 +904,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                     tls_sni_display = if tls_sni.is_empty() { "none".to_string() } else { tls_sni },
                 );
 
-                if let Ok((reply, _)) = crate::ai::call_ai(
-                    &ai_cfg, prompt, &[], &question
+                if let Ok((reply, _)) = crate::ai::provider::generate_chat(
+                    &ch3, prompt, &[], &question
                 ).await {
                     // Parse AI JSON response
                     let ai: serde_json::Value = serde_json::from_str(&reply)
@@ -1347,7 +1387,9 @@ for integration in &integrations {
         obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
     }
 
-    publish_event(state, &tenant_id, &hit_msg.to_string());
+    if hit.community_id.starts_with("1:") {
+        publish_event(state, &tenant_id, &hit_msg.to_string());
+    }
 }
 
 
@@ -2360,6 +2402,121 @@ pub async fn update_ai_config(
         "status": "ok",
         "message": "AI configuration saved!"
     }))
+}
+
+// GET /api/settings/ai/providers — list all providers (super_admin)
+pub async fn list_ai_providers(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+    match state.ch_storage.list_ai_providers().await {
+        Ok(providers) => Json(json!({ "status": "ok", "providers": providers })),
+        Err(e)        => Json(json!({ "status": "error", "error": e.to_string() })),
+    }
+}
+
+// POST /api/settings/ai/providers — add or update a provider (super_admin)
+pub async fn save_ai_provider(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(p): Json<Value>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+
+    let name          = p["name"].as_str().unwrap_or("").trim().to_string();
+    let provider_type = p["provider_type"].as_str().unwrap_or("custom").to_string();
+    let api_key       = p["api_key"].as_str().unwrap_or("").to_string();
+    let model         = p["model"].as_str().unwrap_or("").to_string();
+    let base_url      = p["base_url"].as_str().unwrap_or("").to_string();
+    let endpoint_path = p["endpoint_path"].as_str().unwrap_or("/v1/chat/completions").to_string();
+    let msg_format    = p["msg_format"].as_str().unwrap_or("openai").to_string();
+    let use_case      = p["use_case"].as_str().unwrap_or("all").to_string();
+    let priority      = p["priority"].as_u64().unwrap_or(10) as u8;
+    let enabled       = p["enabled"].as_bool().unwrap_or(true);
+
+    if name.is_empty() {
+        return Json(json!({ "status": "error", "error": "name is required" }));
+    }
+
+    // If api_key contains '****' it's the masked value — keep existing key
+    let effective_key = if api_key.contains("****") || api_key.is_empty() {
+        // preserve existing key by re-inserting with existing value
+        match state.ch_storage.list_ai_providers().await {
+            Ok(_) => {
+                // We can't get the actual key from list (it's masked), so just skip key update
+                String::new()
+            }
+            Err(_) => String::new(),
+        }
+    } else {
+        api_key
+    };
+
+    // If effective_key is empty and provider already exists, get the existing key
+    let final_key = if effective_key.is_empty() {
+        state.ch_storage.get_ai_provider_key(&name).await.unwrap_or_default()
+    } else {
+        effective_key
+    };
+
+    match state.ch_storage.save_ai_provider(
+        &name, &provider_type, &final_key, &model,
+        &base_url, &endpoint_path, &msg_format,
+        &use_case, priority, enabled,
+    ).await {
+        Ok(_)  => Json(json!({ "status": "ok", "message": "Provider saved" })),
+        Err(e) => Json(json!({ "status": "error", "error": e.to_string() })),
+    }
+}
+
+// DELETE /api/settings/ai/providers/:name — remove a provider (super_admin)
+pub async fn delete_ai_provider(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+    match state.ch_storage.delete_ai_provider(&name).await {
+        Ok(_)  => Json(json!({ "status": "ok", "message": "Provider deleted" })),
+        Err(e) => Json(json!({ "status": "error", "error": e.to_string() })),
+    }
+}
+
+// POST /api/settings/ai/providers/test — test a specific provider config (super_admin)
+pub async fn test_ai_provider(
+    State(_state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(p): Json<Value>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+
+    let provider = crate::ai::provider::AiProvider {
+        name:          p["name"].as_str().unwrap_or("test").to_string(),
+        provider_type: p["provider_type"].as_str().unwrap_or("custom").to_string(),
+        api_key:       p["api_key"].as_str().unwrap_or("").to_string(),
+        model:         p["model"].as_str().unwrap_or("").to_string(),
+        base_url:      p["base_url"].as_str().unwrap_or("").to_string(),
+        endpoint_path: p["endpoint_path"].as_str().unwrap_or("/v1/chat/completions").to_string(),
+        msg_format:    p["msg_format"].as_str().unwrap_or("openai").to_string(),
+        priority:      1,
+    };
+
+    if provider.api_key.is_empty() {
+        return Json(json!({ "status": "error", "error": "No API key provided" }));
+    }
+
+    let result = crate::ai::provider::call_provider_simple(
+        &provider,
+        "You are a test assistant.",
+        "Reply with exactly: OK",
+    ).await;
+
+    if result.is_empty() {
+        Json(json!({ "status": "error", "error": "Provider returned empty response" }))
+    } else {
+        Json(json!({ "status": "ok", "response": result }))
+    }
 }
 
 pub async fn export_report(
@@ -5088,10 +5245,11 @@ pub async fn sensor_checkin(
     let pcap_rows = state.ch_storage.client
         .query(&format!(
             "SELECT community_id, severity, retry_count \
-             FROM {}.pcap_pending \
+             FROM {}.pcap_pending FINAL \
              WHERE tenant_id = '{}' \
              AND fulfilled = 0 \
              AND retry_count < 3 \
+             AND community_id LIKE '1:%' \
              AND requested_at > now() - INTERVAL 24 HOUR \
              ORDER BY multiIf(severity='CRITICAL',1, severity='HIGH',2, 3) ASC, \
                       requested_at ASC \
@@ -5687,10 +5845,11 @@ pub async fn pcap_pending(
              severity, \
              toString(requested_at) as requested_at_str, \
              retry_count \
-             FROM {}.pcap_pending \
+             FROM {}.pcap_pending FINAL \
              WHERE tenant_id = '{}' \
              AND fulfilled = 0 \
              AND retry_count < 3 \
+             AND community_id LIKE '1:%' \
              AND requested_at > now() - INTERVAL 24 HOUR \
              ORDER BY \
                multiIf(severity='CRITICAL',1, severity='HIGH',2, 3) ASC, \
@@ -6795,9 +6954,14 @@ pub async fn get_evidence_timeline(
     let severity = hit["severity"].as_str().unwrap_or("").to_string();
     let rule_name = hit["rule_name"].as_str().unwrap_or("").to_string();
 
-    // 2. Get related hits for same src_ip in ±5min window
+    // 2a. All detection rules that fired on this exact CID
+    let rule_hits = state.ch_storage
+        .get_rule_hits_by_community_id(&claims.tenant_id, &community_id)
+        .await.unwrap_or_default();
+
+    // 2b. Related hits from same src_ip in ±30 min (different CIDs)
     let related = state.ch_storage
-        .get_related_hits_by_ip(&claims.tenant_id, &src_ip, &alert_time, 5)
+        .get_related_hits_by_ip(&claims.tenant_id, &src_ip, &alert_time, 30)
         .await.unwrap_or_default();
 
     // 3. Get OpenSearch session info (on-premise)
@@ -6874,10 +7038,12 @@ pub async fn get_evidence_timeline(
     let narrative = format!(
         "At {}, host {} established a {} connection to {}. \
         NDR engine triggered rule '{}' with {} severity. \
+        {} detection rule(s) fired on this connection. \
         {} related activity events were detected for the same \
-        source host within a 5-minute window, suggesting {}.",
+        source host within a 30-minute window, suggesting {}.",
         alert_time, src_ip, protocol, dst_ip,
         rule_name, severity,
+        rule_hits.len(),
         related.len(),
         if related.len() > 3 {
             "possible lateral movement or automated attack pattern"
@@ -6891,6 +7057,8 @@ pub async fn get_evidence_timeline(
         "narrative": narrative,
         "primary_alert": hit,
         "events": events,
+        "rule_hits": rule_hits,
+        "related_alerts": related,
         "related_sessions_count": related.len(),
         "src_ip": src_ip,
         "dst_ip": dst_ip,
@@ -6955,46 +7123,28 @@ pub async fn aria_chat(
         .cloned()
         .unwrap_or_default();
 
-    // Fetch live NDR context
-    let critical = state.ch_storage
-        .count_hits_by_severity_aria(
-            &claims.tenant_id, "CRITICAL")
-        .await.unwrap_or(0);
+    // Fetch live NDR context — counts + real data based on what user asked
+    let (critical, high, bundles) = tokio::join!(
+        state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "CRITICAL"),
+        state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "HIGH"),
+        state.ch_storage.count_evidence_bundles_aria(&claims.tenant_id),
+    );
+    let real_context = state.ch_storage
+        .fetch_aria_context(&claims.tenant_id, &user_message)
+        .await;
 
-    let high = state.ch_storage
-        .count_hits_by_severity_aria(
-            &claims.tenant_id, "HIGH")
-        .await.unwrap_or(0);
-
-    let bundles = state.ch_storage
-        .count_evidence_bundles_aria(
-            &claims.tenant_id)
-        .await.unwrap_or(0);
-
-    let recent = state.ch_storage
-        .get_recent_hits_for_aria(
-            &claims.tenant_id, 5)
-        .await.unwrap_or_default();
-
-    // Build system prompt with live data
+    // Build system prompt with real tenant data only
     let system = crate::ai::build_system_prompt(
         &claims.sub,
         &claims.tenant_id,
-        critical,
-        high,
-        bundles,
-        &recent,
+        critical.unwrap_or(0),
+        high.unwrap_or(0),
+        bundles.unwrap_or(0),
+        &real_context,
     );
 
-    // Load AI config from DB (fallback to env var inside call_ai)
-    let settings = state.ch_storage
-        .get_settings_by_tenant(&claims.tenant_id)
-        .await
-        .unwrap_or_default();
-    let ai_config = crate::ai::AiConfig::from_settings(&settings);
-
-    match crate::ai::call_ai(
-        &ai_config,
+    match crate::ai::provider::generate_chat(
+        &state.ch_storage,
         &system,
         &history,
         &user_message,
@@ -7037,49 +7187,44 @@ pub async fn aria_status(
             &claims.tenant_id, "HIGH")
         .await.unwrap_or(0);
 
-    let recent = state.ch_storage
-        .get_recent_hits_for_aria(
-            &claims.tenant_id, 1)
-        .await.unwrap_or_default();
+    let (latest_critical, rising_prediction) = tokio::join!(
+        state.ch_storage.get_latest_critical_hit_for_aria(&claims.tenant_id),
+        state.ch_storage.get_rising_critical_prediction(&claims.tenant_id),
+    );
 
-    let latest_severity = recent
-        .first()
-        .and_then(|h| h["severity"].as_str())
-        .unwrap_or("none")
-        .to_string();
+    let latest_critical  = latest_critical.unwrap_or(None);
+    let rising_prediction = rising_prediction.unwrap_or(None);
 
-    let latest_src = recent
-        .first()
-        .and_then(|h| h["src_ip"].as_str())
-        .unwrap_or("")
-        .to_string();
+    let latest_severity = latest_critical
+        .as_ref().and_then(|h| h["severity"].as_str()).unwrap_or("none").to_string();
+    let latest_src = latest_critical
+        .as_ref().and_then(|h| h["src_ip"].as_str()).unwrap_or("").to_string();
+    let latest_dst = latest_critical
+        .as_ref().and_then(|h| h["dst_ip"].as_str()).unwrap_or("").to_string();
+    let latest_cid = latest_critical
+        .as_ref().and_then(|h| h["community_id"].as_str()).unwrap_or("").to_string();
 
-    let latest_dst = recent
-        .first()
-        .and_then(|h| h["dst_ip"].as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let latest_cid = recent
-        .first()
-        .and_then(|h| h["community_id"].as_str())
-        .unwrap_or("")
-        .to_string();
+    // Rising prediction alert fields
+    let pred_id        = rising_prediction.as_ref().and_then(|p| p["id"].as_str()).unwrap_or("").to_string();
+    let pred_attack    = rising_prediction.as_ref().and_then(|p| p["attack_type"].as_str()).unwrap_or("").to_string();
+    let pred_prob      = rising_prediction.as_ref().and_then(|p| p["probability"].as_f64()).unwrap_or(0.0);
+    let pred_level     = rising_prediction.as_ref().and_then(|p| p["alert_level"].as_str()).unwrap_or("").to_string();
+    let pred_expl      = rising_prediction.as_ref().and_then(|p| p["explanation"].as_str()).unwrap_or("").to_string();
 
     Json(json!({
-        "critical_count": critical,
-        "high_count": high,
-        "latest_severity": latest_severity,
-        "latest_src_ip": latest_src,
-        "latest_dst_ip": latest_dst,
-        "latest_community_id": latest_cid,
-        "emotion": if critical > 0 {
-            "alert"
-        } else if high > 0 {
-            "alert"
-        } else {
-            "idle"
-        }
+        "critical_count":       critical,
+        "high_count":           high,
+        "latest_severity":      latest_severity,
+        "latest_src_ip":        latest_src,
+        "latest_dst_ip":        latest_dst,
+        "latest_community_id":  latest_cid,
+        "prediction_alert":     !pred_id.is_empty(),
+        "prediction_id":        pred_id,
+        "prediction_attack":    pred_attack,
+        "prediction_prob":      pred_prob,
+        "prediction_level":     pred_level,
+        "prediction_expl":      pred_expl,
+        "emotion": if critical > 0 || !pred_id.is_empty() { "alert" } else { "idle" }
     }))
 }
 
@@ -7121,4 +7266,110 @@ pub async fn get_ipam_subnets(
         Ok(subnets) => Json(json!(subnets)),
         Err(e)      => Json(json!({"error": e.to_string()})),
     }
+}
+
+// ── Threat Prediction Engine endpoints ───────────────────────────────────────
+
+pub async fn get_threat_predictions(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let limit = 20u32;
+    match crate::threat::get_predictions(&state.ch_storage, &claims.tenant_id, limit).await {
+        Ok(rows) => Json(json!({ "predictions": rows })),
+        Err(e)   => Json(json!({ "predictions": [], "error": e.to_string() })),
+    }
+}
+
+pub async fn get_threat_predictions_history(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    match crate::threat::get_predictions(&state.ch_storage, &claims.tenant_id, 100).await {
+        Ok(rows) => Json(json!({ "predictions": rows })),
+        Err(e)   => Json(json!({ "predictions": [], "error": e.to_string() })),
+    }
+}
+
+pub async fn get_threat_exposure(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let (exposure_res, intel_res) = tokio::join!(
+        crate::threat::get_exposure_history(&state.ch_storage, &claims.tenant_id, 24),
+        crate::threat::get_threat_intel_summary(&state.ch_storage),
+    );
+    Json(json!({
+        "exposure_history": exposure_res.unwrap_or_default(),
+        "intel_summary":    intel_res.unwrap_or_default(),
+    }))
+}
+
+pub async fn get_threat_patterns(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    match crate::threat::get_pattern_matches(&state.ch_storage, &claims.tenant_id).await {
+        Ok(rows) => Json(json!({ "patterns": rows })),
+        Err(e)   => Json(json!({ "error": e.to_string() })),
+    }
+}
+
+/// GET /api/admin/leader-status
+/// Shows which engine instance is the current threat task leader.
+pub async fn get_leader_status(
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if extract_claims(&headers).is_none() {
+        return Json(json!({"error": "unauthorized"}));
+    }
+
+    let redis_url = std::env::var("REDIS_URL")
+        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+
+    let (current_leader, ttl_ms) = match redis::Client::open(redis_url) {
+        Ok(client) => {
+            match client.get_multiplexed_async_connection().await {
+                Ok(mut conn) => {
+                    let leader: Option<String> = redis::cmd("GET")
+                        .arg("ndr:threat_leader")
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap_or(None);
+                    let ttl: i64 = redis::cmd("PTTL")
+                        .arg("ndr:threat_leader")
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap_or(-1);
+                    (leader, ttl)
+                }
+                Err(_) => (None, -1),
+            }
+        }
+        Err(_) => (None, -1),
+    };
+
+    Json(json!({
+        "current_leader":  current_leader.unwrap_or_else(|| "none".to_string()),
+        "ttl_ms":          ttl_ms,
+        "ttl_seconds":     if ttl_ms > 0 { ttl_ms / 1000 } else { -1 },
+        "leader_key":      "ndr:threat_leader",
+        "election_info":   "Leader renewed every 10s, TTL=30s, failover < 30s",
+    }))
 }

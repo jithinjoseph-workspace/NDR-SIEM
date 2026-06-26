@@ -85,7 +85,8 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   // ── Alert tracking ──
   criticalCount = 0;
   highCount = 0;
-  lastSeenCid = '';
+  lastSeenCid        = '';
+  lastSeenPredId     = '';
 
   // ── Lottie ──
   private dotLottie: DotLottie | null = null;
@@ -253,10 +254,10 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     this.criticalCount = s.critical_count || 0;
     this.highCount     = s.high_count     || 0;
 
+    // Real-time CRITICAL alert from live hits
     const newCid = s.latest_community_id || '';
     const sev    = s.latest_severity     || '';
-
-    if (newCid && newCid !== this.lastSeenCid && (sev === 'CRITICAL' || sev === 'HIGH')) {
+    if (newCid && newCid !== this.lastSeenCid && sev === 'CRITICAL') {
       this.lastSeenCid = newCid;
       this.latestAlert = {
         severity:     sev,
@@ -265,6 +266,29 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
         community_id: newCid,
       };
       this.onNewAlert(this.latestAlert);
+    }
+
+    // Rising prediction alert — MITRE chain probability increasing
+    const predId = s.prediction_id || '';
+    if (s.prediction_alert && predId && predId !== this.lastSeenPredId) {
+      this.lastSeenPredId = predId;
+      const pct = Math.round((s.prediction_prob || 0) * 100);
+      this.setEmotion('alert');
+      this.unreadCount++;
+      this.showAlertBanner = true;
+      this.showSpeechBubble(
+        `⚠️ Rising ${(s.prediction_level || '').toUpperCase()} prediction: ${s.prediction_attack} at ${pct}% probability! Click me!`
+      );
+      this.addBotMessage(
+        `🔺 RISING THREAT DETECTED — ${s.prediction_attack} attack chain probability is at ${pct}% and increasing.\n\n${s.prediction_expl || ''}\n\nDo you want me to investigate?`,
+        'alert',
+        [
+          { label: '🔍 Show details',       icon: '🔍', action: 'threat_prediction', data: s },
+          { label: '📊 View pattern match', icon: '📊', action: 'pattern_match',     data: s },
+          { label: '🚨 Escalate now',       icon: '🚨', action: 'escalate',          data: s },
+        ],
+        undefined
+      );
     }
 
     this.cdr.detectChanges();

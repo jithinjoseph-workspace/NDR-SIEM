@@ -136,6 +136,8 @@ services:
       - ARKIME_PASS=${ARKIME_PASS}
       - OPENSEARCH_URL=http://${HOST_IP}:9200
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -183,6 +185,8 @@ services:
       - ARKIME_PASS=${ARKIME_PASS}
       - OPENSEARCH_URL=http://${HOST_IP}:9200
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -230,6 +234,8 @@ services:
       - ARKIME_PASS=${ARKIME_PASS}
       - OPENSEARCH_URL=http://${HOST_IP}:9200
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
