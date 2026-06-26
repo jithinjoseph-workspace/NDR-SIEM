@@ -25,7 +25,7 @@ import {
 } from 'lucide-angular';
 import { Announcement, Api, SensorKey } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 
 type AnnouncementType = 'info' | 'maintenance' | 'update' | 'critical';
 type AnnouncementAudience = 'all' | 'tenant_admins' | 'tenant';
@@ -238,6 +238,7 @@ export class Admin implements OnInit, OnDestroy {
     private api: Api,
     private auth: AuthService,
     private router: Router,
+    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -247,6 +248,17 @@ export class Admin implements OnInit, OnDestroy {
       this.router.navigate(['/dashboard']);
       return;
     }
+
+    this.route.queryParams.subscribe(params => {
+      const tab = params['tab'];
+      if (tab) {
+        this.switchTab(tab);
+      } else {
+        // default if no tab is in the URL
+        this.switchTab('tenants');
+      }
+    });
+
     this.loadUsers();
     this.loadTenants();
     this.loadSensorKeys();

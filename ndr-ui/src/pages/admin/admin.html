@@ -43,32 +43,6 @@
     </article>
   </section>
 
-  <div class="admin-tabs" role="tablist" aria-label="Super admin sections">
-    <button type="button" (click)="switchTab('tenants')" [class.active]="activeTab === 'tenants'">
-      <lucide-icon [name]="BuildingIcon" class="w-4 h-4"></lucide-icon>
-      Tenants
-    </button>
-    <button type="button" (click)="switchTab('users')" [class.active]="activeTab === 'users'">
-      <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
-      Users
-    </button>
-    <button type="button" (click)="switchTab('engines')" [class.active]="activeTab === 'engines'">
-      <lucide-icon [name]="GaugeIcon" class="w-4 h-4"></lucide-icon>
-      Engines
-    </button>
-    <button type="button" (click)="switchTab('sensors')" [class.active]="activeTab === 'sensors'">
-      <lucide-icon [name]="KeyIcon" class="w-4 h-4"></lucide-icon>
-      Sensors
-    </button>
-    <button type="button" (click)="switchTab('announcements')" [class.active]="activeTab === 'announcements'">
-      <lucide-icon [name]="AnnouncementIcon" class="w-4 h-4"></lucide-icon>
-      Announcements
-    </button>
-    <button type="button" (click)="switchTab('telemetry')" [class.active]="activeTab === 'telemetry'">
-      <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
-      Telemetry
-    </button>
-  </div>
 
   <section *ngIf="activeTab === 'tenants'" class="admin-panel">
     <div class="panel-head">

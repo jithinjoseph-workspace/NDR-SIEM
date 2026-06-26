@@ -18,6 +18,10 @@ import {
   FolderSearch,
   Bot,
   Server,
+  Building2,
+  Gauge,
+  KeyRound,
+  Megaphone,
   LucideAngularModule
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
@@ -56,19 +60,22 @@ export class Sidebar implements OnInit, OnDestroy {
     const user = this.auth.getUser();
     const isDefaultTenant = user?.tenant_id === 'default';
 
-    if (this.auth.isAdmin() || user?.role === 'tenant_admin') {
+    if (this.auth.isAdmin()) {
       this.navItems = [
-        isDefaultTenant
-          ? { label: 'Admin Panel', route: '/admin', icon: Users }
-          : { label: 'Tenant Users', route: '/tenant-admin', icon: Users },
+        { label: 'Tenants', route: '/admin', queryParams: { tab: 'tenants' }, icon: Building2 },
+        { label: 'Users', route: '/admin', queryParams: { tab: 'users' }, icon: Users },
+        { label: 'Engines', route: '/admin', queryParams: { tab: 'engines' }, icon: Gauge },
+        { label: 'Sensors', route: '/admin', queryParams: { tab: 'sensors' }, icon: KeyRound },
+        { label: 'Announcements', route: '/admin', queryParams: { tab: 'announcements' }, icon: Megaphone },
+        { label: 'Telemetry', route: '/admin', queryParams: { tab: 'telemetry' }, icon: Activity },
       ];
-
-      if (user?.role === 'tenant_admin') {
-        this.navItems.push({ label: 'Sensor Setup', route: '/setup', icon: Settings });
-      }
-
-      this.navItems.push({ label: 'Evidence', route: '/evidence', icon: FolderSearch });
-      this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot });
+    } else if (user?.role === 'tenant_admin') {
+      this.navItems = [
+        { label: 'Tenant Users', route: '/tenant-admin', icon: Users },
+        { label: 'Sensor Setup', route: '/setup', icon: Settings },
+        { label: 'Evidence', route: '/evidence', icon: FolderSearch },
+        { label: 'AI Activity', route: '/ai-activity', icon: Bot },
+      ];
     } else {
       this.navItems = [
         { label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, permission: 'dashboard' },
@@ -100,5 +107,14 @@ export class Sidebar implements OnInit, OnDestroy {
       { label: 'Settings', route: '/settings', icon: Settings },
       { label: 'Support', route: '/support', icon: HelpCircle },
     ];
+  }
+
+  isActive(item: any): boolean {
+    if (item.queryParams) {
+      const urlTree = this.router.createUrlTree([item.route], { queryParams: item.queryParams });
+      return this.router.isActive(urlTree, { paths: 'exact', queryParams: 'exact', fragment: 'ignored', matrixParams: 'ignored' });
+    } else {
+      return this.router.isActive(item.route, { paths: 'exact', queryParams: 'ignored', fragment: 'ignored', matrixParams: 'ignored' });
+    }
   }
 }
