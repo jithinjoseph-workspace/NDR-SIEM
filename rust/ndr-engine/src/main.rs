@@ -62,12 +62,6 @@ async fn main() {
     let threat_intel = ThreatIntel::new();
     let ti_ref = Arc::new(threat_intel);
 
-    // Initial fetch (non-blocking — starts immediately)
-    {
-        let ti = ti_ref.clone();
-        tokio::spawn(async move { ti.refresh().await });
-    }
-
     // ── Build AppState ────────────────────────────────────────────────────
     let (tx, _) = broadcast::channel::<String>(512);
 
@@ -544,24 +538,28 @@ async fn main() {
         });
     }
 
-    // ── Background: Arkime → pcap_sessions sync (every 5 min) ────────────────
+    // ── Background: Arkime → pcap_sessions sync — leader only ───────────────
     {
         let arkime_state = state.clone();
+        let election_arkime = election.clone();
         tokio::spawn(async move {
-            // Wait 30s so engine is fully initialized before first Arkime query
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            api::sync_arkime_sessions(arkime_state).await;
+            if election_arkime.is_leader() {
+                api::sync_arkime_sessions(arkime_state).await;
+            }
         });
     }
 
-    // ── Background: daily PCAP file cleanup (30-day retention) ───────────────
+    // ── Background: daily PCAP file cleanup — leader only ────────────────────
     {
         let ch_cleanup = state.ch_storage.clone();
+        let election_pcap = election.clone();
         tokio::spawn(async move {
-            // First run after 1 hour, then every 24 hours
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             loop {
-                cleanup_expired_pcaps(&ch_cleanup).await;
+                if election_pcap.is_leader() {
+                    cleanup_expired_pcaps(&ch_cleanup).await;
+                }
                 tokio::time::sleep(
                     std::time::Duration::from_secs(86400)
                 ).await;

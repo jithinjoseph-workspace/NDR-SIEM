@@ -3,6 +3,17 @@
 
 pub mod websocket;
 
+/// Global semaphore — limits concurrent evidence bundle AI calls to 4.
+/// Prevents burst of HIGH/CRITICAL alerts from exhausting AI rate limits.
+static EVIDENCE_SEMAPHORE: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+
+fn evidence_semaphore() -> Arc<tokio::sync::Semaphore> {
+    EVIDENCE_SEMAPHORE
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+        .clone()
+}
+
 trait ExitStatusDefault {
     fn default() -> Self;
 }
@@ -32,7 +43,7 @@ use axum::{extract::{State, Query}, Json, http::StatusCode};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 use std::env;
 use std::time::Duration;
 use rdkafka::producer::Producer;
@@ -406,7 +417,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
             let svc      = event.network_protocol.as_deref().unwrap_or("-");
             let proto    = event.proto.as_deref().unwrap_or("-");
             let ts       = event.raw.get("ts").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            info!("🟢 Zeek {} | {}→{} [{}] {} | CID: {}",
+            trace!("zeek {} | {}→{} [{}] {} cid={}",
                 svc, src, dst, proto, cs,
                 event.community_id.as_deref().unwrap_or("?"));
             json!({
@@ -429,7 +440,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.timestamp() as f64)
                 .unwrap_or(0.0);
-            info!("🔵 Suricata {} | {}→{} | CID: {}",
+            trace!("suricata {} | {}→{} cid={}",
                 et, src, dst, event.community_id.as_deref().unwrap_or("?"));
             json!({
                 "type": "suricata",
@@ -612,7 +623,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             "auto_captured_at": now_str
         });
 
+        let ev_sem = evidence_semaphore();
         tokio::spawn(async move {
+            // Acquire permit — at most 4 concurrent evidence+AI calls
+            let _permit = ev_sem.acquire_owned().await;
             match crate::evidence::build_evidence_bundle(
                 &opensearch_url,
                 &arkime_url,
@@ -737,22 +751,17 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let cs      = hit.zeek.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);
 
-    // Console output
-    println!("\n╔════════════════════════════════════════════════════════════╗");
-    println!("║                     🔥 CORRELATION HIT                     ║");
-    println!("╠════════════════════════════════════════════════════════════╣");
-    println!("║ {} [score={:.0}/100]", risk.severity.as_str(), risk.score);
-    println!("║ CID      : {}", hit.community_id);
-    println!("║ Flow     : {} → {}", src, dst);
-    println!("║ State    : {} ({})", cs, cs_desc);
-    println!("║ Tags     : {}", risk.tags.join(", "));
-    if !risk.reasons.is_empty() {
-        println!("║ Reasons  : {}", risk.reasons.join(" | "));
-    }
-    if !detections.is_empty() {
-        println!("║ SIGMA    : {}", detections.iter().map(|d| d.title.as_str()).collect::<Vec<_>>().join(", "));
-    }
-    println!("╚════════════════════════════════════════════════════════════╝\n");
+    debug!(
+        cid = %hit.community_id,
+        flow = %format!("{}→{}", src, dst),
+        severity = %risk.severity.as_str(),
+        score = risk.score,
+        state = %format!("{} ({})", cs, cs_desc),
+        tags = %risk.tags.join(","),
+        reasons = %risk.reasons.join("|"),
+        sigma = %detections.iter().map(|d| d.title.as_str()).collect::<Vec<_>>().join(","),
+        "correlation hit"
+    );
 
 // Only store hits above threshold
     if risk.score < store_threshold {
@@ -2485,26 +2494,36 @@ pub async fn delete_ai_provider(
 
 // POST /api/settings/ai/providers/test — test a specific provider config (super_admin)
 pub async fn test_ai_provider(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(p): Json<Value>,
 ) -> Json<Value> {
     if let Err(e) = require_super_admin(&headers) { return e; }
 
+    let name          = p["name"].as_str().unwrap_or("test").to_string();
+    let raw_api_key   = p["api_key"].as_str().unwrap_or("").to_string();
+
+    // If UI sent masked key (****) or empty, look up real key from DB by name
+    let api_key = if raw_api_key.is_empty() || raw_api_key.contains("****") {
+        state.ch_storage.get_ai_provider_key(&name).await.unwrap_or_default()
+    } else {
+        raw_api_key
+    };
+
+    if api_key.is_empty() {
+        return Json(json!({ "status": "error", "error": "No API key found for this provider" }));
+    }
+
     let provider = crate::ai::provider::AiProvider {
-        name:          p["name"].as_str().unwrap_or("test").to_string(),
+        name,
         provider_type: p["provider_type"].as_str().unwrap_or("custom").to_string(),
-        api_key:       p["api_key"].as_str().unwrap_or("").to_string(),
+        api_key,
         model:         p["model"].as_str().unwrap_or("").to_string(),
         base_url:      p["base_url"].as_str().unwrap_or("").to_string(),
         endpoint_path: p["endpoint_path"].as_str().unwrap_or("/v1/chat/completions").to_string(),
         msg_format:    p["msg_format"].as_str().unwrap_or("openai").to_string(),
         priority:      1,
     };
-
-    if provider.api_key.is_empty() {
-        return Json(json!({ "status": "error", "error": "No API key provided" }));
-    }
 
     let result = crate::ai::provider::call_provider_simple(
         &provider,
@@ -7118,10 +7137,13 @@ pub async fn aria_chat(
         })),
     };
 
-    let history = payload["history"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    // Keep last 6 messages only — prevents prompt bloat on long conversations
+    let history_full = payload["history"].as_array().cloned().unwrap_or_default();
+    let history = if history_full.len() > 6 {
+        history_full[history_full.len() - 6..].to_vec()
+    } else {
+        history_full
+    };
 
     // Fetch live NDR context — counts + real data based on what user asked
     let (critical, high, bundles) = tokio::join!(
@@ -7129,9 +7151,11 @@ pub async fn aria_chat(
         state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "HIGH"),
         state.ch_storage.count_evidence_bundles_aria(&claims.tenant_id),
     );
-    let real_context = state.ch_storage
+    let real_context_raw = state.ch_storage
         .fetch_aria_context(&claims.tenant_id, &user_message)
         .await;
+    // Truncate context to avoid rate limits on free-tier AI providers (Groq: 6k TPM)
+    let real_context: String = real_context_raw.chars().take(3000).collect();
 
     // Build system prompt with real tenant data only
     let system = crate::ai::build_system_prompt(

@@ -22,13 +22,10 @@ pub fn spawn_all(
         Ok(e) => Arc::new(e),
         Err(e) => {
             tracing::error!(
-                "Leader election init failed: {} — falling back to THREAT_WORKER_ENABLED",
+                "Leader election init failed: {} — threat tasks disabled until Redis recovers. \
+                 Running without coordination risks duplicate data across engines.",
                 e
             );
-            if std::env::var("THREAT_WORKER_ENABLED").unwrap_or_default() == "true" {
-                spawn_threat_tasks(ch);
-            }
-            // Return a dummy election (env-var fallback path)
             return Arc::new(
                 crate::leader::LeaderElection::new("redis://localhost:6379")
                     .expect("Cannot create fallback election")

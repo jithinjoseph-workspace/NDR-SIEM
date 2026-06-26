@@ -260,74 +260,17 @@ pub async fn call_claude_chat(
     Ok((clean, emotion))
 }
 
-// ─── Env-var fallbacks ──────────────────────────────────────────────────────
+// ─── No env-var fallback — DB only ─────────────────────────────────────────
 
-/// Fallback chain: GROQ_API_KEY → OPENAI_API_KEY → ANTHROPIC_API_KEY
-async fn env_fallback_simple(system: &str, prompt: &str) -> String {
-    if let Ok(key) = std::env::var("GROQ_API_KEY") {
-        if !key.is_empty() {
-            let model = std::env::var("GROQ_MODEL")
-                .unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
-            let r = call_openai_compat(
-                &key, &model,
-                "https://api.groq.com/openai/v1/chat/completions",
-                system, prompt,
-            ).await;
-            if !r.is_empty() { return r; }
-        }
-    }
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        if !key.is_empty() {
-            let r = call_openai_compat(
-                &key, "gpt-4o-mini",
-                "https://api.openai.com/v1/chat/completions",
-                system, prompt,
-            ).await;
-            if !r.is_empty() { return r; }
-        }
-    }
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !key.is_empty() {
-            return call_anthropic_simple(&key, "", system, prompt).await;
-        }
-    }
-    warn!("No AI provider configured or all failed");
+async fn env_fallback_simple(_system: &str, _prompt: &str) -> String {
+    warn!("No AI provider configured in DB — add one in Settings > AI Configuration");
     String::new()
 }
 
 async fn env_fallback_chat(
-    system: &str,
-    history: &[serde_json::Value],
-    user_msg: &str,
+    _system: &str,
+    _history: &[serde_json::Value],
+    _user_msg: &str,
 ) -> anyhow::Result<(String, String)> {
-    if let Ok(key) = std::env::var("GROQ_API_KEY") {
-        if !key.is_empty() {
-            let model = std::env::var("GROQ_MODEL")
-                .unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
-            if let Ok(r) = call_openai_chat(
-                &key, &model,
-                "https://api.groq.com/openai/v1/chat/completions",
-                system, history, user_msg,
-            ).await {
-                if !r.0.is_empty() { return Ok(r); }
-            }
-        }
-    }
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        if !key.is_empty() {
-            if let Ok(r) = call_openai_chat(
-                &key, "gpt-4o-mini",
-                "https://api.openai.com/v1/chat/completions",
-                system, history, user_msg,
-            ).await {
-                if !r.0.is_empty() { return Ok(r); }
-            }
-        }
-    }
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !key.is_empty() {
-            return call_claude_chat(&key, "", system, history, user_msg).await;
-        }
-    }
     Ok(("AI not configured — add a provider in Settings > AI Configuration.".to_string(), "sad".to_string()))
 }
