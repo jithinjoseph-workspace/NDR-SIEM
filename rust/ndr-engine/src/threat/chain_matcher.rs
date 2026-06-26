@@ -141,7 +141,8 @@ async fn fetch_threat_intel(client: &clickhouse::Client) -> Vec<String> {
             "SELECT ioc_type, ioc_value, attack_type, severity, description \
              FROM ndr.threat_intel \
              WHERE expires_at > now() AND ioc_value != '' \
-             ORDER BY collected_at DESC",
+             ORDER BY collected_at DESC \
+             LIMIT 5000",
         )
         .fetch_all::<ThreatIntelRow>()
         .await

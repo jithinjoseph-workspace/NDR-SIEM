@@ -171,9 +171,18 @@ async fn handle_ws(
                 tokio::time::Duration::from_secs(REVALIDATION_INTERVAL_SECS)
             );
             revalidation_interval.tick().await;
+            let mut ping_interval = tokio::time::interval(
+                tokio::time::Duration::from_secs(30)
+            );
+            ping_interval.tick().await; // skip immediate first tick
 
             loop {
                 tokio::select! {
+                    _ = ping_interval.tick() => {
+                        if socket.send(Message::Ping(vec![])).await.is_err() {
+                            break; // dead connection — clean up task
+                        }
+                    }
                     msg = stream.next() => {
                         match msg {
                             Some(m) => {
@@ -250,9 +259,18 @@ async fn handle_ws(
         tokio::time::Duration::from_secs(REVALIDATION_INTERVAL_SECS)
     );
     revalidation_interval.tick().await;
+    let mut ping_interval_fb = tokio::time::interval(
+        tokio::time::Duration::from_secs(30)
+    );
+    ping_interval_fb.tick().await;
 
     loop {
         tokio::select! {
+            _ = ping_interval_fb.tick() => {
+                if socket.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+            }
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
@@ -303,28 +321,58 @@ async fn should_force_disconnect(state: &AppState, auth: &WsAuthContext) -> bool
         return false;
     }
 
-    match state.ch_storage.is_tenant_active(&auth.tenant_id).await {
-        Ok(false) => return true,
-        Err(e) => {
-            tracing::warn!(
-                "Periodic tenant check failed for '{}': {}",
-                auth.tenant_id, e
-            );
+    let mut redis = state.redis_mux.clone();
+    let cache_ttl = 60u64; // seconds — matches revalidation interval
+
+    // ── Tenant active check — Redis cache first, ClickHouse on miss ──────
+    let tenant_cache_key = format!("ndr:ws_tenant_active:{}", auth.tenant_id);
+    let tenant_cached: Option<String> = redis::cmd("GET")
+        .arg(&tenant_cache_key)
+        .query_async(&mut redis).await.unwrap_or(None);
+
+    let tenant_active = match tenant_cached.as_deref() {
+        Some("1") => true,
+        Some("0") => false,
+        _ => {
+            // Cache miss — query ClickHouse and cache result
+            let active = state.ch_storage.is_tenant_active(&auth.tenant_id).await
+                .unwrap_or(true); // default allow on error
+            let val = if active { "1" } else { "0" };
+            let _: () = redis::cmd("SETEX")
+                .arg(&tenant_cache_key).arg(cache_ttl).arg(val)
+                .query_async(&mut redis).await.unwrap_or(());
+            active
         }
-        Ok(true) => {}
+    };
+
+    if !tenant_active {
+        return true;
     }
 
+    // ── User active check — Redis cache first, ClickHouse on miss ────────
     let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
     if blockable_roles.contains(&auth.role.as_str()) {
-        match state.ch_storage.is_user_active(&auth.username).await {
-            Ok(false) => return true,
-            Err(e) => {
-                tracing::warn!(
-                    "Periodic user check failed for '{}': {}",
-                    auth.username, e
-                );
+        let user_cache_key = format!("ndr:ws_user_active:{}", auth.username);
+        let user_cached: Option<String> = redis::cmd("GET")
+            .arg(&user_cache_key)
+            .query_async(&mut redis).await.unwrap_or(None);
+
+        let user_active = match user_cached.as_deref() {
+            Some("1") => true,
+            Some("0") => false,
+            _ => {
+                let active = state.ch_storage.is_user_active(&auth.username).await
+                    .unwrap_or(true);
+                let val = if active { "1" } else { "0" };
+                let _: () = redis::cmd("SETEX")
+                    .arg(&user_cache_key).arg(cache_ttl).arg(val)
+                    .query_async(&mut redis).await.unwrap_or(());
+                active
             }
-            Ok(true) => {}
+        };
+
+        if !user_active {
+            return true;
         }
     }
 

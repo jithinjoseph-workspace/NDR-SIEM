@@ -78,9 +78,19 @@ pub async fn start_consumer(state: Arc<AppState>) {
             let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
                 ticker.tick().await;
-                let dirty_keys: Vec<String> = redis::cmd("KEYS")
-                    .arg("ndr:assets_dirty:*")
-                    .query_async(&mut redis_flush).await.unwrap_or_default();
+                // SCAN instead of KEYS — non-blocking cursor scan, safe at any key count
+                let mut dirty_keys: Vec<String> = Vec::new();
+                let mut cursor: u64 = 0;
+                loop {
+                    let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                        .arg(cursor)
+                        .arg("MATCH").arg("ndr:assets_dirty:*")
+                        .arg("COUNT").arg(100u64)
+                        .query_async(&mut redis_flush).await.unwrap_or((0, vec![]));
+                    dirty_keys.extend(batch);
+                    cursor = next;
+                    if cursor == 0 { break; }
+                }
                 for dirty_key in dirty_keys {
                     let tenant_id = dirty_key.trim_start_matches("ndr:assets_dirty:").to_string();
                     let ips: Vec<String> = redis::cmd("SPOP")

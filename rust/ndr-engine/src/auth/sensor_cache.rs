@@ -179,9 +179,8 @@ pub fn spawn_refresh_loop(
                         .get_multiplexed_async_connection()
                         .await
                         .is_ok();
-                    tracing::info!(
-                        "Sensor key cache (Redis) health: {} active keys in DB, \
-                         redis_ok={}",
+                    tracing::debug!(
+                        "Sensor key cache health: {} active keys, redis_ok={}",
                         n, redis_ok
                     );
                 }

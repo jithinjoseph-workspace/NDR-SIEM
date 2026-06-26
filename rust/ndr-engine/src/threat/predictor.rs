@@ -265,6 +265,13 @@ async fn run_prediction(
         let _ = ch.client.query(&q).execute().await;
     }
 
+    // Retain only last 30 days — prevents unbounded table growth
+    let retention_db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
+    let _ = ch.client.query(&format!(
+        "DELETE FROM {db}.threat_predictions WHERE predicted_at < now() - INTERVAL 30 DAY",
+        db = retention_db
+    )).execute().await;
+
     info!("Predictions saved for tenant {} ({} attack types)", tenant_id, attack_types.len());
     Ok(())
 }
