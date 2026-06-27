@@ -1,14 +1,8 @@
 <header class="topbar">
   <div class="search-wrap">
     <lucide-icon [name]="SearchIcon" class="search-icon w-4 h-4"></lucide-icon>
-    <input
-      type="text"
-      [(ngModel)]="searchText"
-      (input)="onSearchInput()"
-      (keydown)="onSearch($event)"
-      (blur)="closeSearch()"
-      placeholder="Search IPs, alerts, rules, and logs"
-    />
+    <input type="text" [(ngModel)]="searchText" (input)="onSearchInput()" (keydown)="onSearch($event)"
+      (blur)="closeSearch()" placeholder="Search IPs, alerts, rules, and logs" />
 
     <div *ngIf="showSuggestions" class="suggestions-panel">
       <button *ngFor="let s of filteredSuggestions" (mousedown)="selectSuggestion(s)" class="suggestion-row">
@@ -31,6 +25,12 @@
   </div>
 
   <div class="topbar-actions">
+
+    <button *ngIf="canViewTutorial" class="icon-button tutorial-btn" aria-label="Start Tutorial"
+      title="Interactive Guided Tour" (click)="startTutorial()">
+      <lucide-icon [name]="HelpCircleIcon" class="w-5 h-5"></lucide-icon>
+    </button>
+
     <div class="system-card">
       <span>System Status</span>
       <strong [class.degraded]="systemStatus !== 'OPERATIONAL'">
@@ -60,13 +60,9 @@
         </div>
 
         <div *ngIf="activeAnnouncements.length > 0" class="notification-list">
-          <div
-            *ngFor="let announcement of activeAnnouncements"
-            class="notification-row announcement-notification"
-            [class.unread-announcement]="!announcement.read"
-            (click)="toggleAnnouncementExpand(announcement.id)"
-            style="cursor:pointer"
-          >
+          <div *ngFor="let announcement of activeAnnouncements" class="notification-row announcement-notification"
+            [class.unread-announcement]="!announcement.read" (click)="toggleAnnouncementExpand(announcement.id)"
+            style="cursor:pointer">
             <div class="announcement-card-inner">
               <div class="announcement-card-header">
                 <span [class]="'announcement-badge ' + announcementTypeClass(announcement.type)">
@@ -75,10 +71,8 @@
                 <span *ngIf="!announcement.read" class="unread-dot" title="Unread"></span>
               </div>
               <strong class="announcement-card-title">{{ announcement.title }}</strong>
-              <p
-                class="announcement-card-body"
-                [class.expanded]="isAnnouncementExpanded(announcement.id)"
-              >{{ announcement.message }}</p>
+              <p class="announcement-card-body" [class.expanded]="isAnnouncementExpanded(announcement.id)">{{
+                announcement.message }}</p>
               <div class="announcement-card-footer">
                 <em *ngIf="announcement.starts_at || announcement.start_at">
                   Starts {{ (announcement.starts_at || announcement.start_at) | date:'MMM d, h:mm a' }}
@@ -86,7 +80,8 @@
                 <em *ngIf="!announcement.starts_at && !announcement.start_at">
                   {{ announcement.created_at | date:'MMM d, h:mm a' }}
                 </em>
-                <em class="expand-hint">{{ isAnnouncementExpanded(announcement.id) ? 'Click to collapse' : 'Click to read more' }}</em>
+                <em class="expand-hint">{{ isAnnouncementExpanded(announcement.id) ? 'Click to collapse' : 'Click to
+                  read more' }}</em>
               </div>
             </div>
           </div>
@@ -120,8 +115,7 @@
       </div>
     </div>
 
-    <button class="profile-button" (click)="showUserMenu=!showUserMenu"
-      style="position:relative">
+    <button class="profile-button" (click)="showUserMenu=!showUserMenu" style="position:relative">
       <span class="avatar">
         <lucide-icon [name]="UserIcon" class="w-5 h-5"></lucide-icon>
       </span>
@@ -131,12 +125,10 @@
       </span>
       <lucide-icon [name]="ChevronDownIcon" class="w-3 h-3 chevron-icon"></lucide-icon>
       <!-- Dropdown -->
-      <div *ngIf="showUserMenu"
-        style="position:absolute;top:100%;right:0;
+      <div *ngIf="showUserMenu" style="position:absolute;top:100%;right:0;
         background:#1a1a2e;border:1px solid rgba(255,255,255,0.1);
         border-radius:8px;padding:8px;min-width:150px;z-index:1000">
-        <button (click)="logout()"
-          style="width:100%;text-align:left;padding:8px 12px;
+        <button (click)="logout()" style="width:100%;text-align:left;padding:8px 12px;
           color:#ff4444;font-size:12px;border-radius:4px;
           background:none;border:none;cursor:pointer">
           🚪 Logout
