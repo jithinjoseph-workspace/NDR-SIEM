@@ -54,9 +54,10 @@ struct MitreTechnique {
 }
 
 async fn fetch_active_pattern_matches(
-    ch:      &crate::storage::ClickhouseStorage,
-    tenant_id: &str,
-    trusted: &TrustedRanges,
+    ch:               &crate::storage::ClickhouseStorage,
+    tenant_id:        &str,
+    trusted:          &TrustedRanges,
+    trusted_asset_ips: &[String],
 ) -> Vec<ActivePatternMatch> {
     let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
 
@@ -93,6 +94,7 @@ async fn fetch_active_pattern_matches(
         }
         if !sensor_ip.is_empty() && r.src_ip == sensor_ip { return false; }
         if trusted.is_trusted_ip(&r.src_ip) { return false; }
+        if trusted_asset_ips.contains(&r.src_ip) { return false; }
         true
     })
     .map(|r| ActivePatternMatch {
@@ -151,19 +153,75 @@ async fn fetch_mitre_techniques(
     }).collect()
 }
 
+/// Build a map of IP → human label from the assets table for enriching predictions.
+async fn build_asset_map(
+    ch:        &crate::storage::ClickhouseStorage,
+    tenant_id: &str,
+    ips:       &[String],
+) -> std::collections::HashMap<String, String> {
+    if ips.is_empty() { return Default::default(); }
+    let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
+    let ip_list = ips.iter().map(|ip| format!("'{}'", ip.replace('\'', "\\'"))).collect::<Vec<_>>().join(",");
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row { ip: String, hostname: String, custom_name: String, device_type: String }
+    let rows = ch.client.query(&format!(
+        "SELECT ip, hostname, custom_name, device_type FROM {db}.assets FINAL \
+         WHERE ip IN ({ip_list}) AND tenant_id = '{tid}'",
+        db = db, ip_list = ip_list, tid = tenant_id
+    )).fetch_all::<Row>().await.unwrap_or_default();
+
+    rows.into_iter().map(|r| {
+        let label = if !r.custom_name.is_empty() {
+            format!("{} [{}]", r.custom_name, r.device_type)
+        } else if !r.hostname.is_empty() {
+            format!("{} [{}]", r.hostname, r.device_type)
+        } else {
+            r.device_type.clone()
+        };
+        (r.ip, label)
+    }).collect()
+}
+
 async fn run_prediction(
     ch:        &crate::storage::ClickhouseStorage,
     tenant_id: &str,
     trusted:   &TrustedRanges,
 ) -> anyhow::Result<()> {
+    // 0. Sensor health check — skip if no events in last 2 hours (sensor offline/not deployed)
+    let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
+    let recent_count: u64 = ch.client
+        .query(&format!(
+            "SELECT count() FROM {db}.ndr_events WHERE timestamp >= now() - INTERVAL 2 HOUR",
+            db = db
+        ))
+        .fetch_one::<u64>().await.unwrap_or(0);
+    if recent_count == 0 {
+        info!("Predictor: no sensor data in last 2 hours for tenant {} — skipping cycle (sensor offline?)", tenant_id);
+        return Ok(());
+    }
+
     // 1. Exposure profile
     let exposure = build_exposure(ch, tenant_id).await?;
 
+    // 1b. Trusted assets — treated like trusted cloud IPs, excluded from scoring
+    let trusted_asset_ips = ch.get_trusted_asset_ips(tenant_id).await;
+
     // 2. Active MITRE chain matches — trusted IPs filtered out immediately
-    let all_patterns = fetch_active_pattern_matches(ch, tenant_id, trusted).await;
+    let all_patterns = fetch_active_pattern_matches(ch, tenant_id, trusted, &trusted_asset_ips).await;
 
     // 3. IOC IP matches — trusted IPs filtered out immediately
     let ioc_matches = match_iocs(ch, tenant_id, trusted).await;
+    let ioc_matches: Vec<_> = ioc_matches.into_iter()
+        .filter(|m| !trusted_asset_ips.contains(&m.ip))
+        .collect();
+
+    // 3b. Asset enrichment map: IP → label (e.g. "DESKTOP-ABC [Windows PC]")
+    let all_ips: Vec<String> = {
+        let mut v: Vec<String> = all_patterns.iter().map(|p| p.src_ip.clone()).collect();
+        v.extend(ioc_matches.iter().map(|m| m.ip.clone()));
+        v.sort(); v.dedup(); v
+    };
+    let asset_map = build_asset_map(ch, tenant_id, &all_ips).await;
 
     // 4. Recent threat intel signals — CVEs excluded (no network indicator, cause hallucinations)
     let intel_rows = ch.client
@@ -256,11 +314,11 @@ async fn run_prediction(
         let (aria_briefing, recommendations) = generate_aria_briefing(
             ch, tenant_id, attack_type, probability,
             &exposure, &intel_context,
-            &matched_iocs, &matched_patterns, &techniques,
+            &matched_iocs, &matched_patterns, &techniques, &asset_map,
         ).await;
 
         let explanation = build_explanation(
-            attack_type, &matched_patterns, &techniques, &matched_iocs, max_completion,
+            attack_type, &matched_patterns, &techniques, &matched_iocs, max_completion, &asset_map,
         );
 
         let db       = crate::storage::clickhouse::tenant_db_pub(tenant_id);
@@ -303,6 +361,13 @@ async fn run_prediction(
             al       = alert_level,
         );
         let _ = ch.client.query(&q).execute().await;
+
+        // Mark involved asset IPs as threat_flagged in the assets table
+        let flagged_ips: Vec<String> = matched_patterns.iter().map(|p| p.src_ip.clone())
+            .chain(matched_iocs.iter().map(|m| m.ip.clone()))
+            .filter(|ip| !ip.is_empty())
+            .collect::<std::collections::HashSet<_>>().into_iter().collect();
+        let _ = ch.mark_assets_threat_flagged(tenant_id, &flagged_ips).await;
     }
 
     // Retain only last 30 days — prevents unbounded table growth
@@ -399,6 +464,7 @@ fn build_explanation(
     techniques: &[MitreTechnique],
     iocs: &[&IocMatch],
     max_completion: f32,
+    asset_map: &std::collections::HashMap<String, String>,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
 
@@ -417,9 +483,12 @@ fn build_explanation(
 
     if !patterns.is_empty() {
         let chain_list: Vec<String> = patterns.iter().map(|pm| {
+            let ip_label = asset_map.get(&pm.src_ip)
+                .map(|l| format!("{} ({})", pm.src_ip, l))
+                .unwrap_or_else(|| pm.src_ip.clone());
             format!("\"{}\" {}/{} steps ({:.0}%) from {}",
                 pm.chain_name, pm.steps_observed, pm.steps_total,
-                pm.completion_pct, pm.src_ip)
+                pm.completion_pct, ip_label)
         }).collect();
         parts.push(format!("MITRE chains matched: {}", chain_list.join("; ")));
 
@@ -440,9 +509,13 @@ fn build_explanation(
     }
 
     if !iocs.is_empty() {
-        let ip_list: Vec<String> = iocs.iter()
-            .map(|m| format!("{} ({})", m.ip, m.source))
-            .collect();
+        let ip_list: Vec<String> = iocs.iter().map(|m| {
+            if let Some(label) = asset_map.get(&m.ip) {
+                format!("{} — {} ({})", m.ip, label, m.source)
+            } else {
+                format!("{} ({})", m.ip, m.source)
+            }
+        }).collect();
         parts.push(format!("Malicious IPs confirmed: {}", ip_list.join(", ")));
     }
 
@@ -463,6 +536,7 @@ async fn generate_aria_briefing(
     matched_iocs: &[&IocMatch],
     matched_patterns: &[&ActivePatternMatch],
     techniques: &[MitreTechnique],
+    asset_map: &std::collections::HashMap<String, String>,
 ) -> (String, Vec<String>) {
     let exposure_ctx  = exposure.as_json_context();
     let intel_summary = intel_context.join("\n");
@@ -471,7 +545,8 @@ async fn generate_aria_briefing(
         "No confirmed IOC matches.".to_string()
     } else {
         let lines: Vec<String> = matched_iocs.iter().map(|m| {
-            format!("  {} ({} traffic) — {} [{}] | {}", m.ip, m.direction, m.attack_type, m.source, m.description)
+            let asset_label = asset_map.get(&m.ip).map(|l| format!(" — Asset: {}", l)).unwrap_or_default();
+            format!("  {}{} ({} traffic) — {} [{}] | {}", m.ip, asset_label, m.direction, m.attack_type, m.source, m.description)
         }).collect();
         format!("Confirmed malicious IPs ({} matched):\n{}", matched_iocs.len(), lines.join("\n"))
     };
@@ -480,9 +555,11 @@ async fn generate_aria_briefing(
         "No active MITRE chain matches.".to_string()
     } else {
         let lines: Vec<String> = matched_patterns.iter().map(|pm| {
-            format!("  Chain: {} | {:.0}% complete ({}/{} steps) | src_ip: {} | next expected: {}",
+            let asset_label = asset_map.get(&pm.src_ip).map(|l| format!(" ({})", l)).unwrap_or_default();
+            format!("  Chain: {} | {:.0}% complete ({}/{} steps) | src_ip: {}{} | next expected: {}",
                 pm.chain_name, pm.completion_pct, pm.steps_observed, pm.steps_total,
-                pm.src_ip, if pm.next_step.is_empty() { "chain may be complete" } else { &pm.next_step })
+                pm.src_ip, asset_label,
+                if pm.next_step.is_empty() { "chain may be complete" } else { &pm.next_step })
         }).collect();
         format!("Active MITRE attack chains:\n{}", lines.join("\n"))
     };

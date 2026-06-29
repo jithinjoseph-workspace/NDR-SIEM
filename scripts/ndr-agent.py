@@ -76,12 +76,10 @@ def ensure_zeek_arp():
 
     try:
         result = subprocess.run(["sudo", "cat", local_path], capture_output=True, text=True)
-        content = result.stdout
-        if "@load ndr-arp" not in content:
-            new_content = content.rstrip() + "\n@load ndr-arp\n"
+        if "@load ndr-arp" not in result.stdout:
             subprocess.run(
-                ["sudo", "tee", local_path],
-                input=new_content.encode(),
+                ["sudo", "tee", "-a", local_path],
+                input=b"\n@load ndr-arp\n",
                 capture_output=True,
             )
     except Exception:

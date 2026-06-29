@@ -282,6 +282,10 @@ export class Api {
     return this.http.put(`${this.baseUrl}/assets/${ip}`, payload);
   }
 
+  setAssetTrusted(ip: string, trusted: boolean): Observable<any> {
+    return this.http.patch(`${this.baseUrl}/assets/${ip}/trusted`, { trusted });
+  }
+
   togglePlaybook(data: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/soar/playbook/toggle`, data);
   }

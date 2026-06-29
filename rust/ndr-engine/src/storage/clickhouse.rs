@@ -163,6 +163,8 @@ pub struct AssetRow {
     pub first_seen: u32,
     pub last_seen: u32,
     pub ip_history: String,
+    pub trusted: u8,
+    pub threat_flagged: u8,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -4605,10 +4607,9 @@ pub async fn get_ioc_hits(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, \
              toUnixTimestamp(last_seen) as last_seen, \
-             ip_history \
-             FROM {}.assets WHERE tenant_id = '{}' \
-             ORDER BY ip ASC, last_seen DESC \
-             LIMIT 1 BY ip",
+             ip_history, trusted, threat_flagged \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' \
+             ORDER BY ip ASC",
             db, sql_escape(tenant_id)
         );
         let rows = self.client.query(&query).fetch_all::<AssetRow>().await?;
@@ -4620,8 +4621,9 @@ pub async fn get_ioc_hits(
         let db = tenant_db(tenant_id);
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
-             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
-             FROM {}.assets WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
+             ip_history, trusted, threat_flagged \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(mac)
         );
         let result = self.client.query(&query).fetch_optional::<AssetRow>().await?;
@@ -4666,8 +4668,9 @@ pub async fn get_ioc_hits(
         let db = tenant_db(tenant_id);
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
-             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
-             FROM {}.assets WHERE tenant_id = '{}' AND ip = '{}' ORDER BY last_seen DESC LIMIT 1",
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
+             ip_history, trusted, threat_flagged \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}' LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(ip)
         );
         let asset = self.client.query(&query).fetch_optional::<AssetRow>().await?;
@@ -4680,6 +4683,45 @@ pub async fn get_ioc_hits(
             "ALTER TABLE {}.assets UPDATE custom_name = '{}', last_seen = now() \
              WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(custom_name), sql_escape(tenant_id), sql_escape(ip)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    /// Returns IPs of assets marked as trusted by the user for a tenant.
+    pub async fn get_trusted_asset_ips(&self, tenant_id: &str) -> Vec<String> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "SELECT ip FROM {}.assets FINAL WHERE tenant_id = '{}' AND trusted = 1",
+            db, sql_escape(tenant_id)
+        );
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { ip: String }
+        self.client.query(&query).fetch_all::<Row>().await
+            .unwrap_or_default().into_iter().map(|r| r.ip).collect()
+    }
+
+    /// Mark a list of IPs as threat_flagged for a tenant (called after prediction).
+    pub async fn mark_assets_threat_flagged(&self, tenant_id: &str, ips: &[String]) -> anyhow::Result<()> {
+        if ips.is_empty() { return Ok(()); }
+        let db = tenant_db(tenant_id);
+        let ip_list = ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
+        let query = format!(
+            "ALTER TABLE {}.assets UPDATE threat_flagged = 1, threat_flagged_at = now() \
+             WHERE tenant_id = '{}' AND ip IN ({}) SETTINGS mutations_sync=0",
+            db, sql_escape(tenant_id), ip_list
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    /// Toggle the trusted flag on an asset (0→1 or 1→0).
+    pub async fn set_asset_trusted(&self, tenant_id: &str, ip: &str, trusted: bool) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "ALTER TABLE {}.assets UPDATE trusted = {}, threat_flagged = 0, last_seen = now() \
+             WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
+            db, if trusted { 1 } else { 0 }, sql_escape(tenant_id), sql_escape(ip)
         );
         self.client.query(&query).execute().await?;
         Ok(())
