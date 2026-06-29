@@ -1856,18 +1856,19 @@ pub async fn list_ai_providers(&self) -> anyhow::Result<Vec<serde_json::Value>> 
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct Row {
         name: String, provider_type: String, model: String,
-        base_url: String, use_case: String, priority: u8,
-        enabled: u8, key_set: u8,
+        base_url: String, endpoint_path: String, msg_format: String,
+        use_case: String, priority: u8, enabled: u8, key_set: u8,
     }
     let rows = self.client.query(
-        "SELECT name, provider_type, model, base_url, use_case, priority, enabled, \
+        "SELECT name, provider_type, model, base_url, endpoint_path, msg_format, use_case, priority, enabled, \
          if(length(api_key) > 0, 1, 0) as key_set \
          FROM ndr.ai_providers FINAL ORDER BY priority ASC"
     ).fetch_all::<Row>().await.unwrap_or_default();
 
     Ok(rows.into_iter().map(|r| serde_json::json!({
         "name": r.name, "provider_type": r.provider_type, "model": r.model,
-        "base_url": r.base_url, "use_case": r.use_case, "priority": r.priority,
+        "base_url": r.base_url, "endpoint_path": r.endpoint_path, "msg_format": r.msg_format,
+        "use_case": r.use_case, "priority": r.priority,
         "enabled": r.enabled == 1, "key_set": r.key_set == 1,
     })).collect())
 }

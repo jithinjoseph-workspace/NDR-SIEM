@@ -89,10 +89,10 @@ export class AiActivity {
 
   probColor(p: number): string {
     const pct = (p || 0) * 100;
-    if (pct >= 75) return '#ef4444';
-    if (pct >= 50) return '#f97316';
-    if (pct >= 25) return '#eab308';
-    return '#22c55e';
+    if (pct >= 75) return '#ff2a5f';
+    if (pct >= 50) return '#ff9900';
+    if (pct >= 25) return '#ffea00';
+    return '#69f6b8';
   }
 
   trendIcon(trend: string) {

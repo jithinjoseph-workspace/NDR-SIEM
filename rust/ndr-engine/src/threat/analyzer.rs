@@ -13,10 +13,11 @@ pub struct IocMatch {
 }
 
 /// Cross-reference IPs seen in tenant traffic against ndr.threat_intel.
-/// Returns matched IPs with full threat context.
+/// Returns matched IPs with full threat context, excluding trusted cloud IPs.
 pub async fn match_iocs(
-    ch: &crate::storage::ClickhouseStorage,
+    ch:        &crate::storage::ClickhouseStorage,
     tenant_id: &str,
+    trusted:   &super::cloud_trust::TrustedRanges,
 ) -> Vec<IocMatch> {
     let db = tenant_db_pub(tenant_id);
 
@@ -71,18 +72,20 @@ pub async fn match_iocs(
     let direction_map: std::collections::HashMap<String, String> =
         traffic_ips.into_iter().map(|r| (r.ip, r.direction)).collect();
 
-    // 5. Merge matches
-    let matches: Vec<IocMatch> = intel_rows.into_iter().map(|r| {
-        let dir = direction_map.get(&r.ioc_value).cloned().unwrap_or_else(|| "dst".into());
-        IocMatch {
-            ip:          r.ioc_value,
-            source:      r.source,
-            attack_type: r.attack_type,
-            severity:    r.severity,
-            description: r.description,
-            direction:   dir,
-        }
-    }).collect();
+    // 5. Merge matches — skip IPs in trusted cloud
+    let matches: Vec<IocMatch> = intel_rows.into_iter()
+        .filter(|r| !trusted.is_trusted_ip(&r.ioc_value))
+        .map(|r| {
+            let dir = direction_map.get(&r.ioc_value).cloned().unwrap_or_else(|| "dst".into());
+            IocMatch {
+                ip:          r.ioc_value,
+                source:      r.source,
+                attack_type: r.attack_type,
+                severity:    r.severity,
+                description: r.description,
+                direction:   dir,
+            }
+        }).collect();
 
     info!("IOC match: {} malicious IPs found in tenant {} traffic", matches.len(), tenant_id);
     matches

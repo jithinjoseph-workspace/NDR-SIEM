@@ -1,12 +1,13 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth/auth';
-import { LucideAngularModule, Search, Bell, User, ChevronDown } from 'lucide-angular';
+import { LucideAngularModule, Search, Bell, User, ChevronDown, HelpCircle } from 'lucide-angular';
 import { Websocket } from '../../services/websocket/websocket';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Announcement, Api } from '../../services/api/api';
+import { TourService } from '../../services/tour/tour.service';
 
 @Component({
   selector: 'app-navbar',
@@ -20,6 +21,7 @@ export class Navbar implements OnInit, OnDestroy {
   BellIcon = Bell;
   UserIcon = User;
   ChevronDownIcon = ChevronDown;
+  HelpCircleIcon = HelpCircle;
 
   systemStatus = 'OPERATIONAL';
   searchText = '';
@@ -54,6 +56,7 @@ export class Navbar implements OnInit, OnDestroy {
   ];
 
   filteredSuggestions: any[] = [];
+  private tour = inject(TourService);
   private statusInterval: ReturnType<typeof setInterval> | null = null;
   private announcementInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -81,6 +84,14 @@ export class Navbar implements OnInit, OnDestroy {
     return this.activeAnnouncements.length > 0 || (this.canViewAlerts && this.recentAlerts.length > 0);
   }
 
+  get canViewTutorial() {
+    const user = this.auth.getUser();
+    if (!user) return false;
+    const isDefaultUser = user.tenant_id === 'default' && !this.auth.isAdmin();
+    const isTenantAnalyst = user.tenant_id !== 'default' && user.role === 'analyst';
+    return isDefaultUser || isTenantAnalyst;
+  }
+
   constructor(
     private auth: AuthService,
     private router: Router,
@@ -88,8 +99,12 @@ export class Navbar implements OnInit, OnDestroy {
     private notifications: Notifications,
     private api: Api,
     private cdr: ChangeDetectorRef,
-    private el: ElementRef
+    private el: ElementRef,
   ) {}
+
+  startTutorial() {
+    this.tour.startTour();
+  }
 
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: MouseEvent) {

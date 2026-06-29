@@ -1,11 +1,16 @@
 use std::sync::Arc;
 use tokio::time::Duration;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::ai::provider::{generate, UseCase};
 use super::analyzer::{build_exposure, match_iocs, ExposureProfile, IocMatch};
+use super::cloud_trust::TrustedRanges;
 
-pub fn spawn_predictor(ch: Arc<crate::storage::ClickhouseStorage>) {
+pub fn spawn_predictor(
+    ch:      Arc<crate::storage::ClickhouseStorage>,
+    trusted: Arc<RwLock<TrustedRanges>>,
+) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(300)).await;
         loop {
@@ -14,12 +19,14 @@ pub fn spawn_predictor(ch: Arc<crate::storage::ClickhouseStorage>) {
                 tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
                 continue;
             };
+            let trusted_snap = trusted.read().await;
             for tenant_id in tenants {
-                if let Err(e) = run_prediction(&ch, &tenant_id).await {
+                if let Err(e) = run_prediction(&ch, &tenant_id, &trusted_snap).await {
                     warn!("Prediction failed for {}: {}", tenant_id, e);
                 }
             }
             info!("Threat predictor: cycle complete — next run in 6 hours");
+            drop(trusted_snap);
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });
@@ -47,8 +54,9 @@ struct MitreTechnique {
 }
 
 async fn fetch_active_pattern_matches(
-    ch: &crate::storage::ClickhouseStorage,
+    ch:      &crate::storage::ClickhouseStorage,
     tenant_id: &str,
+    trusted: &TrustedRanges,
 ) -> Vec<ActivePatternMatch> {
     let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
 
@@ -84,6 +92,7 @@ async fn fetch_active_pattern_matches(
             if addr.is_multicast() { return false; }
         }
         if !sensor_ip.is_empty() && r.src_ip == sensor_ip { return false; }
+        if trusted.is_trusted_ip(&r.src_ip) { return false; }
         true
     })
     .map(|r| ActivePatternMatch {
@@ -143,17 +152,18 @@ async fn fetch_mitre_techniques(
 }
 
 async fn run_prediction(
-    ch: &crate::storage::ClickhouseStorage,
+    ch:        &crate::storage::ClickhouseStorage,
     tenant_id: &str,
+    trusted:   &TrustedRanges,
 ) -> anyhow::Result<()> {
     // 1. Exposure profile
     let exposure = build_exposure(ch, tenant_id).await?;
 
-    // 2. Active MITRE chain matches from chain_matcher
-    let all_patterns = fetch_active_pattern_matches(ch, tenant_id).await;
+    // 2. Active MITRE chain matches — trusted IPs filtered out immediately
+    let all_patterns = fetch_active_pattern_matches(ch, tenant_id, trusted).await;
 
-    // 3. IOC IP matches from threat intel
-    let ioc_matches = match_iocs(ch, tenant_id).await;
+    // 3. IOC IP matches — trusted IPs filtered out immediately
+    let ioc_matches = match_iocs(ch, tenant_id, trusted).await;
 
     // 4. Recent threat intel signals — CVEs excluded (no network indicator, cause hallucinations)
     let intel_rows = ch.client

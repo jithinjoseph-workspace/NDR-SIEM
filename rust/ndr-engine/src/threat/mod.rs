@@ -112,7 +112,7 @@ fn spawn_threat_tasks(
     );
 
     collector::spawn_collector(Arc::clone(&ch));
-    predictor::spawn_predictor(Arc::clone(&ch));
+    predictor::spawn_predictor(Arc::clone(&ch), Arc::clone(&trusted));
     patterns::spawn_pattern_sync(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&redis));
     chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&trusted), Arc::clone(&asn));
     correlator::spawn_correlator(Arc::clone(&ch));

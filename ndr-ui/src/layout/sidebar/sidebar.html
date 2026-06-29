@@ -11,7 +11,8 @@
     <a
       *ngFor="let item of navItems"
       [routerLink]="item.route"
-      routerLinkActive="active"
+      [queryParams]="item.queryParams || null"
+      [class.active]="isActive(item)"
       class="nav-link"
     >
       <lucide-icon [name]="item.icon" class="w-5 h-5"></lucide-icon>

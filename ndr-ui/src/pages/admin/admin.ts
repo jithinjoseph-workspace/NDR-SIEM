@@ -21,11 +21,18 @@ import {
   UserPlus,
   Users,
   X,
-  Activity
+  Bot,
+  Eye,
+  EyeOff,
+  Zap,
+  LoaderCircle,
+  AlertTriangle,
+  Activity,
+  Save
 } from 'lucide-angular';
 import { Announcement, Api, SensorKey } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 
 type AnnouncementType = 'info' | 'maintenance' | 'update' | 'critical';
 type AnnouncementAudience = 'all' | 'tenant_admins' | 'tenant';
@@ -39,6 +46,19 @@ interface AnnouncementDraft {
   starts_at: string;
   ends_at: string;
   active: boolean;
+}
+
+interface AiProvider {
+  name: string;
+  provider_type: string;
+  model: string;
+  base_url: string;
+  endpoint_path: string;
+  msg_format: string;
+  use_case: string;
+  priority: number;
+  enabled: boolean;
+  key_set: boolean;
 }
 
 @Component({
@@ -68,6 +88,38 @@ export class Admin implements OnInit, OnDestroy {
   ChevronDownIcon = ChevronDown;
   ChevronRightIcon = ChevronRight;
   ActivityIcon = Activity;
+  BotIcon = Bot;
+  EyeIcon = Eye;
+  EyeOffIcon = EyeOff;
+  TestIcon = Zap;
+  LoadingIcon = LoaderCircle;
+  SaveIcon = Save;
+
+  // AI Providers state
+  providers: AiProvider[] = [];
+  loadingProviders = false;
+  savingProvider = false;
+  providerMessage = '';
+  providerError = '';
+  testProviderResult = '';
+  showAddProviderForm = false;
+  testingProvider = '';
+  showProviderKey = false;
+  newProvider = {
+    name: '', provider_type: 'custom', api_key: '', model: '',
+    base_url: '', endpoint_path: '/v1/chat/completions',
+    msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
+  };
+  providerTypeOptions = [
+    { value: 'custom',    label: 'Custom / OpenAI-compatible' },
+    { value: 'openai',    label: 'OpenAI' },
+    { value: 'anthropic', label: 'Anthropic' },
+  ];
+  useCaseOptions = [
+    { value: 'all',    label: 'All (chat + threat analysis)' },
+    { value: 'chat',   label: 'ARIA chat only' },
+    { value: 'threat', label: 'Threat analysis only' },
+  ];
 
   activeTab = 'tenants';
   telemetryData: any = null;
@@ -247,6 +299,7 @@ export class Admin implements OnInit, OnDestroy {
     private api: Api,
     private auth: AuthService,
     private router: Router,
+    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -256,6 +309,11 @@ export class Admin implements OnInit, OnDestroy {
       this.router.navigate(['/dashboard']);
       return;
     }
+    this.route.queryParams.subscribe(params => {
+      if (params['tab']) {
+        this.switchTab(params['tab']);
+      }
+    });
     this.loadUsers();
     this.loadTenants();
     this.loadSensorKeys();
@@ -305,6 +363,9 @@ export class Admin implements OnInit, OnDestroy {
     }
     if (tab === 'trusted-cloud') {
       this.loadTrustedCloud();
+    }
+    if (tab === 'ai-providers') {
+      this.loadProviders();
     }
   }
 
@@ -1562,5 +1623,133 @@ export class Admin implements OnInit, OnDestroy {
         },
       });
     }, delay);
+  }
+
+  // ── AI Providers ──────────────────────────────────────────────────────────
+
+  loadProviders() {
+    this.loadingProviders = true;
+    this.api.listAiProviders().subscribe({
+      next: (data: any) => {
+        this.providers = data.providers || [];
+        this.loadingProviders = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.loadingProviders = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  saveProvider() {
+    this.savingProvider = true;
+    this.providerMessage = '';
+    this.providerError = '';
+    this.api.saveAiProvider(this.newProvider).subscribe({
+      next: () => {
+        this.savingProvider = false;
+        this.providerMessage = `Provider "${this.newProvider.name}" saved`;
+        this.showAddProviderForm = false;
+        this.resetNewProvider();
+        this.loadProviders();
+        this.cdr.detectChanges();
+        setTimeout(() => { this.providerMessage = ''; this.cdr.detectChanges(); }, 3000);
+      },
+      error: () => {
+        this.savingProvider = false;
+        this.providerError = 'Failed to save provider';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  deleteProvider(name: string) {
+    if (!confirm(`Delete provider "${name}"?`)) return;
+    this.api.deleteAiProvider(name).subscribe({
+      next: () => {
+        this.providerMessage = `Provider "${name}" deleted`;
+        this.loadProviders();
+        this.cdr.detectChanges();
+        setTimeout(() => { this.providerMessage = ''; this.cdr.detectChanges(); }, 3000);
+      },
+      error: () => {
+        this.providerError = 'Failed to delete provider';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  testProvider(p: AiProvider) {
+    this.testingProvider = p.name;
+    this.testProviderResult = '';
+    const payload = {
+      name: p.name, provider_type: p.provider_type,
+      api_key: '', model: p.model, base_url: p.base_url,
+      endpoint_path: p.endpoint_path || '/v1/chat/completions', msg_format: p.msg_format || 'openai',
+    };
+    this.api.testAiProvider(payload).subscribe({
+      next: (data: any) => {
+        this.testingProvider = '';
+        this.testProviderResult = data.status === 'ok'
+          ? `✓ ${p.name} — OK` : `✗ ${p.name} — ${data.error}`;
+        this.cdr.detectChanges();
+        setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 5000);
+      },
+      error: () => {
+        this.testingProvider = '';
+        this.testProviderResult = `✗ ${p.name} — request failed`;
+        this.cdr.detectChanges();
+        setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 5000);
+      }
+    });
+  }
+
+  testNewProvider() {
+    this.testingProvider = '__new__';
+    this.testProviderResult = '';
+    this.api.testAiProvider(this.newProvider).subscribe({
+      next: (data: any) => {
+        this.testingProvider = '';
+        this.testProviderResult = data.status === 'ok'
+          ? '✓ Connection OK — ' + (data.response || '').substring(0, 60)
+          : '✗ ' + (data.error || 'No response');
+        this.cdr.detectChanges();
+        setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 6000);
+      },
+      error: () => {
+        this.testingProvider = '';
+        this.testProviderResult = '✗ Request failed — check URL and key';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  resetNewProvider() {
+    this.newProvider = {
+      name: '', provider_type: 'custom', api_key: '', model: '',
+      base_url: '', endpoint_path: '/v1/chat/completions',
+      msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
+    };
+  }
+
+  get defaultBaseUrl(): string {
+    switch (this.newProvider.provider_type) {
+      case 'openai':    return 'https://api.openai.com';
+      case 'anthropic': return 'https://api.anthropic.com';
+      default:          return '';
+    }
+  }
+
+  get defaultModelPlaceholder(): string {
+    switch (this.newProvider.provider_type) {
+      case 'openai':    return 'gpt-4o-mini';
+      case 'anthropic': return 'claude-sonnet-4-6';
+      default:          return 'e.g. llama-3.3-70b-versatile';
+    }
+  }
+
+  useCaseLabel(uc: string): string {
+    return ({ all: 'All', chat: 'Chat', threat: 'Threat' } as any)[uc] || uc;
   }
 }

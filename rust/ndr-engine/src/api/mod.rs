@@ -2710,16 +2710,13 @@ pub async fn test_ai_provider(
         priority:      1,
     };
 
-    let result = crate::ai::provider::call_provider_simple(
+    match crate::ai::provider::call_provider_test(
         &provider,
         "You are a test assistant.",
         "Reply with exactly: OK",
-    ).await;
-
-    if result.is_empty() {
-        Json(json!({ "status": "error", "error": "Provider returned empty response" }))
-    } else {
-        Json(json!({ "status": "ok", "response": result }))
+    ).await {
+        Ok(text) => Json(json!({ "status": "ok", "response": text })),
+        Err(e)   => Json(json!({ "status": "error", "error": e })),
     }
 }
 

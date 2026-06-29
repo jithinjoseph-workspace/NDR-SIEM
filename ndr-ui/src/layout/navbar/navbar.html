@@ -31,6 +31,12 @@
   </div>
 
   <div class="topbar-actions">
+
+    <button *ngIf="canViewTutorial" class="icon-button tutorial-btn" aria-label="Start Tutorial"
+      title="Interactive Guided Tour" (click)="startTutorial()">
+      <lucide-icon [name]="HelpCircleIcon" class="w-5 h-5"></lucide-icon>
+    </button>
+
     <div class="system-card">
       <span>System Status</span>
       <strong [class.degraded]="systemStatus !== 'OPERATIONAL'">

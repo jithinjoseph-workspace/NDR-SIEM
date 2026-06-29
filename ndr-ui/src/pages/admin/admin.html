@@ -43,36 +43,6 @@
     </article>
   </section>
 
-  <div class="admin-tabs" role="tablist" aria-label="Super admin sections">
-    <button type="button" (click)="switchTab('tenants')" [class.active]="activeTab === 'tenants'">
-      <lucide-icon [name]="BuildingIcon" class="w-4 h-4"></lucide-icon>
-      Tenants
-    </button>
-    <button type="button" (click)="switchTab('users')" [class.active]="activeTab === 'users'">
-      <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
-      Users
-    </button>
-    <button type="button" (click)="switchTab('engines')" [class.active]="activeTab === 'engines'">
-      <lucide-icon [name]="GaugeIcon" class="w-4 h-4"></lucide-icon>
-      Engines
-    </button>
-    <button type="button" (click)="switchTab('sensors')" [class.active]="activeTab === 'sensors'">
-      <lucide-icon [name]="KeyIcon" class="w-4 h-4"></lucide-icon>
-      Sensors
-    </button>
-    <button type="button" (click)="switchTab('announcements')" [class.active]="activeTab === 'announcements'">
-      <lucide-icon [name]="AnnouncementIcon" class="w-4 h-4"></lucide-icon>
-      Announcements
-    </button>
-    <button type="button" (click)="switchTab('telemetry')" [class.active]="activeTab === 'telemetry'">
-      <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
-      Telemetry
-    </button>
-    <button type="button" (click)="switchTab('trusted-cloud')" [class.active]="activeTab === 'trusted-cloud'">
-      <lucide-icon name="shield-check" class="w-4 h-4"></lucide-icon>
-      Trusted Cloud
-    </button>
-  </div>
 
   <section *ngIf="activeTab === 'tenants'" class="admin-panel">
     <div class="panel-head">
@@ -600,6 +570,148 @@
     </div>
   </section>
 
+  <section *ngIf="activeTab === 'ai-providers'" class="admin-panel ai-providers-section">
+    <div class="panel-head">
+      <div>
+        <h3>AI Providers</h3>
+        <p>Add multiple providers — tried in priority order. Falls back to env vars (GROQ_API_KEY → OPENAI_API_KEY) if all fail.</p>
+      </div>
+      <button class="primary-action" (click)="showAddProviderForm = !showAddProviderForm">
+        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+        Add Provider
+      </button>
+    </div>
+
+    <!-- Feedback -->
+    <div *ngIf="providerMessage" class="admin-message success">
+      {{ providerMessage }}
+    </div>
+    <div *ngIf="providerError" class="admin-message error">
+      {{ providerError }}
+    </div>
+    <div *ngIf="testProviderResult" class="admin-message" [class.success]="testProviderResult.startsWith('✓')" [class.error]="testProviderResult.startsWith('✗')">
+      {{ testProviderResult }}
+    </div>
+
+    <!-- Provider list -->
+    <div *ngIf="loadingProviders" class="loading-state">Loading providers...</div>
+
+    <div *ngIf="!loadingProviders && providers.length === 0 && !showAddProviderForm" class="empty-state">
+      <strong>No providers configured</strong>
+      <span>Add one below — or set GROQ_API_KEY / OPENAI_API_KEY in your .env as a fallback.</span>
+    </div>
+
+    <div *ngIf="providers.length > 0" class="admin-table">
+      <div class="table-row table-head" style="grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr;">
+        <span>Name</span>
+        <span>Type</span>
+        <span>Model</span>
+        <span>Use For</span>
+        <span>Priority</span>
+        <span>Status</span>
+        <span>Actions</span>
+      </div>
+      <div class="table-row" *ngFor="let p of providers" style="grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr; align-items: center;">
+        <strong>{{ p.name }}</strong>
+        <span>{{ p.provider_type }}</span>
+        <span>{{ p.model || '—' }}</span>
+        <span class="status-pill">{{ useCaseLabel(p.use_case) }}</span>
+        <span>{{ p.priority }}</span>
+        <div>
+          <span class="status-pill" [class.active]="p.enabled" [class.inactive]="!p.enabled">
+            {{ p.enabled ? 'Active' : 'Inactive' }}
+          </span>
+          <span class="status-pill" *ngIf="p.key_set">Key set</span>
+        </div>
+        <div class="row-actions action-row">
+          <button class="icon-button" (click)="testProvider(p)" [disabled]="testingProvider === p.name" title="Test">
+            <lucide-icon [name]="testingProvider === p.name ? LoadingIcon : TestIcon" class="w-4 h-4" [class.spin]="testingProvider === p.name"></lucide-icon>
+          </button>
+          <button class="danger-icon" (click)="deleteProvider(p.name)" title="Delete">
+            <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add provider form -->
+    <div *ngIf="showAddProviderForm" class="modal-backdrop">
+      <div class="modal-panel">
+        <div class="modal-head">
+          <div>
+            <h3>Add Provider</h3>
+            <p>Configure a new AI provider.</p>
+          </div>
+          <button type="button" class="icon-button" (click)="showAddProviderForm = false; resetNewProvider()">
+            <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+        </div>
+
+        <label class="form-field">
+          <span>Name</span>
+          <input type="text" [(ngModel)]="newProvider.name" placeholder="e.g. Groq-70B" />
+        </label>
+
+        <label class="form-field">
+          <span>Type</span>
+          <select [(ngModel)]="newProvider.provider_type">
+            <option *ngFor="let t of providerTypeOptions" [value]="t.value">{{ t.label }}</option>
+          </select>
+        </label>
+
+        <label class="form-field">
+          <span>API Key <small>(required)</small></span>
+          <div style="display: flex; gap: 8px; width: 100%;">
+            <input [type]="showProviderKey ? 'text' : 'password'" [(ngModel)]="newProvider.api_key" placeholder="Paste API key" style="flex: 1;" />
+            <button class="secondary-action compact-action" (click)="showProviderKey = !showProviderKey" type="button">
+              <lucide-icon [name]="showProviderKey ? EyeOffIcon : EyeIcon" class="w-4 h-4"></lucide-icon>
+            </button>
+          </div>
+        </label>
+
+        <label class="form-field">
+          <span>Model <small>(optional)</small></span>
+          <input type="text" [(ngModel)]="newProvider.model" [placeholder]="defaultModelPlaceholder" />
+        </label>
+
+        <label class="form-field">
+          <span>Base URL</span>
+          <input type="text" [(ngModel)]="newProvider.base_url" [placeholder]="newProvider.provider_type === 'custom' ? 'https://api.groq.com/openai' : defaultBaseUrl" />
+          <small *ngIf="newProvider.provider_type === 'custom'">For Groq: <code>https://api.groq.com/openai</code></small>
+        </label>
+
+        <label class="form-field">
+          <span>Endpoint Path</span>
+          <input type="text" [(ngModel)]="newProvider.endpoint_path" placeholder="/v1/chat/completions" />
+        </label>
+
+        <label class="form-field">
+          <span>Use For</span>
+          <select [(ngModel)]="newProvider.use_case">
+            <option *ngFor="let u of useCaseOptions" [value]="u.value">{{ u.label }}</option>
+          </select>
+        </label>
+
+        <label class="form-field">
+          <span>Priority <small>(lower = tried first)</small></span>
+          <input type="number" [(ngModel)]="newProvider.priority" min="1" max="99" />
+        </label>
+
+        <div class="modal-actions">
+          <button class="secondary-action" (click)="testNewProvider()" [disabled]="testingProvider === '__new__' || !newProvider.api_key">
+            <lucide-icon [name]="testingProvider === '__new__' ? LoadingIcon : TestIcon" class="w-4 h-4" [class.spin]="testingProvider === '__new__'"></lucide-icon>
+            Test Connection
+          </button>
+          <button class="primary-action" (click)="saveProvider()" [disabled]="savingProvider || !newProvider.name || !newProvider.api_key">
+            <lucide-icon [name]="savingProvider ? LoadingIcon : SaveIcon" class="w-4 h-4" [class.spin]="savingProvider"></lucide-icon>
+            {{ savingProvider ? 'Saving...' : 'Save Provider' }}
+          </button>
+          <button class="secondary-action" (click)="showAddProviderForm = false; resetNewProvider()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <div *ngIf="showAddTenant" class="modal-backdrop">
     <div class="modal-panel">
       <div class="modal-head">
@@ -1090,7 +1202,7 @@
     <div class="tc-card">
       <div class="tc-card-head">
         <div class="tc-card-title">
-          <lucide-icon name="shield-check" class="w-4 h-4 tc-icon-green"></lucide-icon>
+          <lucide-icon [name]="ShieldIcon" class="w-4 h-4 tc-icon-green"></lucide-icon>
           Trusted Organization Keywords
         </div>
         <span class="tc-badge tc-badge-green">{{ trustedCloud.keywords.length }} active</span>
