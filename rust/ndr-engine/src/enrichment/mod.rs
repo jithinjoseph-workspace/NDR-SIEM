@@ -81,7 +81,7 @@ pub struct EnrichmentData {
 /// Holds all enrichment resources. Created once at startup and shared via Arc.
 pub struct EnrichmentPipeline {
     pub geoip:        Option<GeoIpLookup>,
-    pub asn:          Option<AsnLookup>,
+    pub asn:          Arc<Option<AsnLookup>>,
     pub threat_intel: Arc<ThreatIntel>,
     pub asset_id:     Arc<AssetIdentifier>,
 }
@@ -101,11 +101,11 @@ impl EnrichmentPipeline {
             .flatten();
 
         let src_asn = src_external
-            .then(|| self.asn.as_ref().and_then(|a| a.lookup(src_ip)))
+            .then(|| (*self.asn).as_ref().and_then(|a| a.lookup(src_ip)))
             .flatten();
 
         let dst_asn = dst_external
-            .then(|| self.asn.as_ref().and_then(|a| a.lookup(dst_ip)))
+            .then(|| (*self.asn).as_ref().and_then(|a| a.lookup(dst_ip)))
             .flatten();
         let is_malicious = self.threat_intel.is_malicious_ip(src_ip)
             || self.threat_intel.is_malicious_ip(dst_ip)

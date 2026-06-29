@@ -329,15 +329,19 @@ if command -v ufw &>/dev/null; then
     sudo ufw allow 3000/tcp comment "NDR API (Docker nginx)"
     sudo ufw allow 9092/tcp comment "Kafka (sensor ingest)"
 
-    # Internal-only: block from internet
-    sudo ufw deny 8123/tcp comment "ClickHouse ch1 (internal only)"
-    sudo ufw deny 8124/tcp comment "ClickHouse ch2 (internal only)"
-    sudo ufw deny 6379/tcp comment "Redis (internal only)"
+    # Internal-only: block from internet (Docker bypasses ufw so containers still work)
+    sudo ufw deny 8123/tcp comment "ClickHouse HTTP ch1 (internal only)"
+    sudo ufw deny 8124/tcp comment "ClickHouse HTTP ch2 (internal only)"
+    sudo ufw deny 9000/tcp comment "ClickHouse TCP ch1  (internal only)"
+    sudo ufw deny 9001/tcp comment "ClickHouse TCP ch2  (internal only)"
+    sudo ufw deny 9181/tcp comment "ClickHouse Keeper   (internal only)"
+    sudo ufw deny 2181/tcp comment "ZooKeeper           (internal only)"
+    sudo ufw deny 6379/tcp comment "Redis               (internal only)"
 
     sudo ufw --force enable > /dev/null
     log "✅ UFW rules applied:"
     log "   OPEN  : 22 (SSH), 80 (HTTP), 443 (HTTPS), 3000 (API), 9092 (Kafka)"
-    log "   CLOSED: 8123/8124 (ClickHouse), 6379 (Redis)"
+    log "   CLOSED: 8123/8124/9000/9001/9181 (ClickHouse/Keeper), 6379 (Redis)"
 else
     warn "ufw not found — skipping firewall setup"
 fi

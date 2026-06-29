@@ -22,18 +22,25 @@ pub struct NdrEvent {
 
 #[derive(Debug, Serialize, clickhouse::Row)]
 pub struct NdrHit {
-    pub timestamp:    u32,
-    pub community_id: String,
-    pub src_ip:       String,
-    pub dst_ip:       String,
-    pub score:        f32,
-    pub severity:     String,
-    pub tags:         Vec<String>,
-    pub sigma_hits:   Vec<String>,
-    pub threat_intel: u8,
-    pub src_country:  String,
-    pub dst_country:  String,
-    pub tenant_id:    String,
+    pub timestamp:          u32,
+    pub community_id:       String,
+    pub src_ip:             String,
+    pub dst_ip:             String,
+    pub score:              f32,
+    pub severity:           String,
+    pub tags:               Vec<String>,
+    pub sigma_hits:         Vec<String>,
+    pub threat_intel:       u8,
+    pub src_country:        String,
+    pub dst_country:        String,
+    pub tenant_id:          String,
+    pub correlation_status: String,
+    pub zeek_details:       String,
+    pub suricata_details:   String,
+    pub corroborated_at:    u32,
+    pub suricata_rule_id:   String,
+    pub suricata_category:  String,
+    pub updated_at:         u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -81,17 +88,20 @@ pub struct RecentHit {
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 #[allow(dead_code)]
 pub struct RecentHitDetail {
-    pub timestamp:    u32,
-    pub community_id: String,
-    pub src_ip:       String,
-    pub dst_ip:       String,
-    pub score:        f32,
-    pub severity:     String,
-    pub tags:         Vec<String>,
-    pub sigma_hits:   Vec<String>,
-    pub threat_intel: u8,
-    pub src_country:  String,
-    pub dst_country:  String,
+    pub timestamp:          u32,
+    pub community_id:       String,
+    pub src_ip:             String,
+    pub dst_ip:             String,
+    pub score:              f32,
+    pub severity:           String,
+    pub tags:               Vec<String>,
+    pub sigma_hits:         Vec<String>,
+    pub threat_intel:       u8,
+    pub src_country:        String,
+    pub dst_country:        String,
+    pub correlation_status: String,
+    pub suricata_rule_id:   String,
+    pub corroborated_at:    u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -153,6 +163,8 @@ pub struct AssetRow {
     pub first_seen: u32,
     pub last_seen: u32,
     pub ip_history: String,
+    pub trusted: u8,
+    pub threat_flagged: u8,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -1104,6 +1116,13 @@ pub async fn delete_announcement(
             for alter in &[
                 "ALTER TABLE ndr.ndr_events ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS correlation_status String DEFAULT 'zeek_only'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS zeek_details String DEFAULT '{}'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS suricata_details String DEFAULT '{}'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS corroborated_at DateTime DEFAULT toDateTime(0)",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS suricata_rule_id String DEFAULT ''",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS suricata_category String DEFAULT ''",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
                 "ALTER TABLE ndr.soar_integrations ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_playbooks ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_config ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
@@ -1262,6 +1281,52 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         insert.write(&hit).await?;
         insert.end().await?;
         Ok(())
+    }
+
+    /// Enrich an existing zeek-only hit with Suricata data.
+    /// Inserts a new row with correlation_status='corroborated' and a newer updated_at.
+    /// ReplacingMergeTree keeps the newer row, deduplicating the original zeek-only row.
+    pub async fn enrich_hit_with_suricata(
+        &self,
+        tenant_id:        &str,
+        community_id:     &str,
+        src_ip:           &str,
+        dst_ip:           &str,
+        combined_score:   f32,
+        severity:         &str,
+        tags:             Vec<String>,
+        sigma_hits:       Vec<String>,
+        threat_intel:     u8,
+        src_country:      &str,
+        dst_country:      &str,
+        zeek_details:     &str,
+        suricata_details: &str,
+        suricata_rule_id: &str,
+        suricata_category: &str,
+    ) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().timestamp() as u32;
+        let hit = NdrHit {
+            timestamp:          now,
+            community_id:       community_id.to_string(),
+            src_ip:             src_ip.to_string(),
+            dst_ip:             dst_ip.to_string(),
+            score:              combined_score,
+            severity:           severity.to_string(),
+            tags,
+            sigma_hits,
+            threat_intel,
+            src_country:        src_country.to_string(),
+            dst_country:        dst_country.to_string(),
+            tenant_id:          tenant_id.to_string(),
+            correlation_status: "corroborated".to_string(),
+            zeek_details:       zeek_details.to_string(),
+            suricata_details:   suricata_details.to_string(),
+            corroborated_at:    now,
+            suricata_rule_id:   suricata_rule_id.to_string(),
+            suricata_category:  suricata_category.to_string(),
+            updated_at:         now,
+        };
+        self.insert_hit_for_tenant(hit, tenant_id).await
     }
 
     // ── Query methods ─────────────────────────────────────────────────────
@@ -1707,6 +1772,57 @@ pub async fn get_settings(&self) -> anyhow::Result<serde_json::Value> {
     self.get_settings_by_tenant("default").await
 }
 
+/// Read a single global setting value by key. Returns None if not found.
+pub async fn get_global_setting(&self, key: &str) -> Option<String> {
+    self.client
+        .query(&format!(
+            "SELECT value FROM ndr.settings FINAL WHERE key = '{}' LIMIT 1",
+            sql_escape(key)
+        ))
+        .fetch_one::<String>()
+        .await
+        .ok()
+        .filter(|v| !v.is_empty())
+}
+
+pub async fn set_global_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+    self.client
+        .query(&format!(
+            "INSERT INTO ndr.settings (key, value, updated_at) VALUES ('{}', '{}', now())",
+            sql_escape(key),
+            sql_escape(value)
+        ))
+        .execute()
+        .await
+        .map_err(|e| anyhow::anyhow!("set_global_setting failed: {}", e))
+}
+
+/// Returns top dst IPs with high hit counts and zero threat_intel — ASN lookup done by caller.
+pub async fn get_high_volume_clean_dst_ips(
+    &self,
+    tenant_id: &str,
+    hours: u32,
+    min_hits: u64,
+) -> anyhow::Result<Vec<(String, u64)>> {
+    let db = tenant_db(tenant_id);
+    self.client
+        .query(&format!(
+            "SELECT dst_ip, count() as cnt
+             FROM {db}.ndr_hits FINAL
+             WHERE timestamp > now() - INTERVAL {hours} HOUR
+               AND threat_intel = 0
+               AND dst_ip != ''
+             GROUP BY dst_ip
+             HAVING cnt >= {min_hits}
+             ORDER BY cnt DESC
+             LIMIT 100",
+            db = db, hours = hours, min_hits = min_hits
+        ))
+        .fetch_all::<(String, u64)>()
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))
+}
+
 // ── AI Provider registry ───────────────────────────────────────────────────
 
 fn _esc_ai(s: &str) -> String {
@@ -1742,18 +1858,19 @@ pub async fn list_ai_providers(&self) -> anyhow::Result<Vec<serde_json::Value>> 
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct Row {
         name: String, provider_type: String, model: String,
-        base_url: String, use_case: String, priority: u8,
-        enabled: u8, key_set: u8,
+        base_url: String, endpoint_path: String, msg_format: String,
+        use_case: String, priority: u8, enabled: u8, key_set: u8,
     }
     let rows = self.client.query(
-        "SELECT name, provider_type, model, base_url, use_case, priority, enabled, \
+        "SELECT name, provider_type, model, base_url, endpoint_path, msg_format, use_case, priority, enabled, \
          if(length(api_key) > 0, 1, 0) as key_set \
          FROM ndr.ai_providers FINAL ORDER BY priority ASC"
     ).fetch_all::<Row>().await.unwrap_or_default();
 
     Ok(rows.into_iter().map(|r| serde_json::json!({
         "name": r.name, "provider_type": r.provider_type, "model": r.model,
-        "base_url": r.base_url, "use_case": r.use_case, "priority": r.priority,
+        "base_url": r.base_url, "endpoint_path": r.endpoint_path, "msg_format": r.msg_format,
+        "use_case": r.use_case, "priority": r.priority,
         "enabled": r.enabled == 1, "key_set": r.key_set == 1,
     })).collect())
 }
@@ -1971,7 +2088,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             self.client.query(&format!(
                 "SELECT count() as hits_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as hits_1h \
-                 FROM {}.ndr_hits", db_name))
+                 FROM {}.ndr_hits FINAL", db_name))
                 .fetch_one::<(u64, u64)>()
         )?;
         Ok(serde_json::json!({
@@ -2008,7 +2125,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let rows = self.client.query(&format!(
             "SELECT proto, count() as cnt \
              FROM {}.ndr_events \
-             WHERE proto != '' \
+             WHERE proto != '' AND timestamp >= now() - INTERVAL 1 HOUR \
              GROUP BY proto ORDER BY cnt DESC LIMIT {}", db_name, limit))
             .fetch_all::<(String, u64)>()
             .await.unwrap_or_default();
@@ -2024,6 +2141,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let rows = self.client.query(&format!(
             "SELECT src_ip, count() as cnt \
              FROM {}.ndr_events \
+             WHERE src_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR \
              GROUP BY src_ip ORDER BY cnt DESC LIMIT {}", db_name, limit))
             .fetch_all::<(String,u64)>()
             .await.unwrap_or_default();
@@ -2039,6 +2157,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let rows = self.client.query(&format!(
             "SELECT dst_ip, count() as cnt \
              FROM {}.ndr_events \
+             WHERE dst_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR \
              GROUP BY dst_ip ORDER BY cnt DESC LIMIT {}", db_name, limit))
             .fetch_all::<(String,u64)>()
             .await.unwrap_or_default();
@@ -2055,24 +2174,28 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             "SELECT \
                 toUInt32(timestamp) AS timestamp, \
                 community_id, src_ip, dst_ip, score, severity, \
-                tags, sigma_hits, threat_intel, src_country, dst_country \
-             FROM {}.ndr_hits \
-             WHERE community_id LIKE '1:%' \
+                tags, sigma_hits, threat_intel, src_country, dst_country, \
+                correlation_status, suricata_rule_id, toUInt32(corroborated_at) AS corroborated_at \
+             FROM {}.ndr_hits FINAL \
              ORDER BY timestamp DESC LIMIT {}", db_name, limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
-            "timestamp": r.timestamp,
-            "community_id": r.community_id,
-            "src_ip": r.src_ip,
-            "dst_ip": r.dst_ip,
-            "score": r.score,
-            "severity": r.severity,
-            "tags": r.tags,
-            "sigma_hits": r.sigma_hits,
-            "threat_intel": r.threat_intel != 0,
-            "src_country": r.src_country,
-            "dst_country": r.dst_country
+            "timestamp":          r.timestamp,
+            "community_id":       r.community_id,
+            "src_ip":             r.src_ip,
+            "dst_ip":             r.dst_ip,
+            "score":              r.score,
+            "severity":           r.severity,
+            "tags":               r.tags,
+            "sigma_hits":         r.sigma_hits,
+            "threat_intel":       r.threat_intel != 0,
+            "src_country":        r.src_country,
+            "dst_country":        r.dst_country,
+            "correlation_status": r.correlation_status,
+            "corroborated":       r.correlation_status == "corroborated",
+            "suricata_rule_id":   r.suricata_rule_id,
+            "corroborated_at":    r.corroborated_at,
         })).collect())
     }
 
@@ -3020,6 +3143,26 @@ pub async fn clear_sensor_command(
 
     // ── AI suppressions ──────────────────────────────────────────────────
 
+    /// Returns true if src_ip has ANY confirmed threat-intel hit in the last 24h.
+    /// Used to hard-block suppression for compromised hosts — code enforcement,
+    /// not AI prompt rules which LLMs can silently ignore.
+    pub async fn host_has_threat_intel_hit(&self, tenant_id: &str, ip: &str) -> bool {
+        let db = tenant_db(tenant_id);
+        let safe_ip = sql_escape(ip);
+        let count: u64 = self.client
+            .query(&format!(
+                "SELECT count() FROM {}.ndr_hits FINAL \
+                 WHERE (src_ip = '{}' OR dst_ip = '{}') \
+                 AND threat_intel = 1 \
+                 AND timestamp > now() - INTERVAL 24 HOUR",
+                db, safe_ip, safe_ip
+            ))
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0);
+        count > 0
+    }
+
     pub async fn save_ai_suppression(
         &self,
         tenant_id:      &str,
@@ -3053,6 +3196,26 @@ pub async fn clear_sensor_command(
             sql_escape(ai_reason),
             ai_confidence,
             sql_escape(sensor_id),
+        )).execute().await?;
+        Ok(())
+    }
+
+    pub async fn deactivate_ai_suppression(&self, tenant_id: &str, id: &str) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        self.client.query(&format!(
+            "ALTER TABLE {}.ai_suppressions UPDATE active = 0 \
+             WHERE id = '{}' AND tenant_id = '{}'",
+            db, sql_escape(id), sql_escape(tenant_id)
+        )).execute().await?;
+        Ok(())
+    }
+
+    pub async fn delete_ai_suppression(&self, tenant_id: &str, id: &str) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        self.client.query(&format!(
+            "ALTER TABLE {}.ai_suppressions DELETE \
+             WHERE id = '{}' AND tenant_id = '{}'",
+            db, sql_escape(id), sql_escape(tenant_id)
         )).execute().await?;
         Ok(())
     }
@@ -3918,7 +4081,7 @@ pub async fn get_hit_by_community_id(
     let hits = self.client.query(&format!(
         "SELECT community_id, src_ip, dst_ip,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp, severity
-         FROM {}.ndr_hits
+         FROM {}.ndr_hits FINAL
          WHERE community_id = '{}'
          ORDER BY timestamp DESC LIMIT 1",
         db, community_id
@@ -4444,10 +4607,9 @@ pub async fn get_ioc_hits(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, \
              toUnixTimestamp(last_seen) as last_seen, \
-             ip_history \
-             FROM {}.assets WHERE tenant_id = '{}' \
-             ORDER BY ip ASC, last_seen DESC \
-             LIMIT 1 BY ip",
+             ip_history, trusted, threat_flagged \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' \
+             ORDER BY ip ASC",
             db, sql_escape(tenant_id)
         );
         let rows = self.client.query(&query).fetch_all::<AssetRow>().await?;
@@ -4459,8 +4621,9 @@ pub async fn get_ioc_hits(
         let db = tenant_db(tenant_id);
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
-             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
-             FROM {}.assets WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
+             ip_history, trusted, threat_flagged \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(mac)
         );
         let result = self.client.query(&query).fetch_optional::<AssetRow>().await?;
@@ -4505,8 +4668,9 @@ pub async fn get_ioc_hits(
         let db = tenant_db(tenant_id);
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
-             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, ip_history \
-             FROM {}.assets WHERE tenant_id = '{}' AND ip = '{}' ORDER BY last_seen DESC LIMIT 1",
+             toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
+             ip_history, trusted, threat_flagged \
+             FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}' LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(ip)
         );
         let asset = self.client.query(&query).fetch_optional::<AssetRow>().await?;
@@ -4519,6 +4683,45 @@ pub async fn get_ioc_hits(
             "ALTER TABLE {}.assets UPDATE custom_name = '{}', last_seen = now() \
              WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(custom_name), sql_escape(tenant_id), sql_escape(ip)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    /// Returns IPs of assets marked as trusted by the user for a tenant.
+    pub async fn get_trusted_asset_ips(&self, tenant_id: &str) -> Vec<String> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "SELECT ip FROM {}.assets FINAL WHERE tenant_id = '{}' AND trusted = 1",
+            db, sql_escape(tenant_id)
+        );
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { ip: String }
+        self.client.query(&query).fetch_all::<Row>().await
+            .unwrap_or_default().into_iter().map(|r| r.ip).collect()
+    }
+
+    /// Mark a list of IPs as threat_flagged for a tenant (called after prediction).
+    pub async fn mark_assets_threat_flagged(&self, tenant_id: &str, ips: &[String]) -> anyhow::Result<()> {
+        if ips.is_empty() { return Ok(()); }
+        let db = tenant_db(tenant_id);
+        let ip_list = ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
+        let query = format!(
+            "ALTER TABLE {}.assets UPDATE threat_flagged = 1, threat_flagged_at = now() \
+             WHERE tenant_id = '{}' AND ip IN ({}) SETTINGS mutations_sync=0",
+            db, sql_escape(tenant_id), ip_list
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    /// Toggle the trusted flag on an asset (0→1 or 1→0).
+    pub async fn set_asset_trusted(&self, tenant_id: &str, ip: &str, trusted: bool) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        let query = format!(
+            "ALTER TABLE {}.assets UPDATE trusted = {}, threat_flagged = 0, last_seen = now() \
+             WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
+            db, if trusted { 1 } else { 0 }, sql_escape(tenant_id), sql_escape(ip)
         );
         self.client.query(&query).execute().await?;
         Ok(())

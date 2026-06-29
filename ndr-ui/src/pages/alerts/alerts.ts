@@ -104,7 +104,11 @@ export class Alerts implements OnInit, OnDestroy {
           severity: hit.severity?.toUpperCase() || 'LOW',
           source: `${hit.src_ip || '-'} -> ${hit.dst_ip || '-'}`,
           description: hit.sigma_hits?.join(', ') || 'Correlation hit',
-          time: this.formatAlertTime(hit.timestamp || hit.time),
+          time: this.formatAlertTime(
+            hit.timestamp != null && hit.timestamp !== 0 ? hit.timestamp
+              : hit.time != null ? hit.time
+              : null
+          ),
           score: hit.score,
           threat_intel: hit.threat_intel,
           community_id: hit.community_id || hit.cid || '',
@@ -131,20 +135,21 @@ export class Alerts implements OnInit, OnDestroy {
     });
   }
 
+  // ── Summary counts always reflect ALL loaded alerts, not just filtered view ──
   get totalAlerts() {
-    return this.alerts.length;
+    return this.allAlerts.length;
   }
 
   get priorityAlerts() {
-    return this.alerts.filter(alert => ['CRITICAL', 'HIGH'].includes(alert.severity?.toUpperCase())).length;
+    return this.allAlerts.filter(alert => ['CRITICAL', 'HIGH'].includes(alert.severity?.toUpperCase())).length;
   }
 
   get mediumAlerts() {
-    return this.alerts.filter(alert => alert.severity?.toUpperCase() === 'MEDIUM').length;
+    return this.allAlerts.filter(alert => alert.severity?.toUpperCase() === 'MEDIUM').length;
   }
 
   get intelAlerts() {
-    return this.alerts.filter(alert => alert.threat_intel).length;
+    return this.allAlerts.filter(alert => alert.threat_intel).length;
   }
 
   getScoreClass(score: number) {

@@ -96,13 +96,15 @@ impl RiskScorer {
 
     /// Score a correlated pair.
     ///
-    /// `is_malicious`     — src or dst IP matched threat intel feed
-    /// `sensitive_country`— src or dst GeoIP country in the sensitive list
+    /// `is_malicious`      — src or dst IP matched threat intel feed
+    /// `sensitive_country` — src or dst GeoIP country in the sensitive list
+    /// `is_trusted_cloud`  — dst ASN is a known cloud provider (from TrustedRanges, DB-driven)
     pub fn score(
         &self,
         hit: &CorrelationHit,
         is_malicious: bool,
         sensitive_country: bool,
+        is_trusted_cloud: bool,
     ) -> RiskResult {
         let mut score: f32 = 0.0;
         let mut tags       = Vec::<String>::new();
@@ -237,6 +239,24 @@ impl RiskScorer {
                     tags.push(format!("protocol:{}", other));
                 }
                 _ => {}
+            }
+        }
+
+        // ── 7. Trusted cloud provider — suppress behavioral noise ─────
+        // Caller resolves trust via TrustedRanges (DB-driven keywords, no hardcoding).
+        // Cap score only when there is no real threat signal.
+        if is_trusted_cloud {
+            let has_real_signal = is_malicious
+                || (suricata.event_type.as_deref() == Some("alert")
+                    && !suricata.alert.as_ref()
+                        .map(|a| a.signature.starts_with("SURICATA "))
+                        .unwrap_or(false));
+            if !has_real_signal {
+                score = score.min(8.0);
+                tags.push("trusted-cloud".into());
+                reasons.push(
+                    "Destination is trusted cloud provider — behavioral noise suppressed".into()
+                );
             }
         }
 

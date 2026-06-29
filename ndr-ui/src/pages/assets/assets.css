@@ -475,9 +475,9 @@
 /* CSS Grid for perfect column alignment */
 .grid-header, .grid-row {
   display: grid;
-  grid-template-columns: 60px 160px minmax(220px, 1fr) minmax(160px, 1fr) minmax(140px, 1fr) 180px 120px 120px 160px;
+  grid-template-columns: 60px 160px minmax(220px, 1fr) minmax(160px, 1fr) minmax(140px, 1fr) 180px 120px 120px 160px 110px 56px;
   align-items: center;
-  min-width: 1320px;
+  min-width: 1500px;
 }
 
 .grid-header {
@@ -563,6 +563,31 @@
 /* Column Alignments */
 .col-type { display: flex; justify-content: center; }
 .col-conns, .col-alerts, .col-seen { text-align: right; }
+.col-status { display: flex; align-items: center; }
+.col-actions { display: flex; align-items: center; justify-content: center; }
+
+.threat-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(255, 180, 50, 0.15);
+  color: #ffb432;
+  border: 1px solid rgba(255, 180, 50, 0.3);
+  padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+}
+.trusted-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+}
+.trust-btn {
+  background: none; border: none; cursor: pointer; padding: 6px;
+  color: var(--md-sys-color-on-surface-variant);
+  border-radius: 6px; transition: all 0.15s;
+}
+.trust-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.trust-btn.is-trusted { color: #4ade80; }
+.trust-btn.is-trusted:hover { color: #f87171; }
 
 .grid-row .col-ip { color: var(--md-sys-color-on-surface-variant); font-family: var(--font-mono); font-size: 13px; }
 .grid-row .col-name { display: flex; align-items: center; gap: 12px; font-weight: 600; color: #ffffff; letter-spacing: -0.01em;}

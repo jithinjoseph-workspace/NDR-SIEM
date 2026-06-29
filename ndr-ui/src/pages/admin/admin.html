@@ -651,14 +651,14 @@
           <span>Name</span>
           <input type="text" [(ngModel)]="newProvider.name" placeholder="e.g. Groq-70B" />
         </label>
-        
+
         <label class="form-field">
           <span>Type</span>
           <select [(ngModel)]="newProvider.provider_type">
             <option *ngFor="let t of providerTypeOptions" [value]="t.value">{{ t.label }}</option>
           </select>
         </label>
-        
+
         <label class="form-field">
           <span>API Key <small>(required)</small></span>
           <div style="display: flex; gap: 8px; width: 100%;">
@@ -668,30 +668,30 @@
             </button>
           </div>
         </label>
-        
+
         <label class="form-field">
           <span>Model <small>(optional)</small></span>
           <input type="text" [(ngModel)]="newProvider.model" [placeholder]="defaultModelPlaceholder" />
         </label>
-        
+
         <label class="form-field">
           <span>Base URL</span>
           <input type="text" [(ngModel)]="newProvider.base_url" [placeholder]="newProvider.provider_type === 'custom' ? 'https://api.groq.com/openai' : defaultBaseUrl" />
           <small *ngIf="newProvider.provider_type === 'custom'">For Groq: <code>https://api.groq.com/openai</code></small>
         </label>
-        
+
         <label class="form-field">
           <span>Endpoint Path</span>
           <input type="text" [(ngModel)]="newProvider.endpoint_path" placeholder="/v1/chat/completions" />
         </label>
-        
+
         <label class="form-field">
           <span>Use For</span>
           <select [(ngModel)]="newProvider.use_case">
             <option *ngFor="let u of useCaseOptions" [value]="u.value">{{ u.label }}</option>
           </select>
         </label>
-        
+
         <label class="form-field">
           <span>Priority <small>(lower = tried first)</small></span>
           <input type="number" [(ngModel)]="newProvider.priority" min="1" max="99" />
@@ -1130,4 +1130,130 @@
       </div>
     </div>
   </div>
+
+  <!-- ── Trusted Cloud Settings ─────────────────────────────────────────── -->
+  <section *ngIf="activeTab === 'trusted-cloud'" class="admin-panel">
+
+    <div class="panel-head">
+      <div>
+        <h3>Trusted Cloud Providers</h3>
+        <p>Traffic to trusted cloud orgs is scored as noise and not stored as alerts. AI scans every 15 minutes and suggests new orgs — you approve or reject each one.</p>
+      </div>
+      <button class="secondary-action" type="button" (click)="loadTrustedCloud()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
+      </button>
+    </div>
+
+    <div *ngIf="loadingTrustedCloud" class="loading-state">Loading trusted cloud settings...</div>
+
+    <!-- Stats row -->
+    <div class="tc-stats-row" *ngIf="!loadingTrustedCloud">
+      <div class="tc-stat-card">
+        <span class="tc-stat-value">{{ trustedCloud.keywords.length }}</span>
+        <span class="tc-stat-label">Trusted Keywords</span>
+      </div>
+      <div class="tc-stat-card">
+        <span class="tc-stat-value">{{ trustedCloud.domains.length }}</span>
+        <span class="tc-stat-label">Trusted Domains</span>
+      </div>
+      <div class="tc-stat-card tc-stat-ai">
+        <span class="tc-stat-value">{{ trustedCloud.suggestions.length }}</span>
+        <span class="tc-stat-label">Pending AI Suggestions</span>
+      </div>
+    </div>
+
+    <!-- AI Suggestions -->
+    <div class="tc-card tc-card-ai" *ngIf="trustedCloud.suggestions.length > 0">
+      <div class="tc-card-head">
+        <div class="tc-card-title">
+          <lucide-icon name="sparkles" class="w-4 h-4"></lucide-icon>
+          AI Suggestions
+        </div>
+        <span class="tc-badge tc-badge-amber">{{ trustedCloud.suggestions.length }} pending</span>
+      </div>
+      <p class="tc-card-desc">Review each suggestion — approving adds it to your trusted keywords instantly without a restart.</p>
+      <div class="tc-suggestion-list">
+        <div *ngFor="let s of trustedCloud.suggestions" class="tc-suggestion-card">
+          <div class="tc-suggestion-left">
+            <div class="tc-org-avatar">{{ s.org.charAt(0) }}</div>
+            <div class="tc-suggestion-info">
+              <span class="tc-org-name">{{ s.org }}</span>
+              <span class="tc-hits">{{ s.hits | number }} connections in last 24h — zero threats detected</span>
+            </div>
+          </div>
+          <div class="tc-suggestion-actions">
+            <button class="tc-approve-btn" (click)="approveSuggestion(s.org)">Approve</button>
+            <button class="tc-reject-btn" (click)="rejectSuggestion(s.org)">Reject</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tc-empty-suggestions" *ngIf="trustedCloud.suggestions.length === 0">
+      <lucide-icon name="bot" class="w-5 h-5"></lucide-icon>
+      <div>
+        <strong>No pending AI suggestions</strong>
+        <span>Next scan runs automatically every 6 hours.</span>
+      </div>
+    </div>
+
+    <!-- Keywords -->
+    <div class="tc-card">
+      <div class="tc-card-head">
+        <div class="tc-card-title">
+          <lucide-icon [name]="ShieldIcon" class="w-4 h-4 tc-icon-green"></lucide-icon>
+          Trusted Organization Keywords
+        </div>
+        <span class="tc-badge tc-badge-green">{{ trustedCloud.keywords.length }} active</span>
+      </div>
+      <p class="tc-card-desc">Any ASN org name containing one of these words is excluded from alerts entirely.</p>
+      <div class="tc-chips">
+        <span *ngFor="let kw of trustedCloud.keywords" class="tc-chip">
+          {{ kw }}
+          <button class="tc-chip-remove" (click)="removeKeyword(kw)" title="Remove {{ kw }}">×</button>
+        </span>
+      </div>
+      <div class="tc-add-row">
+        <input [(ngModel)]="newKeyword" placeholder="Add keyword  (e.g. ORACLE)"
+               class="tc-input" (keydown.enter)="addKeyword()" />
+        <button class="tc-add-btn" (click)="addKeyword()">Add Keyword</button>
+      </div>
+    </div>
+
+    <!-- Domains -->
+    <div class="tc-card">
+      <div class="tc-card-head">
+        <div class="tc-card-title">
+          <lucide-icon name="globe" class="w-4 h-4 tc-icon-blue"></lucide-icon>
+          Trusted Domain Suffixes
+        </div>
+        <span class="tc-badge tc-badge-blue">{{ trustedCloud.domains.length }} active</span>
+      </div>
+      <p class="tc-card-desc">Connections to hostnames ending with these suffixes are trusted regardless of ASN org.</p>
+      <div class="tc-chips">
+        <span *ngFor="let d of trustedCloud.domains" class="tc-chip tc-chip-domain">
+          {{ d }}
+          <button class="tc-chip-remove" (click)="removeDomain(d)" title="Remove {{ d }}">×</button>
+        </span>
+      </div>
+      <div class="tc-add-row">
+        <input [(ngModel)]="newDomain" placeholder="e.g. .example.com"
+               class="tc-input" (keydown.enter)="addDomain()" />
+        <button class="tc-add-btn" (click)="addDomain()">Add Domain</button>
+      </div>
+    </div>
+
+    <!-- Save -->
+    <div class="tc-save-row">
+      <button class="primary-action" (click)="saveTrustedCloud()" [disabled]="trustedCloudSaving">
+        {{ trustedCloudSaving ? 'Saving…' : 'Save Changes' }}
+      </button>
+      <span *ngIf="trustedCloudSaved" class="tc-saved-msg">
+        Saved and applied immediately.
+      </span>
+    </div>
+
+  </section>
+
 </section>
