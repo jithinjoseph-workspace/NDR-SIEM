@@ -84,6 +84,54 @@
   transform: translateY(-1px);
 }
 
+/* ── AI Report Button ─────────────────────────────────────────────────────── */
+.ai-report-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 38px;
+  padding: 0 18px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  border: 1px solid rgba(105, 246, 184, 0.45);
+  background: rgba(105, 246, 184, 0.08);
+  color: #69f6b8;
+  letter-spacing: 0.03em;
+  position: relative;
+  overflow: hidden;
+  transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+  box-shadow: 0 0 10px rgba(105, 246, 184, 0.12), inset 0 0 8px rgba(105, 246, 184, 0.04);
+}
+
+.ai-report-action::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, rgba(105, 246, 184, 0.12) 50%, transparent 70%);
+  background-size: 200% 100%;
+  animation: ai-btn-shimmer 3s ease-in-out infinite;
+}
+
+@keyframes ai-btn-shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+.ai-report-action lucide-icon {
+  filter: drop-shadow(0 0 5px rgba(105, 246, 184, 0.6));
+  flex-shrink: 0;
+}
+
+.ai-report-action:hover {
+  transform: translateY(-1px);
+  background: rgba(105, 246, 184, 0.15);
+  border-color: rgba(105, 246, 184, 0.7);
+  box-shadow: 0 0 20px rgba(105, 246, 184, 0.25), inset 0 0 12px rgba(105, 246, 184, 0.08);
+  color: #a8fbd8;
+}
+
 .chevron {
   margin-left: 8px;
   color: #98a3b8;
@@ -301,6 +349,7 @@
   font-weight: 700;
   background: linear-gradient(180deg, #ffffff 0%, #aeb8cc 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 

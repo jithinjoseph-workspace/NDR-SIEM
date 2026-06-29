@@ -2077,20 +2077,24 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         // 6 sequential queries → 2 parallel queries using countIf
-        let (events_row, hits_row) = tokio::try_join!(
+        let (events_row, hits_row) = tokio::join!(
             self.client.query(&format!(
                 "SELECT count() as events_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as events_1h, \
                  countIf(source='zeek') as zeek_events, \
                  countIf(source='suricata') as suricata_events \
                  FROM {}.ndr_events", db_name))
-                .fetch_one::<(u64, u64, u64, u64)>(),
+                .fetch_optional::<(u64, u64, u64, u64)>(),
             self.client.query(&format!(
                 "SELECT count() as hits_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as hits_1h \
                  FROM {}.ndr_hits FINAL", db_name))
-                .fetch_one::<(u64, u64)>()
-        )?;
+                .fetch_optional::<(u64, u64)>()
+        );
+        
+        let events_row = events_row.unwrap_or(None).unwrap_or((0, 0, 0, 0));
+        let hits_row = hits_row.unwrap_or(None).unwrap_or((0, 0));
+
         Ok(serde_json::json!({
             "events_total": events_row.0, "hits_total": hits_row.0,
             "events_1h": events_row.1,   "hits_1h": hits_row.1,

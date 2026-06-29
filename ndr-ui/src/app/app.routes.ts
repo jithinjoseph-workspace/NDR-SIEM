@@ -118,6 +118,13 @@ export const routes: Routes = [
       .then(m => m.AiActivity)
   },
   {
+    path: 'ai-report',
+    canActivate: [authGuard],
+    data: { permission: 'alerts' },
+    loadComponent: () => import('../pages/ai-report/ai-report')
+      .then(m => m.AiReport)
+  },
+  {
     path: 'assets',
     canActivate: [authGuard],
     data: { role: 'analyst', permission: 'alerts' },

@@ -375,20 +375,26 @@ EOF
 # ── Start local OpenSearch for Arkime ────────────
 # FIX: Start OpenSearch FIRST, wait fully,
 #      THEN configure and start Arkime
-log "Starting local OpenSearch for Arkime..."
+log "Checking if OpenSearch is already running on port 9200..."
+if curl -s http://localhost:9200 > /dev/null 2>&1; then
+  log "OpenSearch is already running on port 9200. Using existing instance."
+else
+  log "Starting local OpenSearch for Arkime..."
+  # Remove old container if exists
+  docker rm -f opensearch-arkime 2>/dev/null || true
 
-# Remove old container if exists
-docker rm -f opensearch-arkime 2>/dev/null || true
+  log "Pulling OpenSearch image (this may take a few minutes)..."
+  docker pull opensearchproject/opensearch:2.5.0
 
-docker run -d \
-  --name opensearch-arkime \
-  -e "discovery.type=single-node" \
-  -e "DISABLE_SECURITY_PLUGIN=true" \
-  -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
-  -p 9200:9200 \
-  --restart unless-stopped \
-  opensearchproject/opensearch:2.5.0 \
-    > /dev/null 2>&1
+  docker run -d \
+    --name opensearch-arkime \
+    -e "discovery.type=single-node" \
+    -e "DISABLE_SECURITY_PLUGIN=true" \
+    -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
+    -p 9200:9200 \
+    --restart unless-stopped \
+    opensearchproject/opensearch:2.5.0
+fi
 
 # FIX: Wait properly — up to 3 minutes
 log "Waiting for OpenSearch (up to 3 min)..."
@@ -977,7 +983,7 @@ log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
 """NDR Sensor Agent v2 — monitors and restarts all services"""
-import os, time, subprocess, threading, requests, json, hashlib
+import os, time, subprocess, threading, requests, json, hashlib, re
 from datetime import datetime
 
 config = {}
@@ -1031,7 +1037,7 @@ def start_zeek():
             ["/opt/zeek/bin/zeek", "-i", IFACE,
              "local",
              "Log::default_logdir=/var/log/ndr/zeek"],
-            stdout=open("/tmp/zeek.log", "w"),
+            stdout=open("/var/log/ndr/zeek_stdout.log", "w"),
             stderr=subprocess.STDOUT
         )
         print("[NDR] ✅ Zeek started")
@@ -1061,7 +1067,7 @@ def start_suricata():
              "--pidfile", "/tmp/suricata.pid",
              "--set", "detect.profile=low",
              "--set", "max-pending-packets=128"],
-            stdout=open("/tmp/suricata.log", "w"),
+            stdout=open("/var/log/ndr/suricata_stdout.log", "w"),
             stderr=subprocess.STDOUT
         )
         print("[NDR] ✅ Suricata started")
@@ -2213,6 +2219,9 @@ echo "$REG" | grep -q '"status":"ok"' && \
   warn "Registration: $REG"
 
 # ── Verify everything ─────────────────────────────
+log "Waiting 15 seconds for Zeek and Suricata to fully initialize..."
+sleep 15
+
 echo ""
 echo "╔══════════════════════════════════════════╗"
 echo "║    ✅ NDR Sensor Installation Done!      ║"
@@ -2238,6 +2247,10 @@ printf "║  Suricata:     %s                           ║\n" "$S"
 printf "║  Vector:       %s → HTTP                    ║\n" "$V"
 printf "║  Arkime cap:   %s                           ║\n" "$AC"
 echo "╚══════════════════════════════════════════╝"
+echo ""
+
+
+
 echo ""
 log "Config:  /etc/ndr/sensor.conf"
 log "Logs:    journalctl -u ndr-agent -f"
