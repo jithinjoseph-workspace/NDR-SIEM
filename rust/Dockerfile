@@ -3,6 +3,8 @@ FROM rust:latest
 
 WORKDIR /app
 
+ARG CACHEBUST=1
+
 COPY ndr-engine ./ndr-engine
 
 WORKDIR /app/ndr-engine

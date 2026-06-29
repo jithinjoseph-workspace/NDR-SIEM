@@ -121,4 +121,13 @@ export class AiActivity {
     const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
     return isNaN(d.getTime()) ? ts : d.toLocaleString();
   }
+
+  deactivateSuppression(id: string) {
+    this.api.deactivateAiSuppression(id).subscribe();
+  }
+
+  deleteSuppression(id: string) {
+    if (!confirm('Delete this suppression rule permanently?')) return;
+    this.api.deleteAiSuppression(id).subscribe();
+  }
 }

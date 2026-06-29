@@ -116,7 +116,7 @@ async fn handle_ws(
 ) {
     let agent = std::env::var("NDR_AGENT_URL")
         .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string());
-    let client = reqwest::Client::new();
+    let client = state.http_client.clone();
 
     // Push interfaces only to default tenant
     if auth.tenant_id == "default" {
@@ -179,6 +179,31 @@ async fn handle_ws(
             loop {
                 tokio::select! {
                     _ = ping_interval.tick() => {
+                        // Push live stats + supporting data alongside the keepalive ping
+                        let (stats, severity, top_src, top_dst, protocols) = tokio::join!(
+                            state.ch_storage.get_stats_by_tenant(&auth.tenant_id),
+                            state.ch_storage.get_severity_by_tenant(&auth.tenant_id),
+                            state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id),
+                            state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id),
+                            state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id),
+                        );
+                        if let Ok(stats) = stats {
+                            let telemetry = serde_json::json!({
+                                "type":             "telemetry",
+                                "total_events":     stats.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "zeek_events":      stats.get("zeek_events").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "suricata_events":  stats.get("suricata_events").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "correlation_hits": stats.get("hits_total").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "events_1h":        stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "severity":         severity.ok(),
+                                "top_src_ips":      top_src.unwrap_or_default(),
+                                "top_dst_ips":      top_dst.unwrap_or_default(),
+                                "protocols":        protocols.unwrap_or_default(),
+                            });
+                            if socket.send(Message::Text(telemetry.to_string())).await.is_err() {
+                                break;
+                            }
+                        }
                         if socket.send(Message::Ping(vec![])).await.is_err() {
                             break; // dead connection — clean up task
                         }
@@ -267,6 +292,30 @@ async fn handle_ws(
     loop {
         tokio::select! {
             _ = ping_interval_fb.tick() => {
+                let (stats, severity, top_src, top_dst, protocols) = tokio::join!(
+                    state.ch_storage.get_stats_by_tenant(&auth.tenant_id),
+                    state.ch_storage.get_severity_by_tenant(&auth.tenant_id),
+                    state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id),
+                    state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id),
+                    state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id),
+                );
+                if let Ok(stats) = stats {
+                    let telemetry = serde_json::json!({
+                        "type":             "telemetry",
+                        "total_events":     stats.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
+                        "zeek_events":      stats.get("zeek_events").and_then(|v| v.as_u64()).unwrap_or(0),
+                        "suricata_events":  stats.get("suricata_events").and_then(|v| v.as_u64()).unwrap_or(0),
+                        "correlation_hits": stats.get("hits_total").and_then(|v| v.as_u64()).unwrap_or(0),
+                        "events_1h":        stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
+                        "severity":         severity.ok(),
+                        "top_src_ips":      top_src.unwrap_or_default(),
+                        "top_dst_ips":      top_dst.unwrap_or_default(),
+                        "protocols":        protocols.unwrap_or_default(),
+                    });
+                    if socket.send(Message::Text(telemetry.to_string())).await.is_err() {
+                        break;
+                    }
+                }
                 if socket.send(Message::Ping(vec![])).await.is_err() {
                     break;
                 }

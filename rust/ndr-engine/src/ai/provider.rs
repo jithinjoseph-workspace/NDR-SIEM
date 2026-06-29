@@ -1,4 +1,17 @@
+use std::sync::Arc;
 use tracing::{error, warn};
+
+// Process-level cache: use_case_tag → (providers, populated_at)
+// TTL = 5 min. Serialised behind a Mutex so only one CH query fires per miss.
+static PROVIDER_CACHE: std::sync::OnceLock<
+    Arc<tokio::sync::Mutex<std::collections::HashMap<String, (Vec<AiProvider>, std::time::Instant)>>>
+> = std::sync::OnceLock::new();
+
+fn provider_cache() -> Arc<tokio::sync::Mutex<std::collections::HashMap<String, (Vec<AiProvider>, std::time::Instant)>>> {
+    PROVIDER_CACHE
+        .get_or_init(|| Arc::new(tokio::sync::Mutex::new(Default::default())))
+        .clone()
+}
 
 #[allow(dead_code)]
 pub enum UseCase {
@@ -39,8 +52,7 @@ pub async fn generate(
     system: &str,
     prompt: &str,
 ) -> String {
-    let providers = storage.get_ai_providers(use_case.tag()).await
-        .unwrap_or_default();
+    let providers = cached_providers(storage, use_case.tag()).await;
 
     for p in &providers {
         if p.api_key.is_empty() { continue; }
@@ -61,8 +73,7 @@ pub async fn generate_chat(
     history: &[serde_json::Value],
     user_msg: &str,
 ) -> anyhow::Result<(String, String)> {
-    let providers = storage.get_ai_providers("chat").await
-        .unwrap_or_default();
+    let providers = cached_providers(storage, "chat").await;
 
     for p in &providers {
         if p.api_key.is_empty() { continue; }
@@ -74,6 +85,27 @@ pub async fn generate_chat(
     }
 
     env_fallback_chat(system, history, user_msg).await
+}
+
+/// Returns providers from cache if fresh (< 5 min), otherwise queries CH once
+/// and updates cache. Callers that arrive during a refresh wait on the Mutex
+/// and immediately read the freshly populated result — no thundering herd.
+async fn cached_providers(
+    storage: &crate::storage::ClickhouseStorage,
+    tag: &str,
+) -> Vec<AiProvider> {
+    let cache = provider_cache();
+    let mut guard = cache.lock().await;
+    let needs_refresh = guard.get(tag)
+        .map(|(_, ts)| ts.elapsed() > std::time::Duration::from_secs(300))
+        .unwrap_or(true);
+    if needs_refresh {
+        let fresh = storage.get_ai_providers(tag).await.unwrap_or_default();
+        guard.insert(tag.to_string(), (fresh.clone(), std::time::Instant::now()));
+        fresh
+    } else {
+        guard[tag].0.clone()
+    }
 }
 
 // ─── Provider dispatch ──────────────────────────────────────────────────────

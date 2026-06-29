@@ -162,6 +162,9 @@ pub struct AppState {
     pub correlation_semaphore: Arc<tokio::sync::Semaphore>,
     pub sensor_key_cache: Arc<crate::auth::sensor_cache::SensorKeyCache>,
     pub ingest_tx: tokio::sync::mpsc::Sender<(String, String)>,
+    pub http_client: reqwest::Client,
+    pub trusted: Arc<tokio::sync::RwLock<crate::threat::cloud_trust::TrustedRanges>>,
+    pub sensor_ip: Option<std::net::IpAddr>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -575,9 +578,43 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         }
     }
 
+    // Resolve trusted-cloud flag via dynamic DB-driven TrustedRanges (no hardcoding)
+    let dst_ip_str = hit.zeek.dest_ip.as_deref().unwrap_or("").to_string();
+    let sni_str    = hit.zeek.raw.get("server_name")
+        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let is_trusted_cloud = {
+        let tr = state.trusted.read().await;
+        if tr.is_trusted_ip(&dst_ip_str) || tr.is_trusted_domain(&sni_str) {
+            true
+        } else if let Some(asn) = enrichment.dst_asn.as_ref() {
+            tr.is_trusted_asn(&asn.org)
+        } else {
+            false
+        }
+    };
+
+    // TAP mode: sensor is a passive probe — ALL traffic from sensor IP is noise.
+    // Agent mode: sensor IS the monitored host — don't suppress its traffic.
+    let src_ip_parsed: Option<std::net::IpAddr> = hit.zeek.source_ip
+        .as_deref().and_then(|s| s.parse().ok());
+    let sensor_mode_tap = std::env::var("SENSOR_MODE")
+        .map(|m| m.to_lowercase() == "tap")
+        .unwrap_or(false);
+    if let (Some(sensor), Some(src)) = (state.sensor_ip, src_ip_parsed) {
+        if src == sensor {
+            if sensor_mode_tap {
+                return; // TAP mode: sensor probe traffic — silently drop
+            }
+            // Agent mode: only drop if destination is trusted cloud (management noise)
+            if is_trusted_cloud {
+                return;
+            }
+        }
+    }
+
     // Score — use tenant-configured severity thresholds so critical_threshold
     // and alert_threshold bands from the Settings page are respected.
-    let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country);
+    let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud);
     let severity = crate::scoring::Severity::from_score_with_thresholds(
         raw_risk.score,
         critical_threshold,
@@ -592,8 +629,20 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         reasons:  raw_risk.reasons,
     };
 
+    // Drop hits that are already AI-suppressed — check before storing so
+    // suppressed alerts never appear in the UI at all
+    if let Some(alert) = hit.suricata.alert.as_ref() {
+        let sig_id = alert.signature_id;
+        if sig_id > 0 && state.ch_storage
+            .is_ai_suppressed(&tenant_id, sig_id, src, dst).await
+        {
+            return; // AI-suppressed — silently drop
+        }
+    }
+
     // Auto-capture evidence for HIGH, CRITICAL, and MEDIUM hits
     let severity_str = risk.severity.as_str().to_string();
+    let hit_is_malicious = enrichment.is_malicious;
     if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM")
         && hit.community_id.starts_with("1:")
     {
@@ -611,6 +660,14 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             .as_ref().map(|a| a.signature.clone())
             .or_else(|| hit.zeek.raw.get("rule_name").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .unwrap_or_default();
+        let suricata_category_str = hit.suricata.alert
+            .as_ref().map(|a| a.category.clone()).unwrap_or_default();
+        let app_proto_str = hit.suricata.raw
+            .get("app_proto").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let dns_query_str = hit.suricata.raw
+            .get("dns").and_then(|d| d.get("queries")).and_then(|q| q.as_array())
+            .and_then(|arr| arr.first()).and_then(|q| q.get("rrname"))
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
         let now_str = chrono::Utc::now().to_rfc3339();
         let alert_json = serde_json::json!({
             "community_id": cid,
@@ -667,71 +724,146 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 
                         // AI threat analysis — gathers ALL bundles for this CID,
                         // sends grouped prompt, deletes old analyses, saves one result.
+                        // Skip entirely if destination is a trusted cloud provider with no
+                        // real threat signal — prevents false-positive AI analysis.
                         {
-                            let bundles = ch.get_bundles_for_cid(&tenant, &cid).await
-                                .unwrap_or_default();
+                            if is_trusted_cloud && !hit_is_malicious {
+                                tracing::info!(
+                                    "AI analysis skipped — trusted cloud provider, no threat signal (cid {})",
+                                    cid
+                                );
+                            } else {
+                                let bundles = ch.get_bundles_for_cid(&tenant, &cid).await
+                                    .unwrap_or_default();
 
-                            // Group alerts by severity in priority order
-                            let sev_order = ["CRITICAL","HIGH","MEDIUM","LOW","INFO","UNKNOWN"];
-                            let mut by_sev: std::collections::HashMap<String, Vec<String>> =
-                                std::collections::HashMap::new();
-                            for b in &bundles {
-                                let sev = b["severity"].as_str().unwrap_or("UNKNOWN").to_string();
-                                let src  = b["src_ip"].as_str().unwrap_or("?");
-                                let dst  = b["dst_ip"].as_str().unwrap_or("?");
-                                let rule = b["alert_id"].as_str().unwrap_or("?");
-                                by_sev.entry(sev).or_default()
-                                    .push(format!("  {}→{}  rule={}", src, dst, rule));
-                            }
+                                // Check if source host has confirmed C2/threat-intel history
+                                let host_compromised = ch.host_has_threat_intel_hit(&tenant, &src_ip_str).await;
+                                let host_context = if host_compromised {
+                                    format!(
+                                        "HOST THREAT HISTORY: {} has confirmed threat-intel C2 hit(s) \
+                                         in the last 24h — treat this host as compromised.\n",
+                                        src_ip_str
+                                    )
+                                } else {
+                                    String::new()
+                                };
 
-                            let mut grouped = String::new();
-                            for sev in sev_order {
-                                if let Some(entries) = by_sev.get(sev) {
-                                    grouped.push_str(&format!(
-                                        "{} ({} alert{}):\n", sev, entries.len(),
-                                        if entries.len() == 1 { "" } else { "s" }
-                                    ));
-                                    for e in entries { grouped.push_str(e); grouped.push('\n'); }
-                                    grouped.push('\n');
+                                // Look up asset info for src and dst IPs from the asset inventory
+                                let asset_context = {
+                                    let mut parts = Vec::new();
+                                    for (label, ip) in [("src", &src_ip_str), ("dst", &dst_ip_str)] {
+                                        if ip.is_empty() { continue; }
+                                        let rows = ch.client
+                                            .query(&format!(
+                                                "SELECT hostname, mac, vendor, os_guess, device_type, custom_name \
+                                                 FROM ndr.assets WHERE ip = '{}' AND tenant_id = '{}' LIMIT 1",
+                                                ip.replace('\'', "''"), tenant
+                                            ))
+                                            .fetch_all::<(String,String,String,String,String,String)>()
+                                            .await
+                                            .unwrap_or_default();
+                                        if let Some((hostname, mac, vendor, os_guess, device_type, custom_name)) = rows.first() {
+                                            let mut info = Vec::new();
+                                            if !hostname.is_empty()    { info.push(format!("hostname={}", hostname)); }
+                                            if !mac.is_empty()         { info.push(format!("mac={}", mac)); }
+                                            if !vendor.is_empty()      { info.push(format!("vendor={}", vendor)); }
+                                            if !os_guess.is_empty()    { info.push(format!("os={}", os_guess)); }
+                                            if !device_type.is_empty() { info.push(format!("type={}", device_type)); }
+                                            if !custom_name.is_empty() { info.push(format!("name={}", custom_name)); }
+                                            if !info.is_empty() {
+                                                parts.push(format!("  {} ({}): {}", ip, label, info.join(", ")));
+                                            }
+                                        }
+                                    }
+                                    if parts.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("ASSET INVENTORY:\n{}\n", parts.join("\n"))
+                                    }
+                                };
+
+                                // Group alerts by severity, include full rule details
+                                let sev_order = ["CRITICAL","HIGH","MEDIUM","LOW","INFO","UNKNOWN"];
+                                let mut by_sev: std::collections::HashMap<String, Vec<String>> =
+                                    std::collections::HashMap::new();
+                                for b in &bundles {
+                                    let sev = b["severity"].as_str().unwrap_or("UNKNOWN").to_string();
+                                    let src  = b["src_ip"].as_str().unwrap_or("?");
+                                    let dst  = b["dst_ip"].as_str().unwrap_or("?");
+                                    let mut entry = format!("  {}→{}", src, dst);
+                                    if !rule_name_str.is_empty() {
+                                        entry.push_str(&format!("\n    sig=\"{}\"", rule_name_str));
+                                    }
+                                    if !suricata_category_str.is_empty() {
+                                        entry.push_str(&format!("  category=\"{}\"", suricata_category_str));
+                                    }
+                                    if !app_proto_str.is_empty() {
+                                        entry.push_str(&format!("\n    proto={}", app_proto_str));
+                                    }
+                                    if !dns_query_str.is_empty() {
+                                        entry.push_str(&format!("  dns_query={}", dns_query_str));
+                                    }
+                                    by_sev.entry(sev).or_default().push(entry);
                                 }
-                            }
 
-                            let system_prompt = "You are a senior NDR (Network Detection & Response) \
-                                security analyst. You are given ALL alerts captured for a single \
-                                network session grouped by severity. Analyse the full picture and \
-                                respond in plain text with three short sections:\n\
-                                THREAT: what this session indicates overall (2-3 sentences)\n\
-                                RISK: combined impact across all severity levels (1-2 sentences)\n\
-                                ACTION: recommended immediate response steps (2-3 bullet points)\n\
-                                Be concise and actionable. No markdown headers.";
-
-                            let question = format!(
-                                "Session community_id: {cid}\n\
-                                 All captured alerts grouped by severity:\n\
-                                 {grouped}\n\
-                                 Tenant: {tenant}\n\
-                                 Provide your comprehensive threat analysis.",
-                            );
-
-                            match crate::ai::provider::generate_chat(
-                                &ch, system_prompt, &[], &question
-                            ).await {
-                                Ok((analysis, _)) => {
-                                    let safe_analysis = analysis.replace('\'', "''");
-                                    // Delete old individual analyses for this CID
-                                    let _ = ch.delete_ai_annotations_for_cid(&tenant, &cid).await;
-                                    // Save one comprehensive analysis
-                                    let _ = ch.add_evidence_annotation(
-                                        &tenant, &bundle_id, &cid,
-                                        "ARIA-AI", &safe_analysis, "ai_analysis",
-                                    ).await;
-                                    tracing::info!(
-                                        "AI analysis saved for cid {} ({} bundles)",
-                                        cid, bundles.len()
-                                    );
+                                let mut grouped = String::new();
+                                for sev in sev_order {
+                                    if let Some(entries) = by_sev.get(sev) {
+                                        grouped.push_str(&format!(
+                                            "{} ({} alert{}):\n", sev, entries.len(),
+                                            if entries.len() == 1 { "" } else { "s" }
+                                        ));
+                                        for e in entries { grouped.push_str(e); grouped.push('\n'); }
+                                        grouped.push('\n');
+                                    }
                                 }
-                                Err(e) => {
-                                    tracing::warn!("AI analysis failed for {}: {}", bundle_id, e);
+
+                                let system_prompt = "You are a senior NDR (Network Detection & Response) \
+                                    security analyst. You are given ALL alerts captured for a single \
+                                    network session grouped by severity. Analyse the full picture and \
+                                    respond in plain text with three short sections:\n\
+                                    THREAT: what this session indicates overall (2-3 sentences)\n\
+                                    RISK: combined impact across all severity levels (1-2 sentences)\n\
+                                    ACTION: recommended immediate response steps (2-3 bullet points)\n\
+                                    Be concise and actionable. No markdown headers.\n\
+                                    IMPORTANT: If HOST THREAT HISTORY shows a confirmed C2 hit, treat \
+                                    all alerts from that host as high-priority regardless of individual \
+                                    alert severity. DNS queries to ngrok, pagekite, or other tunneling \
+                                    domains from a compromised host indicate active C2 beaconing.\n\
+                                    Traffic to known cloud providers (Google, AWS, Microsoft, Cloudflare) \
+                                    is normal UNLESS the host is flagged as compromised OR a tunneling \
+                                    domain is in the dns_query field.";
+
+                                let question = format!(
+                                    "Session community_id: {cid}\n\
+                                     {host_context}\
+                                     {asset_context}\
+                                     All captured alerts grouped by severity:\n\
+                                     {grouped}\n\
+                                     Tenant: {tenant}\n\
+                                     Provide your comprehensive threat analysis.",
+                                );
+
+                                match crate::ai::provider::generate_chat(
+                                    &ch, system_prompt, &[], &question
+                                ).await {
+                                    Ok((analysis, _)) => {
+                                        let safe_analysis = analysis.replace('\'', "''");
+                                        // Delete old individual analyses for this CID
+                                        let _ = ch.delete_ai_annotations_for_cid(&tenant, &cid).await;
+                                        // Save one comprehensive analysis
+                                        let _ = ch.add_evidence_annotation(
+                                            &tenant, &bundle_id, &cid,
+                                            "ARIA-AI", &safe_analysis, "ai_analysis",
+                                        ).await;
+                                        tracing::info!(
+                                            "AI analysis saved for cid {} ({} bundles)",
+                                            cid, bundles.len()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("AI analysis failed for {}: {}", bundle_id, e);
+                                    }
                                 }
                             }
                         }
@@ -774,26 +906,60 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     }
 
     // Persist to ClickHouse
+    // zeek+suricata hits ENRICH the existing zeek-only row via ReplacingMergeTree
+    // instead of inserting a second duplicate row.
 
-    let ch = state.ch_storage.clone();
+    let ch             = state.ch_storage.clone();
     let tenant_id_clone = tenant_id.clone();
+    let hit_source     = hit.source.clone();
+    let now_ts         = chrono::Utc::now().timestamp() as u32;
+    let sigma_deduped: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        detections.iter().map(|d| d.title.clone()).filter(|t| seen.insert(t.clone())).collect()
+    };
+    let src_country = enrichment.src_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
+    let dst_country = enrichment.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
+    let threat_intel_flag = enrichment.is_malicious as u8;
+
+    let zeek_details = serde_json::to_string(&hit.zeek.raw).unwrap_or_else(|_| "{}".into());
+    let suricata_details = if hit_source == "zeek+suricata" || hit_source == "suricata" {
+        serde_json::to_string(&hit.suricata.raw).unwrap_or_else(|_| "{}".into())
+    } else {
+        "{}".into()
+    };
+    let suricata_rule_id = hit.suricata.alert.as_ref()
+        .map(|a| a.signature_id.to_string())
+        .unwrap_or_default();
+    let suricata_category = hit.suricata.alert.as_ref()
+        .map(|a| a.category.clone())
+        .unwrap_or_default();
+
+    let corr_status = match hit_source.as_str() {
+        "zeek+suricata" => "corroborated",
+        "suricata"      => "suricata_only",
+        _               => "zeek_only",
+    }.to_string();
+
     let ch_hit = crate::storage::clickhouse::NdrHit {
-    timestamp:    chrono::Utc::now().timestamp() as u32,
-    community_id: hit.community_id.clone(),
-    src_ip:       src.to_string(),
-    dst_ip:       dst.to_string(),
-    score:        risk.score as f32,
-    severity:     risk.severity.as_str().to_string(),
-    tags:         risk.tags.clone(),
-    sigma_hits: {let mut seen = std::collections::HashSet::new();detections.iter().map(|d| d.title.clone()).filter(|t| seen.insert(t.clone())).collect()},  
-    threat_intel: enrichment.is_malicious as u8,
-    src_country:  enrichment.src_geo.as_ref()
-                    .map(|g| g.country_code.clone())
-                    .unwrap_or_default(),
-    dst_country:  enrichment.dst_geo.as_ref()
-                    .map(|g| g.country_code.clone())
-                    .unwrap_or_default(),
-    tenant_id:    tenant_id.clone(),
+        timestamp:          now_ts,
+        community_id:       hit.community_id.clone(),
+        src_ip:             src.to_string(),
+        dst_ip:             dst.to_string(),
+        score:              risk.score as f32,
+        severity:           risk.severity.as_str().to_string(),
+        tags:               risk.tags.clone(),
+        sigma_hits:         sigma_deduped,
+        threat_intel:       threat_intel_flag,
+        src_country:        src_country.clone(),
+        dst_country:        dst_country.clone(),
+        tenant_id:          tenant_id.clone(),
+        correlation_status: corr_status,
+        zeek_details:       zeek_details,
+        suricata_details:   suricata_details,
+        corroborated_at:    if hit_source == "zeek+suricata" { now_ts } else { 0 },
+        suricata_rule_id:   suricata_rule_id,
+        suricata_category:  suricata_category,
+        updated_at:         now_ts,
     };
     tokio::spawn(async move {
         if let Err(e) = ch.insert_hit_for_tenant(ch_hit, &tenant_id_clone).await {
@@ -850,6 +1016,25 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 || dst_ip.starts_with("172.") { "private/internal" } else { "public/external" };
 
             tokio::spawn(async move {
+                // Hard-block 1: hit itself has threat intel match — AI cannot override this
+                if threat_intel {
+                    tracing::info!(
+                        "Suppression skipped — threat_intel=true for {}→{} SID={}",
+                        src_ip, dst_ip, sig_id
+                    );
+                    return;
+                }
+
+                // Hard-block 2: src_ip has ANY confirmed C2/threat-intel hit in last 24h
+                // An already-confirmed compromised host must never have its alerts suppressed
+                if ch3.host_has_threat_intel_hit(&tid3, &src_ip).await {
+                    tracing::info!(
+                        "Suppression skipped — {} has confirmed threat-intel history (SID={})",
+                        src_ip, sig_id
+                    );
+                    return;
+                }
+
                 // Skip if already suppressed
                 if ch3.is_ai_suppressed(&tid3, sig_id, &src_ip, &dst_ip).await {
                     return;
@@ -7279,6 +7464,38 @@ pub async fn get_ai_activity(
     }))
 }
 
+/// PATCH /api/ai-suppressions/:id/deactivate
+pub async fn deactivate_ai_suppression_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    match state.ch_storage.deactivate_ai_suppression(&claims.tenant_id, &id).await {
+        Ok(_) => Json(json!({"ok": true})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+/// DELETE /api/ai-suppressions/:id
+pub async fn delete_ai_suppression_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    match state.ch_storage.delete_ai_suppression(&claims.tenant_id, &id).await {
+        Ok(_) => Json(json!({"ok": true})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
 pub async fn get_ipam_subnets(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -7396,4 +7613,102 @@ pub async fn get_leader_status(
         "leader_key":      "ndr:threat_leader",
         "election_info":   "Leader renewed every 10s, TTL=30s, failover < 30s",
     }))
+}
+
+// ── Trusted Cloud Settings — super_admin only ─────────────────────────────────
+
+pub async fn get_trusted_cloud_settings(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+    let ch = &state.ch_storage;
+
+    let keywords_str = ch.get_global_setting("trusted_cloud_asn_keywords").await.unwrap_or_default();
+    let domains_str  = ch.get_global_setting("trusted_cloud_domains").await.unwrap_or_default();
+
+    let keywords: Vec<&str> = keywords_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let domains:  Vec<&str> = domains_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+
+    let suggestions = crate::threat::cloud_suggestions::load_suggestions(ch).await;
+    let mut suggestions_list: Vec<serde_json::Value> = suggestions.into_iter()
+        .map(|(org, hits)| json!({ "org": org, "hits": hits }))
+        .collect();
+    suggestions_list.sort_by(|a, b| {
+        b["hits"].as_u64().unwrap_or(0).cmp(&a["hits"].as_u64().unwrap_or(0))
+    });
+
+    Json(json!({
+        "keywords":    keywords,
+        "domains":     domains,
+        "suggestions": suggestions_list,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct TrustedCloudUpdate {
+    pub keywords: Option<Vec<String>>,
+    pub domains:  Option<Vec<String>>,
+}
+
+pub async fn update_trusted_cloud_settings(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<TrustedCloudUpdate>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+    let ch = &state.ch_storage;
+
+    if let Some(ref kws) = body.keywords {
+        let val = kws.iter().map(|k| k.trim().to_uppercase()).filter(|k| !k.is_empty()).collect::<Vec<_>>().join(",");
+        if let Err(e) = ch.set_global_setting("trusted_cloud_asn_keywords", &val).await {
+            return Json(json!({"error": e.to_string()}));
+        }
+        let mut guard = state.trusted.write().await;
+        for kw in kws.iter() {
+            guard.add_asn_keyword(kw.trim());
+        }
+    }
+
+    if let Some(ref doms) = body.domains {
+        let val = doms.iter().map(|d| d.trim().to_lowercase()).filter(|d| !d.is_empty()).collect::<Vec<_>>().join(",");
+        if let Err(e) = ch.set_global_setting("trusted_cloud_domains", &val).await {
+            return Json(json!({"error": e.to_string()}));
+        }
+    }
+
+    Json(json!({"ok": true}))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SuggestionAction {
+    pub org: String,
+}
+
+pub async fn approve_trusted_cloud_suggestion(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<SuggestionAction>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+    match crate::threat::cloud_suggestions::approve_suggestion(
+        &state.ch_storage,
+        &body.org,
+        &state.trusted,
+    ).await {
+        Ok(_)  => Json(json!({"ok": true, "org": body.org})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+pub async fn reject_trusted_cloud_suggestion(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<SuggestionAction>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) { return e; }
+    match crate::threat::cloud_suggestions::reject_suggestion(&state.ch_storage, &body.org).await {
+        Ok(_)  => Json(json!({"ok": true, "org": body.org})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
 }

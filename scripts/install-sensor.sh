@@ -29,6 +29,7 @@ TENANT_ID=""
 API_KEY=""
 IFACE=""
 KAFKA_BOOTSTRAP=""
+SENSOR_MODE=""   # "tap" = passive probe/SPAN, "agent" = installed on monitored server
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --api-key)        API_KEY="$2";        shift 2 ;;
     --interface)      IFACE="$2";          shift 2 ;;
     --kafka)          KAFKA_BOOTSTRAP="$2";shift 2 ;;
+    --mode)           SENSOR_MODE="$2";    shift 2 ;;
     *) warn "Unknown option: $1"; shift ;;
   esac
 done
@@ -50,7 +52,8 @@ if [ -z "$CLOUD_URL" ] || \
   echo "  --tenant-id acme1 \\"
   echo "  --api-key YOUR_KEY \\"
   echo "  [--interface eth0] \\"
-  echo "  [--kafka cloud-host:9092]"
+  echo "  [--kafka cloud-host:9092] \\"
+  echo "  [--mode tap|agent]   # tap=passive probe, agent=on monitored server"
   exit 1
 fi
 
@@ -98,6 +101,40 @@ if [ -z "$IFACE" ]; then
     log "Selected: $IFACE"
   fi
 fi
+
+# ── Detect sensor's own IP on chosen interface ────
+SENSOR_IP=$(ip -o -4 addr show "$IFACE" 2>/dev/null \
+  | awk '{print $4}' | cut -d/ -f1 | head -1)
+if [ -z "$SENSOR_IP" ]; then
+  log "⚠️  Could not detect sensor IP on $IFACE — exclusion rules will be skipped"
+fi
+log "Sensor IP: ${SENSOR_IP:-unknown}"
+mkdir -p "$(dirname "$0")/../.runtime"
+echo "$SENSOR_IP" > "$(dirname "$0")/../.runtime/ndr_sensor_ip"
+
+# ── Select deployment mode ────────────────────────
+if [ -z "$SENSOR_MODE" ]; then
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Deployment Mode"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  1) TAP / SPAN  — sensor is a passive network probe"
+  echo "                   (traffic is mirrored to this VM)"
+  echo "                   Sensor's own IP is excluded from alerts."
+  echo ""
+  echo "  2) Cloud Agent — sensor is installed ON the server"
+  echo "                   being monitored (EC2, GCP VM, etc.)"
+  echo "                   Server's own traffic IS what we monitor."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  read -rp "Select mode [1/2]: " MODE_NUM
+  case "${MODE_NUM:-1}" in
+    1) SENSOR_MODE="tap"   ;;
+    2) SENSOR_MODE="agent" ;;
+    *) SENSOR_MODE="tap"   ;;
+  esac
+fi
+log "Deployment mode: $SENSOR_MODE"
+echo "$SENSOR_MODE" > "$(dirname "$0")/../.runtime/ndr_mode"
 
 # ── Check OS and root ─────────────────────────────
 [ -f /etc/os-release ] || error "Unsupported OS"
@@ -492,6 +529,14 @@ EOF
 @load ndr-arp
 ZEEKCONF
 
+  # TAP mode only: exclude sensor's own IP from Zeek conn.log
+  # In agent mode the server's traffic IS what we want to see — don't suppress
+  if [ "$SENSOR_MODE" = "tap" ] && [ -n "$SENSOR_IP" ]; then
+    echo "redef Site::local_nets += { ${SENSOR_IP}/32 };" \
+      >> /opt/zeek/share/zeek/site/local.zeek
+    log "  ✅ Zeek: sensor $SENSOR_IP added to Site::local_nets (TAP mode)"
+  fi
+
   cat > /opt/zeek/share/zeek/site/ndr-arp.zeek << 'ARPSCRIPT'
 module ARP;
 
@@ -599,7 +644,8 @@ log "Writing Suricata false-positive suppressions..."
 THRESHOLD_FILE="/etc/suricata/threshold.conf"
 touch "$THRESHOLD_FILE"
 
-# Known false positives — add new SIDs here as needed
+# Bootstrap-only SIDs — absolute known noise fired on every sensor at install time
+# All other SIDs are added dynamically via suppress_sid commands from the engine
 SUPPRESS_SIDS=(
   2066052   # ET INFO ngrok-free.dev in TLS SNI — sensor heartbeat to cloud
   2066057   # Related ngrok tunneling rule
@@ -614,6 +660,20 @@ for SID in "${SUPPRESS_SIDS[@]}"; do
     log "  SID $SID already suppressed"
   fi
 done
+
+# TAP mode only: suppress all Suricata alerts from sensor's own IP
+# Agent mode: server IS the monitored endpoint — never suppress its traffic by IP
+if [ "$SENSOR_MODE" = "tap" ] && [ -n "$SENSOR_IP" ]; then
+  SENSOR_LINE="suppress gen_id 1, sig_id 0, track by_src, ip ${SENSOR_IP}"
+  if ! grep -qF "$SENSOR_LINE" "$THRESHOLD_FILE" 2>/dev/null; then
+    echo "$SENSOR_LINE" >> "$THRESHOLD_FILE"
+    log "  ✅ Suppressed all Suricata alerts from sensor IP: $SENSOR_IP (TAP mode)"
+  else
+    log "  Sensor IP $SENSOR_IP already suppressed in Suricata"
+  fi
+else
+  log "  Agent mode: sensor IP NOT suppressed — server traffic is monitored"
+fi
 
 # Configure Suricata to load the threshold file
 if grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
@@ -703,8 +763,6 @@ type = "file"
 include = ["/var/log/ndr/suricata/eve.json"]
 read_from = "end"
 glob_minimum_cooldown_ms = 100
-
-# ── TRANSFORMS: parse JSON + tag source ──────────
 
 [transforms.suricata_json]
 type = "remap"
@@ -1410,6 +1468,62 @@ def execute_command(cmd):
                 pass
             if not reloaded:
                 subprocess.run(['suricatasc', '-c', 'reload-rules'], capture_output=True)
+
+            # ── Zeek collection-layer filter ──────────────────────────────
+            # Map known SIDs to Zeek log_policy hooks so noise never reaches logs
+            ZEEK_SID_FILTERS = {
+                '2049049': ('dns',  '"ngrok" in rec$query'),
+                '2066052': ('ssl',  '"ngrok" in rec$server_name'),
+                '2066057': ('ssl',  '"ngrok" in rec$server_name'),
+                '2022973': ('dhcp', 'rec?$host_name && "kali" in to_lower(rec$host_name)'),
+            }
+            zeek_filter_file = '/opt/zeek/share/zeek/site/ndr-suppress.zeek'
+            if sid in ZEEK_SID_FILTERS:
+                log_type, condition = ZEEK_SID_FILTERS[sid]
+                hook_map = {
+                    'dns':  ('DNS', 'DNS::Info', 'DNS::log_policy'),
+                    'ssl':  ('SSL', 'SSL::Info', 'SSL::log_policy'),
+                    'dhcp': ('DHCP', 'DHCP::Info', 'DHCP::log_policy'),
+                }
+                module, rec_type, hook_name = hook_map[log_type]
+                hook_block = (
+                    f'\nhook {hook_name}(rec: {rec_type}, '
+                    f'id: Log::ID, filter: Log::Filter) {{\n'
+                    f'    if ({condition}) break;\n}}\n'
+                )
+                try:
+                    existing_zeek = open(zeek_filter_file).read() if os.path.exists(zeek_filter_file) else ''
+                except Exception:
+                    existing_zeek = ''
+                if hook_block.strip() not in existing_zeek:
+                    os.makedirs(os.path.dirname(zeek_filter_file), exist_ok=True)
+                    with open(zeek_filter_file, 'a') as zf:
+                        if not existing_zeek:
+                            zf.write('# NDR auto-generated Zeek suppression filters\n')
+                        zf.write(hook_block)
+                    # Add @load to local.zeek if not already there
+                    local_zeek = '/opt/zeek/share/zeek/site/local.zeek'
+                    load_line = '@load ndr-suppress\n'
+                    try:
+                        lz = open(local_zeek).read()
+                    except Exception:
+                        lz = ''
+                    if load_line.strip() not in lz:
+                        with open(local_zeek, 'a') as lf:
+                            lf.write(load_line)
+                    # Restart Zeek to apply new filter
+                    try:
+                        subprocess.run(['pkill', '-f', 'zeek'], capture_output=True)
+                        import time as _time; _time.sleep(1)
+                        iface = open('/opt/ndr/.runtime/ndr_interface').read().strip()
+                        subprocess.Popen(
+                            ['/opt/zeek/bin/zeek', '-i', iface, 'local',
+                             'Log::default_logdir=/var/log/ndr/zeek'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                        print(f"[NDR] Zeek filter added for SID {sid}, Zeek restarted")
+                    except Exception as e:
+                        print(f"[NDR] Zeek restart failed: {e}")
         else:
             print(f"[NDR] SID {sid} already suppressed")
     else:

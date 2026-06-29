@@ -73,6 +73,15 @@ export class Admin implements OnInit, OnDestroy {
   telemetryData: any = null;
   private telemetryInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Trusted cloud settings
+  trustedCloud: { keywords: string[], domains: string[], suggestions: {org: string, hits: number}[] } =
+    { keywords: [], domains: [], suggestions: [] };
+  newKeyword  = '';
+  newDomain   = '';
+  trustedCloudSaving  = false;
+  trustedCloudSaved   = false;
+  loadingTrustedCloud = false;
+
   users: any[] = [];
   loadingUsers = false;
   showAddUser = false;
@@ -252,6 +261,7 @@ export class Admin implements OnInit, OnDestroy {
     this.loadSensorKeys();
     this.loadEngines();
     this.loadAnnouncements();
+    this.loadTrustedCloud();
     this.startSessionExpiryCheck();
   }
 
@@ -293,6 +303,84 @@ export class Admin implements OnInit, OnDestroy {
         this.kafkaInterval = null;
       }
     }
+    if (tab === 'trusted-cloud') {
+      this.loadTrustedCloud();
+    }
+  }
+
+  // ── Trusted cloud ────────────────────────────────────────────────────────
+
+  loadTrustedCloud() {
+    this.loadingTrustedCloud = true;
+    this.api.getTrustedCloudSettings().subscribe({
+      next: (data: any) => {
+        this.trustedCloud = data;
+        this.loadingTrustedCloud = false;
+        this.cdr.detectChanges();
+      },
+      error: () => { this.loadingTrustedCloud = false; },
+    });
+  }
+
+  addKeyword() {
+    const kw = this.newKeyword.trim().toUpperCase();
+    if (kw && !this.trustedCloud.keywords.includes(kw)) {
+      this.trustedCloud.keywords.push(kw);
+    }
+    this.newKeyword = '';
+  }
+
+  removeKeyword(kw: string) {
+    this.trustedCloud.keywords = this.trustedCloud.keywords.filter(k => k !== kw);
+  }
+
+  addDomain() {
+    const d = this.newDomain.trim().toLowerCase();
+    if (d && !this.trustedCloud.domains.includes(d)) {
+      this.trustedCloud.domains.push(d);
+    }
+    this.newDomain = '';
+  }
+
+  removeDomain(d: string) {
+    this.trustedCloud.domains = this.trustedCloud.domains.filter(x => x !== d);
+  }
+
+  saveTrustedCloud() {
+    this.trustedCloudSaving = true;
+    this.trustedCloudSaved  = false;
+    this.api.updateTrustedCloudSettings({
+      keywords: this.trustedCloud.keywords,
+      domains:  this.trustedCloud.domains,
+    }).subscribe({
+      next: () => {
+        this.trustedCloudSaving = false;
+        this.trustedCloudSaved  = true;
+        setTimeout(() => { this.trustedCloudSaved = false; }, 3000);
+      },
+      error: () => { this.trustedCloudSaving = false; },
+    });
+  }
+
+  approveSuggestion(org: string) {
+    this.api.approveTrustedCloudSuggestion(org).subscribe({
+      next: () => {
+        this.trustedCloud.suggestions = this.trustedCloud.suggestions.filter(s => s.org !== org);
+        if (!this.trustedCloud.keywords.includes(org.split(' ')[0])) {
+          this.trustedCloud.keywords.push(org.split(' ')[0]);
+        }
+      },
+      error: () => {},
+    });
+  }
+
+  rejectSuggestion(org: string) {
+    this.api.rejectTrustedCloudSuggestion(org).subscribe({
+      next: () => {
+        this.trustedCloud.suggestions = this.trustedCloud.suggestions.filter(s => s.org !== org);
+      },
+      error: () => {},
+    });
   }
 
   loadKafkaStatus() {

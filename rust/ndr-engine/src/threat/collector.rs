@@ -13,6 +13,11 @@ pub fn spawn_collector(ch: std::sync::Arc<crate::storage::ClickhouseStorage>) {
 }
 
 pub async fn collect_all(ch: &crate::storage::ClickhouseStorage) {
+    // Fetch all currently stored (source, ioc_value) pairs before collecting.
+    // Passed into every collector so insert_intel can skip already-present IOCs.
+    // One SELECT per 6h cycle instead of one per IOC — prevents unbounded table growth.
+    let existing = std::sync::Arc::new(fetch_existing_iocs(ch).await);
+
     let settings = ch.get_settings_by_tenant("default").await.unwrap_or_default();
     let abuseipdb_key = settings["abuseipdb_api_key"].as_str().unwrap_or("").to_string();
     let otx_key      = settings["otx_api_key"].as_str().unwrap_or("").to_string();
@@ -24,15 +29,34 @@ pub async fn collect_all(ch: &crate::storage::ClickhouseStorage) {
         .unwrap_or_default();
 
     tokio::join!(
-        collect_cisa_kev(&http, ch),
-        collect_abuseipdb(&http, ch, &abuseipdb_key),
-        collect_otx(&http, ch, &otx_key),
-        collect_emerging_threats(&http, ch),
+        collect_cisa_kev(&http, ch, &existing),
+        collect_abuseipdb(&http, ch, &abuseipdb_key, &existing),
+        collect_otx(&http, ch, &otx_key, &existing),
+        collect_emerging_threats(&http, ch, &existing),
     );
+}
+
+/// Load all non-expired (source, ioc_value) pairs from the threat_intel table.
+/// Used for dedup — callers skip any IOC already present.
+async fn fetch_existing_iocs(
+    ch: &crate::storage::ClickhouseStorage,
+) -> std::collections::HashSet<(String, String)> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row { source: String, ioc_value: String }
+
+    ch.client
+        .query("SELECT source, ioc_value FROM ndr.threat_intel FINAL WHERE expires_at > now()")
+        .fetch_all::<Row>()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.source, r.ioc_value))
+        .collect()
 }
 
 async fn insert_intel(
     ch: &crate::storage::ClickhouseStorage,
+    existing: &std::collections::HashSet<(String, String)>,
     source: &str,
     attack_type: &str,
     severity: &str,
@@ -41,6 +65,10 @@ async fn insert_intel(
     description: &str,
     threat_pattern: &str,
 ) {
+    // Skip if this exact (source, ioc_value) is already in the table for this cycle.
+    if existing.contains(&(source.to_string(), ioc_value.to_string())) {
+        return;
+    }
     let q = format!(
         "INSERT INTO ndr.threat_intel \
          (source, attack_type, severity, ioc_type, ioc_value, description, threat_pattern) \
@@ -59,6 +87,7 @@ fn esc(s: &str) -> String {
 async fn collect_cisa_kev(
     http: &reqwest::Client,
     ch: &crate::storage::ClickhouseStorage,
+    existing: &std::collections::HashSet<(String, String)>,
 ) {
     let url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
     let Ok(resp) = http.get(url).send().await else { return };
@@ -96,7 +125,7 @@ async fn collect_cisa_kev(
             action, due_date
         );
 
-        insert_intel(ch, "cisa_kev", &attack_type, severity, "cve", cve, &description, &threat_pattern).await;
+        insert_intel(ch, existing, "cisa_kev", &attack_type, severity, "cve", cve, &description, &threat_pattern).await;
         count += 1;
     }
     info!("CISA KEV: {} recent vulns collected", count);
@@ -107,6 +136,7 @@ async fn collect_abuseipdb(
     http: &reqwest::Client,
     ch: &crate::storage::ClickhouseStorage,
     api_key: &str,
+    existing: &std::collections::HashSet<(String, String)>,
 ) {
     if api_key.is_empty() {
         warn!("abuseipdb_api_key not configured in settings — skipping");
@@ -148,7 +178,7 @@ async fn collect_abuseipdb(
             ip, country, score, categories, last_reported
         );
 
-        insert_intel(ch, "abuseipdb", &attack_type, sev, "ip", ip, &description, &threat_pattern).await;
+        insert_intel(ch, existing, "abuseipdb", &attack_type, sev, "ip", ip, &description, &threat_pattern).await;
     }
     info!("AbuseIPDB: {} malicious IPs collected", count);
 }
@@ -195,6 +225,7 @@ async fn collect_otx(
     http: &reqwest::Client,
     ch: &crate::storage::ClickhouseStorage,
     api_key: &str,
+    existing: &std::collections::HashSet<(String, String)>,
 ) {
     if api_key.is_empty() {
         warn!("otx_api_key not configured in settings — skipping");
@@ -235,7 +266,7 @@ async fn collect_otx(
                 let ioc_type = ioc["type"].as_str().unwrap_or("");
                 let ioc_val  = ioc["indicator"].as_str().unwrap_or("");
                 if ioc_val.is_empty() { continue; }
-                insert_intel(ch, "otx", &attack_type, "MEDIUM", ioc_type, ioc_val, &desc_short, &threat_pattern).await;
+                insert_intel(ch, existing, "otx", &attack_type, "MEDIUM", ioc_type, ioc_val, &desc_short, &threat_pattern).await;
                 total += 1;
             }
         }
@@ -247,6 +278,7 @@ async fn collect_otx(
 async fn collect_emerging_threats(
     http: &reqwest::Client,
     ch: &crate::storage::ClickhouseStorage,
+    existing: &std::collections::HashSet<(String, String)>,
 ) {
     let url = "https://rules.emergingthreats.net/open/suricata-5.0/rules/emerging-current_events.rules";
     let Ok(resp) = http.get(url).send().await else { return };
@@ -278,7 +310,7 @@ async fn collect_emerging_threats(
             count, attack_type,
             examples.join(" | ")
         );
-        insert_intel(ch, "emerging_threats", attack_type, "MEDIUM", "", "", &desc, &threat_pattern).await;
+        insert_intel(ch, existing, "emerging_threats", attack_type, "MEDIUM", "", "", &desc, &threat_pattern).await;
     }
     info!("Emerging Threats: {} attack categories", categories.len());
 }

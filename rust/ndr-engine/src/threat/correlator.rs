@@ -6,7 +6,6 @@ use crate::storage::clickhouse::tenant_db_pub;
 
 pub fn spawn_correlator(ch: Arc<crate::storage::ClickhouseStorage>) {
     tokio::spawn(async move {
-        // Delay so collector runs first and populates threat_intel
         tokio::time::sleep(std::time::Duration::from_secs(900)).await;
         loop {
             match ch.get_all_tenants().await {
@@ -31,254 +30,223 @@ async fn run_correlation(
 ) -> anyhow::Result<()> {
     let db = tenant_db_pub(tenant_id);
 
-    // ── 1. Internet threat patterns (today) ──────────────────────────────────
+    // ── 1. Fetch real network IOCs (IPs, domains, hashes) — CVEs excluded ────
+    // CVEs have no direct network indicator so they can't be matched against logs.
+    // Only IOCs with actual network presence (IP, domain, hash) are correlated.
 
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct ThreatRow {
-        source:         String,
+        ioc_type:       String,
+        ioc_value:      String,
         attack_type:    String,
         severity:       String,
-        ioc_value:      String,
         description:    String,
         threat_pattern: String,
     }
 
     let threat_rows = ch.client
-        .query("SELECT source, attack_type, severity, ioc_value, description, threat_pattern \
+        .query("SELECT ioc_type, ioc_value, attack_type, severity, description, threat_pattern \
                 FROM ndr.threat_intel \
                 WHERE collected_at >= now() - INTERVAL 24 HOUR \
-                AND threat_pattern != '' \
-                ORDER BY collected_at DESC LIMIT 30")
+                  AND ioc_type IN ('ip','ip4','ip6','domain','hostname','url','hash','md5','sha256','sha1') \
+                  AND ioc_value != '' \
+                ORDER BY collected_at DESC LIMIT 200")
         .fetch_all::<ThreatRow>().await
         .unwrap_or_default();
 
     if threat_rows.is_empty() {
-        info!("correlator: no enriched threat patterns yet for tenant {}", tenant_id);
+        info!("correlator: no network IOCs in threat_intel for tenant {} — skipping", tenant_id);
         return Ok(());
     }
 
-    // ── 2. YOUR network context (last 6h) ────────────────────────────────────
+    info!("correlator: {} network IOCs to correlate for tenant {}", threat_rows.len(), tenant_id);
 
-    // Top destination ports
-    #[derive(clickhouse::Row, serde::Deserialize)]
-    struct PortRow { dst_port: u16, cnt: u64 }
-    let top_ports = ch.client
-        .query(&format!(
-            "SELECT dst_port, count() as cnt \
-             FROM {}.ndr_events \
-             WHERE timestamp >= now() - INTERVAL 6 HOUR AND dst_port > 0 \
-             GROUP BY dst_port ORDER BY cnt DESC LIMIT 15",
-            db
-        ))
-        .fetch_all::<PortRow>().await.unwrap_or_default();
+    // ── 2. Match each IOC against real log data ───────────────────────────────
+    // Probability is derived from ACTUAL log evidence, not AI estimation.
 
-    // Top Suricata rule hits
-    #[derive(clickhouse::Row, serde::Deserialize)]
-    struct RuleRow { rule_name: String, cnt: u64 }
-    let top_rules = ch.client
-        .query(&format!(
-            "SELECT rule_name, count() as cnt \
-             FROM {}.ndr_hits \
-             WHERE timestamp >= now() - INTERVAL 6 HOUR \
-             AND community_id LIKE '1:%' \
-             GROUP BY rule_name ORDER BY cnt DESC LIMIT 20",
-            db
-        ))
-        .fetch_all::<RuleRow>().await.unwrap_or_default();
+    let mut matched: Vec<MatchedThreat> = vec![];
 
-    // Exposure summary
-    #[derive(clickhouse::Row, serde::Deserialize)]
-    struct ExposureRow {
-        rdp_sessions:            u64,
-        ssh_sessions:            u64,
-        #[allow(dead_code)]
-        brute_force:             u64,
-        #[allow(dead_code)]
-        c2_like:                 u64,
-        large_outbound:          u64,
-        unique_external:         u64,
-    }
-    let exposure = ch.client
-        .query(&format!(
-            "SELECT \
-               countIf(dst_port = 3389 OR src_port = 3389) as rdp_sessions, \
-               countIf(dst_port = 22   OR src_port = 22)   as ssh_sessions, \
-               0 as brute_force, 0 as c2_like, \
-               countIf(bytes_sent > 10000000)               as large_outbound, \
-               uniqExact(dst_ip)                             as unique_external \
-             FROM {}.ndr_events \
-             WHERE timestamp >= now() - INTERVAL 6 HOUR",
-            db
-        ))
-        .fetch_all::<ExposureRow>().await.unwrap_or_default();
+    for row in &threat_rows {
+        let (hit_count, evidence) = match row.ioc_type.as_str() {
 
-    let exp = exposure.into_iter().next().unwrap_or(ExposureRow {
-        rdp_sessions: 0, ssh_sessions: 0, brute_force: 0,
-        c2_like: 0, large_outbound: 0, unique_external: 0,
-    });
-
-    // Brute force count from ndr_hits
-    #[derive(clickhouse::Row, serde::Deserialize)]
-    struct BruteRow { cnt: u64 }
-    let brute = ch.client
-        .query(&format!(
-            "SELECT count() as cnt FROM {}.ndr_hits \
-             WHERE timestamp >= now() - INTERVAL 6 HOUR \
-             AND (lower(rule_name) LIKE '%brute%' OR lower(rule_name) LIKE '%ssh%failed%')",
-            db
-        ))
-        .fetch_all::<BruteRow>().await.unwrap_or_default();
-    let brute_count = brute.into_iter().next().map(|r| r.cnt).unwrap_or(0);
-
-    // IOC matches count
-    let ioc_matches = super::analyzer::match_iocs(ch, tenant_id).await;
-
-    // ── 3. Build AI prompt ────────────────────────────────────────────────────
-
-    let port_context = top_ports.iter()
-        .map(|p| format!("{}({})", p.dst_port, p.cnt))
-        .collect::<Vec<_>>().join(", ");
-
-    let rules_context = top_rules.iter().take(10)
-        .map(|r| format!("{}({})", r.rule_name, r.cnt))
-        .collect::<Vec<_>>().join(", ");
-
-    // Format threat patterns — deduplicate by attack_type, keep richest
-    let mut seen_types: std::collections::HashSet<String> = Default::default();
-    let mut threat_lines: Vec<String> = vec![];
-    for r in &threat_rows {
-        if seen_types.contains(&r.attack_type) && threat_lines.len() > 5 { continue; }
-        seen_types.insert(r.attack_type.clone());
-        let pattern = if !r.threat_pattern.is_empty() {
-            r.threat_pattern.chars().take(200).collect::<String>()
-        } else {
-            r.description.clone()
-        };
-        let ioc_hint = if !r.ioc_value.is_empty() {
-            format!(" [IOC: {}]", r.ioc_value)
-        } else { String::new() };
-        threat_lines.push(format!("- [{}] {} ({}){}: {}", r.source, r.attack_type, r.severity, ioc_hint, pattern));
-    }
-
-    let ioc_context = if ioc_matches.is_empty() {
-        "No confirmed IOC matches in current traffic.".to_string()
-    } else {
-        let lines: Vec<String> = ioc_matches.iter().map(|m| {
-            format!("  {} ({} traffic) — {} from {} [{}]", m.ip, m.direction, m.attack_type, m.source, m.severity)
-        }).collect();
-        format!("CONFIRMED IOC MATCHES IN YOUR TRAFFIC ({}):\n{}", ioc_matches.len(), lines.join("\n"))
-    };
-
-    let system = format!(
-        "You are ARIA, an NDR threat correlation engine. \
-         Your job is to find which internet threats ACTUALLY match this network's exposure. \
-         Be specific — name the threat, the matching port/service, and the risk path. \
-         Tenant: {}. Date: {}.",
-        tenant_id,
-        chrono::Utc::now().format("%Y-%m-%d")
-    );
-
-    let prompt = format!(
-        "THREAT PATTERNS FROM INTERNET (last 24h):\n{}\n\n\
-         YOUR NETWORK (last 6h):\n\
-         - Top destination ports: {}\n\
-         - Suricata alerts fired: {}\n\
-         - RDP sessions: {}, SSH sessions: {}\n\
-         - Brute force attempts: {}\n\
-         - Large outbound transfers (>10MB): {}\n\
-         - Unique external destinations: {}\n\n\
-         {}\n\n\
-         QUESTION: Which of the above threat patterns match this network's attack surface?\n\
-         For each match: name the threat, explain why it matches (which port/service/behavior), \
-         assign probability (0-100%), and give the #1 action to block it.\n\
-         Format each match as:\n\
-         THREAT: <name>\n\
-         MATCH: <why it matches your network>\n\
-         PROBABILITY: <0-100>%\n\
-         ACTION: <single most important action>\n\
-         ---\n\
-         List top 3 matched threats only.",
-        threat_lines.join("\n"),
-        port_context,
-        rules_context,
-        exp.rdp_sessions, exp.ssh_sessions,
-        brute_count,
-        exp.large_outbound,
-        exp.unique_external,
-        ioc_context,
-    );
-
-    let response = generate(ch, UseCase::ThreatPrediction, &system, &prompt).await;
-    if response.is_empty() {
-        warn!("correlator: empty AI response for tenant {}", tenant_id);
-        return Ok(());
-    }
-
-    // ── 4. Parse and store each matched threat ────────────────────────────────
-    store_correlation_results(ch, tenant_id, &response).await;
-
-    info!("AI correlation complete for tenant {}", tenant_id);
-    Ok(())
-}
-
-async fn store_correlation_results(
-    ch: &crate::storage::ClickhouseStorage,
-    tenant_id: &str,
-    ai_response: &str,
-) {
-    // Parse the structured response — split on ---
-    let blocks: Vec<&str> = ai_response.split("---").collect();
-
-    for block in &blocks {
-        let mut threat_name = String::new();
-        let mut match_reason = String::new();
-        let mut probability = 0.5f32;
-        let mut action = String::new();
-
-        for line in block.lines() {
-            let line = line.trim();
-            if let Some(v) = line.strip_prefix("THREAT:") {
-                threat_name = v.trim().to_string();
-            } else if let Some(v) = line.strip_prefix("MATCH:") {
-                match_reason = v.trim().to_string();
-            } else if let Some(v) = line.strip_prefix("PROBABILITY:") {
-                let pct = v.trim().trim_end_matches('%');
-                probability = pct.parse::<f32>().unwrap_or(50.0) / 100.0;
-            } else if let Some(v) = line.strip_prefix("ACTION:") {
-                action = v.trim().to_string();
+            // IP IOC: count how many times this IP appeared in src or dst
+            "ip" | "ip4" | "ip6" => {
+                let val = esc(&row.ioc_value);
+                let cnt: u64 = ch.client
+                    .query(&format!(
+                        "SELECT count() FROM {db}.ndr_events \
+                         WHERE timestamp >= now() - INTERVAL 6 HOUR \
+                           AND (src_ip = '{val}' OR dst_ip = '{val}')"
+                    ))
+                    .fetch_one::<u64>().await.unwrap_or(0);
+                let ev = if cnt > 0 {
+                    format!("{} log entries with IP {}", cnt, row.ioc_value)
+                } else { String::new() };
+                (cnt, ev)
             }
-        }
 
-        if threat_name.is_empty() { continue; }
+            // Domain/hostname IOC: check DNS queries and TLS SNI
+            "domain" | "hostname" | "url" => {
+                let domain = row.ioc_value.trim_start_matches("http://")
+                    .trim_start_matches("https://")
+                    .split('/').next().unwrap_or(&row.ioc_value);
+                let val = esc(domain);
+                let cnt: u64 = ch.client
+                    .query(&format!(
+                        "SELECT count() FROM {db}.ndr_events \
+                         WHERE timestamp >= now() - INTERVAL 6 HOUR \
+                           AND (JSONExtractString(raw, 'query') LIKE '%{val}%' \
+                             OR JSONExtractString(raw, 'server_name') LIKE '%{val}%' \
+                             OR JSONExtractString(raw, 'host') LIKE '%{val}%')"
+                    ))
+                    .fetch_one::<u64>().await.unwrap_or(0);
+                let ev = if cnt > 0 {
+                    format!("{} DNS/TLS/HTTP log entries matching domain {}", cnt, domain)
+                } else { String::new() };
+                (cnt, ev)
+            }
 
-        let attack_type = super::collector::classify_attack(&threat_name, "");
-        let alert_level = if probability > 0.75 { "critical" }
-                          else if probability > 0.5 { "high" }
-                          else if probability > 0.25 { "medium" }
-                          else { "info" };
+            // Hash IOC: check file hashes in Zeek files.log
+            "hash" | "md5" | "sha256" | "sha1" => {
+                let val = esc(&row.ioc_value);
+                let cnt: u64 = ch.client
+                    .query(&format!(
+                        "SELECT count() FROM {db}.ndr_events \
+                         WHERE timestamp >= now() - INTERVAL 6 HOUR \
+                           AND (JSONExtractString(raw, 'md5') = '{val}' \
+                             OR JSONExtractString(raw, 'sha256') = '{val}' \
+                             OR JSONExtractString(raw, 'sha1') = '{val}')"
+                    ))
+                    .fetch_one::<u64>().await.unwrap_or(0);
+                let ev = if cnt > 0 {
+                    format!("{} file log entries with hash {}", cnt, row.ioc_value)
+                } else { String::new() };
+                (cnt, ev)
+            }
 
-        let briefing = format!("{} — {}", match_reason, if !action.is_empty() { format!("Action: {}", action) } else { String::new() });
-        let recs_json = serde_json::to_string(&[action]).unwrap_or_default();
+            _ => (0, String::new()),
+        };
 
-        let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
+        // No log evidence = no match = skip
+        if hit_count == 0 { continue; }
+
+        // Probability from actual hit count:
+        // 1 hit = 30%, 5 hits = 50%, 20+ hits = 90% (capped)
+        let probability = match hit_count {
+            1..=2   => 0.30,
+            3..=5   => 0.45,
+            6..=19  => 0.60,
+            20..=49 => 0.75,
+            _       => 0.90,
+        };
+
+        matched.push(MatchedThreat {
+            ioc_type:    row.ioc_type.clone(),
+            ioc_value:   row.ioc_value.clone(),
+            attack_type: row.attack_type.clone(),
+            severity:    row.severity.clone(),
+            description: row.description.clone(),
+            hit_count,
+            evidence,
+            probability,
+        });
+    }
+
+    if matched.is_empty() {
+        info!("correlator: no IOC matches found in logs for tenant {}", tenant_id);
+        return Ok(());
+    }
+
+    info!("correlator: {} IOCs matched in logs for tenant {}", matched.len(), tenant_id);
+
+    // ── 3. Use AI only to generate human-readable briefing for real matches ───
+    // Probability is already calculated from logs — AI just explains the match.
+
+    for m in &matched {
+        let system = format!(
+            "You are ARIA, an NDR threat analyst for tenant {}. \
+             A malicious {} ({}) was found in network logs {} times. \
+             Write a 2-sentence briefing: what this threat does and what the network team should do. \
+             Be specific and concise. No hallucinations — only describe what is confirmed.",
+            tenant_id, m.ioc_type, m.ioc_value, m.hit_count
+        );
+
+        let prompt = format!(
+            "Confirmed log evidence: {}\n\
+             Threat description: {}\n\
+             Attack type: {} | Severity: {}\n\n\
+             Write briefing (2 sentences max): what this IOC does + recommended action.",
+            m.evidence, m.description, m.attack_type, m.severity
+        );
+
+        let briefing = {
+            let raw = generate(ch, UseCase::ThreatPrediction, &system, &prompt).await;
+            if raw.is_empty() {
+                // AI unavailable — generate briefing from known data, no hallucination
+                format!(
+                    "Confirmed: {} {} appeared {} time(s) in network logs in the last 6 hours. \
+                     Investigate and block this {} immediately.",
+                    m.ioc_type, m.ioc_value, m.hit_count, m.ioc_type
+                )
+            } else {
+                raw.chars().take(500).collect::<String>()
+            }
+        };
+
+        let alert_level = if m.probability >= 0.75     { "critical" }
+                          else if m.probability >= 0.50 { "high" }
+                          else if m.probability >= 0.30 { "medium" }
+                          else                           { "info" };
+
+        let explanation = format!(
+            "IOC {} ({}) found {} time(s) in logs — {} severity threat",
+            m.ioc_value, m.ioc_type, m.hit_count, m.severity
+        );
+        let recs_json = serde_json::to_string(&[
+            format!("Block {} {} at firewall/DNS level", m.ioc_type, m.ioc_value),
+            format!("Investigate all systems that communicated with {}", m.ioc_value),
+        ]).unwrap_or_else(|_| "[]".into());
+
+        let db  = tenant_db_pub(tenant_id);
         let q = format!(
             "INSERT INTO {db}.threat_predictions \
              (tenant_id, attack_type, probability, confidence, trend, trend_delta, \
               intel_signal_count, exposure_score, internal_hit_count, \
               explanation, recommendations, aria_briefing, alert_level) \
-             VALUES ('{tid}','{at}',{prob:.4},{conf:.4},'stable',0.0,0,0.0,0,'{exp}','{recs}','{briefing}','{al}')",
-            db = db,
-            tid = esc(tenant_id),
-            at = esc(&attack_type),
-            prob = probability,
-            conf = probability * 0.9,
-            exp = esc(&briefing),
-            recs = esc(&recs_json),
+             VALUES ('{tid}','{at}',{prob:.4},{conf:.4},'stable',0.0,1,0.0,{hits},\
+                     '{exp}','{recs}','{briefing}','{al}')",
+            db       = db,
+            tid      = esc(tenant_id),
+            at       = esc(&m.attack_type),
+            prob     = m.probability,
+            conf     = (m.probability * 0.85).min(0.95),
+            hits     = m.hit_count,
+            exp      = esc(&explanation),
+            recs     = esc(&recs_json),
             briefing = esc(&briefing),
-            al = alert_level,
+            al       = alert_level,
         );
-        let _ = ch.client.query(&q).execute().await;
+        if let Err(e) = ch.client.query(&q).execute().await {
+            warn!("correlator: failed to store match for {}: {}", m.ioc_value, e);
+        } else {
+            info!("correlator: stored match — {} ({}) hits={} prob={:.0}%",
+                m.ioc_value, m.attack_type, m.hit_count, m.probability * 100.0);
+        }
     }
+
+    info!("AI correlation complete for tenant {}", tenant_id);
+    Ok(())
+}
+
+struct MatchedThreat {
+    ioc_type:    String,
+    ioc_value:   String,
+    attack_type: String,
+    severity:    String,
+    description: String,
+    hit_count:   u64,
+    evidence:    String,
+    probability: f32,
 }
 
 fn esc(s: &str) -> String {

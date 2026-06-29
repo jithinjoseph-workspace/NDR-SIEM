@@ -79,7 +79,7 @@ impl LeaderElection {
                     let _: () = redis::cmd("CONFIG")
                         .arg("SET")
                         .arg("notify-keyspace-events")
-                        .arg("Kx")   // K=Keyspace, x=expired+deleted only (not all commands)
+                        .arg("gxE") // E=keyevent channel, g=generic cmds (DEL), x=expired
                         .query_async(&mut conn)
                         .await
                         .unwrap_or(());
@@ -131,13 +131,27 @@ impl LeaderElection {
                             .unwrap_or(None);
 
                         if current.as_deref() == Some(instance_id.as_str()) {
-                            let _: bool = redis::cmd("PEXPIRE")
-                                .arg(LEADER_KEY)
-                                .arg(LEADER_TTL_MS)
-                                .query_async(&mut conn)
-                                .await
-                                .unwrap_or(false);
-                            tracing::debug!("Leadership renewed: {}", instance_id);
+                            // Atomic: only extend TTL if we still own the key (Lua = single round-trip)
+                            let renewed: i64 = redis::Script::new(
+                                "if redis.call('GET', KEYS[1]) == ARGV[1] then \
+                                    return redis.call('PEXPIRE', KEYS[1], ARGV[2]) \
+                                 else return 0 end"
+                            )
+                            .key(LEADER_KEY)
+                            .arg(&instance_id)
+                            .arg(LEADER_TTL_MS)
+                            .invoke_async(&mut conn)
+                            .await
+                            .unwrap_or(0);
+                            if renewed == 1 {
+                                tracing::debug!("Leadership renewed: {}", instance_id);
+                            } else {
+                                // Lost it between the GET above and the Lua call — treat as lost
+                                is_leader.store(false, Ordering::Relaxed);
+                                tracing::warn!("LEADERSHIP LOST (renewal race): {}", instance_id);
+                                on_lost_clone();
+                                continue;
+                            }
                         } else {
                             // Key gone or taken — we lost it
                             is_leader.store(false, Ordering::Relaxed);
@@ -274,18 +288,19 @@ impl LeaderElection {
             return;
         };
 
-        let current: Option<String> = redis::cmd("GET")
-            .arg(LEADER_KEY)
-            .query_async(&mut conn)
-            .await
-            .unwrap_or(None);
+        // Atomic: only DEL if we still own the key — prevents deleting a new leader's key
+        let deleted: i64 = redis::Script::new(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then \
+                return redis.call('DEL', KEYS[1]) \
+             else return 0 end"
+        )
+        .key(LEADER_KEY)
+        .arg(&self.instance_id)
+        .invoke_async(&mut conn)
+        .await
+        .unwrap_or(0);
 
-        if current.as_deref() == Some(&self.instance_id) {
-            let _: () = redis::cmd("DEL")
-                .arg(LEADER_KEY)
-                .query_async(&mut conn)
-                .await
-                .unwrap_or(());
+        if deleted == 1 {
             tracing::info!("Leadership released gracefully: {}", self.instance_id);
         }
     }

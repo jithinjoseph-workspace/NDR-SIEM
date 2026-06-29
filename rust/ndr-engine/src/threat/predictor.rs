@@ -65,7 +65,8 @@ async fn fetch_active_pattern_matches(
         ai_assessment:  String,
     }
 
-    ch.client.query(&format!(
+    let sensor_ip = std::env::var("HOST_IP").unwrap_or_default();
+    let rows = ch.client.query(&format!(
         "SELECT chain_name, attack_type, steps_observed, steps_total, \
          completion_pct, evidence, next_step, src_ip, ai_assessment \
          FROM {db}.pattern_matches \
@@ -75,8 +76,17 @@ async fn fetch_active_pattern_matches(
          LIMIT 50",
         db = db
     ))
-    .fetch_all::<Row>().await.unwrap_or_default()
-    .into_iter().map(|r| ActivePatternMatch {
+    .fetch_all::<Row>().await.unwrap_or_default();
+
+    rows.into_iter()
+    .filter(|r| {
+        if let Ok(addr) = r.src_ip.parse::<std::net::Ipv4Addr>() {
+            if addr.is_multicast() { return false; }
+        }
+        if !sensor_ip.is_empty() && r.src_ip == sensor_ip { return false; }
+        true
+    })
+    .map(|r| ActivePatternMatch {
         chain_name:     r.chain_name,
         attack_type:    r.attack_type,
         steps_observed: r.steps_observed,
@@ -145,11 +155,12 @@ async fn run_prediction(
     // 3. IOC IP matches from threat intel
     let ioc_matches = match_iocs(ch, tenant_id).await;
 
-    // 4. Recent threat intel signals
+    // 4. Recent threat intel signals — CVEs excluded (no network indicator, cause hallucinations)
     let intel_rows = ch.client
         .query("SELECT source, attack_type, severity, ioc_type, ioc_value, description \
                 FROM ndr.threat_intel \
                 WHERE collected_at >= now() - INTERVAL 6 HOUR \
+                  AND ioc_type IN ('ip','ip4','ip6','domain','hostname','url','hash','md5','sha256','sha1') \
                 ORDER BY collected_at DESC LIMIT 50")
         .fetch_all::<(String,String,String,String,String,String)>()
         .await?;
@@ -211,6 +222,12 @@ async fn run_prediction(
             .map(|pm| pm.completion_pct)
             .fold(0.0f32, f32::max);
 
+        // Skip generic attack types with no real chain evidence (prevents noise from vague patterns)
+        if attack_type == "general_threat" && max_completion < 30.0 && matched_iocs.is_empty() {
+            info!("Predictor: skipping general_threat — no chain evidence (completion={:.0}%)", max_completion);
+            continue;
+        }
+
         let probability = compute_probability(
             &exposure, attack_type, signal_count, exposure_score,
             matched_iocs.len() as u32, max_completion,
@@ -239,6 +256,19 @@ async fn run_prediction(
         let db       = crate::storage::clickhouse::tenant_db_pub(tenant_id);
         let recs_json = serde_json::to_string(&recommendations).unwrap_or_else(|_| "[]".into());
         let confidence = (0.4 + (matched_patterns.len() as f32 * 0.15) + (signal_count as f32 * 0.02)).min(0.95);
+
+        // Dedup: skip if same attack_type was already predicted within the 6-hour predictor interval
+        let already: u64 = ch.client
+            .query(&format!(
+                "SELECT count() FROM {db}.threat_predictions \
+                 WHERE attack_type = '{at}' AND tenant_id = '{tid}' \
+                 AND predicted_at >= now() - INTERVAL 6 HOUR",
+                db  = db,
+                at  = esc(attack_type),
+                tid = tenant_id,
+            ))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        if already > 0 { continue; }
 
         let q = format!(
             "INSERT INTO {db}.threat_predictions \

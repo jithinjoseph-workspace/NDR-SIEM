@@ -5,10 +5,13 @@ use serde_json::Value;
 
 use crate::ai::provider::{generate, UseCase};
 use crate::storage::clickhouse::tenant_db_pub;
+use super::cloud_trust::TrustedRanges;
 
 pub fn spawn_chain_matcher(
-    ch: Arc<crate::storage::ClickhouseStorage>,
+    ch:      Arc<crate::storage::ClickhouseStorage>,
     trigger: Arc<Notify>,
+    trusted: Arc<tokio::sync::RwLock<TrustedRanges>>,
+    asn:     Arc<Option<crate::enrichment::AsnLookup>>,
 ) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -16,7 +19,7 @@ pub fn spawn_chain_matcher(
             match ch.get_all_tenants().await {
                 Ok(tenants) => {
                     for tenant_id in &tenants {
-                        run_matching(Arc::clone(&ch), tenant_id).await;
+                        run_matching(Arc::clone(&ch), tenant_id, &trusted, &asn).await;
                     }
                 }
                 Err(e) => warn!("chain_matcher: failed to get tenants: {}", e),
@@ -44,10 +47,18 @@ struct HitRow {
 }
 
 #[derive(clickhouse::Row, serde::Deserialize)]
+struct BeaconPairRow {
+    src_ip: String,
+    dst_ip: String,
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
 struct SessionRow {
     community_id: String,
     event_type:   String,
     detail:       String,
+    src_ip:       String,
+    dst_ip:       String,
 }
 
 #[derive(clickhouse::Row, serde::Deserialize)]
@@ -74,7 +85,13 @@ struct AttackPatternRow {
     tactic:         String,
 }
 
-async fn fetch_filtered_hits(client: &clickhouse::Client, db: &str) -> Vec<String> {
+async fn fetch_filtered_hits(
+    client:  &clickhouse::Client,
+    db:      &str,
+    trusted: &TrustedRanges,
+    asn:     &Option<crate::enrichment::AsnLookup>,
+    beacons: &std::collections::HashSet<String>,
+) -> Vec<String> {
     let rows = client
         .query(&format!(
             "SELECT \
@@ -94,7 +111,26 @@ async fn fetch_filtered_hits(client: &clickhouse::Client, db: &str) -> Vec<Strin
         .await
         .unwrap_or_default();
 
+    let sensor_ip = std::env::var("HOST_IP").unwrap_or_default();
+
     rows.into_iter()
+        .filter(|r| {
+            // Drop multicast/broadcast — never real attackers, always protocol noise
+            if is_multicast_or_broadcast(&r.dst_ip) || is_multicast_or_broadcast(&r.src_ip) {
+                return false;
+            }
+            // Drop sensor's own trusted outbound traffic
+            if !sensor_ip.is_empty() && r.src_ip == sensor_ip
+                && trusted.is_trusted(&r.dst_ip, "", asn) {
+                return false;
+            }
+            let key = format!("{}→{}", r.src_ip, r.dst_ip);
+            if beacons.contains(&key) { return true; }
+            if crate::enrichment::is_private_ip(&r.src_ip) && trusted.is_trusted(&r.dst_ip, "", asn) {
+                return false;
+            }
+            !trusted.is_trusted(&r.dst_ip, "", asn)
+        })
         .map(|r| {
             let signal = format!("{} {}", r.tags_str, r.sigma_str).trim().to_string();
             format!("[{}] {} → {}  tags={}", r.ts, r.src_ip, r.dst_ip, signal)
@@ -102,7 +138,40 @@ async fn fetch_filtered_hits(client: &clickhouse::Client, db: &str) -> Vec<Strin
         .collect()
 }
 
-async fn fetch_all_sessions(client: &clickhouse::Client, db: &str) -> Vec<String> {
+async fn fetch_beacon_pairs(
+    client: &clickhouse::Client,
+    db:     &str,
+) -> std::collections::HashSet<String> {
+    let q = format!(
+        "SELECT src_ip, dst_ip \
+         FROM {db}.ndr_events \
+         WHERE timestamp >= now() - INTERVAL 6 HOUR \
+         GROUP BY src_ip, dst_ip \
+         HAVING count() >= 8 \
+           AND avg(toUInt64OrZero(JSONExtractString(raw, 'orig_bytes'))) < 4096 \
+           AND (max(toUnixTimestamp(timestamp)) - min(toUnixTimestamp(timestamp))) > 300 \
+           AND toFloat64(count()) / \
+               ((max(toUnixTimestamp(timestamp)) - min(toUnixTimestamp(timestamp))) / 60.0) \
+               BETWEEN 0.5 AND 10",
+        db = db,
+    );
+    client
+        .query(&q)
+        .fetch_all::<BeaconPairRow>()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| format!("{}→{}", r.src_ip, r.dst_ip))
+        .collect()
+}
+
+async fn fetch_all_sessions(
+    client:  &clickhouse::Client,
+    db:      &str,
+    trusted: &TrustedRanges,
+    asn:     &Option<crate::enrichment::AsnLookup>,
+    beacons: &std::collections::HashSet<String>,
+) -> Vec<String> {
     let rows = client
         .query(&format!(
             "SELECT community_id, event_type, \
@@ -112,7 +181,8 @@ async fn fetch_all_sessions(client: &clickhouse::Client, db: &str) -> Vec<String
                event_type IN ('ssl', 'tls'), JSONExtractString(raw, 'server_name'), \
                event_type = 'files', concat(JSONExtractString(raw, 'filename'), ' md5:', JSONExtractString(raw, 'md5')), \
                '' \
-             ) as detail \
+             ) as detail, \
+             src_ip, dst_ip \
              FROM {db}.ndr_events \
              WHERE timestamp >= now() - INTERVAL 6 HOUR \
                AND event_type IN ('dns', 'http', 'ssl', 'tls', 'files') \
@@ -126,7 +196,15 @@ async fn fetch_all_sessions(client: &clickhouse::Client, db: &str) -> Vec<String
     rows.into_iter()
         .filter(|r| {
             let d = r.detail.trim();
-            !d.is_empty() && d != " "
+            if d.is_empty() || d == " " { return false; }
+            let sni = if r.event_type == "ssl" || r.event_type == "tls" { r.detail.trim() } else { "" };
+            let key = format!("{}→{}", r.src_ip, r.dst_ip);
+            if beacons.contains(&key) { return true; } // beacon pattern always kept
+            // Internal src → trusted cloud = sensor/engine own traffic, never an attacker
+            if crate::enrichment::is_private_ip(&r.src_ip) && trusted.is_trusted(&r.dst_ip, sni, asn) {
+                return false;
+            }
+            !trusted.is_trusted(&r.dst_ip, sni, asn)
         })
         .map(|r| {
             let cid_short = &r.community_id[..r.community_id.len().min(16)];
@@ -141,8 +219,9 @@ async fn fetch_threat_intel(client: &clickhouse::Client) -> Vec<String> {
             "SELECT ioc_type, ioc_value, attack_type, severity, description \
              FROM ndr.threat_intel \
              WHERE expires_at > now() AND ioc_value != '' \
+               AND ioc_type IN ('ip', 'ip4', 'ip6', 'domain', 'hostname', 'url', 'hash', 'md5', 'sha256', 'sha1') \
              ORDER BY collected_at DESC \
-             LIMIT 5000",
+             LIMIT 3000",
         )
         .fetch_all::<ThreatIntelRow>()
         .await
@@ -174,7 +253,12 @@ async fn fetch_attack_patterns(client: &clickhouse::Client) -> Vec<String> {
         .collect()
 }
 
-async fn run_matching(ch: Arc<crate::storage::ClickhouseStorage>, tenant_id: &str) {
+async fn run_matching(
+    ch:        Arc<crate::storage::ClickhouseStorage>,
+    tenant_id: &str,
+    trusted:   &Arc<tokio::sync::RwLock<TrustedRanges>>,
+    asn:       &Arc<Option<crate::enrichment::AsnLookup>>,
+) {
     let db = tenant_db_pub(tenant_id);
 
     let chains = ch
@@ -188,12 +272,20 @@ async fn run_matching(ch: Arc<crate::storage::ClickhouseStorage>, tenant_id: &st
         return;
     }
 
+    // Beacon detection: (src,dst) pairs with regular cadence + small bytes = C2 even on trusted cloud
+    let beacons = fetch_beacon_pairs(&ch.client, &db).await;
+    if !beacons.is_empty() {
+        info!("chain_matcher: {} beacon pairs for tenant {}", beacons.len(), tenant_id);
+    }
+
+    let t = trusted.read().await;
     let (hits, sessions, iocs, techniques) = tokio::join!(
-        fetch_filtered_hits(&ch.client, &db),
-        fetch_all_sessions(&ch.client, &db),
+        fetch_filtered_hits(&ch.client, &db, &*t, &**asn, &beacons),
+        fetch_all_sessions(&ch.client, &db, &*t, &**asn, &beacons),
         fetch_threat_intel(&ch.client),
         fetch_attack_patterns(&ch.client),
     );
+    drop(t); // release read lock before long-running AI calls
 
     if hits.is_empty() && sessions.is_empty() {
         info!("chain_matcher: no hits or sessions for tenant {} in last 6h", tenant_id);
@@ -346,6 +438,19 @@ async fn run_matching(ch: Arc<crate::storage::ClickhouseStorage>, tenant_id: &st
             if next_step.is_empty()      { "chain may be complete" }        else { next_step },
             kcs_marker
         );
+
+        // Dedup: skip if same chain already active for this tenant within the sweep window
+        let already: u64 = ch.client
+            .query(&format!(
+                "SELECT count() FROM {db}.pattern_matches \
+                 WHERE chain_id = '{cid}' AND tenant_id = '{tid}' AND status = 'active' \
+                 AND last_updated >= now() - INTERVAL 1 HOUR",
+                db  = db,
+                cid = esc(chain_id),
+                tid = esc(tenant_id),
+            ))
+            .fetch_one::<u64>().await.unwrap_or(0);
+        if already > 0 { continue; }
 
         let q = format!(
             "INSERT INTO {db}.pattern_matches \
@@ -600,4 +705,12 @@ fn default_recs_for_chain(attack_type: &str) -> Vec<String> {
 
 fn esc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+fn is_multicast_or_broadcast(ip: &str) -> bool {
+    if ip == "255.255.255.255" { return true; }
+    if let Ok(addr) = ip.parse::<std::net::Ipv4Addr>() {
+        return addr.is_multicast(); // covers 224.0.0.0/4 including 239.255.255.250
+    }
+    false
 }

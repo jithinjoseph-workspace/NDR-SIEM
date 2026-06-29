@@ -138,6 +138,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - HOST_IP=${HOST_IP}
+      - SENSOR_MODE=${SENSOR_MODE:-agent}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -187,6 +189,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - HOST_IP=${HOST_IP}
+      - SENSOR_MODE=${SENSOR_MODE:-agent}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -236,6 +240,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - HOST_IP=${HOST_IP}
+      - SENSOR_MODE=${SENSOR_MODE:-agent}
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -331,6 +337,7 @@ services:
       - clickhouse1-data:/var/lib/clickhouse
       - clickhouse1-logs:/var/log/clickhouse-server
       - ${INSTALL_DIR}/config/clickhouse/cluster/ch1-config.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ${INSTALL_DIR}/config/clickhouse/cluster/z-ndr-listen.xml:/etc/clickhouse-server/config.d/z-ndr-listen.xml:ro
       - ${INSTALL_DIR}/config/clickhouse/cluster/users.xml:/etc/clickhouse-server/users.d/ndr-users.xml:ro
     restart: unless-stopped
     depends_on:
@@ -356,6 +363,7 @@ services:
       - clickhouse2-data:/var/lib/clickhouse
       - clickhouse2-logs:/var/log/clickhouse-server
       - ${INSTALL_DIR}/config/clickhouse/cluster/ch2-config.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ${INSTALL_DIR}/config/clickhouse/cluster/z-ndr-listen.xml:/etc/clickhouse-server/config.d/z-ndr-listen.xml:ro
       - ${INSTALL_DIR}/config/clickhouse/cluster/users.xml:/etc/clickhouse-server/users.d/ndr-users.xml:ro
     restart: unless-stopped
     depends_on:

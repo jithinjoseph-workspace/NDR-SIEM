@@ -460,7 +460,145 @@ class AgentHandler(BaseHTTPRequestHandler):
         else:
             self.send_json({"error": "not found"}, 404)
 
+ZEEK_SID_FILTERS = {
+    '2049049': ('DNS',  'rec?$query && "ngrok" in rec$query'),
+    '2066052': ('SSL',  'rec?$server_name && "ngrok" in rec$server_name'),
+    '2066057': ('SSL',  'rec?$server_name && "ngrok" in rec$server_name'),
+    '2022973': ('DHCP', 'rec?$host_name && "kali" in to_lower(rec$host_name)'),
+}
+
+ZEEK_HOOK_TYPES = {
+    'DNS':  ('DNS::Info',  'DNS::log_policy'),
+    'SSL':  ('SSL::Info',  'SSL::log_policy'),
+    'DHCP': ('DHCP::Info', 'DHCP::log_policy'),
+}
+
+def apply_suppress_sid(cmd: str) -> bool:
+    """Apply suppress_sid command at both Suricata and Zeek collection layer.
+    Returns True if successfully applied, False if write failed.
+    Format: suppress_sid:SID  or  suppress_sid:SID:by_src:IP  or  suppress_sid:SID:by_dst:IP
+    """
+    parts = cmd.split(':')
+    if len(parts) < 2:
+        return False
+    sid = parts[1].strip()
+
+    # ── Suricata threshold.conf ───────────────────────────────────────────
+    threshold_file = '/etc/suricata/threshold.conf'
+    if len(parts) >= 4:
+        track_kw = 'by_dst' if parts[2].strip() == 'by_dst' else 'by_src'
+        suppress_line = f'suppress gen_id 1, sig_id {sid}, track {track_kw}, ip {parts[3].strip()}\n'
+    else:
+        suppress_line = f'suppress gen_id 1, sig_id {sid}\n'
+
+    try:
+        existing = open(threshold_file).read() if os.path.exists(threshold_file) else ''
+    except Exception:
+        existing = ''
+
+    if suppress_line.strip() not in existing:
+        # threshold.conf is root-owned — use sudo tee to append
+        result = subprocess.run(
+            ['sudo', 'tee', '-a', threshold_file],
+            input=suppress_line.encode(), capture_output=True
+        )
+        if result.returncode != 0:
+            return False
+        print(f"[NDR] Suricata: suppressed SID {sid}")
+        try:
+            pid = subprocess.run(['pidof', 'suricata'], capture_output=True, text=True).stdout.strip().split()[0]
+            subprocess.run(['sudo', 'kill', '-USR2', pid], check=True)
+        except Exception:
+            subprocess.run(['sudo', 'suricatasc', '-c', 'reload-rules'], capture_output=True)
+
+    # ── Zeek ndr-suppress.zeek ────────────────────────────────────────────
+    zeek_filter_file = '/opt/zeek/share/zeek/site/ndr-suppress.zeek'
+    if sid in ZEEK_SID_FILTERS:
+        log_type, condition = ZEEK_SID_FILTERS[sid]
+        rec_type, hook_name = ZEEK_HOOK_TYPES[log_type]
+        hook_block = (
+            f'\nhook {hook_name}(rec: {rec_type}, id: Log::ID, filter: Log::Filter) {{\n'
+            f'    if ( {condition} ) break;\n}}\n'
+        )
+        try:
+            existing_zeek = open(zeek_filter_file).read() if os.path.exists(zeek_filter_file) else ''
+        except Exception:
+            existing_zeek = ''
+
+        if hook_block.strip() not in existing_zeek:
+            subprocess.run(
+                ['sudo', 'tee', '-a', zeek_filter_file],
+                input=hook_block.encode(), capture_output=True
+            )
+
+            # Ensure local.zeek loads ndr-suppress
+            local_zeek = '/opt/zeek/share/zeek/site/local.zeek'
+            try:
+                lz = open(local_zeek).read()
+            except Exception:
+                lz = ''
+            if '@load ndr-suppress' not in lz:
+                subprocess.run(
+                    ['sudo', 'tee', '-a', local_zeek],
+                    input=b'@load ndr-suppress\n', capture_output=True
+                )
+
+            # Restart Zeek to apply new hook
+            iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else 'eth0'
+            subprocess.run(['sudo', 'pkill', '-f', 'zeek'], capture_output=True)
+            time.sleep(1)
+            subprocess.Popen(
+                ['sudo', '/opt/zeek/bin/zeek', '-i', iface, 'local',
+                 f'Log::default_logdir={LOGDIR}/zeek'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            print(f"[NDR] Zeek: filter added for SID {sid}, Zeek restarted")
+    return True
+
+
+def suppression_sync_loop():
+    """Poll ClickHouse directly every 5 min for pending suppress_sid commands.
+    ClickHouse uses network_mode: host so localhost:8123 is always reachable.
+    No sensor key needed — this runs on the same machine as the NDR stack."""
+    import urllib.request, urllib.parse, base64
+    ch_url   = 'http://localhost:8123/'
+    ch_auth  = base64.b64encode(b'ndr:ndr123').decode()
+    headers  = {'Authorization': f'Basic {ch_auth}'}
+
+    select_q = (
+        "SELECT command FROM ndr.sensor_commands FINAL "
+        "WHERE tenant_id='default' AND sensor_id='' AND status='pending'"
+    )
+    while True:
+        try:
+            req = urllib.request.Request(
+                ch_url + '?query=' + urllib.parse.quote(select_q),
+                headers=headers
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                for line in resp.read().decode().strip().splitlines():
+                    cmd = line.strip()
+                    if not cmd.startswith('suppress_sid:'):
+                        continue
+                    if apply_suppress_sid(cmd):
+                        # Only mark done after successful write
+                        done_q = (
+                            "ALTER TABLE ndr.sensor_commands "
+                            "UPDATE status='done' "
+                            f"WHERE tenant_id='default' AND sensor_id='' "
+                            f"AND command='{cmd.replace(chr(39), chr(39)*2)}' AND status='pending'"
+                        )
+                        done_req = urllib.request.Request(
+                            ch_url, data=done_q.encode(), headers=headers
+                        )
+                        urllib.request.urlopen(done_req, timeout=5)
+        except Exception:
+            pass
+        time.sleep(300)
+
+
 if __name__ == "__main__":
+    threading.Thread(target=suppression_sync_loop, daemon=True).start()
     server = HTTPServer(("0.0.0.0", 3001), AgentHandler)
     print("🚀 NDR Host Agent listening on port 3001")
     server.serve_forever()
