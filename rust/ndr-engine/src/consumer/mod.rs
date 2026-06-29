@@ -120,17 +120,19 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         while i + 1 < pairs.len() { m.insert(pairs[i].clone(), pairs[i+1].clone()); i += 2; }
                         if m.get("mac").map(|s| s.is_empty()).unwrap_or(true) { continue; }
                         let asset = crate::storage::clickhouse::AssetRow {
-                            ip:          ip.clone(),
-                            mac:         m.get("mac").cloned().unwrap_or_default(),
-                            hostname:    m.get("hostname").cloned().unwrap_or_default(),
-                            vendor:      m.get("vendor").cloned().unwrap_or_default(),
-                            os_guess:    m.get("os_guess").cloned().unwrap_or_default(),
-                            device_type: m.get("device_type").cloned().unwrap_or_default(),
-                            custom_name: m.get("custom_name").cloned().unwrap_or_default(),
-                            tenant_id:   tenant_id.clone(),
-                            first_seen:  m.get("first_seen").and_then(|s| s.parse().ok()).unwrap_or(0),
-                            last_seen:   m.get("last_seen").and_then(|s| s.parse().ok()).unwrap_or(0),
-                            ip_history:  m.get("ip_history").cloned().unwrap_or_else(|| "[]".to_string()),
+                            ip:             ip.clone(),
+                            mac:            m.get("mac").cloned().unwrap_or_default(),
+                            hostname:       m.get("hostname").cloned().unwrap_or_default(),
+                            vendor:         m.get("vendor").cloned().unwrap_or_default(),
+                            os_guess:       m.get("os_guess").cloned().unwrap_or_default(),
+                            device_type:    m.get("device_type").cloned().unwrap_or_default(),
+                            custom_name:    m.get("custom_name").cloned().unwrap_or_default(),
+                            tenant_id:      tenant_id.clone(),
+                            first_seen:     m.get("first_seen").and_then(|s| s.parse().ok()).unwrap_or(0),
+                            last_seen:      m.get("last_seen").and_then(|s| s.parse().ok()).unwrap_or(0),
+                            ip_history:     m.get("ip_history").cloned().unwrap_or_else(|| "[]".to_string()),
+                            trusted:        0,
+                            threat_flagged: 0,
                         };
                         let ch2 = ch_flush.clone();
                         tokio::spawn(async move {
@@ -227,17 +229,19 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         }
                         let device_type = state.enrichment.asset_id.guess_device_type(hostname, &vendor, is_gateway);
                         let asset = crate::storage::clickhouse::AssetRow {
-                            ip: ip.to_string(),
-                            mac: mac.to_string(),
-                            hostname: hostname.to_string(),
+                            ip:             ip.to_string(),
+                            mac:            mac.to_string(),
+                            hostname:       hostname.to_string(),
                             vendor,
-                            os_guess: "".to_string(),
+                            os_guess:       "".to_string(),
                             device_type,
-                            custom_name: "".to_string(),
-                            tenant_id: tenant_id.clone(),
-                            first_seen: chrono::Utc::now().timestamp() as u32,
-                            last_seen: chrono::Utc::now().timestamp() as u32,
-                            ip_history: "[]".to_string(),
+                            custom_name:    "".to_string(),
+                            tenant_id:      tenant_id.clone(),
+                            first_seen:     chrono::Utc::now().timestamp() as u32,
+                            last_seen:      chrono::Utc::now().timestamp() as u32,
+                            ip_history:     "[]".to_string(),
+                            trusted:        0,
+                            threat_flagged: 0,
                         };
                         let ch_clone = state.ch_storage.clone();
                         let mac_clone = mac.to_string();

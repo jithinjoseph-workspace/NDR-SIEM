@@ -6133,6 +6133,22 @@ pub async fn update_asset_name(
     }
 }
 
+pub async fn set_asset_trusted_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(ip): axum::extract::Path<String>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    let trusted = payload.get("trusted").and_then(|v| v.as_bool()).unwrap_or(false);
+    match state.ch_storage.set_asset_trusted(&tenant_id, &ip, trusted).await {
+        Ok(_)  => axum::Json(json!({"status": "ok", "trusted": trusted})),
+        Err(e) => axum::Json(json!({"error": e.to_string()})),
+    }
+}
+
 pub async fn pcap_upload_failed(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,

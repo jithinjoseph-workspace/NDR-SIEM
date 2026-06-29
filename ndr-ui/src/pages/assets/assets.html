@@ -146,6 +146,8 @@
       <div class="col-conns">Conns (24h)</div>
       <div class="col-alerts">Alerts (24h)</div>
       <div class="col-seen">Last Seen</div>
+      <div class="col-status">Status</div>
+      <div class="col-actions"></div>
     </div>
 
     <div class="loading-state" *ngIf="loading">
@@ -200,8 +202,27 @@
             <span *ngIf="asset.alerts_24h > 0" class="alert-badge">{{ asset.alerts_24h }}</span>
             <span *ngIf="!asset.alerts_24h || asset.alerts_24h === 0">0</span>
         </div>
-        
+
         <div class="col-seen">{{ formatLastSeen(asset.last_seen) }}</div>
+
+        <div class="col-status">
+          <span *ngIf="asset.threat_flagged && !asset.trusted" class="threat-badge" title="Flagged in AI prediction">
+            <lucide-icon [name]="AlertTriangleIcon" class="w-3 h-3"></lucide-icon> Threat
+          </span>
+          <span *ngIf="asset.trusted" class="trusted-badge" title="Marked as trusted">
+            <lucide-icon [name]="ShieldCheckIcon" class="w-3 h-3"></lucide-icon> Trusted
+          </span>
+        </div>
+
+        <div class="col-actions" (click)="$event.stopPropagation()">
+          <button
+            class="trust-btn"
+            [class.is-trusted]="asset.trusted"
+            (click)="toggleTrusted(asset)"
+            [title]="asset.trusted ? 'Remove trusted' : 'Mark as trusted'">
+            <lucide-icon [name]="asset.trusted ? ShieldOffIcon : ShieldCheckIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+        </div>
       </div>
     </div>
   </div>

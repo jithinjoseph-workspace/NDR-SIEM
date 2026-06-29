@@ -15,7 +15,10 @@ import {
   Check,
   X,
   Edit,
-  ChevronDown
+  ChevronDown,
+  ShieldCheck,
+  ShieldOff,
+  AlertTriangle
 } from 'lucide-angular';
 
 import { DeviceDrawer } from '../../components/device-drawer/device-drawer';
@@ -38,6 +41,9 @@ export class Assets implements OnInit {
   FilterIcon = Filter;
   CheckIcon = Check;
   XIcon = X;
+  ShieldCheckIcon = ShieldCheck;
+  ShieldOffIcon = ShieldOff;
+  AlertTriangleIcon = AlertTriangle;
   EditIcon = Edit;
   ChevronDownIcon = ChevronDown;
 
@@ -297,6 +303,17 @@ export class Assets implements OnInit {
         alert('Failed to update name. Please try again.');
         this.editingIp = null;
       }
+    });
+  }
+
+  toggleTrusted(asset: any) {
+    const newVal = !asset.trusted;
+    this.api.setAssetTrusted(asset.ip, newVal).subscribe({
+      next: () => {
+        asset.trusted = newVal;
+        if (newVal) asset.threat_flagged = false;
+      },
+      error: (err) => console.error('Failed to update trusted flag:', err)
     });
   }
 

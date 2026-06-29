@@ -432,6 +432,7 @@ async fn main() {
         .route("/api/settings/trusted-cloud/suggestions/reject",  post(api::reject_trusted_cloud_suggestion))
         .route("/api/assets",     get(api::get_assets))
         .route("/api/assets/:ip", get(api::get_asset_by_ip).put(api::update_asset_name))
+        .route("/api/assets/:ip/trusted", patch(api::set_asset_trusted_handler))
         .route("/api/ipam/subnets", get(api::get_ipam_subnets))
         .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
         .route("/api/soar/playbook/create",post(api::create_playbook))
