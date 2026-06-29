@@ -23,8 +23,6 @@ import {
     Zap
 } from 'lucide-angular';
 
-
-
 @Component({
     selector: 'app-settings',
     standalone: true,
@@ -46,8 +44,6 @@ export class Settings implements OnInit {
         critical_threshold: 90,
         soar_threshold:     75
     };
-
-
 
     // Legacy single-provider config (kept for backwards compat)
     aiConfig = {
@@ -109,8 +105,6 @@ export class Settings implements OnInit {
         });
     }
 
-
-
     saveSettings() {
         this.saving = true;
         this.message = '';
@@ -129,6 +123,5 @@ export class Settings implements OnInit {
             }
         });
     }
-
 
 }

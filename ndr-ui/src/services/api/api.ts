@@ -254,6 +254,22 @@ export class Api {
     return this.http.post(`${this.baseUrl}/settings/ai/providers/test`, data);
   }
 
+  getTrustedCloudSettings(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/settings/trusted-cloud`);
+  }
+
+  updateTrustedCloudSettings(data: {keywords?: string[], domains?: string[]}): Observable<any> {
+    return this.http.put(`${this.baseUrl}/settings/trusted-cloud`, data);
+  }
+
+  approveTrustedCloudSuggestion(org: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings/trusted-cloud/suggestions/approve`, { org });
+  }
+
+  rejectTrustedCloudSuggestion(org: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings/trusted-cloud/suggestions/reject`, { org });
+  }
+
   getAssets(): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/assets`);
   }
@@ -506,6 +522,14 @@ export class Api {
 
   getAiActivity(): Observable<any> {
     return this.http.get(`${this.baseUrl}/ai-activity`);
+  }
+
+  deactivateAiSuppression(id: string): Observable<any> {
+    return this.http.patch(`${this.baseUrl}/ai-suppressions/${id}/deactivate`, {});
+  }
+
+  deleteAiSuppression(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/ai-suppressions/${id}`);
   }
 
   getProtocols(): Observable<any> {

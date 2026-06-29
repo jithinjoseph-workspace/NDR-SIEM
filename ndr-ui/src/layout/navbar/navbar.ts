@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -56,6 +56,7 @@ export class Navbar implements OnInit, OnDestroy {
   ];
 
   filteredSuggestions: any[] = [];
+  private tour = inject(TourService);
   private statusInterval: ReturnType<typeof setInterval> | null = null;
   private announcementInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -99,7 +100,6 @@ export class Navbar implements OnInit, OnDestroy {
     private api: Api,
     private cdr: ChangeDetectorRef,
     private el: ElementRef,
-    private tour: TourService
   ) {}
 
   startTutorial() {

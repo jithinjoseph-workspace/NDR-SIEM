@@ -49,14 +49,16 @@ interface AnnouncementDraft {
 }
 
 interface AiProvider {
-    name: string;
-    provider_type: string;
-    model: string;
-    base_url: string;
-    use_case: string;
-    priority: number;
-    enabled: boolean;
-    key_set: boolean;
+  name: string;
+  provider_type: string;
+  model: string;
+  base_url: string;
+  endpoint_path: string;
+  msg_format: string;
+  use_case: string;
+  priority: number;
+  enabled: boolean;
+  key_set: boolean;
 }
 
 @Component({
@@ -91,12 +93,46 @@ export class Admin implements OnInit, OnDestroy {
   EyeOffIcon = EyeOff;
   TestIcon = Zap;
   LoadingIcon = LoaderCircle;
-  ErrorIcon = AlertTriangle;
   SaveIcon = Save;
+
+  // AI Providers state
+  providers: AiProvider[] = [];
+  loadingProviders = false;
+  savingProvider = false;
+  providerMessage = '';
+  providerError = '';
+  testProviderResult = '';
+  showAddProviderForm = false;
+  testingProvider = '';
+  showProviderKey = false;
+  newProvider = {
+    name: '', provider_type: 'custom', api_key: '', model: '',
+    base_url: '', endpoint_path: '/v1/chat/completions',
+    msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
+  };
+  providerTypeOptions = [
+    { value: 'custom',    label: 'Custom / OpenAI-compatible' },
+    { value: 'openai',    label: 'OpenAI' },
+    { value: 'anthropic', label: 'Anthropic' },
+  ];
+  useCaseOptions = [
+    { value: 'all',    label: 'All (chat + threat analysis)' },
+    { value: 'chat',   label: 'ARIA chat only' },
+    { value: 'threat', label: 'Threat analysis only' },
+  ];
 
   activeTab = 'tenants';
   telemetryData: any = null;
   private telemetryInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Trusted cloud settings
+  trustedCloud: { keywords: string[], domains: string[], suggestions: {org: string, hits: number}[] } =
+    { keywords: [], domains: [], suggestions: [] };
+  newKeyword  = '';
+  newDomain   = '';
+  trustedCloudSaving  = false;
+  trustedCloudSaved   = false;
+  loadingTrustedCloud = false;
 
   users: any[] = [];
   loadingUsers = false;
@@ -254,41 +290,7 @@ export class Admin implements OnInit, OnDestroy {
     active: true,
   };
 
-  // AI Providers state
-  providers: AiProvider[]  = [];
-  loadingProviders         = false;
-  savingProvider           = false;
-  providerMessage          = '';
-  providerError            = '';
-  showAddProviderForm      = false;
-  testingProvider          = '';
-  testProviderResult       = '';
-  showProviderKey          = false;
 
-  newProvider = {
-      name:          '',
-      provider_type: 'custom',
-      api_key:       '',
-      model:         '',
-      base_url:      '',
-      endpoint_path: '/v1/chat/completions',
-      msg_format:    'openai',
-      use_case:      'all',
-      priority:      10,
-      enabled:       true,
-  };
-
-  providerTypeOptions = [
-      { value: 'custom',    label: 'Custom / OpenAI-compatible' },
-      { value: 'openai',    label: 'OpenAI' },
-      { value: 'anthropic', label: 'Anthropic' },
-  ];
-
-  useCaseOptions = [
-      { value: 'all',    label: 'All (chat + threat analysis)' },
-      { value: 'chat',   label: 'ARIA chat only' },
-      { value: 'threat', label: 'Threat analysis only' },
-  ];
 
   currentUser: any = {};
   /** Non-empty when the session is about to expire or has expired. */
@@ -309,22 +311,17 @@ export class Admin implements OnInit, OnDestroy {
       this.router.navigate(['/dashboard']);
       return;
     }
-
     this.route.queryParams.subscribe(params => {
-      const tab = params['tab'];
-      if (tab) {
-        this.switchTab(tab);
-      } else {
-        // default if no tab is in the URL
-        this.switchTab('tenants');
+      if (params['tab']) {
+        this.switchTab(params['tab']);
       }
     });
-
     this.loadUsers();
     this.loadTenants();
     this.loadSensorKeys();
     this.loadEngines();
     this.loadAnnouncements();
+    this.loadTrustedCloud();
     this.startSessionExpiryCheck();
   }
 
@@ -366,9 +363,87 @@ export class Admin implements OnInit, OnDestroy {
         this.kafkaInterval = null;
       }
     }
-    if (tab === 'ai-providers') {
-        this.loadProviders();
+    if (tab === 'trusted-cloud') {
+      this.loadTrustedCloud();
     }
+    if (tab === 'ai-providers') {
+      this.loadProviders();
+    }
+  }
+
+  // ── Trusted cloud ────────────────────────────────────────────────────────
+
+  loadTrustedCloud() {
+    this.loadingTrustedCloud = true;
+    this.api.getTrustedCloudSettings().subscribe({
+      next: (data: any) => {
+        this.trustedCloud = data;
+        this.loadingTrustedCloud = false;
+        this.cdr.detectChanges();
+      },
+      error: () => { this.loadingTrustedCloud = false; },
+    });
+  }
+
+  addKeyword() {
+    const kw = this.newKeyword.trim().toUpperCase();
+    if (kw && !this.trustedCloud.keywords.includes(kw)) {
+      this.trustedCloud.keywords.push(kw);
+    }
+    this.newKeyword = '';
+  }
+
+  removeKeyword(kw: string) {
+    this.trustedCloud.keywords = this.trustedCloud.keywords.filter(k => k !== kw);
+  }
+
+  addDomain() {
+    const d = this.newDomain.trim().toLowerCase();
+    if (d && !this.trustedCloud.domains.includes(d)) {
+      this.trustedCloud.domains.push(d);
+    }
+    this.newDomain = '';
+  }
+
+  removeDomain(d: string) {
+    this.trustedCloud.domains = this.trustedCloud.domains.filter(x => x !== d);
+  }
+
+  saveTrustedCloud() {
+    this.trustedCloudSaving = true;
+    this.trustedCloudSaved  = false;
+    this.api.updateTrustedCloudSettings({
+      keywords: this.trustedCloud.keywords,
+      domains:  this.trustedCloud.domains,
+    }).subscribe({
+      next: () => {
+        this.trustedCloudSaving = false;
+        this.trustedCloudSaved  = true;
+        setTimeout(() => { this.trustedCloudSaved = false; }, 3000);
+      },
+      error: () => { this.trustedCloudSaving = false; },
+    });
+  }
+
+  approveSuggestion(org: string) {
+    this.api.approveTrustedCloudSuggestion(org).subscribe({
+      next: () => {
+        this.trustedCloud.suggestions = this.trustedCloud.suggestions.filter(s => s.org !== org);
+        if (!this.trustedCloud.keywords.includes(org.split(' ')[0])) {
+          this.trustedCloud.keywords.push(org.split(' ')[0]);
+        }
+      },
+      error: () => {},
+    });
+  }
+
+  rejectSuggestion(org: string) {
+    this.api.rejectTrustedCloudSuggestion(org).subscribe({
+      next: () => {
+        this.trustedCloud.suggestions = this.trustedCloud.suggestions.filter(s => s.org !== org);
+      },
+      error: () => {},
+    });
   }
 
   loadKafkaStatus() {
@@ -1552,134 +1627,131 @@ export class Admin implements OnInit, OnDestroy {
     }, delay);
   }
 
+  // ── AI Providers ──────────────────────────────────────────────────────────
+
   loadProviders() {
-      this.loadingProviders = true;
-      this.api.listAiProviders().subscribe({
-          next: (data: any) => {
-              this.providers = data.providers || [];
-              this.loadingProviders = false;
-              this.cdr.detectChanges();
-          },
-          error: () => {
-              this.loadingProviders = false;
-              this.cdr.detectChanges();
-          }
-      });
+    this.loadingProviders = true;
+    this.api.listAiProviders().subscribe({
+      next: (data: any) => {
+        this.providers = data.providers || [];
+        this.loadingProviders = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.loadingProviders = false;
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   saveProvider() {
-      this.savingProvider = true;
-      this.providerMessage = '';
-      this.providerError   = '';
-      this.api.saveAiProvider(this.newProvider).subscribe({
-          next: () => {
-              this.savingProvider  = false;
-              this.providerMessage = `Provider "${this.newProvider.name}" saved`;
-              this.showAddProviderForm = false;
-              this.resetNewProvider();
-              this.loadProviders();
-              this.cdr.detectChanges();
-              setTimeout(() => { this.providerMessage = ''; this.cdr.detectChanges(); }, 3000);
-          },
-          error: () => {
-              this.savingProvider = false;
-              this.providerError  = 'Failed to save provider';
-              this.cdr.detectChanges();
-          }
-      });
+    this.savingProvider = true;
+    this.providerMessage = '';
+    this.providerError = '';
+    this.api.saveAiProvider(this.newProvider).subscribe({
+      next: () => {
+        this.savingProvider = false;
+        this.providerMessage = `Provider "${this.newProvider.name}" saved`;
+        this.showAddProviderForm = false;
+        this.resetNewProvider();
+        this.loadProviders();
+        this.cdr.detectChanges();
+        setTimeout(() => { this.providerMessage = ''; this.cdr.detectChanges(); }, 3000);
+      },
+      error: () => {
+        this.savingProvider = false;
+        this.providerError = 'Failed to save provider';
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   deleteProvider(name: string) {
-      if (!confirm(`Delete provider "${name}"?`)) return;
-      this.api.deleteAiProvider(name).subscribe({
-          next: () => {
-              this.providerMessage = `Provider "${name}" deleted`;
-              this.loadProviders();
-              this.cdr.detectChanges();
-              setTimeout(() => { this.providerMessage = ''; this.cdr.detectChanges(); }, 3000);
-          },
-          error: () => {
-              this.providerError = 'Failed to delete provider';
-              this.cdr.detectChanges();
-          }
-      });
+    if (!confirm(`Delete provider "${name}"?`)) return;
+    this.api.deleteAiProvider(name).subscribe({
+      next: () => {
+        this.providerMessage = `Provider "${name}" deleted`;
+        this.loadProviders();
+        this.cdr.detectChanges();
+        setTimeout(() => { this.providerMessage = ''; this.cdr.detectChanges(); }, 3000);
+      },
+      error: () => {
+        this.providerError = 'Failed to delete provider';
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   testProvider(p: AiProvider) {
-      this.testingProvider = p.name;
-      this.testProviderResult = '';
-      const payload = {
-          name:          p.name,
-          provider_type: p.provider_type,
-          api_key:       '',
-          model:         p.model,
-          base_url:      p.base_url,
-          endpoint_path: '/v1/chat/completions',
-          msg_format:    'openai',
-      };
-      this.api.testAiProvider(payload).subscribe({
-          next: (data: any) => {
-              this.testingProvider = '';
-              this.testProviderResult = data.status === 'ok'
-                  ? `✓ ${p.name} — OK`
-                  : `✗ ${p.name} — ${data.error}`;
-              this.cdr.detectChanges();
-              setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 5000);
-          },
-          error: () => {
-              this.testingProvider = '';
-              this.testProviderResult = `✗ ${p.name} — request failed`;
-              this.cdr.detectChanges();
-              setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 5000);
-          }
-      });
+    this.testingProvider = p.name;
+    this.testProviderResult = '';
+    const payload = {
+      name: p.name, provider_type: p.provider_type,
+      api_key: '', model: p.model, base_url: p.base_url,
+      endpoint_path: p.endpoint_path || '/v1/chat/completions', msg_format: p.msg_format || 'openai',
+    };
+    this.api.testAiProvider(payload).subscribe({
+      next: (data: any) => {
+        this.testingProvider = '';
+        this.testProviderResult = data.status === 'ok'
+          ? `✓ ${p.name} — OK` : `✗ ${p.name} — ${data.error}`;
+        this.cdr.detectChanges();
+        setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 5000);
+      },
+      error: () => {
+        this.testingProvider = '';
+        this.testProviderResult = `✗ ${p.name} — request failed`;
+        this.cdr.detectChanges();
+        setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 5000);
+      }
+    });
   }
 
   testNewProvider() {
-      this.testingProvider = '__new__';
-      this.testProviderResult = '';
-      this.api.testAiProvider(this.newProvider).subscribe({
-          next: (data: any) => {
-              this.testingProvider = '';
-              this.testProviderResult = data.status === 'ok'
-                  ? '✓ Connection OK — ' + (data.response || '').substring(0, 60)
-                  : '✗ ' + (data.error || 'No response');
-              this.cdr.detectChanges();
-              setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 6000);
-          },
-          error: () => {
-              this.testingProvider = '';
-              this.testProviderResult = '✗ Request failed — check URL and key';
-              this.cdr.detectChanges();
-          }
-      });
+    this.testingProvider = '__new__';
+    this.testProviderResult = '';
+    this.api.testAiProvider(this.newProvider).subscribe({
+      next: (data: any) => {
+        this.testingProvider = '';
+        this.testProviderResult = data.status === 'ok'
+          ? '✓ Connection OK — ' + (data.response || '').substring(0, 60)
+          : '✗ ' + (data.error || 'No response');
+        this.cdr.detectChanges();
+        setTimeout(() => { this.testProviderResult = ''; this.cdr.detectChanges(); }, 6000);
+      },
+      error: () => {
+        this.testingProvider = '';
+        this.testProviderResult = '✗ Request failed — check URL and key';
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   resetNewProvider() {
-      this.newProvider = {
-          name: '', provider_type: 'custom', api_key: '', model: '',
-          base_url: '', endpoint_path: '/v1/chat/completions',
-          msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
-      };
+    this.newProvider = {
+      name: '', provider_type: 'custom', api_key: '', model: '',
+      base_url: '', endpoint_path: '/v1/chat/completions',
+      msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
+    };
   }
 
   get defaultBaseUrl(): string {
-      switch (this.newProvider.provider_type) {
-          case 'openai':    return 'https://api.openai.com';
-          case 'anthropic': return 'https://api.anthropic.com';
-          default:          return '';
-      }
+    switch (this.newProvider.provider_type) {
+      case 'openai':    return 'https://api.openai.com';
+      case 'anthropic': return 'https://api.anthropic.com';
+      default:          return '';
+    }
   }
 
   get defaultModelPlaceholder(): string {
-      switch (this.newProvider.provider_type) {
-          case 'openai':    return 'gpt-4o-mini';
-          case 'anthropic': return 'claude-sonnet-4-6';
-          default:          return 'e.g. llama-3.3-70b-versatile';
-      }
+    switch (this.newProvider.provider_type) {
+      case 'openai':    return 'gpt-4o-mini';
+      case 'anthropic': return 'claude-sonnet-4-6';
+      default:          return 'e.g. llama-3.3-70b-versatile';
+    }
   }
 
   useCaseLabel(uc: string): string {
-      return { all: 'All', chat: 'Chat', threat: 'Threat' }[uc] || uc;
+    return ({ all: 'All', chat: 'Chat', threat: 'Threat' } as any)[uc] || uc;
   }
 }

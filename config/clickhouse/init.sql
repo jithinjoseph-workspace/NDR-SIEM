@@ -17,20 +17,27 @@ ORDER BY (timestamp, src_ip, dst_ip)
 TTL timestamp + INTERVAL 30 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
-    timestamp    DateTime,
-    community_id String,
-    src_ip       String,
-    dst_ip       String,
-    score        Float32,
-    severity     String,
-    tags         Array(String),
-    sigma_hits   Array(String),
-    threat_intel UInt8,
-    src_country  String,
-    dst_country  String,
-    tenant_id    String DEFAULT 'default'
-) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_hits', '{replica}')
-ORDER BY (timestamp, severity, score)
+    timestamp           DateTime,
+    community_id        String,
+    src_ip              String,
+    dst_ip              String,
+    score               Float32,
+    severity            String,
+    tags                Array(String),
+    sigma_hits          Array(String),
+    threat_intel        UInt8,
+    src_country         String,
+    dst_country         String,
+    tenant_id           String DEFAULT 'default',
+    correlation_status  String DEFAULT 'zeek_only',
+    zeek_details        String DEFAULT '{}',
+    suricata_details    String DEFAULT '{}',
+    corroborated_at     DateTime DEFAULT toDateTime(0),
+    suricata_rule_id    String DEFAULT '',
+    suricata_category   String DEFAULT '',
+    updated_at          DateTime DEFAULT now()
+) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_hits', '{replica}', updated_at)
+ORDER BY (tenant_id, community_id)
 TTL timestamp + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.ndr_stats ON CLUSTER ndr_cluster (
@@ -388,7 +395,8 @@ CREATE TABLE IF NOT EXISTS ndr.soar_case_comments ON CLUSTER ndr_cluster
     tenant_id  String DEFAULT 'default'
 )
 ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/soar_case_comments', '{replica}')
-ORDER BY (tenant_id, case_id, created_at);
+ORDER BY (tenant_id, case_id, created_at)
+TTL created_at + INTERVAL 730 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.soar_native_playbooks ON CLUSTER ndr_cluster
 (
@@ -422,7 +430,8 @@ CREATE TABLE IF NOT EXISTS ndr.soar_playbook_runs ON CLUSTER ndr_cluster
     tenant_id     String DEFAULT 'default'
 )
 ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/soar_playbook_runs', '{replica}')
-ORDER BY (tenant_id, created_at);
+ORDER BY (tenant_id, created_at)
+TTL created_at + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.evidence_log ON CLUSTER ndr_cluster
 (
@@ -440,7 +449,8 @@ CREATE TABLE IF NOT EXISTS ndr.evidence_log ON CLUSTER ndr_cluster
     ip_address      String DEFAULT ''
 )
 ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/evidence_log', '{replica}')
-ORDER BY (community_id, performed_at);
+ORDER BY (community_id, performed_at)
+TTL performed_at + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.evidence_bundles ON CLUSTER ndr_cluster
 (
@@ -490,7 +500,7 @@ CREATE TABLE IF NOT EXISTS ndr.ioc_hits ON CLUSTER ndr_cluster
 )
 ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ioc_hits', '{replica}')
 ORDER BY (timestamp, community_id, matched_ip)
-COMMENT 'Immutable IOC hit log — never delete or update these records';
+TTL timestamp + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.shared_iocs ON CLUSTER ndr_cluster
 (
@@ -722,3 +732,10 @@ CREATE TABLE IF NOT EXISTS ndr.ai_providers ON CLUSTER ndr_cluster
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ai_providers', '{replica}', created_at)
 ORDER BY name;
+
+-- ── Retention TTL migrations (idempotent — safe to re-run on existing tables) ──
+-- Applied here so already-deployed clusters pick up TTLs without a manual ALTER.
+ALTER TABLE ndr.ioc_hits ON CLUSTER ndr_cluster MODIFY TTL timestamp + INTERVAL 90 DAY;
+ALTER TABLE ndr.soar_playbook_runs ON CLUSTER ndr_cluster MODIFY TTL created_at + INTERVAL 90 DAY;
+ALTER TABLE ndr.evidence_log ON CLUSTER ndr_cluster MODIFY TTL performed_at + INTERVAL 90 DAY;
+ALTER TABLE ndr.soar_case_comments ON CLUSTER ndr_cluster MODIFY TTL created_at + INTERVAL 730 DAY;

@@ -8,11 +8,11 @@ export class TourService {
   private driverLoaded = false;
   private driverInstance: any;
 
-  constructor(private router: Router) {}
+  constructor(private router: Router) { }
 
   private async loadDriver(): Promise<void> {
     if (this.driverLoaded) return Promise.resolve();
-    
+
     return new Promise((resolve, reject) => {
       const link = document.createElement('link');
       link.rel = 'stylesheet';

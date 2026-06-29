@@ -59,7 +59,6 @@ export class Dashboard implements OnInit, OnDestroy {
   chartDataSnapshot = signal<{ labels: string[], data: number[] }>({ labels: [], data: [] });
 
   private subs:           Subscription[] = [];
-  private supportInterval: any;   // drives /api/severity + /api/top-ips only
 
   // Tracks unique incidents to deduplicate live stat card increments
   private seenIncidents = new Set<string>();
@@ -146,12 +145,31 @@ export class Dashboard implements OnInit, OnDestroy {
       })
     );
 
-    // ── Supporting data: severity + top IPs every 30 s ───────────────────
-    // These have their own endpoints and are not part of /api/stats.
+    // ── Cold start: fetch supporting data once on load ───────────────────
+    // After this, WebSocket telemetry takes over — no more HTTP polling.
     this.loadSupportingStats();
-    this.supportInterval = setInterval(() => this.loadSupportingStats(), 30_000);
 
-    // ── WebSocket: real-time increments ──────────────────────────────────
+    // ── WebSocket: authoritative counts + supporting data every 30s ──────
+    this.subs.push(
+      this.ws.telemetry$.subscribe(t => {
+        this.totalEvents.set(t.total_events);
+        this.zeekEvents.set(t.zeek_events);
+        this.suricataEvents.set(t.suricata_events);
+        this.totalHits.set(t.correlation_hits);
+        this.eventsLastHour.set(t.events_1h);
+        if (t.severity) {
+          this.critical.set(t.severity.critical || 0);
+          this.high.set(t.severity.high     || 0);
+          this.medium.set(t.severity.medium  || 0);
+          this.low.set(t.severity.low        || 0);
+        }
+        if (t.top_src_ips)  this.topSrcIps.set(t.top_src_ips);
+        if (t.top_dst_ips)  this.topDstIps.set(t.top_dst_ips);
+        if (t.protocols)    this.protocols.set(t.protocols);
+      })
+    );
+
+    // ── WebSocket: real-time increments (between telemetry pushes) ────────
     this.subs.push(
       this.ws.events$.subscribe(() => {
         this.eventsLastHour.update(v => v + 1);
@@ -694,7 +712,6 @@ export class Dashboard implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.subs.forEach(s => s.unsubscribe());
-    if (this.supportInterval) clearInterval(this.supportInterval);
     d3.select("body").selectAll(".chart-tooltip").remove();
   }
 }

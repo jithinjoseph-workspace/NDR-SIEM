@@ -11,10 +11,12 @@ export class Websocket {
   public messages$ = new Subject<any>();
   public lastAgentStatus$ = new BehaviorSubject<any>(null);
   public lastInterfaces$ = new BehaviorSubject<any>(null);
+  public lastTelemetry$ = new BehaviorSubject<any>(null);
 
   public agentStatus$ = this.messages$.pipe(filter(m => m.type === 'agent_status'));
   public interfaces$ = this.messages$.pipe(filter(m => m.type === 'interfaces'));
   public hits$ = this.messages$.pipe(filter(m => m.type === 'hit'));
+  public telemetry$ = this.messages$.pipe(filter(m => m.type === 'telemetry'));
   public events$ = this.messages$.pipe(
     filter(m => m.type === 'zeek' || m.type === 'suricata')
   );
@@ -64,7 +66,8 @@ export class Websocket {
             const data = JSON.parse(event.data);
             this.messages$.next(data);
             if (data.type === 'agent_status') this.lastAgentStatus$.next(data);
-            if (data.type === 'interfaces') this.lastInterfaces$.next(data);
+            if (data.type === 'interfaces')  this.lastInterfaces$.next(data);
+            if (data.type === 'telemetry')   this.lastTelemetry$.next(data);
           } catch (e) {
             console.warn('Invalid WS message:', event.data);
           }

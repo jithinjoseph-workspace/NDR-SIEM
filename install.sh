@@ -693,6 +693,68 @@ log "Updating Suricata rules..."
 sudo suricata-update 2>/dev/null || true
 log "✅ Suricata configured on interface: $IFACE"
 
+# ── Suricata suppression infrastructure ───────
+# Creates empty threshold.conf and wires it into suricata.yaml
+# SIDs are added dynamically by ndr-agent.py when engine sends suppress_sid commands
+log "Setting up Suricata suppression infrastructure..."
+THRESHOLD_FILE="/etc/suricata/threshold.conf"
+sudo touch "$THRESHOLD_FILE"
+if sudo grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
+  sudo sed -i "s|threshold-file:.*|threshold-file: $THRESHOLD_FILE|g" /etc/suricata/suricata.yaml
+else
+  echo "threshold-file: $THRESHOLD_FILE" | sudo tee -a /etc/suricata/suricata.yaml > /dev/null
+fi
+log "✅ Suricata threshold.conf ready (SIDs added dynamically by engine)"
+
+# ── Zeek suppression infrastructure ───────────
+# Creates empty ndr-suppress.zeek skeleton loaded by local.zeek
+# Hooks are added dynamically by ndr-agent.py when engine sends suppress_sid commands
+log "Setting up Zeek suppression infrastructure..."
+sudo tee /opt/zeek/share/zeek/site/ndr-suppress.zeek > /dev/null << 'ZEEKSUPPRESS'
+# NDR suppression filters — managed dynamically by NDR engine
+# Hooks are appended here via suppress_sid commands; do not edit manually
+ZEEKSUPPRESS
+if ! sudo grep -q "ndr-suppress" /opt/zeek/share/zeek/site/local.zeek 2>/dev/null; then
+  echo "@load ndr-suppress" | sudo tee -a /opt/zeek/share/zeek/site/local.zeek > /dev/null
+fi
+log "✅ Zeek ndr-suppress.zeek ready (hooks added dynamically by engine)"
+
+
+# ── Firewall: block internal ports from external access ───────────────────
+# ClickHouse HTTP/TCP and ZooKeeper/Keeper ports must never be reachable
+# from outside. ndr-engine containers connect via HOST_IP through Docker
+# bridge interfaces — Docker default network uses docker0 (matched by docker+)
+# but Docker user-defined networks create br-XXXX bridges (matched by br+).
+# Both must be allowed. ndr-agent.py connects via loopback (lo).
+log "Configuring firewall to protect internal ports..."
+INTERNAL_PORTS="8123 8124 9000 9001 9181 2181"
+if command -v iptables &>/dev/null; then
+  for PORT in $INTERNAL_PORTS; do
+    # Remove any stale rules for this port first (avoid duplicates on re-run)
+    while sudo iptables -D INPUT -p tcp --dport $PORT -i lo      -j ACCEPT 2>/dev/null; do :; done
+    while sudo iptables -D INPUT -p tcp --dport $PORT -i docker+ -j ACCEPT 2>/dev/null; do :; done
+    while sudo iptables -D INPUT -p tcp --dport $PORT -i br+     -j ACCEPT 2>/dev/null; do :; done
+    while sudo iptables -D INPUT -p tcp --dport $PORT            -j DROP   2>/dev/null; do :; done
+    # Allow loopback (ndr-agent.py, local tools)
+    sudo iptables -I INPUT -p tcp --dport $PORT -i lo      -j ACCEPT 2>/dev/null || true
+    # Allow Docker default bridge (docker0) — docker+ matches docker-named interfaces
+    sudo iptables -I INPUT -p tcp --dport $PORT -i docker+ -j ACCEPT 2>/dev/null || true
+    # Allow Docker user-defined bridges (br-XXXX) — br+ matches br-named interfaces
+    sudo iptables -I INPUT -p tcp --dport $PORT -i br+     -j ACCEPT 2>/dev/null || true
+    # Drop everything else (external network, cloud public IP, LAN)
+    sudo iptables -A INPUT -p tcp --dport $PORT            -j DROP   2>/dev/null || true
+  done
+  # Persist rules across reboots if iptables-persistent is available
+  if command -v netfilter-persistent &>/dev/null; then
+    sudo netfilter-persistent save 2>/dev/null || true
+  elif command -v iptables-save &>/dev/null; then
+    sudo mkdir -p /etc/iptables
+    sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null 2>&1 || true
+  fi
+  log "✅ iptables: ClickHouse/Keeper blocked externally, Docker+loopback allowed"
+else
+  log "⚠️  iptables not found — manually block ports $INTERNAL_PORTS from external access"
+fi
 
 
 # ── Suricata log rotation ─────────────────────
@@ -780,9 +842,12 @@ $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/suricata
 $USERNAME ALL=(ALL) NOPASSWD: /opt/zeek/bin/zeek
 $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/pkill
 $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/pgrep
+$USERNAME ALL=(ALL) NOPASSWD: /bin/kill
 $USERNAME ALL=(ALL) NOPASSWD: /bin/rm
 $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl
 $USERNAME ALL=(ALL) NOPASSWD: /bin/fuser
+$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tee
+$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/suricatasc
 SUDOERS
 sudo chmod 440 /etc/sudoers.d/ndr-stack
 log "✅ Sudo configured"

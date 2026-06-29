@@ -4,19 +4,33 @@ pub mod predictor;
 pub mod patterns;
 pub mod chain_matcher;
 pub mod correlator;
+pub mod cloud_trust;
+pub mod cloud_suggestions;
 
 use std::sync::Arc;
 
 /// Start threat background tasks with Redis leader election.
 /// Only the elected leader runs tasks — automatic failover if leader dies.
-/// Returns the election handle for graceful shutdown.
+/// Returns (election handle, trusted ranges Arc) — both stored in AppState.
 pub fn spawn_all(
-    ch: Arc<crate::storage::ClickhouseStorage>,
+    ch:        Arc<crate::storage::ClickhouseStorage>,
     redis_url: &str,
-) -> Arc<crate::leader::LeaderElection> {
+    asn:       Arc<Option<crate::enrichment::AsnLookup>>,
+) -> (
+    Arc<crate::leader::LeaderElection>,
+    Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
+) {
+    // Create trusted here so AppState can hold the same Arc that the updater writes into
+    let trusted = Arc::new(tokio::sync::RwLock::new(cloud_trust::TrustedRanges::default()));
+
     // Small random jitter so all 3 engines don't race at the exact same ms
     let jitter_ms: u64 = rand::random::<u64>() % 2000;
     let redis_url  = redis_url.to_string();
+
+    let redis_client = Arc::new(
+        redis::Client::open(redis_url.as_str())
+            .unwrap_or_else(|_| redis::Client::open("redis://localhost:6379").unwrap())
+    );
 
     let election = match crate::leader::LeaderElection::new(&redis_url) {
         Ok(e) => Arc::new(e),
@@ -26,15 +40,17 @@ pub fn spawn_all(
                  Running without coordination risks duplicate data across engines.",
                 e
             );
-            return Arc::new(
+            let fallback = Arc::new(
                 crate::leader::LeaderElection::new("redis://localhost:6379")
                     .expect("Cannot create fallback election")
             );
+            return (fallback, trusted);
         }
     };
 
     let election_arc    = election.clone();
     let ch_for_election = ch.clone();
+    let trusted_for_spawn = Arc::clone(&trusted);
 
     tokio::spawn(async move {
         tokio::time::sleep(
@@ -42,14 +58,22 @@ pub fn spawn_all(
         ).await;
 
         let tasks_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag          = tasks_started.clone();
-        let ch_for_elect  = ch_for_election.clone();
+        let flag            = tasks_started.clone();
+        let ch_for_elect    = ch_for_election.clone();
+        let redis_for_elect = redis_client.clone();
+        let asn_for_elect   = asn.clone();
+        let trusted_clone   = Arc::clone(&trusted_for_spawn);
 
         election_arc.start(
             move || {
                 if !flag.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     tracing::info!("Starting all threat background tasks as elected leader");
-                    spawn_threat_tasks(ch_for_elect.clone());
+                    spawn_threat_tasks(
+                        ch_for_elect.clone(),
+                        redis_for_elect.clone(),
+                        asn_for_elect.clone(),
+                        Arc::clone(&trusted_clone),
+                    );
                 } else {
                     tracing::info!("Re-elected — tasks already running, no restart needed");
                 }
@@ -67,21 +91,34 @@ pub fn spawn_all(
         }
     });
 
-    election
+    (election, trusted)
 }
 
 /// Start all 5 threat background tasks. Called once when this engine wins election.
-fn spawn_threat_tasks(ch: Arc<crate::storage::ClickhouseStorage>) {
-    // Shared trigger: pattern sync fires this → chain_matcher runs immediately
+fn spawn_threat_tasks(
+    ch:      Arc<crate::storage::ClickhouseStorage>,
+    redis:   Arc<redis::Client>,
+    asn:     Arc<Option<crate::enrichment::AsnLookup>>,
+    trusted: Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
+) {
     let chain_trigger = Arc::new(tokio::sync::Notify::new());
 
-    collector::spawn_collector(Arc::clone(&ch));
-    predictor::spawn_predictor(Arc::clone(&ch));
-    patterns::spawn_pattern_sync(Arc::clone(&ch), Arc::clone(&chain_trigger));
-    chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger));
-    correlator::spawn_correlator(Arc::clone(&ch));
+    // Keywords read from ndr.settings at startup and every 23h
+    cloud_trust::spawn_trust_updater(
+        Arc::clone(&trusted),
+        Arc::clone(&redis),
+        Arc::clone(&asn),
+        Arc::clone(&ch),
+    );
 
-    tracing::info!("All 5 threat background tasks started on elected leader");
+    collector::spawn_collector(Arc::clone(&ch));
+    predictor::spawn_predictor(Arc::clone(&ch), Arc::clone(&trusted));
+    patterns::spawn_pattern_sync(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&redis));
+    chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&trusted), Arc::clone(&asn));
+    correlator::spawn_correlator(Arc::clone(&ch));
+    cloud_suggestions::spawn_suggestion_scanner(Arc::clone(&ch));
+
+    tracing::info!("All 6 threat background tasks started on elected leader");
 }
 
 // ── Row structs for ClickHouse queries ───────────────────────────────────────

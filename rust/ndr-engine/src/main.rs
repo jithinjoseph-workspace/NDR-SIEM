@@ -20,7 +20,7 @@ mod leader;
 
 use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
-use axum::{routing::{get, post, put, delete}, Router};
+use axum::{routing::{get, post, put, delete, patch}, Router};
 use axum::extract::DefaultBodyLimit;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
@@ -29,6 +29,8 @@ use enrichment::{AsnLookup, AssetIdentifier, EnrichmentPipeline, GeoIpLookup, Th
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
+const KAFKA_DEFAULT: &str = "kafka:9092";
+
 #[tokio::main]
 async fn main() {
     // ── Logging ───────────────────────────────────────────────────────────
@@ -54,9 +56,11 @@ async fn main() {
         .map_err(|e| info!("GeoIP unavailable ({}). Place GeoLite2-City.mmdb in data/", e))
         .ok();
 
-    let asn = AsnLookup::open("data/GeoLite2-ASN.mmdb")
-        .map_err(|e| info!("ASN DB unavailable ({}). Place GeoLite2-ASN.mmdb in data/", e))
-        .ok();
+    let asn_arc: Arc<Option<AsnLookup>> = Arc::new(
+        AsnLookup::open("data/GeoLite2-ASN.mmdb")
+            .map_err(|e| info!("ASN DB unavailable ({}). Place GeoLite2-ASN.mmdb in data/", e))
+            .ok()
+    );
 
     // ── Threat intel ──────────────────────────────────────────────────────
     let threat_intel = ThreatIntel::new();
@@ -85,7 +89,7 @@ async fn main() {
     let kafka_producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", 
              std::env::var("KAFKA_BROKERS")
-             .unwrap_or_else(|_| "kafka:9092".to_string()))
+             .unwrap_or_else(|_| KAFKA_DEFAULT.to_string()))
         .set("message.timeout.ms", "5000")
         .set("queue.buffering.max.messages", "100000")
         .set("batch.num.messages", "1000")
@@ -163,7 +167,13 @@ async fn main() {
     };
 
     // ── Background: Threat tasks with Redis leader election ───────────────
-    let election = threat::spawn_all(ch_storage_arc.clone(), &redis_url);
+    let sensor_ip: Option<std::net::IpAddr> = std::env::var("HOST_IP").ok()
+        .and_then(|s| s.trim().parse().ok());
+    if let Some(ip) = sensor_ip {
+        tracing::info!("Sensor self-IP: {} — own trusted traffic will be filtered", ip);
+    }
+
+    let (election, trusted) = threat::spawn_all(ch_storage_arc.clone(), &redis_url, Arc::clone(&asn_arc));
 
     // Start sensor key cache refresh loop (after ch_storage is ready)
     auth::sensor_cache::spawn_refresh_loop(
@@ -175,7 +185,7 @@ async fn main() {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
         enrichment: Arc::new(EnrichmentPipeline {
             geoip,
-            asn,
+            asn: Arc::clone(&asn_arc),
             threat_intel: ti_ref.clone(),
             asset_id: Arc::new(AssetIdentifier::new()),
         }),
@@ -190,6 +200,13 @@ async fn main() {
         correlation_semaphore: Arc::new(tokio::sync::Semaphore::new(16)),
         sensor_key_cache,
         ingest_tx,
+        http_client: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("NDR-Engine/1.0")
+            .build()
+            .unwrap_or_default(),
+        trusted,
+        sensor_ip,
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
@@ -296,11 +313,12 @@ async fn main() {
     }
 
 
+    let rules_dir = std::env::var("RULES_DIR").unwrap_or_else(|_| "rules".to_string());
+
     // ── Migrate rules to ClickHouse ──────────────────────────────────────────
     {
         let ch = state.ch_storage.clone();
-        let rules_dir = std::env::var("RULES_DIR")
-            .unwrap_or_else(|_| "rules".to_string());
+        let rules_dir = rules_dir.clone();
         
         tokio::spawn(async move {
             if let Ok(entries) = std::fs::read_dir(&rules_dir) {
@@ -333,8 +351,7 @@ async fn main() {
     {
         let ch = state.ch_storage.clone();
         let det = state.detection.clone();
-        let rules_dir = std::env::var("RULES_DIR")
-            .unwrap_or_else(|_| "rules".to_string());
+        let rules_dir = rules_dir.clone();
         tokio::spawn(async move {
             // Wait briefly for migration to complete
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -348,9 +365,8 @@ async fn main() {
         let ch = state.ch_storage.clone();
         let det = state.detection.clone();
         let redis_client = redis_client.clone();
-        let rules_dir = std::env::var("RULES_DIR")
-            .unwrap_or_else(|_| "rules".to_string());
-        
+        let rules_dir = rules_dir.clone();
+
         tokio::spawn(async move {
             if let Ok(conn) = redis_client.get_async_connection().await {
                 let mut pubsub = conn.into_pubsub();
@@ -411,6 +427,9 @@ async fn main() {
         .route("/api/settings/ai/providers", get(api::list_ai_providers).post(api::save_ai_provider))
         .route("/api/settings/ai/providers/test", post(api::test_ai_provider))
         .route("/api/settings/ai/providers/:name", delete(api::delete_ai_provider))
+        .route("/api/settings/trusted-cloud", get(api::get_trusted_cloud_settings).put(api::update_trusted_cloud_settings))
+        .route("/api/settings/trusted-cloud/suggestions/approve", post(api::approve_trusted_cloud_suggestion))
+        .route("/api/settings/trusted-cloud/suggestions/reject",  post(api::reject_trusted_cloud_suggestion))
         .route("/api/assets",     get(api::get_assets))
         .route("/api/assets/:ip", get(api::get_asset_by_ip).put(api::update_asset_name))
         .route("/api/ipam/subnets", get(api::get_ipam_subnets))
@@ -495,6 +514,8 @@ async fn main() {
  .route("/api/aria/chat",   post(api::aria_chat))
 .route("/api/aria/status", get(api::aria_status))
 .route("/api/ai-activity", get(api::get_ai_activity))
+.route("/api/ai-suppressions/:id/deactivate", patch(api::deactivate_ai_suppression_handler))
+.route("/api/ai-suppressions/:id", delete(api::delete_ai_suppression_handler))
 .route("/api/threat/predictions",         get(api::get_threat_predictions))
 .route("/api/threat/predictions/history", get(api::get_threat_predictions_history))
 .route("/api/threat/exposure",            get(api::get_threat_exposure))
@@ -510,7 +531,7 @@ async fn main() {
     info!("🌐 API active");
     info!("❤  Health:    GET  http://0.0.0.0:3000/health");
     info!("📡 Kafka:     ndr-events (broker: {})",
-        std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "kafka:9092".to_string()));
+        std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| KAFKA_DEFAULT.to_string()));
 
 // ── Background: agent status monitor ─────────────────────────────────
     {

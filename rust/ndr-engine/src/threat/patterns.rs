@@ -5,20 +5,20 @@ use tracing::{info, warn};
 pub fn spawn_pattern_sync(
     ch: Arc<crate::storage::ClickhouseStorage>,
     chain_trigger: Arc<Notify>,
+    redis: Arc<redis::Client>,
 ) {
     tokio::spawn(async move {
-        sync_mitre_attack(&ch).await;
-        // Immediately trigger chain_matcher sweep with fresh patterns
+        sync_mitre_attack(&ch, &redis).await;
         chain_trigger.notify_one();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(7 * 24 * 3600)).await;
-            sync_mitre_attack(&ch).await;
+            sync_mitre_attack(&ch, &redis).await;
             chain_trigger.notify_one();
         }
     });
 }
 
-pub async fn sync_mitre_attack(ch: &crate::storage::ClickhouseStorage) {
+pub async fn sync_mitre_attack(ch: &crate::storage::ClickhouseStorage, redis: &redis::Client) {
     info!("Syncing MITRE ATT&CK patterns...");
 
     let http = reqwest::Client::builder()
@@ -31,12 +31,12 @@ pub async fn sync_mitre_attack(ch: &crate::storage::ClickhouseStorage) {
 
     let resp = match http.get(url).send().await {
         Ok(r) => r,
-        Err(e) => { warn!("Failed to fetch MITRE ATT&CK: {}", e); build_attack_chains(ch).await; return; }
+        Err(e) => { warn!("Failed to fetch MITRE ATT&CK: {}", e); build_attack_chains(ch, redis).await; return; }
     };
 
     let data: serde_json::Value = match resp.json().await {
         Ok(d) => d,
-        Err(e) => { warn!("Failed to parse MITRE ATT&CK JSON: {}", e); build_attack_chains(ch).await; return; }
+        Err(e) => { warn!("Failed to parse MITRE ATT&CK JSON: {}", e); build_attack_chains(ch, redis).await; return; }
     };
 
     let objects = data["objects"].as_array().cloned().unwrap_or_default();
@@ -98,9 +98,8 @@ pub async fn sync_mitre_attack(ch: &crate::storage::ClickhouseStorage) {
     }
 
     info!("MITRE ATT&CK: {} techniques synced", count);
-    build_attack_chains(ch).await;
-    // Build chains dynamically from real APT group TTPs in the feed
-    build_dynamic_chains_from_mitre(ch, &objects).await;
+    build_attack_chains(ch, redis).await;
+    build_dynamic_chains_from_mitre(ch, &objects, redis).await;
 }
 
 fn tactic_to_phase(tactic: &str) -> u8 {
@@ -119,7 +118,25 @@ fn tactic_to_phase(tactic: &str) -> u8 {
     else                                       { 3 }
 }
 
-async fn build_attack_chains(ch: &crate::storage::ClickhouseStorage) {
+async fn build_attack_chains(ch: &crate::storage::ClickhouseStorage, redis: &redis::Client) {
+    // Distributed seed lock — only one engine runs DELETE+INSERT at a time.
+    // SET NX PX: atomically set only if not exists, expire after 60s.
+    // If another engine holds the lock, skip; it will seed the correct data.
+    if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
+        let acquired: bool = redis::cmd("SET")
+            .arg("ndr:seed_lock:attack_chains_builtin")
+            .arg("1")
+            .arg("NX")
+            .arg("PX").arg(60_000u64)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or(false);
+        if !acquired {
+            tracing::debug!("attack_chains builtin seed locked by another engine — skipping");
+            return;
+        }
+    }
+
     // Delete old builtin chains and rebuild
     let _ = ch.client.query("ALTER TABLE ndr.attack_chains DELETE WHERE source = 'builtin'")
         .execute().await;
@@ -224,7 +241,24 @@ async fn build_attack_chains(ch: &crate::storage::ClickhouseStorage) {
 async fn build_dynamic_chains_from_mitre(
     ch: &crate::storage::ClickhouseStorage,
     objects: &[serde_json::Value],
+    redis: &redis::Client,
 ) {
+    // Distributed seed lock — same pattern as build_attack_chains
+    if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
+        let acquired: bool = redis::cmd("SET")
+            .arg("ndr:seed_lock:attack_chains_mitre")
+            .arg("1")
+            .arg("NX")
+            .arg("PX").arg(120_000u64) // 2 min — dynamic build takes longer
+            .query_async(&mut conn)
+            .await
+            .unwrap_or(false);
+        if !acquired {
+            tracing::debug!("attack_chains mitre_cti seed locked by another engine — skipping");
+            return;
+        }
+    }
+
     // Delete stale dynamic chains before rebuilding
     let _ = ch.client
         .query("ALTER TABLE ndr.attack_chains DELETE WHERE source = 'mitre_cti'")

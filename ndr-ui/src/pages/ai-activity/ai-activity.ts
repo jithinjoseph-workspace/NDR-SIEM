@@ -89,10 +89,10 @@ export class AiActivity {
 
   probColor(p: number): string {
     const pct = (p || 0) * 100;
-    if (pct >= 75) return '#ff2a5f'; // Vibrant Neon Red/Pink
-    if (pct >= 50) return '#ff9900'; // Vibrant Neon Orange
-    if (pct >= 25) return '#ffea00'; // Vibrant Neon Yellow
-    return '#69f6b8'; // Mint Green matching sidebar
+    if (pct >= 75) return '#ff2a5f';
+    if (pct >= 50) return '#ff9900';
+    if (pct >= 25) return '#ffea00';
+    return '#69f6b8';
   }
 
   trendIcon(trend: string) {
@@ -120,5 +120,14 @@ export class AiActivity {
     if (!ts) return '';
     const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
     return isNaN(d.getTime()) ? ts : d.toLocaleString();
+  }
+
+  deactivateSuppression(id: string) {
+    this.api.deactivateAiSuppression(id).subscribe();
+  }
+
+  deleteSuppression(id: string) {
+    if (!confirm('Delete this suppression rule permanently?')) return;
+    this.api.deleteAiSuppression(id).subscribe();
   }
 }

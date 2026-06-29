@@ -155,6 +155,7 @@
             <th>Status</th>
             <th>Reason</th>
             <th>Time</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -179,6 +180,14 @@
             </td>
             <td class="reason-cell" [title]="s.ai_reason">{{ s.ai_reason }}</td>
             <td class="small">{{ formatTime(s.created_at) }}</td>
+            <td class="actions-cell">
+              <button *ngIf="s.active" class="btn-deactivate" (click)="deactivateSuppression(s.id)" title="Deactivate — keeps history but stops suppressing">
+                Deactivate
+              </button>
+              <button class="btn-delete" (click)="deleteSuppression(s.id)" title="Delete permanently">
+                Delete
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>

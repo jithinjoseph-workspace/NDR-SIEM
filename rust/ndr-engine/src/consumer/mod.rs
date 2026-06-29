@@ -44,7 +44,7 @@ async fn batch_writer(
 
 pub async fn start_consumer(state: Arc<AppState>) {
     let brokers = std::env::var("KAFKA_BROKERS")
-        .unwrap_or_else(|_| "kafka:9092".to_string());
+        .unwrap_or_else(|_| crate::KAFKA_DEFAULT.to_string());
 
     let instance_id = std::env::var("INSTANCE_ID")
         .unwrap_or_else(|_| "1".to_string());
@@ -69,6 +69,19 @@ pub async fn start_consumer(state: Arc<AppState>) {
     info!("Kafka consumer ready — group: ndr-engine-group instance: {}", instance_id);
     use dashmap::DashMap;
     let known_assets: Arc<DashMap<String, u32>> = Arc::new(DashMap::new());
+
+    // Hourly eviction: remove IPs not seen in the last 24h to bound memory under DHCP churn
+    {
+        let assets_evict = known_assets.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                let cutoff = chrono::Utc::now().timestamp() as u32;
+                assets_evict.retain(|_, ts| cutoff.saturating_sub(*ts) < 86400);
+            }
+        });
+    }
 
     // Background flush: dirty assets in Redis → ClickHouse every 30s
     {
@@ -353,18 +366,25 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             if !existing_mac.is_empty() && existing_mac != mac_s && !existing_mac.contains("00:00:00") {
                                 warn!("IP CONFLICT: {} claimed by {} and {} — possible ARP spoofing", ip_s, existing_mac, mac_s);
                                 let hit = crate::storage::clickhouse::NdrHit {
-                                    timestamp:    now,
-                                    community_id: format!("arp-conflict-{}", ip_s),
-                                    src_ip:       mac_s.clone(),
-                                    dst_ip:       ip_s.clone(),
-                                    score:        85.0,
-                                    severity:     "HIGH".to_string(),
-                                    tags:         vec!["ip-conflict".to_string(), "arp-spoofing".to_string()],
-                                    sigma_hits:   vec![],
-                                    threat_intel: 0,
-                                    src_country:  "".to_string(),
-                                    dst_country:  "".to_string(),
-                                    tenant_id:    tid.clone(),
+                                    timestamp:          now,
+                                    community_id:       format!("arp-conflict-{}", ip_s),
+                                    src_ip:             mac_s.clone(),
+                                    dst_ip:             ip_s.clone(),
+                                    score:              85.0,
+                                    severity:           "HIGH".to_string(),
+                                    tags:               vec!["ip-conflict".to_string(), "arp-spoofing".to_string()],
+                                    sigma_hits:         vec![],
+                                    threat_intel:       0,
+                                    src_country:        "".to_string(),
+                                    dst_country:        "".to_string(),
+                                    tenant_id:          tid.clone(),
+                                    correlation_status: "arp_conflict".to_string(),
+                                    zeek_details:       "{}".to_string(),
+                                    suricata_details:   "{}".to_string(),
+                                    corroborated_at:    0,
+                                    suricata_rule_id:   "".to_string(),
+                                    suricata_category:  "".to_string(),
+                                    updated_at:         now,
                                 };
                                 let _ = conflict_ch.insert_hit_for_tenant(hit, &tid).await;
                             }
@@ -416,7 +436,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             if let Err(e) = ch_clone.upsert_ipam_subnet(&tid, &interface, &cidr, &local_ip, &gateway, &sensor_id).await {
                                 tracing::debug!("IPAM subnet upsert: {}", e);
                             } else {
-                                info!("IPAM: {} {} → {}", sensor_id, interface, cidr);
+                                tracing::debug!("IPAM: {} {} → {}", sensor_id, interface, cidr);
                             }
                         });
                     }

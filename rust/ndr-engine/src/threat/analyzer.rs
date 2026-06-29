@@ -13,10 +13,11 @@ pub struct IocMatch {
 }
 
 /// Cross-reference IPs seen in tenant traffic against ndr.threat_intel.
-/// Returns matched IPs with full threat context.
+/// Returns matched IPs with full threat context, excluding trusted cloud IPs.
 pub async fn match_iocs(
-    ch: &crate::storage::ClickhouseStorage,
+    ch:        &crate::storage::ClickhouseStorage,
     tenant_id: &str,
+    trusted:   &super::cloud_trust::TrustedRanges,
 ) -> Vec<IocMatch> {
     let db = tenant_db_pub(tenant_id);
 
@@ -71,18 +72,20 @@ pub async fn match_iocs(
     let direction_map: std::collections::HashMap<String, String> =
         traffic_ips.into_iter().map(|r| (r.ip, r.direction)).collect();
 
-    // 5. Merge matches
-    let matches: Vec<IocMatch> = intel_rows.into_iter().map(|r| {
-        let dir = direction_map.get(&r.ioc_value).cloned().unwrap_or_else(|| "dst".into());
-        IocMatch {
-            ip:          r.ioc_value,
-            source:      r.source,
-            attack_type: r.attack_type,
-            severity:    r.severity,
-            description: r.description,
-            direction:   dir,
-        }
-    }).collect();
+    // 5. Merge matches — skip IPs in trusted cloud
+    let matches: Vec<IocMatch> = intel_rows.into_iter()
+        .filter(|r| !trusted.is_trusted_ip(&r.ioc_value))
+        .map(|r| {
+            let dir = direction_map.get(&r.ioc_value).cloned().unwrap_or_else(|| "dst".into());
+            IocMatch {
+                ip:          r.ioc_value,
+                source:      r.source,
+                attack_type: r.attack_type,
+                severity:    r.severity,
+                description: r.description,
+                direction:   dir,
+            }
+        }).collect();
 
     info!("IOC match: {} malicious IPs found in tenant {} traffic", matches.len(), tenant_id);
     matches
@@ -152,23 +155,45 @@ pub async fn build_exposure(
     };
 
     let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
-    let insert = format!(
-        "INSERT INTO {db}.exposure_profile \
-         (tenant_id, rdp_exposed, smb_exposed, ssh_exposed, http_exposed, \
-          dns_anomalies, port_scans, failed_logins, lateral_movement, c2_beacons, \
-          data_exfil_bytes, brute_force_attempts, unique_src_ips) \
-         VALUES ('{tid}',{rdp},{smb},{ssh},{http},{dns},{ps},{fl},{lm},{c2},{de},{bf},{us})",
-        db = db,
-        tid = profile.tenant_id,
-        rdp = profile.rdp_exposed as u8, smb = profile.smb_exposed as u8,
-        ssh = profile.ssh_exposed as u8, http = profile.http_exposed as u8,
-        dns = profile.dns_anomalies, ps = profile.port_scans,
-        fl = profile.failed_logins, lm = profile.lateral_movement,
-        c2 = profile.c2_beacons, de = profile.data_exfil_bytes,
-        bf = profile.brute_force_attempts, us = profile.unique_src_ips,
-    );
-    ch.client.query(&insert).execute().await?;
-    info!("Exposure profile saved for tenant {}", tenant_id);
+
+    // One snapshot per tenant per day is sufficient — skip if already recorded today.
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct CountRow { count: u64 }
+    let already_today: u64 = ch.client
+        .query(&format!(
+            "SELECT count() as count FROM {db}.exposure_profile \
+             WHERE tenant_id = '{tid}' AND toDate(snapshot_at) = today()",
+            db = db, tid = profile.tenant_id
+        ))
+        .fetch_all::<CountRow>()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .map(|r| r.count)
+        .unwrap_or(0);
+
+    if already_today == 0 {
+        let insert = format!(
+            "INSERT INTO {db}.exposure_profile \
+             (tenant_id, rdp_exposed, smb_exposed, ssh_exposed, http_exposed, \
+              dns_anomalies, port_scans, failed_logins, lateral_movement, c2_beacons, \
+              data_exfil_bytes, brute_force_attempts, unique_src_ips) \
+             VALUES ('{tid}',{rdp},{smb},{ssh},{http},{dns},{ps},{fl},{lm},{c2},{de},{bf},{us})",
+            db = db,
+            tid = profile.tenant_id,
+            rdp = profile.rdp_exposed as u8, smb = profile.smb_exposed as u8,
+            ssh = profile.ssh_exposed as u8, http = profile.http_exposed as u8,
+            dns = profile.dns_anomalies, ps = profile.port_scans,
+            fl = profile.failed_logins, lm = profile.lateral_movement,
+            c2 = profile.c2_beacons, de = profile.data_exfil_bytes,
+            bf = profile.brute_force_attempts, us = profile.unique_src_ips,
+        );
+        ch.client.query(&insert).execute().await?;
+        tracing::debug!("Exposure profile saved for tenant {}", tenant_id);
+    } else {
+        tracing::debug!("Exposure profile already recorded today for tenant {} — skipping insert", tenant_id);
+    }
     Ok(profile)
 }
 
