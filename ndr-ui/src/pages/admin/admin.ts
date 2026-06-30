@@ -95,31 +95,7 @@ export class Admin implements OnInit, OnDestroy {
   LoadingIcon = LoaderCircle;
   SaveIcon = Save;
 
-  // AI Providers state
-  providers: AiProvider[] = [];
-  loadingProviders = false;
-  savingProvider = false;
-  providerMessage = '';
-  providerError = '';
-  testProviderResult = '';
-  showAddProviderForm = false;
-  testingProvider = '';
-  showProviderKey = false;
-  newProvider = {
-    name: '', provider_type: 'custom', api_key: '', model: '',
-    base_url: '', endpoint_path: '/v1/chat/completions',
-    msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
-  };
-  providerTypeOptions = [
-    { value: 'custom',    label: 'Custom / OpenAI-compatible' },
-    { value: 'openai',    label: 'OpenAI' },
-    { value: 'anthropic', label: 'Anthropic' },
-  ];
-  useCaseOptions = [
-    { value: 'all',    label: 'All (chat + threat analysis)' },
-    { value: 'chat',   label: 'ARIA chat only' },
-    { value: 'threat', label: 'Threat analysis only' },
-  ];
+
 
   activeTab = 'tenants';
   telemetryData: any = null;
