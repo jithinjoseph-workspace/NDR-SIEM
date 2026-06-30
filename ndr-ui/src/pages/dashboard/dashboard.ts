@@ -7,7 +7,7 @@ import { Subscription } from 'rxjs';
 import { toSignal } from '@angular/core/rxjs-interop';
 import {
   LucideAngularModule,
-  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw
+  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw, Bot
 } from 'lucide-angular';
 import { Router } from '@angular/router';
 import * as d3 from 'd3';
@@ -50,6 +50,7 @@ export class Dashboard implements OnInit, OnDestroy {
   ActivityIcon = Activity;
   ArrowIcon = ArrowUpRight;
   RefreshIcon = RefreshCw;
+  BotIcon = Bot;
 
   liveEventStreamRef = viewChild<ElementRef>('liveEventStream');
   @ViewChild('severityDonutChart') severityDonutChartRef!: ElementRef;
@@ -216,6 +217,8 @@ export class Dashboard implements OnInit, OnDestroy {
   }
 
   openNetworkMap() { this.router.navigate(['/network-map']); }
+
+  openAiReport() { this.router.navigate(['/ai-report']); }
 
   // ── Private helpers ────────────────────────────────────────────────────────
 

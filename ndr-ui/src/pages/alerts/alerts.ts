@@ -72,12 +72,14 @@ export class Alerts implements OnInit, OnDestroy {
 
     this.loadAlerts();
 
-    // Real-time - add new hit to top of list via WebSocket
+    // Real-time - use continuous hits from background WebSocket service
     this.subs.push(
-      this.ws.hits$.subscribe(hit => {
-        const alert = {
+      this.ws.continuousHits$.subscribe(hits => {
+        if (!hits || hits.length === 0) return;
+        
+        const formattedHits = hits.map(hit => ({
           severity: hit.severity?.toUpperCase() || 'LOW',
-          source: `${hit.src || hit.suricata?.src || '-'} -> ${hit.dst || hit.suricata?.dst || '-'}`,
+          source: `${hit.src || hit.suricata?.src || hit.zeek?.src || '-'} -> ${hit.dst || hit.suricata?.dst || hit.zeek?.dst || '-'}`,
           description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
           time: hit.ts
             ? new Date(hit.ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -86,10 +88,15 @@ export class Alerts implements OnInit, OnDestroy {
           community_id: hit.cid || hit.community_id || '',
           src_country: this.formatOrigin(hit.src || hit.suricata?.src || hit.zeek?.src, hit.src_country),
           dst_country: hit.dst_country,
-        };
-        this.allAlerts.unshift(alert);
-        // Keep max 100 alerts
-        if (this.allAlerts.length > 100) this.allAlerts.pop();
+        }));
+        
+        const existingCids = new Set(formattedHits.map(h => h.community_id));
+        const oldAlerts = this.allAlerts.filter(a => !existingCids.has(a.community_id));
+        
+        this.allAlerts = [...formattedHits, ...oldAlerts];
+        if (this.allAlerts.length > 100) this.allAlerts = this.allAlerts.slice(0, 100);
+        
+        this.loading = false;
         this.applyFilters();
         this.cdr.detectChanges();
       })
@@ -97,10 +104,12 @@ export class Alerts implements OnInit, OnDestroy {
   }
 
   loadAlerts() {
-    this.loading = true;
+    if (this.allAlerts.length === 0) {
+      this.loading = true;
+    }
     this.api.getAlerts().subscribe({
       next: (data: any[]) => {
-        this.allAlerts = data.map(hit => ({
+        const apiAlerts = data.map(hit => ({
           severity: hit.severity?.toUpperCase() || 'LOW',
           source: `${hit.src_ip || '-'} -> ${hit.dst_ip || '-'}`,
           description: hit.sigma_hits?.join(', ') || 'Correlation hit',
@@ -115,6 +124,15 @@ export class Alerts implements OnInit, OnDestroy {
           src_country: this.formatOrigin(hit.src_ip, hit.src_country),
           dst_country: hit.dst_country,
         }));
+
+        const existingCids = new Set(this.allAlerts.map(a => a.community_id));
+        const newApiAlerts = apiAlerts.filter(a => !existingCids.has(a.community_id));
+        
+        this.allAlerts = [...this.allAlerts, ...newApiAlerts];
+        if (this.allAlerts.length > 100) {
+            this.allAlerts = this.allAlerts.slice(0, 100);
+        }
+
         this.applyFilters();
         this.loading = false;
         this.cdr.detectChanges();

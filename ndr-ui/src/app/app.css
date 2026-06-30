@@ -457,3 +457,41 @@ html[data-theme="light"] app-setup .bg-primary {
 html[data-theme="light"] app-setup .bg-primary.text-black {
   color: #ffffff !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOBAL PRINT RULES
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media print {
+  /* Hide all global navigation and overlays during print */
+  app-sidebar,
+  app-navbar,
+  app-aria-bot,
+  app-toast-container,
+  .no-print {
+    display: none !important;
+  }
+
+  /* Reset layout constraints so pages expand naturally to fit A4 paper */
+  body, html {
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
+    background: #ffffff !important;
+  }
+
+  /* Force the layout flex containers to behave like normal blocks for printing */
+  .flex.h-screen.w-full.overflow-hidden,
+  .flex.flex-col.flex-1.overflow-hidden,
+  main.flex-1.overflow-auto {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+  }
+
+  /* Force background colors and gradients to render in the PDF */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

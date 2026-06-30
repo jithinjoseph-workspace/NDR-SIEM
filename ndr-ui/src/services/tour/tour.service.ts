@@ -8,7 +8,7 @@ export class TourService {
   private driverLoaded = false;
   private driverInstance: any;
 
-  constructor(private router: Router) {}
+  constructor(private router: Router) { }
 
   private async loadDriver(): Promise<void> {
     if (this.driverLoaded) return Promise.resolve();
@@ -100,6 +100,7 @@ export class TourService {
       nextBtnText: 'Next',
       prevBtnText: 'Back',
       onDestroyed: () => {
+        // Fix navbar scroll issue by completely resetting ALL scrollable containers
         window.scrollTo(0, 0);
         document.body.scrollTop = 0;
         document.documentElement.scrollTop = 0;
@@ -109,13 +110,13 @@ export class TourService {
       },
       onNextClick: (elem: any, step: any, options: any) => {
         const i = options.state.activeIndex;
-        if (i === 1) {
+        if (i === 1) { // search-wrap -> dashboard
           this.router.navigate(['/dashboard']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
-        } else if (i === 3) {
+        } else if (i === 3) { // chart-frame -> alerts
           this.router.navigate(['/alerts']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
-        } else if (i === 4) {
+        } else if (i === 4) { // alerts-table -> evidence
           this.router.navigate(['/evidence']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
-        } else if (i === 5) {
+        } else if (i === 5) { // bundle-list -> ai-activity
           this.router.navigate(['/ai-activity']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
         } else {
           this.driverInstance.moveNext();
@@ -123,11 +124,11 @@ export class TourService {
       },
       onPrevClick: (elem: any, step: any, options: any) => {
         const i = options.state.activeIndex;
-        if (i === 4) {
+        if (i === 4) { // alerts-table -> back to dashboard
           this.router.navigate(['/dashboard']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
-        } else if (i === 5) {
+        } else if (i === 5) { // bundle-list -> back to alerts
           this.router.navigate(['/alerts']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
-        } else if (i === 6) {
+        } else if (i === 6) { // aria-wrapper -> back to evidence
           this.router.navigate(['/evidence']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
         } else {
           this.driverInstance.movePrevious();

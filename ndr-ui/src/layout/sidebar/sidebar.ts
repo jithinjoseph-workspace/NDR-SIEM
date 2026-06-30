@@ -63,6 +63,7 @@ export class Sidebar implements OnInit, OnDestroy {
 
     if (this.auth.isAdmin()) {
       this.navItems = [
+        { label: 'Overview',      route: '/admin', queryParams: { tab: 'overview' },      icon: LayoutDashboard },
         { label: 'Tenants',       route: '/admin', queryParams: { tab: 'tenants' },       icon: Building2 },
         { label: 'Users',         route: '/admin', queryParams: { tab: 'users' },          icon: Users },
         { label: 'Engines',       route: '/admin', queryParams: { tab: 'engines' },        icon: Gauge },

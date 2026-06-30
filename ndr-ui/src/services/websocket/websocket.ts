@@ -21,7 +21,20 @@ export class Websocket {
     filter(m => m.type === 'zeek' || m.type === 'suricata')
   );
 
-  constructor(private zone: NgZone) { }
+  private hitsHistory: any[] = [];
+  public continuousHits$ = new BehaviorSubject<any[]>([]);
+
+  constructor(private zone: NgZone) { 
+    try {
+      const stored = sessionStorage.getItem('ndr_live_hits');
+      if (stored) {
+        this.hitsHistory = JSON.parse(stored);
+        this.continuousHits$.next(this.hitsHistory);
+      }
+    } catch (e) {
+      console.warn('Failed to parse cached live hits', e);
+    }
+  }
 
   connect() {
     // ── Guard: do not open a second connection if one is already live ──────
@@ -68,6 +81,14 @@ export class Websocket {
             if (data.type === 'agent_status') this.lastAgentStatus$.next(data);
             if (data.type === 'interfaces')  this.lastInterfaces$.next(data);
             if (data.type === 'telemetry')   this.lastTelemetry$.next(data);
+            if (data.type === 'hit') {
+              this.hitsHistory.unshift(data);
+              if (this.hitsHistory.length > 100) this.hitsHistory.pop();
+              this.continuousHits$.next([...this.hitsHistory]);
+              try {
+                sessionStorage.setItem('ndr_live_hits', JSON.stringify(this.hitsHistory));
+              } catch (e) {}
+            }
           } catch (e) {
             console.warn('Invalid WS message:', event.data);
           }
