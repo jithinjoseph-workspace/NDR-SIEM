@@ -83,8 +83,7 @@ export class Sidebar implements OnInit, OnDestroy {
       this.navItems = [
         { label: 'Dashboard',    route: '/dashboard',    icon: LayoutDashboard, permission: 'dashboard' },
         { label: 'Alerts',       route: '/alerts',       icon: Bell,            permission: 'alerts' },
-        { label: 'Network Logs', route: '/logs',         icon: FileText,        permission: 'logs' },
-        { label: 'Live Stream',  route: '/live',         icon: Activity,        permission: 'live' },
+        { label: 'Network',      route: '/logs',         icon: FileText,        permission: 'logs' },
         { label: 'Network Map',  route: '/network-map',  icon: Network,         permission: 'network-map' },
         { label: 'Assets',       route: '/assets',       icon: Server,          permission: 'alerts' },
         { label: 'Rules',        route: '/rules',        icon: ShieldAlert,     permission: 'rules' },

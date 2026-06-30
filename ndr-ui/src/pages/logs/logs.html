@@ -1,93 +1,113 @@
-<div class="logs-shell animate-in fade-in duration-500">
-  <div class="logs-header">
-    <div>
-      <div class="eyebrow">Network telemetry</div>
-      <h2>Network Logs</h2>
-      <p>Deep packet inspection log stream from Zeek and Suricata</p>
-    </div>
-
-    <div class="logs-actions">
-      <label class="logs-search">
-        <lucide-icon [name]="SearchIcon" class="search-icon"></lucide-icon>
-        <input
-          type="text"
-          [(ngModel)]="searchText"
-          (ngModelChange)="onSearch()"
-          placeholder="Filter IP, protocol, source"
-        />
-      </label>
-
-      <button (click)="loadLogs()" class="refresh-button" title="Refresh logs" aria-label="Refresh logs">
-        <lucide-icon [name]="RefreshIcon" class="action-icon"></lucide-icon>
+<div class="network-shell animate-in fade-in duration-500">
+  <div class="network-tabs-container">
+    <div class="network-tabs">
+      <button [class.active]="activeTab === 'logs'" (click)="activeTab = 'logs'" class="tab-btn">
+        <lucide-icon [name]="FileTextIcon" class="tab-icon"></lucide-icon>
+        <span>Network Logs</span>
+      </button>
+      <button [class.active]="activeTab === 'live'" (click)="activeTab = 'live'" class="tab-btn">
+        <lucide-icon [name]="ActivityIcon" class="tab-icon"></lucide-icon>
+        <span>Live Stream</span>
+        <span class="tab-pulse-dot" *ngIf="activeTab !== 'live'"></span>
       </button>
     </div>
   </div>
 
-  <div class="logs-status-strip">
-    <div>
-      <span class="status-dot"></span>
-      <span>Live event intake</span>
+  <div *ngIf="activeTab === 'logs'" class="network-content">
+    <div class="logs-header">
+      <div>
+        <div class="eyebrow">Network telemetry</div>
+        <h2>Network Logs</h2>
+        <p>Deep packet inspection log stream from Zeek and Suricata</p>
+      </div>
+
+      <div class="logs-actions">
+        <label class="logs-search">
+          <lucide-icon [name]="SearchIcon" class="search-icon"></lucide-icon>
+          <input
+            type="text"
+            [(ngModel)]="searchText"
+            (ngModelChange)="onSearch()"
+            placeholder="Filter IP, protocol, source"
+          />
+        </label>
+
+        <button (click)="loadLogs()" class="refresh-button" title="Refresh logs" aria-label="Refresh logs">
+          <lucide-icon [name]="RefreshIcon" class="action-icon"></lucide-icon>
+        </button>
+      </div>
     </div>
-    <div>
-      <span class="status-label">Visible</span>
-      <strong>{{ filteredLogs.length }}</strong>
+
+    <div class="logs-status-strip">
+      <div>
+        <span class="status-dot"></span>
+        <span>Live event intake</span>
+      </div>
+      <div>
+        <span class="status-label">Visible</span>
+        <strong>{{ filteredLogs.length }}</strong>
+      </div>
+      <div>
+        <span class="status-label">Buffer</span>
+        <strong>{{ logs.length }}</strong>
+      </div>
     </div>
-    <div>
-      <span class="status-label">Buffer</span>
-      <strong>{{ logs.length }}</strong>
-    </div>
+
+    <section class="logs-terminal">
+      <div class="terminal-topbar">
+        <div class="terminal-title">
+          <lucide-icon [name]="TerminalIcon" class="terminal-icon"></lucide-icon>
+          <span>ndr_events - live stream</span>
+        </div>
+        <span class="live-pill"><i></i>LIVE</span>
+      </div>
+
+      <div *ngIf="loading" class="logs-state">
+        <lucide-icon [name]="TerminalIcon" class="state-icon pulse"></lucide-icon>
+        <strong>Loading network events</strong>
+        <span>Refreshing the latest captured traffic.</span>
+      </div>
+
+      <div *ngIf="!loading" class="logs-table-wrap">
+        <div class="log-grid log-heading">
+          <span>Time</span>
+          <span>Source</span>
+          <span>Proto</span>
+          <span>Source IP</span>
+          <span>Destination IP</span>
+          <span>Event</span>
+        </div>
+
+        <div class="log-list">
+          <div *ngFor="let log of filteredLogs; trackBy: trackByLog" class="log-grid log-row">
+            <span class="log-time">{{ log.ts }}</span>
+            <span [class]="'source-badge ' + (log.source === 'suricata' ? 'source-suricata' : 'source-zeek')">
+              {{ log.source?.toUpperCase() }}
+            </span>
+            <span [class]="'proto-badge proto-' + (log.proto || '').toLowerCase()">
+              {{ log.proto }}
+            </span>
+            <span class="ip-value">{{ log.src }}</span>
+            <span class="ip-value">{{ log.dst }}</span>
+            <span class="event-badge">{{ log.event_type || 'CONN' }}</span>
+          </div>
+
+          <div *ngIf="filteredLogs.length === 0" class="logs-state compact">
+            <lucide-icon [name]="SearchIcon" class="state-icon"></lucide-icon>
+            <strong>No matching logs</strong>
+            <span>Try a different IP, protocol, or event source.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="terminal-footer">
+        <span>Showing {{ filteredLogs.length }} of {{ logs.length }} entries</span>
+        <span>WebSocket: Connected</span>
+      </div>
+    </section>
   </div>
 
-  <section class="logs-terminal">
-    <div class="terminal-topbar">
-      <div class="terminal-title">
-        <lucide-icon [name]="TerminalIcon" class="terminal-icon"></lucide-icon>
-        <span>ndr_events - live stream</span>
-      </div>
-      <span class="live-pill"><i></i>LIVE</span>
-    </div>
-
-    <div *ngIf="loading" class="logs-state">
-      <lucide-icon [name]="TerminalIcon" class="state-icon pulse"></lucide-icon>
-      <strong>Loading network events</strong>
-      <span>Refreshing the latest captured traffic.</span>
-    </div>
-
-    <div *ngIf="!loading" class="logs-table-wrap">
-      <div class="log-grid log-heading">
-        <span>Time</span>
-        <span>Source</span>
-        <span>Proto</span>
-        <span>Source IP</span>
-        <span>Destination IP</span>
-        <span>Event</span>
-      </div>
-
-      <div class="log-list">
-        <div *ngFor="let log of filteredLogs; trackBy: trackByLog" class="log-grid log-row">
-          <span class="log-time">{{ log.ts }}</span>
-          <span [class]="'source-badge ' + (log.source === 'suricata' ? 'source-suricata' : 'source-zeek')">
-            {{ log.source?.toUpperCase() }}
-          </span>
-          <span [class]="'proto-badge proto-' + (log.proto || '').toLowerCase()">
-            {{ log.proto }}
-          </span>
-          <span class="ip-value">{{ log.src }}</span>
-          <span class="ip-value">{{ log.dst }}</span>
-          <span class="event-badge">{{ log.event_type || 'CONN' }}</span>
-        </div>
-
-        <div *ngIf="filteredLogs.length === 0" class="logs-state compact">
-          <lucide-icon [name]="SearchIcon" class="state-icon"></lucide-icon>
-          <strong>No matching logs</strong>
-          <span>Try a different IP, protocol, or event source.</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="terminal-footer">
-      <span>Showing {{ filteredLogs.length }} of {{ logs.length }} entries</span>
-      <span>WebSocket: Connected</span>
-    </div>
-  </section>
+  <div *ngIf="activeTab === 'live'" class="network-content embedded-live">
+    <app-live></app-live>
+  </div>
 </div>
