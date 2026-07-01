@@ -432,11 +432,11 @@
 
         <!-- MITRE ATT&CK tags for this analysis -->
         <div class="ar-mitre-row" *ngIf="getMitreForAnalysis(a.id) as mitre">
-          <div class="ar-mitre-tactics" *ngIf="mitre.tactics?.length">
+          <div class="ar-mitre-tactics" *ngIf="mitre.tactics.length">
             <span class="ar-mitre-section-label">Tactics</span>
             <span class="ar-mitre-tactic" *ngFor="let t of mitre.tactics">{{ t }}</span>
           </div>
-          <div class="ar-mitre-techniques" *ngIf="mitre.techniques?.length">
+          <div class="ar-mitre-techniques" *ngIf="mitre.techniques.length">
             <span class="ar-mitre-section-label">Techniques</span>
             <span class="ar-mitre-technique" *ngFor="let tech of mitre.techniques"
                   [title]="tech.name">

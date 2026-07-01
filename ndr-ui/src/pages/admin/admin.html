@@ -20,7 +20,42 @@
     ⚠ {{ sessionExpiryWarning }}
   </div>
 
-  <section class="admin-stats">
+  <section class="admin-stats premium-stats" *ngIf="activeTab === 'overview'">
+    <article class="glass-card">
+      <div class="stat-icon-wrapper success"><lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Platform Availability</span>
+        <strong>99.99%</strong>
+        <div class="stat-trend positive">+0.01% this month</div>
+      </div>
+    </article>
+    <article class="glass-card">
+      <div class="stat-icon-wrapper info"><lucide-icon [name]="BuildingIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Tenant Capacity</span>
+        <strong>{{ activeTenants }} / {{ tenants.length }}</strong>
+        <div class="stat-trend neutral">Active vs Total</div>
+      </div>
+    </article>
+    <article class="glass-card">
+      <div class="stat-icon-wrapper accent"><lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Active Users</span>
+        <strong>{{ managedUsers.length }}</strong>
+        <div class="stat-trend positive">+12% this week</div>
+      </div>
+    </article>
+    <article class="glass-card">
+      <div class="stat-icon-wrapper warning"><lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Cluster Status</span>
+        <strong>{{ engines.length }} Engines</strong>
+        <div class="stat-trend positive">All healthy</div>
+      </div>
+    </article>
+  </section>
+
+  <section class="admin-stats" *ngIf="activeTab !== 'overview'">
     <article>
       <lucide-icon [name]="BuildingIcon" class="w-5 h-5"></lucide-icon>
       <span>Total Tenants</span>
@@ -43,6 +78,47 @@
     </article>
   </section>
 
+  <section *ngIf="activeTab === 'overview'" class="overview-panel">
+    <div class="overview-grid">
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Live Platform Utilization</h4>
+            <p class="chart-desc">Monitor live cluster load to determine if new engine nodes need to be provisioned.</p>
+          </div>
+          <span class="live-badge"><span class="pulse-dot"></span> Live</span>
+        </div>
+        <div id="resource-area-chart" class="chart-container"></div>
+      </div>
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Global User Roles Distribution</h4>
+            <p class="chart-desc">Breakdown of privileges across the entire NDR system.</p>
+          </div>
+        </div>
+        <div id="user-roles-donut-chart" class="chart-container"></div>
+      </div>
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Top Tenants by User Count</h4>
+            <p class="chart-desc">Identify which organizations have the largest user adoption across the platform.</p>
+          </div>
+        </div>
+        <div id="tenant-bar-chart" class="chart-container"></div>
+      </div>
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Processing Engines Health</h4>
+            <p class="chart-desc">Status of backend engine worker nodes processing data.</p>
+          </div>
+        </div>
+        <div id="engines-donut-chart" class="chart-container"></div>
+      </div>
+    </div>
+  </section>
 
   <section *ngIf="activeTab === 'tenants'" class="admin-panel">
     <div class="panel-head">

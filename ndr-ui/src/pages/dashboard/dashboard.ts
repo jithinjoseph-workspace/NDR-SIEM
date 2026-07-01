@@ -22,44 +22,44 @@ import * as d3 from 'd3';
 export class Dashboard implements OnInit, OnDestroy {
 
   // ── Stat card values ──────────────────────────────────────────────────────
-  totalEvents    = signal(0);
-  totalHits      = signal(0);
+  totalEvents = signal(0);
+  totalHits = signal(0);
   eventsLastHour = signal(0);
-  hitsLastHour   = signal(0);
-  zeekEvents     = signal(0);
+  hitsLastHour = signal(0);
+  zeekEvents = signal(0);
   suricataEvents = signal(0);
-  protocols      = signal<any[]>([]);
+  protocols = signal<any[]>([]);
   critical = signal(0);
-  high     = signal(0);
-  medium   = signal(0);
-  low      = signal(0);
+  high = signal(0);
+  medium = signal(0);
+  low = signal(0);
   topSrcIps = signal<any[]>([]);
   topDstIps = signal<any[]>([]);
 
   // ── Chart state ───────────────────────────────────────────────────────────
   chartLoading = signal(true);   // shows skeleton shimmer
-  chartError   = signal(false);  // shows error + retry UI
+  chartError = signal(false);  // shows error + retry UI
 
   /** Cosmetic bar heights for the skeleton shimmer. */
-  readonly skeletonBars = ['30%','55%','40%','70%','50%','85%','60%','45%','75%','35%'];
+  readonly skeletonBars = ['30%', '55%', '40%', '70%', '50%', '85%', '60%', '45%', '75%', '35%'];
 
   // ── Icons ─────────────────────────────────────────────────────────────────
   TrendingUpIcon = TrendingUp;
-  AlertIcon      = TriangleAlert;
-  ShieldIcon     = Shield;
-  ActivityIcon   = Activity;
-  ArrowIcon      = ArrowUpRight;
-  RefreshIcon    = RefreshCw;
-  BotIcon        = Bot;
+  AlertIcon = TriangleAlert;
+  ShieldIcon = Shield;
+  ActivityIcon = Activity;
+  ArrowIcon = ArrowUpRight;
+  RefreshIcon = RefreshCw;
+  BotIcon = Bot;
 
   liveEventStreamRef = viewChild<ElementRef>('liveEventStream');
   @ViewChild('severityDonutChart') severityDonutChartRef!: ElementRef;
   @ViewChild('topDstIpsChart') topDstIpsChartRef!: ElementRef;
   protocolPieChartRef = viewChild<ElementRef>('protocolPieChart');
-  
+
   chartDataSnapshot = signal<{ labels: string[], data: number[] }>({ labels: [], data: [] });
 
-  private subs:           Subscription[] = [];
+  private subs: Subscription[] = [];
 
   // Tracks unique incidents to deduplicate live stat card increments
   private seenIncidents = new Set<string>();
@@ -68,10 +68,10 @@ export class Dashboard implements OnInit, OnDestroy {
   totalSeverityCount = computed(() => (this.critical() + this.high() + this.medium() + this.low()) || 1);
 
   constructor(
-    private api:          Api,
-    private ws:           Websocket,
+    private api: Api,
+    private ws: Websocket,
     private chartService: ChartDataService,
-    private router:       Router
+    private router: Router
   ) {
     // ── Effects for D3 re-rendering ───────────────────────────────────────
     effect(() => {
@@ -160,13 +160,13 @@ export class Dashboard implements OnInit, OnDestroy {
         this.eventsLastHour.set(t.events_1h);
         if (t.severity) {
           this.critical.set(t.severity.critical || 0);
-          this.high.set(t.severity.high     || 0);
-          this.medium.set(t.severity.medium  || 0);
-          this.low.set(t.severity.low        || 0);
+          this.high.set(t.severity.high || 0);
+          this.medium.set(t.severity.medium || 0);
+          this.low.set(t.severity.low || 0);
         }
-        if (t.top_src_ips)  this.topSrcIps.set(t.top_src_ips);
-        if (t.top_dst_ips)  this.topDstIps.set(t.top_dst_ips);
-        if (t.protocols)    this.protocols.set(t.protocols);
+        if (t.top_src_ips) this.topSrcIps.set(t.top_src_ips);
+        if (t.top_dst_ips) this.topDstIps.set(t.top_dst_ips);
+        if (t.protocols) this.protocols.set(t.protocols);
       })
     );
 
@@ -193,9 +193,9 @@ export class Dashboard implements OnInit, OnDestroy {
           this.seenIncidents.add(incidentId);
           switch (severity) {
             case 'CRITICAL': this.critical.update(v => v + 1); break;
-            case 'HIGH':     this.high.update(v => v + 1);     break;
-            case 'MEDIUM':   this.medium.update(v => v + 1);   break;
-            default:         this.low.update(v => v + 1);      break;
+            case 'HIGH': this.high.update(v => v + 1); break;
+            case 'MEDIUM': this.medium.update(v => v + 1); break;
+            default: this.low.update(v => v + 1); break;
           }
         }
       })
@@ -259,7 +259,7 @@ export class Dashboard implements OnInit, OnDestroy {
     const liveStreamEl = this.liveEventStreamRef();
     if (!liveStreamEl || !snap.data.length) return;
     const el = liveStreamEl.nativeElement;
-    
+
     // Clear previous SVG
     d3.select(el).selectAll('*').remove();
 
@@ -369,14 +369,14 @@ export class Dashboard implements OnInit, OnDestroy {
       .attr("stroke", "#69f6b8")
       .attr("stroke-width", 2)
       .style("cursor", "pointer")
-      .on("mouseover", function(event, d) {
+      .on("mouseover", function (event, d) {
         d3.select(this).transition().duration(100).attr("r", 6).attr("fill", "#69f6b8");
         tooltip.transition().duration(200).style("opacity", .9);
         tooltip.html(`<strong>Time:</strong> ${d.label}<br/><strong>Events:</strong> ${d.value}`)
           .style("left", (event.pageX + 10) + "px")
           .style("top", (event.pageY - 28) + "px");
       })
-      .on("mouseout", function() {
+      .on("mouseout", function () {
         d3.select(this).transition().duration(100).attr("r", 4).attr("fill", "#0f172a");
         tooltip.transition().duration(500).style("opacity", 0);
       });
@@ -399,7 +399,7 @@ export class Dashboard implements OnInit, OnDestroy {
 
     // Gradients for each severity
     const defs = svg.append("defs");
-    
+
     const gradients = [
       { id: "grad-Critical", colors: ["#ef4444", "#991b1b"] },
       { id: "grad-High", colors: ["#f59e0b", "#b45309"] },
@@ -433,19 +433,19 @@ export class Dashboard implements OnInit, OnDestroy {
       .domain(["Critical", "High", "Medium", "Low"])
       .range(["#ef4444", "#f59e0b", "#38bdf8", "#34d399"]);
 
-    const pie = d3.pie<{key: string, value: number}>()
+    const pie = d3.pie<{ key: string, value: number }>()
       .value(d => d.value)
       .sort(null)
       .padAngle(0.04); // Give natural padding
 
-    const data_ready = pie(Object.entries(data).map(([key, value]) => ({key, value})));
+    const data_ready = pie(Object.entries(data).map(([key, value]) => ({ key, value })));
 
-    const arc = d3.arc<d3.PieArcDatum<{key: string, value: number}>>()
+    const arc = d3.arc<d3.PieArcDatum<{ key: string, value: number }>>()
       .innerRadius(radius * 0.65) // thinner donut
       .outerRadius(radius * 0.90)
       .cornerRadius(6); // rounded slices
-      
-    const arcHover = d3.arc<d3.PieArcDatum<{key: string, value: number}>>()
+
+    const arcHover = d3.arc<d3.PieArcDatum<{ key: string, value: number }>>()
       .innerRadius(radius * 0.60)
       .outerRadius(radius * 1.0)
       .cornerRadius(6);
@@ -462,22 +462,22 @@ export class Dashboard implements OnInit, OnDestroy {
       .style("stroke-width", "1px")
       .style("cursor", "pointer");
 
-    paths.on("mouseover", function(event, d) {
-        d3.select(this).transition().duration(250).ease(d3.easeCubicOut).attr("d", arcHover as any);
-        tooltip.transition().duration(200).style("opacity", .95);
-        tooltip.html(`
+    paths.on("mouseover", function (event, d) {
+      d3.select(this).transition().duration(250).ease(d3.easeCubicOut).attr("d", arcHover as any);
+      tooltip.transition().duration(200).style("opacity", .95);
+      tooltip.html(`
           <div style="font-family: var(--font-display); font-size: 14px; font-weight: 700; margin-bottom: 2px;">${d.data.key}</div>
           <div style="font-family: var(--font-mono); color: #cbd5e1;">Count: ${d.data.value}</div>
         `)
-          .style("left", (event.pageX + 15) + "px")
-          .style("top", (event.pageY - 35) + "px")
-          .style("border-left", `4px solid ${solidColor(d.data.key)}`);
-      })
-      .on("mouseout", function(event, d) {
+        .style("left", (event.pageX + 15) + "px")
+        .style("top", (event.pageY - 35) + "px")
+        .style("border-left", `4px solid ${solidColor(d.data.key)}`);
+    })
+      .on("mouseout", function (event, d) {
         d3.select(this).transition().duration(300).ease(d3.easeCubicOut).attr("d", arc as any);
         tooltip.transition().duration(500).style("opacity", 0);
       });
-      
+
     // Center text background
     svg.append("circle")
       .attr("r", radius * 0.5)
@@ -492,7 +492,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .style("font-weight", "800")
       .style("text-shadow", "0px 2px 10px rgba(255,255,255,0.3)")
       .text(this.critical() + this.high() + this.medium() + this.low());
-      
+
     svg.append("text")
       .attr("text-anchor", "middle")
       .attr("dy", "1.6em")
@@ -537,7 +537,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .innerRadius(radius * 0.4)
       .outerRadius(radius * 0.9)
       .cornerRadius(6);
-      
+
     const arcHover = d3.arc<d3.PieArcDatum<any>>()
       .innerRadius(radius * 0.35)
       .outerRadius(radius * 1.0)
@@ -570,18 +570,18 @@ export class Dashboard implements OnInit, OnDestroy {
       .style("stroke-width", "2px")
       .style("cursor", "pointer");
 
-    paths.on("mouseover", function(event, d) {
-        d3.select(this).transition().duration(250).ease(d3.easeCubicOut).attr("d", arcHover as any);
-        tooltip.transition().duration(200).style("opacity", .95);
-        tooltip.html(`
+    paths.on("mouseover", function (event, d) {
+      d3.select(this).transition().duration(250).ease(d3.easeCubicOut).attr("d", arcHover as any);
+      tooltip.transition().duration(200).style("opacity", .95);
+      tooltip.html(`
           <div style="font-family: var(--font-display); font-size: 14px; font-weight: 700; margin-bottom: 2px;">${d.data.proto.toUpperCase()}</div>
           <div style="font-family: var(--font-mono); color: #cbd5e1;">Traffic: ${d.data.count.toLocaleString()}</div>
         `)
-          .style("left", (event.pageX + 15) + "px")
-          .style("top", (event.pageY - 35) + "px")
-          .style("border-left", `4px solid ${color(d.data.proto)}`);
-      })
-      .on("mouseout", function(event, d) {
+        .style("left", (event.pageX + 15) + "px")
+        .style("top", (event.pageY - 35) + "px")
+        .style("border-left", `4px solid ${color(d.data.proto)}`);
+    })
+      .on("mouseout", function (event, d) {
         d3.select(this).transition().duration(300).ease(d3.easeCubicOut).attr("d", arc as any);
         tooltip.transition().duration(500).style("opacity", 0);
       });
@@ -615,7 +615,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .padding(0.4);
 
     const defs = svg.append("defs");
-    
+
     // Add glowing gradient for bars
     const barGrad = defs.append("linearGradient")
       .attr("id", "bar-gradient")
@@ -623,7 +623,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .attr("x2", "100%").attr("y2", "0%");
     barGrad.append("stop").attr("offset", "0%").attr("stop-color", "rgba(56, 189, 248, 0.2)");
     barGrad.append("stop").attr("offset", "100%").attr("stop-color", "#38bdf8");
-    
+
     const barGradHover = defs.append("linearGradient")
       .attr("id", "bar-gradient-hover")
       .attr("x1", "0%").attr("y1", "0%")
@@ -669,7 +669,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .attr("fill", "url(#bar-gradient)")
       .attr("rx", 4)
       .style("cursor", "pointer")
-      .on("mouseover", function(event, d) {
+      .on("mouseover", function (event, d) {
         d3.select(this).attr("fill", "url(#bar-gradient-hover)");
         tooltip.transition().duration(200).style("opacity", .95);
         tooltip.html(`
@@ -680,7 +680,7 @@ export class Dashboard implements OnInit, OnDestroy {
           .style("top", (event.pageY - 35) + "px")
           .style("border-left", "4px solid #69f6b8");
       })
-      .on("mouseout", function() {
+      .on("mouseout", function () {
         d3.select(this).attr("fill", "url(#bar-gradient)");
         tooltip.transition().duration(500).style("opacity", 0);
       })
@@ -688,7 +688,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .duration(1000)
       .ease(d3.easeCubicOut)
       .attr("width", d => x(d.count));
-      
+
     // Text Labels on Bars
     svg.selectAll(".fg-label")
       .data(ips)
