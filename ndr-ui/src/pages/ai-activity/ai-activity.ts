@@ -1,5 +1,6 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { interval, of } from 'rxjs';
 import { catchError, map, startWith, switchMap } from 'rxjs/operators';
@@ -19,6 +20,7 @@ import {
 })
 export class AiActivity {
   private api = inject(Api);
+  private router = inject(Router);
 
   BotIcon           = Bot;
   ShieldOffIcon     = ShieldOff;
@@ -129,5 +131,9 @@ export class AiActivity {
   deleteSuppression(id: string) {
     if (!confirm('Delete this suppression rule permanently?')) return;
     this.api.deleteAiSuppression(id).subscribe();
+  }
+
+  openAiReport() {
+    this.router.navigate(['/ai-report']);
   }
 }

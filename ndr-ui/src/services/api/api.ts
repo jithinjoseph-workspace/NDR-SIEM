@@ -14,6 +14,8 @@ export interface SensorKey {
   zeek?: string;
   suricata?: string;
   vector?: string;
+  arkime?: string;
+  arkime_url?: string;
   active: boolean;
   created_at: string;
   last_seen: string;

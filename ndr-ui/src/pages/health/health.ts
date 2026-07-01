@@ -80,23 +80,8 @@ export class Health implements OnInit, OnDestroy {
     });
 
     this.loadSensorHealth();
-    this.loadArkimeStatus();
   }
 
-  loadArkimeStatus() {
-    this.arkime.getStatus().subscribe({
-      next: (data: any) => {
-        const status = data.status === 'online' ? 'running' : 'stopped';
-        this.updateStatus('arkime', status);
-        this.arkimeUrl = data.arkime_url || '';
-        this.cdr.detectChanges();
-      },
-      error: () => {
-        this.updateStatus('arkime', 'stopped');
-        this.cdr.detectChanges();
-      },
-    });
-  }
 
   loadSensorHealth() {
     const user = this.auth.getUser() || {};
@@ -115,13 +100,19 @@ export class Health implements OnInit, OnDestroy {
         this.updateStatus('zeek', this.rollupServiceStatus(sensors, 'zeek'));
         this.updateStatus('suricata', this.rollupServiceStatus(sensors, 'suricata'));
         this.updateStatus('vector', this.rollupServiceStatus(sensors, 'vector'));
+        this.updateStatus('arkime', this.rollupServiceStatus(sensors, 'arkime'));
+        
+        const arkimeSensors = sensors.filter(s => s.arkime_url);
+        if (arkimeSensors.length > 0) {
+          this.arkimeUrl = arkimeSensors[0].arkime_url!;
+        }
         this.cdr.detectChanges();
       },
       error: (err) => {
         this.activeSensors = 0;
         this.onlineSensors = 0;
         this.lastSensorSeen = err.message || 'API Error';
-        ['zeek', 'suricata', 'vector'].forEach(service => this.updateStatus(service, 'unknown'));
+        ['zeek', 'suricata', 'vector', 'arkime'].forEach(service => this.updateStatus(service, 'unknown'));
         this.cdr.detectChanges();
       }
     });
@@ -142,13 +133,14 @@ export class Health implements OnInit, OnDestroy {
 
   private isSensorOnline(sensor: SensorKey): boolean {
     if (!sensor.last_seen) return false;
-    const lastSeenMs = new Date(sensor.last_seen).getTime();
-    return !Number.isNaN(lastSeenMs) && Date.now() - lastSeenMs <= 2 * 60 * 1000;
+    const ts = sensor.last_seen.includes('T') ? sensor.last_seen : sensor.last_seen.replace(' ', 'T') + 'Z';
+    const lastSeenMs = new Date(ts).getTime();
+    return !Number.isNaN(lastSeenMs) && Date.now() - lastSeenMs <= 6 * 60 * 1000;
   }
 
   private rollupServiceStatus(
     sensors: SensorKey[],
-    service: 'zeek' | 'suricata' | 'vector'
+    service: 'zeek' | 'suricata' | 'vector' | 'arkime'
   ): string {
     const onlineSensors = sensors.filter(sensor => this.isSensorOnline(sensor));
     if (onlineSensors.length === 0) return sensors.length ? 'stopped' : 'unknown';
@@ -161,7 +153,11 @@ export class Health implements OnInit, OnDestroy {
 
   private getLatestSeen(sensors: SensorKey[]): string {
     const latest = sensors
-      .map(sensor => sensor.last_seen ? new Date(sensor.last_seen).getTime() : 0)
+      .map(sensor => {
+        if (!sensor.last_seen) return 0;
+        const ts = sensor.last_seen.includes('T') ? sensor.last_seen : sensor.last_seen.replace(' ', 'T') + 'Z';
+        return new Date(ts).getTime();
+      })
       .filter(value => !Number.isNaN(value))
       .sort((a, b) => b - a)[0];
 
