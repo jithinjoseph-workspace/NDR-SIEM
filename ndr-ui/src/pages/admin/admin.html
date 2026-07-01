@@ -700,6 +700,9 @@
           <span class="status-pill" *ngIf="p.key_set">Key set</span>
         </div>
         <div class="row-actions action-row">
+          <button class="icon-button" (click)="editProvider(p)" title="Edit">
+            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+          </button>
           <button class="icon-button" (click)="testProvider(p)" [disabled]="testingProvider === p.name" title="Test">
             <lucide-icon [name]="testingProvider === p.name ? LoadingIcon : TestIcon" class="w-4 h-4" [class.spin]="testingProvider === p.name"></lucide-icon>
           </button>
@@ -715,8 +718,8 @@
       <div class="modal-panel">
         <div class="modal-head">
           <div>
-            <h3>Add Provider</h3>
-            <p>Configure a new AI provider.</p>
+            <h3>{{ isEditingProvider ? 'Edit Provider' : 'Add Provider' }}</h3>
+            <p>{{ isEditingProvider ? 'Update the existing AI provider configuration.' : 'Configure a new AI provider.' }}</p>
           </div>
           <button type="button" class="icon-button" (click)="showAddProviderForm = false; resetNewProvider()">
             <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
@@ -725,7 +728,7 @@
 
         <label class="form-field">
           <span>Name</span>
-          <input type="text" [(ngModel)]="newProvider.name" placeholder="e.g. Groq-70B" />
+          <input type="text" [(ngModel)]="newProvider.name" placeholder="e.g. Groq-70B" [disabled]="isEditingProvider" />
         </label>
 
         <label class="form-field">
@@ -736,7 +739,7 @@
         </label>
 
         <label class="form-field">
-          <span>API Key <small>(required)</small></span>
+          <span>API Key <small *ngIf="!isEditingProvider">(required)</small><small *ngIf="isEditingProvider">(leave blank to keep current)</small></span>
           <div style="display: flex; gap: 8px; width: 100%;">
             <input [type]="showProviderKey ? 'text' : 'password'" [(ngModel)]="newProvider.api_key" placeholder="Paste API key" style="flex: 1;" />
             <button class="secondary-action compact-action" (click)="showProviderKey = !showProviderKey" type="button">
@@ -778,9 +781,9 @@
             <lucide-icon [name]="testingProvider === '__new__' ? LoadingIcon : TestIcon" class="w-4 h-4" [class.spin]="testingProvider === '__new__'"></lucide-icon>
             Test Connection
           </button>
-          <button class="primary-action" (click)="saveProvider()" [disabled]="savingProvider || !newProvider.name || !newProvider.api_key">
+          <button class="primary-action" (click)="saveProvider()" [disabled]="savingProvider || !newProvider.name || (!newProvider.api_key && !isEditingProvider)">
             <lucide-icon [name]="savingProvider ? LoadingIcon : SaveIcon" class="w-4 h-4" [class.spin]="savingProvider"></lucide-icon>
-            {{ savingProvider ? 'Saving...' : 'Save Provider' }}
+            {{ savingProvider ? 'Saving...' : (isEditingProvider ? 'Save Changes' : 'Save Provider') }}
           </button>
           <button class="secondary-action" (click)="showAddProviderForm = false; resetNewProvider()">Cancel</button>
         </div>

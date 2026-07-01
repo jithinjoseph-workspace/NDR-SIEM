@@ -24,8 +24,8 @@ export class Health implements OnInit, OnDestroy {
   lastSensorSeen = '';
 
   services: any[] = [
-    { name: 'Zeek IDS',        status: 'unknown', type: 'zeek',       label: 'Tenant Sensor'     },
-    { name: 'Suricata EVE',    status: 'unknown', type: 'suricata',   label: 'Tenant Sensor'     },
+    { name: 'Agent-Z IDS',        status: 'unknown', type: 'zeek',       label: 'Tenant Sensor'     },
+    { name: 'Agent-S EVE',    status: 'unknown', type: 'suricata',   label: 'Tenant Sensor'     },
     { name: 'Vector Pipeline', status: 'unknown', type: 'vector',     label: 'Tenant Sensor'     },
     { name: 'Arkime PCAP',     status: 'unknown', type: 'arkime',     label: 'Tenant Sensor'     },
     { name: 'Kafka Broker',    status: 'unknown', type: 'kafka',      label: 'Platform Service'  },

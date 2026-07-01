@@ -69,7 +69,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
   permissionOptions: PermissionOption[] = [
     { key: 'dashboard', label: 'Dashboard', description: 'Operational overview and metrics' },
     { key: 'alerts', label: 'Alerts', description: 'Correlation hits and alert triage' },
-    { key: 'logs', label: 'Network Logs', description: 'Zeek and Suricata event records' },
+    { key: 'logs', label: 'Network Logs', description: 'Agent-Z and Agent-S event records' },
     { key: 'live', label: 'Live Stream', description: 'Real-time network activity' },
     { key: 'network-map', label: 'Network Map', description: 'Source and destination topology' },
     { key: 'intel', label: 'Threat Intel', description: 'IOC lookup and enrichment' },

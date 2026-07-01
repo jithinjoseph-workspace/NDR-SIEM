@@ -190,7 +190,7 @@ export class AiReport {
   });
 
   /**
-   * Zeek/Suricata ratio:
+   * Agent-Z/Agent-S ratio:
    *   Shows sensor contribution split from real stats data.
    */
   kpiZeekRatio = computed(() => {
@@ -327,8 +327,8 @@ Verified data:
 - Report period: ${period}
 - Total network events: ${stats.events_total?.toLocaleString() ?? 'N/A'}
 - Total correlation hits: ${stats.hits_total?.toLocaleString() ?? 'N/A'}
-- Zeek sensor events: ${stats.zeek_events?.toLocaleString() ?? 'N/A'}
-- Suricata sensor events: ${stats.suricata_events?.toLocaleString() ?? 'N/A'}
+- Agent-Z sensor events: ${stats.zeek_events?.toLocaleString() ?? 'N/A'}
+- Agent-S sensor events: ${stats.suricata_events?.toLocaleString() ?? 'N/A'}
 - Critical alerts: ${sev.critical ?? 0}, High: ${sev.high ?? 0}, Medium: ${sev.medium ?? 0}, Low: ${sev.low ?? 0}
 - Total alerts: ${total}
 - AI threat analyses generated: ${analyses.length}

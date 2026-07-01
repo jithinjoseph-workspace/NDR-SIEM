@@ -39,7 +39,7 @@ export class Rules implements OnInit {
     {
       value: 'event_type',
       label: 'Event Type',
-      description: 'Type of event from Suricata',
+      description: 'Type of event from Agent-S',
       examples: ['alert', 'flow', 'dns', 'http', 'tls', 'quic']
     },
     {
@@ -63,37 +63,37 @@ export class Rules implements OnInit {
     {
       value: 'conn_state',
       label: 'Connection State',
-      description: 'Zeek connection state code',
+      description: 'Agent-Z connection state code',
       examples: ['S0', 'REJ', 'SF', 'OTH', 'RSTO']
     },
     {
       value: 'network_protocol',
       label: 'Application Protocol',
-      description: 'Layer 7 protocol detected by Zeek',
+      description: 'Layer 7 protocol detected by Agent-Z',
       examples: ['dns', 'http', 'ssl', 'ssh', 'ftp', 'smtp']
     },
     {
       value: 'alert.severity',
       label: 'Alert Severity',
-      description: 'Suricata severity (1=high, 2=med, 3=low)',
+      description: 'Agent-S severity (1=high, 2=med, 3=low)',
       examples: ['1', '2', '3']
     },
     {
       value: 'alert.signature',
       label: 'Alert Signature',
-      description: 'Suricata rule signature name',
+      description: 'Agent-S rule signature name',
       examples: ['ET MALWARE', 'ET SCAN', 'ET POLICY']
     },
     {
       value: 'alert.category',
       label: 'Alert Category',
-      description: 'Suricata alert category',
+      description: 'Agent-S alert category',
       examples: ['Malware', 'Exploit', 'Policy Violation']
     },
     {
       value: 'log_source',
-      label: 'Log Source (Zeek)',
-      description: 'Zeek log type',
+      label: 'Log Source (Agent-Z)',
+      description: 'Agent-Z log type',
       examples: ['conn', 'dns', 'http', 'ssl', 'ssh']
     },
   ];

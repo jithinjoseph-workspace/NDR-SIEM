@@ -401,7 +401,7 @@
           <div *ngIf="activeContentSection()==='dns'" class="content-section">
             <!-- Zeek DNS -->
             <div class="source-section">
-              <div class="source-label zeek-label">Zeek DNS Lookups ({{ bundleContents()?.zeek_dns?.total || 0 }})</div>
+              <div class="source-label zeek-label">Agent-Z DNS Lookups ({{ bundleContents()?.zeek_dns?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.zeek_dns?.resolves_to_target_ip" class="warning-row">
                 DNS query resolved to target IP — consistent with C2 domain lookup.
               </div>
@@ -419,12 +419,12 @@
                   <span *ngIf="d.rejected" class="warn-badge">REJECTED</span>
                 </div>
               </div>
-              <div *ngIf="!bundleContents()?.zeek_dns?.total" class="empty">No Zeek DNS logs for this session uid.</div>
+              <div *ngIf="!bundleContents()?.zeek_dns?.total" class="empty">No Agent-Z DNS logs for this session uid.</div>
             </div>
 
             <!-- Suricata DNS -->
             <div class="source-section">
-              <div class="source-label suri-label">Suricata DNS Events ({{ bundleContents()?.suricata_dns?.total || 0 }})</div>
+              <div class="source-label suri-label">Agent-S DNS Events ({{ bundleContents()?.suricata_dns?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.suricata_dns?.resolves_to_target_ip" class="warning-row">
                 DNS query resolved to target IP — consistent with C2 domain lookup.
               </div>
@@ -437,7 +437,7 @@
                 </div>
                 <div class="dns-meta">{{ d.src_ip }} → {{ d.dns_server }} | Proto: {{ d.proto }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.suricata_dns?.total" class="empty">No Suricata DNS events for this community_id.</div>
+              <div *ngIf="!bundleContents()?.suricata_dns?.total" class="empty">No Agent-S DNS events for this community_id.</div>
             </div>
           </div>
 
@@ -445,7 +445,7 @@
           <div *ngIf="activeContentSection()==='http'" class="content-section">
             <!-- Zeek HTTP -->
             <div class="source-section">
-              <div class="source-label zeek-label">Zeek HTTP ({{ bundleContents()?.zeek_http?.total || 0 }})</div>
+              <div class="source-label zeek-label">Agent-Z HTTP ({{ bundleContents()?.zeek_http?.total || 0 }})</div>
               <div *ngFor="let h of bundleContents()?.zeek_http?.requests || []" class="http-row">
                 <div class="http-header">
                   <span class="http-method" [class.post]="h.method==='POST'" [class.get]="h.method==='GET'">{{ h.method }}</span>
@@ -458,12 +458,12 @@
                 </div>
                 <div class="http-time">{{ h.timestamp }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.zeek_http?.total" class="empty">No Zeek HTTP logs for this session uid.</div>
+              <div *ngIf="!bundleContents()?.zeek_http?.total" class="empty">No Agent-Z HTTP logs for this session uid.</div>
             </div>
 
             <!-- Suricata HTTP -->
             <div class="source-section">
-              <div class="source-label suri-label">Suricata HTTP ({{ bundleContents()?.suricata_http?.total || 0 }})</div>
+              <div class="source-label suri-label">Agent-S HTTP ({{ bundleContents()?.suricata_http?.total || 0 }})</div>
               <div *ngFor="let h of bundleContents()?.suricata_http?.requests || []" class="http-row">
                 <div class="http-header">
                   <span class="http-method" [class.post]="h.method==='POST'" [class.get]="h.method==='GET'">{{ h.method }}</span>
@@ -478,7 +478,7 @@
                 </div>
                 <div class="http-time">{{ h.timestamp }} | Proto: {{ h.protocol }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.suricata_http?.total" class="empty">No Suricata HTTP events for this community_id.</div>
+              <div *ngIf="!bundleContents()?.suricata_http?.total" class="empty">No Agent-S HTTP events for this community_id.</div>
             </div>
           </div>
 
@@ -486,7 +486,7 @@
           <div *ngIf="activeContentSection()==='ssl'" class="content-section">
             <!-- Zeek SSL -->
             <div class="source-section">
-              <div class="source-label zeek-label">Zeek TLS/SSL ({{ bundleContents()?.zeek_ssl?.total || 0 }})</div>
+              <div class="source-label zeek-label">Agent-Z TLS/SSL ({{ bundleContents()?.zeek_ssl?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.zeek_ssl?.any_self_signed" class="warning-row">
                 Self-signed certificate detected — typical of attacker-controlled infrastructure.
               </div>
@@ -508,12 +508,12 @@
                 </div>
                 <div class="ssl-meta">{{ s.timestamp }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.zeek_ssl?.total" class="empty">No Zeek TLS/SSL logs for this session uid.</div>
+              <div *ngIf="!bundleContents()?.zeek_ssl?.total" class="empty">No Agent-Z TLS/SSL logs for this session uid.</div>
             </div>
 
             <!-- Suricata TLS -->
             <div class="source-section">
-              <div class="source-label suri-label">Suricata TLS ({{ bundleContents()?.suricata_tls?.total || 0 }})</div>
+              <div class="source-label suri-label">Agent-S TLS ({{ bundleContents()?.suricata_tls?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.suricata_tls?.any_self_signed" class="warning-row">
                 Self-signed certificate detected.
               </div>
@@ -535,7 +535,7 @@
                 </div>
                 <div class="ssl-meta">{{ s.timestamp }} | {{ s.src_ip }} → {{ s.dest_ip }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.suricata_tls?.total" class="empty">No Suricata TLS events for this community_id.</div>
+              <div *ngIf="!bundleContents()?.suricata_tls?.total" class="empty">No Agent-S TLS events for this community_id.</div>
             </div>
           </div>
 
@@ -543,7 +543,7 @@
           <div *ngIf="activeContentSection()==='files'" class="content-section">
             <!-- Zeek Files -->
             <div class="source-section">
-              <div class="source-label zeek-label">Zeek File Transfers ({{ bundleContents()?.zeek_files?.total || 0 }})</div>
+              <div class="source-label zeek-label">Agent-Z File Transfers ({{ bundleContents()?.zeek_files?.total || 0 }})</div>
               <div *ngFor="let f of bundleContents()?.zeek_files?.files || []" class="file-row">
                 <div class="file-header">
                   <span class="file-name">{{ f.filename || '(unnamed)' }}</span>
@@ -561,12 +561,12 @@
                 </div>
                 <div class="file-meta">{{ f.timestamp }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.zeek_files?.total" class="empty">No Zeek file logs for this session uid.</div>
+              <div *ngIf="!bundleContents()?.zeek_files?.total" class="empty">No Agent-Z file logs for this session uid.</div>
             </div>
 
             <!-- Suricata File Info -->
             <div class="source-section">
-              <div class="source-label suri-label">Suricata File Info ({{ bundleContents()?.suricata_files?.total || 0 }})</div>
+              <div class="source-label suri-label">Agent-S File Info ({{ bundleContents()?.suricata_files?.total || 0 }})</div>
               <div *ngFor="let f of bundleContents()?.suricata_files?.files || []" class="file-row">
                 <div class="file-header">
                   <span class="file-name">{{ f.filename || '(unnamed)' }}</span>
@@ -578,7 +578,7 @@
                 <div *ngIf="f.user_agent" class="ua-tag">UA: {{ f.user_agent }}</div>
                 <div class="file-meta">{{ f.timestamp }} | {{ f.src_ip }} → {{ f.dest_ip }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.suricata_files?.total" class="empty">No Suricata fileinfo events for this community_id.</div>
+              <div *ngIf="!bundleContents()?.suricata_files?.total" class="empty">No Agent-S fileinfo events for this community_id.</div>
             </div>
           </div>
 
@@ -586,7 +586,7 @@
           <div *ngIf="activeContentSection()==='weird'" class="content-section">
             <!-- Zeek Weird -->
             <div class="source-section">
-              <div class="source-label zeek-label">Zeek Protocol Anomalies ({{ bundleContents()?.zeek_weird?.total || 0 }})</div>
+              <div class="source-label zeek-label">Agent-Z Protocol Anomalies ({{ bundleContents()?.zeek_weird?.total || 0 }})</div>
               <div *ngFor="let w of bundleContents()?.zeek_weird?.events || []" class="weird-row">
                 <div class="weird-header">
                   <span class="weird-type">{{ w.weird_type }}</span>
@@ -595,12 +595,12 @@
                 <div *ngIf="w.detail" class="weird-detail">{{ w.detail }}</div>
                 <div class="weird-ips">{{ w.src_ip }} → {{ w.dst_ip }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.zeek_weird?.total" class="empty">No Zeek protocol anomalies for this session uid.</div>
+              <div *ngIf="!bundleContents()?.zeek_weird?.total" class="empty">No Agent-Z protocol anomalies for this session uid.</div>
             </div>
 
             <!-- Suricata Anomaly -->
             <div class="source-section">
-              <div class="source-label suri-label">Suricata Anomalies ({{ bundleContents()?.suricata_anomaly?.total || 0 }})</div>
+              <div class="source-label suri-label">Agent-S Anomalies ({{ bundleContents()?.suricata_anomaly?.total || 0 }})</div>
               <div *ngFor="let w of bundleContents()?.suricata_anomaly?.events || []" class="weird-row">
                 <div class="weird-header">
                   <span class="weird-type">{{ w.type }}</span>
@@ -610,13 +610,13 @@
                 <div *ngIf="w.event" class="weird-detail">{{ w.event }}</div>
                 <div class="weird-ips">{{ w.src_ip }} → {{ w.dest_ip }} | Proto: {{ w.proto }}</div>
               </div>
-              <div *ngIf="!bundleContents()?.suricata_anomaly?.total" class="empty">No Suricata anomaly events for this community_id.</div>
+              <div *ngIf="!bundleContents()?.suricata_anomaly?.total" class="empty">No Agent-S anomaly events for this community_id.</div>
             </div>
           </div>
 
           <!-- ALL ALERTS -->
           <div *ngIf="activeContentSection()==='alerts'" class="content-section">
-            <h4>Suricata / NDR Alerts ({{ bundleContents()?.suricata_alerts?.alerts?.length || 0 }})</h4>
+            <h4>Agent-S / NDR Alerts ({{ bundleContents()?.suricata_alerts?.alerts?.length || 0 }})</h4>
             <div *ngFor="let a of bundleContents()?.suricata_alerts?.alerts || []"
                  class="alert-row" [class]="'sev-' + a.severity?.toLowerCase()">
               <div class="alert-header">

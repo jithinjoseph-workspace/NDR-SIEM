@@ -312,13 +312,13 @@
 
         <div class="ar-kpi-card">
           <div class="ar-kpi-top">
-            <span class="ar-kpi-label">Zeek / Suricata Split</span>
-            <span class="ar-kpi-info" title="Event volume contribution from Zeek vs Suricata sensors">ⓘ</span>
+            <span class="ar-kpi-label">Agent-Z / Agent-S Split</span>
+            <span class="ar-kpi-info" title="Event volume contribution from Agent-Z vs Agent-S sensors">ⓘ</span>
           </div>
           <div class="ar-kpi-value" [class.kpi-na]="!kpiZeekRatio()">
             {{ kpiZeekRatio() ?? 'N/A' }}
           </div>
-          <div class="ar-kpi-formula">Zeek events / Suricata events</div>
+          <div class="ar-kpi-formula">Agent-Z events / Agent-S events</div>
           <div class="ar-kpi-data">{{ stats()?.zeek_events?.toLocaleString() ?? 0 }} / {{ stats()?.suricata_events?.toLocaleString() ?? 0 }}</div>
         </div>
 

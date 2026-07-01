@@ -108,6 +108,7 @@ export class Admin implements OnInit, OnDestroy {
   showAddProviderForm = false;
   testingProvider = '';
   showProviderKey = false;
+  isEditingProvider = false;
   newProvider = {
     name: '', provider_type: 'custom', api_key: '', model: '',
     base_url: '', endpoint_path: '/v1/chat/completions',
@@ -1808,11 +1809,18 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   resetNewProvider() {
+    this.isEditingProvider = false;
     this.newProvider = {
       name: '', provider_type: 'custom', api_key: '', model: '',
       base_url: '', endpoint_path: '/v1/chat/completions',
       msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
     };
+  }
+
+  editProvider(p: AiProvider) {
+    this.isEditingProvider = true;
+    this.newProvider = { ...p, api_key: '' };
+    this.showAddProviderForm = true;
   }
 
   get defaultBaseUrl(): string {
