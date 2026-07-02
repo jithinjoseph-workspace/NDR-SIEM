@@ -8,13 +8,8 @@
   </div>
 
   <nav class="nav-list">
-    <a
-      *ngFor="let item of navItems"
-      [routerLink]="item.route"
-      [queryParams]="item.queryParams || null"
-      [class.active]="isActive(item)"
-      class="nav-link"
-    >
+    <a *ngFor="let item of navItems" [routerLink]="item.route" [queryParams]="item.queryParams || null"
+      [class.active]="isActive(item)" class="nav-link">
       <lucide-icon [name]="item.icon" class="w-5 h-5"></lucide-icon>
       <span>{{ item.label }}</span>
     </a>

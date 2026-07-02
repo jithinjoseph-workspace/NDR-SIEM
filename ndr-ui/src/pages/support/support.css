@@ -121,23 +121,25 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
   margin-bottom: 14px;
-  border: 1px solid rgba(110, 117, 136, 0.16);
-  border-radius: 8px;
-  background: rgba(110, 117, 136, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
   overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
 }
 
 .stat-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
-  background: rgba(11, 19, 35, 0.86);
-  transition: background 160ms ease;
+  padding: 16px 20px;
+  background: rgba(13, 20, 36, 0.7);
+  backdrop-filter: blur(10px);
+  transition: background 160ms ease, transform 160ms ease;
 }
 
 .stat-card:hover {
-  background: rgba(16, 25, 43, 0.92);
+  background: rgba(18, 26, 44, 0.9);
 }
 
 .stat-icon {
@@ -219,15 +221,16 @@
    PANELS
 ───────────────────────────────────────────────────────── */
 .panel {
-  border: 1px solid rgba(110, 117, 136, 0.16);
-  border-radius: 8px;
-  background: rgba(16, 25, 43, 0.92);
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.18);
-  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(13, 20, 36, 0.6);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  padding: 24px;
 }
 
 .request-panel {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -320,44 +323,50 @@ input,
 select,
 textarea {
   width: 100%;
-  border: 1px solid rgba(110, 117, 136, 0.2);
-  border-radius: 7px;
-  background: rgba(7, 14, 29, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
   color: #f7f9ff;
   font: inherit;
   font-size: 13px;
   outline: none;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
 input,
 select {
-  height: 42px;
-  padding: 0 13px;
+  height: 44px;
+  padding: 0 16px;
 }
 
 select {
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%238792a7'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 12px center;
+  background-position: right 14px center;
   background-size: 16px;
-  padding-right: 38px;
+  padding-right: 40px;
   cursor: pointer;
 }
 
+select option {
+  background-color: #0f172a; /* dark background for native dropdown */
+  color: #f7f9ff;
+}
+
 textarea {
-  padding: 12px 13px;
+  padding: 14px 16px;
   resize: vertical;
   line-height: 1.6;
-  min-height: 110px;
+  min-height: 120px;
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: rgba(105, 246, 184, 0.42);
-  box-shadow: 0 0 0 3px rgba(105, 246, 184, 0.08);
+  border-color: rgba(105, 246, 184, 0.4);
+  background: rgba(105, 246, 184, 0.02);
+  box-shadow: 0 0 12px rgba(105, 246, 184, 0.12);
 }
 
 .form-actions {
@@ -397,19 +406,26 @@ textarea:focus {
 .btn-primary {
   background: #69f6b8;
   color: #06111e;
+  border-radius: 8px;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(105, 246, 184, 0.3);
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 4px 20px rgba(105, 246, 184, 0.45);
 }
 
 /* Ghost — matches project's secondary outlined button */
 .btn-ghost {
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  background: #ffffff;
-  color: #374151;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: #cbd5e1;
 }
 
 .btn-ghost:hover:not(:disabled) {
-  border-color: rgba(100, 116, 139, 0.5);
-  background: #f1f5f9;
-  color: #111827;
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f8fafc;
 }
 
 /* Ghost when it marks an item as done (Reviewed) */
@@ -496,17 +512,19 @@ textarea:focus {
 .message-card {
   display: grid;
   gap: 0;
-  border: 1px solid rgba(200, 210, 225, 0.55);
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(20, 28, 48, 0.5);
   overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  color: #f7f9ff;
 }
 
 .message-card:hover {
-  border-color: rgba(103, 168, 255, 0.5);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  border-color: rgba(103, 168, 255, 0.3);
+  background: rgba(26, 36, 60, 0.6);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
 /* Card Header */
@@ -515,9 +533,9 @@ textarea:focus {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid rgba(200, 210, 225, 0.5);
-  background: #f8fafc;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .card-title-group {
@@ -529,21 +547,21 @@ textarea:focus {
 
 .msg-icon {
   display: grid;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   place-items: center;
-  border: 1px solid rgba(103, 168, 255, 0.3);
-  border-radius: 6px;
+  border: 1px solid rgba(103, 168, 255, 0.2);
+  border-radius: 8px;
   background: rgba(103, 168, 255, 0.1);
-  color: #3b82f6;
+  color: #67a8ff;
   margin-top: 1px;
 }
 
 .card-title-text h4 {
   margin: 0 0 4px;
-  color: #0f172a;
-  font-size: 13px;
+  color: #f7f9ff;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.3;
 }
@@ -551,18 +569,18 @@ textarea:focus {
 .card-meta {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-wrap: wrap;
-  color: #64748b;
+  color: #94a3b8;
   font-size: 11px;
 }
 
 .meta-tag {
-  border: 1px solid rgba(100, 116, 139, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
-  background: rgba(100, 116, 139, 0.1);
-  color: #475569;
-  padding: 1px 7px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd5e1;
+  padding: 2px 8px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -570,7 +588,7 @@ textarea:focus {
 }
 
 .meta-sep {
-  color: #94a3b8;
+  color: #475569;
 }
 
 .meta-role {
@@ -639,12 +657,12 @@ textarea:focus {
 
 /* Card Body */
 .card-body {
-  padding: 10px 14px;
+  padding: 12px 16px;
 }
 
 .message-body {
   margin: 0;
-  color: #1e293b;
+  color: #cbd5e1;
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -652,9 +670,9 @@ textarea:focus {
 
 /* Reply Box */
 .reply-box {
-  margin: 0 14px;
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  border-radius: 6px;
+  margin: 0 16px 12px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 8px;
   background: rgba(16, 185, 129, 0.05);
   overflow: hidden;
 }
@@ -662,30 +680,30 @@ textarea:focus {
 .reply-box-header {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 11px;
+  gap: 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid rgba(16, 185, 129, 0.15);
-  background: rgba(16, 185, 129, 0.06);
-  color: #374151;
+  background: rgba(16, 185, 129, 0.1);
+  color: #a7f3d0;
   font-size: 11px;
 }
 
 .reply-box-header strong {
-  color: #111827;
+  color: #ecfdf5;
   font-weight: 700;
 }
 
 .reply-box-header small {
   margin-left: auto;
-  color: #6b7280;
+  color: #6ee7b7;
   font-family: var(--font-mono);
   font-size: 10px;
 }
 
 .reply-text {
   margin: 0;
-  padding: 9px 11px;
-  color: #111827;
+  padding: 12px;
+  color: #d1fae5;
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -695,13 +713,13 @@ textarea:focus {
 .forward-note {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 0 14px;
-  padding: 7px 11px;
-  border: 1px solid rgba(37, 99, 235, 0.3);
-  border-radius: 6px;
-  background: rgba(37, 99, 235, 0.08);
-  color: #1e3a8a;
+  gap: 8px;
+  margin: 0 16px 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
   font-size: 11px;
   font-weight: 700;
 }
@@ -711,24 +729,24 @@ textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 9px 14px;
-  border-top: 1px solid rgba(200, 210, 225, 0.55);
-  background: #f1f5f9;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.01);
   flex-wrap: wrap;
 }
 
 .card-timestamps {
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: #475569;
+  gap: 8px;
+  color: #64748b;
   font-size: 11px;
   font-weight: 500;
 }
 
 .ts-sep {
-  color: #94a3b8;
+  color: #475569;
 }
 
 .card-actions {
@@ -743,17 +761,17 @@ textarea:focus {
 ───────────────────────────────────────────────────────── */
 .reply-composer {
   display: grid;
-  gap: 10px;
-  padding: 12px 14px;
-  border-top: 1px solid rgba(200, 210, 225, 0.55);
-  background: #f8fafc;
+  gap: 12px;
+  padding: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .composer-label {
   display: flex;
   align-items: center;
-  gap: 7px;
-  color: #374151;
+  gap: 8px;
+  color: #cbd5e1;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -761,9 +779,9 @@ textarea:focus {
 }
 
 .reply-composer textarea {
-  border-color: rgba(148, 163, 184, 0.4);
-  background: #ffffff;
-  color: #0f172a;
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.2);
+  color: #f7f9ff;
 }
 
 .reply-composer textarea:focus {

@@ -17,3 +17,9 @@ html, body {
   color: var(--color-on-surface-variant, #dfe5fa);
   font-family: var(--font-sans);
 }
+
+/* Global fix for select dropdown options in dark theme */
+select option {
+  background-color: #0f172a;
+  color: #f7f9ff;
+}
