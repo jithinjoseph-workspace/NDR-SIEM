@@ -31,7 +31,7 @@
       <lucide-icon [name]="HelpCircleIcon" class="w-5 h-5"></lucide-icon>
     </button>
 
-    <div class="system-card">
+    <div *ngIf="currentUser?.role !== 'admin' && currentUser?.role !== 'tenant_admin'" class="system-card">
       <span>System Status</span>
       <strong [class.degraded]="systemStatus !== 'OPERATIONAL'">
         <i></i>
