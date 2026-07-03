@@ -33,6 +33,10 @@
       Suppression Decisions
       <span class="badge">{{ suppressions().length }}</span>
     </button>
+    <button class="tab-btn ai-report-btn" (click)="openAiReport()" title="Generate AI-powered threat intelligence report">
+      <lucide-icon [name]="BotIcon" class="w-4 h-4"></lucide-icon>
+      AI Report
+    </button>
   </div>
 
   <!-- Loading -->

@@ -402,7 +402,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
         } else {
           this.router.navigate(['/evidence']);
         }
-        this.addBotMessage("Downloading the evidence bundle! It has 15 files including PCAP, Zeek logs, DNS queries, and the attack narrative.", 'cheer');
+        this.addBotMessage("Downloading the evidence bundle! It has 15 files including PCAP, Agent-Z logs, DNS queries, and the attack narrative.", 'cheer');
         break;
 
       case 'timeline':

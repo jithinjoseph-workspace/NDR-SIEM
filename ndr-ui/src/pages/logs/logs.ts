@@ -4,13 +4,14 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
 import { Subscription } from 'rxjs';
-import { LucideAngularModule, Search, Terminal, RefreshCw } from 'lucide-angular';
+import { LucideAngularModule, Search, Terminal, RefreshCw, FileText, Activity } from 'lucide-angular';
 import { ActivatedRoute } from '@angular/router';
+import { Live } from '../live/live';
 
 @Component({
   selector: 'app-logs',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, FormsModule],
+  imports: [CommonModule, LucideAngularModule, FormsModule, Live],
   templateUrl: './logs.html',
   styleUrl: './logs.css'
 })
@@ -20,10 +21,13 @@ export class Logs implements OnInit, OnDestroy {
   searchText: string = '';
   totalCount: number = 0;
   loading: boolean = true;
+  activeTab: 'logs' | 'live' = 'logs';
 
   TerminalIcon = Terminal;
   SearchIcon = Search;
   RefreshIcon = RefreshCw;
+  FileTextIcon = FileText;
+  ActivityIcon = Activity;
 
   private subs: Subscription[] = [];
 

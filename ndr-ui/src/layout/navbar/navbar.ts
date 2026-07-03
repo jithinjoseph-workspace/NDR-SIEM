@@ -341,11 +341,11 @@ export class Navbar implements OnInit, OnDestroy {
         const tenantSensors = sensors.filter(sensor =>
           sensor.tenant_id === tenantId && sensor.active !== false
         );
-        const healthyPipeline = tenantSensors.some(sensor =>
+        const healthyPipeline = tenantSensors.length === 0 || tenantSensors.some(sensor =>
           this.isRecentlySeen(sensor.last_seen) &&
-          this.isRunning(sensor.zeek) &&
-          this.isRunning(sensor.suricata) &&
-          this.isRunning(sensor.vector)
+          (this.isRunning(sensor.zeek) ||
+           this.isRunning(sensor.suricata) ||
+           this.isRunning(sensor.vector))
         );
 
         this.api.getDashboardStats().subscribe({

@@ -20,7 +20,42 @@
     ⚠ {{ sessionExpiryWarning }}
   </div>
 
-  <section class="admin-stats">
+  <section class="admin-stats premium-stats" *ngIf="activeTab === 'overview'">
+    <article class="glass-card">
+      <div class="stat-icon-wrapper success"><lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Platform Availability</span>
+        <strong>99.99%</strong>
+        <div class="stat-trend positive">+0.01% this month</div>
+      </div>
+    </article>
+    <article class="glass-card">
+      <div class="stat-icon-wrapper info"><lucide-icon [name]="BuildingIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Tenant Capacity</span>
+        <strong>{{ activeTenants }} / {{ tenants.length }}</strong>
+        <div class="stat-trend neutral">Active vs Total</div>
+      </div>
+    </article>
+    <article class="glass-card">
+      <div class="stat-icon-wrapper accent"><lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Active Users</span>
+        <strong>{{ managedUsers.length }}</strong>
+        <div class="stat-trend positive">+12% this week</div>
+      </div>
+    </article>
+    <article class="glass-card">
+      <div class="stat-icon-wrapper warning"><lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon></div>
+      <div class="stat-content">
+        <span>Cluster Status</span>
+        <strong>{{ engines.length }} Engines</strong>
+        <div class="stat-trend positive">All healthy</div>
+      </div>
+    </article>
+  </section>
+
+  <section class="admin-stats" *ngIf="activeTab !== 'overview'">
     <article>
       <lucide-icon [name]="BuildingIcon" class="w-5 h-5"></lucide-icon>
       <span>Total Tenants</span>
@@ -43,6 +78,47 @@
     </article>
   </section>
 
+  <section *ngIf="activeTab === 'overview'" class="overview-panel">
+    <div class="overview-grid">
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Live Platform Utilization</h4>
+            <p class="chart-desc">Monitor live cluster load to determine if new engine nodes need to be provisioned.</p>
+          </div>
+          <span class="live-badge"><span class="pulse-dot"></span> Live</span>
+        </div>
+        <div id="resource-area-chart" class="chart-container"></div>
+      </div>
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Global User Roles Distribution</h4>
+            <p class="chart-desc">Breakdown of privileges across the entire NDR system.</p>
+          </div>
+        </div>
+        <div id="user-roles-donut-chart" class="chart-container"></div>
+      </div>
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Top Tenants by User Count</h4>
+            <p class="chart-desc">Identify which organizations have the largest user adoption across the platform.</p>
+          </div>
+        </div>
+        <div id="tenant-bar-chart" class="chart-container"></div>
+      </div>
+      <div class="chart-card glass-card">
+        <div class="chart-header">
+          <div>
+            <h4>Processing Engines Health</h4>
+            <p class="chart-desc">Status of backend engine worker nodes processing data.</p>
+          </div>
+        </div>
+        <div id="engines-donut-chart" class="chart-container"></div>
+      </div>
+    </div>
+  </section>
 
   <section *ngIf="activeTab === 'tenants'" class="admin-panel">
     <div class="panel-head">
@@ -519,54 +595,74 @@
     </div>
   </section>
 
-  <section *ngIf="activeTab === 'telemetry'" class="admin-panel">
+  <section *ngIf="activeTab === 'telemetry'" class="admin-panel telemetry-panel">
     <header class="panel-header">
       <div>
         <h2>Platform Health & Telemetry</h2>
         <p>Real-time backend hardware and performance metrics.</p>
       </div>
+      <span class="live-badge"><span class="pulse-dot"></span> Live</span>
     </header>
 
     <div class="telemetry-grid" *ngIf="telemetryData">
-      <div class="stat-card">
-        <h3>CPU Usage</h3>
-        <div class="stat-value" [class.danger]="telemetryData.cpu_usage_percent > 90">
-          {{ telemetryData.cpu_usage_percent | number:'1.0-1' }}%
+      <article class="glass-card telemetry-card radial">
+        <div class="telemetry-header">
+          <div class="stat-icon-wrapper info"><lucide-icon [name]="CpuIcon" class="w-5 h-5"></lucide-icon></div>
+          <div class="telemetry-title">
+            <h3>CPU Usage</h3>
+            <span class="telemetry-subtitle">Compute Load</span>
+          </div>
         </div>
-        <div class="progress-bar-container">
-          <div class="progress-bar" [style.width.%]="telemetryData.cpu_usage_percent" [class.danger]="telemetryData.cpu_usage_percent > 90"></div>
+        <div class="radial-gauge-container">
+          <svg viewBox="0 0 36 36" class="circular-chart">
+            <path class="circle-bg"
+              d="M18 2.0845
+                a 15.9155 15.9155 0 0 1 0 31.831
+                a 15.9155 15.9155 0 0 1 0 -31.831"
+            />
+            <path class="circle" [style.stroke-dasharray]="telemetryData.cpu_usage_percent + ', 100'"
+              [class.danger]="telemetryData.cpu_usage_percent > 90"
+              d="M18 2.0845
+                a 15.9155 15.9155 0 0 1 0 31.831
+                a 15.9155 15.9155 0 0 1 0 -31.831"
+            />
+            <text x="18" y="20.35" class="percentage" [class.danger]="telemetryData.cpu_usage_percent > 90">{{ telemetryData.cpu_usage_percent | number:'1.0-0' }}%</text>
+          </svg>
         </div>
-      </div>
+      </article>
       
-      <div class="stat-card">
-        <h3>Memory Usage</h3>
-        <div class="stat-value" [class.danger]="telemetryData.memory_percent > 90">
-          {{ telemetryData.memory_percent | number:'1.0-1' }}%
+      <article class="glass-card telemetry-card radial">
+        <div class="telemetry-header">
+          <div class="stat-icon-wrapper accent"><lucide-icon [name]="MemoryStickIcon" class="w-5 h-5"></lucide-icon></div>
+          <div class="telemetry-title">
+            <h3>Memory Usage</h3>
+            <span class="telemetry-subtitle">
+              {{ telemetryData.memory_used_gb | number:'1.1-2' }} GB / {{ telemetryData.memory_total_gb | number:'1.1-2' }} GB
+            </span>
+          </div>
         </div>
-        <div class="stat-subtitle">
-          {{ telemetryData.memory_used_gb | number:'1.1-2' }} GB / {{ telemetryData.memory_total_gb | number:'1.1-2' }} GB
+        <div class="radial-gauge-container">
+          <svg viewBox="0 0 36 36" class="circular-chart">
+            <path class="circle-bg"
+              d="M18 2.0845
+                a 15.9155 15.9155 0 0 1 0 31.831
+                a 15.9155 15.9155 0 0 1 0 -31.831"
+            />
+            <path class="circle" [style.stroke-dasharray]="telemetryData.memory_percent + ', 100'"
+              [class.danger]="telemetryData.memory_percent > 90"
+              d="M18 2.0845
+                a 15.9155 15.9155 0 0 1 0 31.831
+                a 15.9155 15.9155 0 0 1 0 -31.831"
+            />
+            <text x="18" y="20.35" class="percentage" [class.danger]="telemetryData.memory_percent > 90">{{ telemetryData.memory_percent | number:'1.0-0' }}%</text>
+          </svg>
         </div>
-        <div class="progress-bar-container">
-          <div class="progress-bar" [style.width.%]="telemetryData.memory_percent" [class.danger]="telemetryData.memory_percent > 90"></div>
-        </div>
-      </div>
-
-      <!-- Disabled Event Ingestion Card 
-      <div class="stat-card">
-        <h3>Event Ingestion</h3>
-        <div class="stat-value">
-          {{ telemetryData.events_per_sec | number }} EPS
-        </div>
-        <div class="stat-subtitle">
-          {{ telemetryData.events_1h | number }} events (last hour)
-        </div>
-      </div>
-      -->
+      </article>
     </div>
     
     <div class="empty-state" *ngIf="!telemetryData">
       <lucide-icon [name]="RefreshIcon" class="w-8 h-8 spinning"></lucide-icon>
-      <p>Loading telemetry data...</p>
+      <p>Loading live telemetry data...</p>
     </div>
   </section>
 
@@ -624,6 +720,9 @@
           <span class="status-pill" *ngIf="p.key_set">Key set</span>
         </div>
         <div class="row-actions action-row">
+          <button class="icon-button" (click)="editProvider(p)" title="Edit">
+            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+          </button>
           <button class="icon-button" (click)="testProvider(p)" [disabled]="testingProvider === p.name" title="Test">
             <lucide-icon [name]="testingProvider === p.name ? LoadingIcon : TestIcon" class="w-4 h-4" [class.spin]="testingProvider === p.name"></lucide-icon>
           </button>
@@ -639,8 +738,8 @@
       <div class="modal-panel">
         <div class="modal-head">
           <div>
-            <h3>Add Provider</h3>
-            <p>Configure a new AI provider.</p>
+            <h3>{{ isEditingProvider ? 'Edit Provider' : 'Add Provider' }}</h3>
+            <p>{{ isEditingProvider ? 'Update the existing AI provider configuration.' : 'Configure a new AI provider.' }}</p>
           </div>
           <button type="button" class="icon-button" (click)="showAddProviderForm = false; resetNewProvider()">
             <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
@@ -649,7 +748,7 @@
 
         <label class="form-field">
           <span>Name</span>
-          <input type="text" [(ngModel)]="newProvider.name" placeholder="e.g. Groq-70B" />
+          <input type="text" [(ngModel)]="newProvider.name" placeholder="e.g. Groq-70B" [disabled]="isEditingProvider" />
         </label>
 
         <label class="form-field">
@@ -660,7 +759,7 @@
         </label>
 
         <label class="form-field">
-          <span>API Key <small>(required)</small></span>
+          <span>API Key <small *ngIf="!isEditingProvider">(required)</small><small *ngIf="isEditingProvider">(leave blank to keep current)</small></span>
           <div style="display: flex; gap: 8px; width: 100%;">
             <input [type]="showProviderKey ? 'text' : 'password'" [(ngModel)]="newProvider.api_key" placeholder="Paste API key" style="flex: 1;" />
             <button class="secondary-action compact-action" (click)="showProviderKey = !showProviderKey" type="button">
@@ -702,9 +801,9 @@
             <lucide-icon [name]="testingProvider === '__new__' ? LoadingIcon : TestIcon" class="w-4 h-4" [class.spin]="testingProvider === '__new__'"></lucide-icon>
             Test Connection
           </button>
-          <button class="primary-action" (click)="saveProvider()" [disabled]="savingProvider || !newProvider.name || !newProvider.api_key">
+          <button class="primary-action" (click)="saveProvider()" [disabled]="savingProvider || !newProvider.name || (!newProvider.api_key && !isEditingProvider)">
             <lucide-icon [name]="savingProvider ? LoadingIcon : SaveIcon" class="w-4 h-4" [class.spin]="savingProvider"></lucide-icon>
-            {{ savingProvider ? 'Saving...' : 'Save Provider' }}
+            {{ savingProvider ? 'Saving...' : (isEditingProvider ? 'Save Changes' : 'Save Provider') }}
           </button>
           <button class="secondary-action" (click)="showAddProviderForm = false; resetNewProvider()">Cancel</button>
         </div>

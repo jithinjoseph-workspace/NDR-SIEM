@@ -340,6 +340,7 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   white-space: normal;
   transition: all 0.2s ease;
@@ -348,6 +349,7 @@
 .announcement-card-body.expanded {
   display: block;
   -webkit-line-clamp: unset;
+  line-clamp: unset;
   overflow: visible;
 }
 

@@ -28,8 +28,12 @@ import {
   LoaderCircle,
   AlertTriangle,
   Activity,
-  Save
+  Save,
+  LayoutDashboard,
+  Cpu,
+  MemoryStick
 } from 'lucide-angular';
+import * as d3 from 'd3';
 import { Announcement, Api, SensorKey } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Router, ActivatedRoute } from '@angular/router';
@@ -94,6 +98,9 @@ export class Admin implements OnInit, OnDestroy {
   TestIcon = Zap;
   LoadingIcon = LoaderCircle;
   SaveIcon = Save;
+  LayoutDashboardIcon = LayoutDashboard;
+  CpuIcon = Cpu;
+  MemoryStickIcon = MemoryStick;
 
   // AI Providers state
   providers: AiProvider[] = [];
@@ -105,33 +112,37 @@ export class Admin implements OnInit, OnDestroy {
   showAddProviderForm = false;
   testingProvider = '';
   showProviderKey = false;
+  isEditingProvider = false;
   newProvider = {
     name: '', provider_type: 'custom', api_key: '', model: '',
     base_url: '', endpoint_path: '/v1/chat/completions',
     msg_format: 'openai', use_case: 'all', priority: 10, enabled: true,
   };
   providerTypeOptions = [
-    { value: 'custom',    label: 'Custom / OpenAI-compatible' },
-    { value: 'openai',    label: 'OpenAI' },
+    { value: 'custom', label: 'Custom / OpenAI-compatible' },
+    { value: 'openai', label: 'OpenAI' },
     { value: 'anthropic', label: 'Anthropic' },
   ];
   useCaseOptions = [
-    { value: 'all',    label: 'All (chat + threat analysis)' },
-    { value: 'chat',   label: 'ARIA chat only' },
+    { value: 'all', label: 'All (chat + threat analysis)' },
+    { value: 'chat', label: 'ARIA chat only' },
     { value: 'threat', label: 'Threat analysis only' },
   ];
 
-  activeTab = 'tenants';
+  activeTab = 'overview';
   telemetryData: any = null;
   private telemetryInterval: ReturnType<typeof setInterval> | null = null;
+  
+  overviewTelemetryHistory: {time: Date, cpu: number, mem: number}[] = [];
+  private overviewTelemetryPollTimer: any = null;
 
   // Trusted cloud settings
-  trustedCloud: { keywords: string[], domains: string[], suggestions: {org: string, hits: number}[] } =
+  trustedCloud: { keywords: string[], domains: string[], suggestions: { org: string, hits: number }[] } =
     { keywords: [], domains: [], suggestions: [] };
-  newKeyword  = '';
-  newDomain   = '';
-  trustedCloudSaving  = false;
-  trustedCloudSaved   = false;
+  newKeyword = '';
+  newDomain = '';
+  trustedCloudSaving = false;
+  trustedCloudSaved = false;
   loadingTrustedCloud = false;
 
   users: any[] = [];
@@ -219,8 +230,8 @@ export class Admin implements OnInit, OnDestroy {
   // Friendly date/time picker state
   announcementStartDate = '';
   announcementStartTime = '';
-  announcementEndDate   = '';
-  announcementEndTime   = '';
+  announcementEndDate = '';
+  announcementEndTime = '';
 
   /** 30-minute time slots for the time dropdown */
   readonly timeSlots = (() => {
@@ -290,6 +301,8 @@ export class Admin implements OnInit, OnDestroy {
     active: true,
   };
 
+
+
   currentUser: any = {};
   /** Non-empty when the session is about to expire or has expired. */
   sessionExpiryWarning = '';
@@ -301,7 +314,7 @@ export class Admin implements OnInit, OnDestroy {
     private router: Router,
     private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
-  ) {}
+  ) { }
 
   ngOnInit() {
     this.currentUser = this.auth.getUser();
@@ -323,9 +336,24 @@ export class Admin implements OnInit, OnDestroy {
     this.startSessionExpiryCheck();
   }
 
+  ngAfterViewInit() {
+    if (this.activeTab === 'overview') {
+      // Need a slight delay to ensure D3 containers have actual dimensions
+      setTimeout(() => {
+        this.renderD3Charts();
+        this.setupResizeObserver();
+        this.startOverviewTelemetryPolling();
+      }, 150);
+    }
+  }
+
+  private resizeObserver: any = null;
+  private resizeTimeout: any = null;
+
   ngOnDestroy(): void {
     // Always clear the interval when the component is torn down
     // to avoid a dangling callback and potential memory leak.
+    if (this.overviewTelemetryPollTimer) clearInterval(this.overviewTelemetryPollTimer);
     if (this.sessionCheckInterval !== null) {
       clearInterval(this.sessionCheckInterval);
     }
@@ -334,6 +362,20 @@ export class Admin implements OnInit, OnDestroy {
     }
     if (this.kafkaInterval !== null) {
       clearInterval(this.kafkaInterval);
+    }
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
+  }
+
+  private setupResizeObserver() {
+    const grid = document.querySelector('.overview-grid');
+    if (grid && !this.resizeObserver) {
+      this.resizeObserver = new ResizeObserver(() => {
+        if (this.resizeTimeout) clearTimeout(this.resizeTimeout);
+        this.resizeTimeout = setTimeout(() => this.renderD3Charts(), 100);
+      });
+      this.resizeObserver.observe(grid);
     }
   }
 
@@ -344,10 +386,21 @@ export class Admin implements OnInit, OnDestroy {
       if (!this.telemetryInterval) {
         this.telemetryInterval = setInterval(() => this.loadTelemetry(), 5000);
       }
+    } else if (tab === 'overview') {
+      setTimeout(() => {
+        this.renderD3Charts();
+        this.setupResizeObserver();
+        this.startOverviewTelemetryPolling();
+      }, 50);
     } else {
+      this.stopOverviewTelemetryPolling();
       if (this.telemetryInterval !== null) {
         clearInterval(this.telemetryInterval);
         this.telemetryInterval = null;
+      }
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect();
+        this.resizeObserver = null;
       }
     }
     if (tab === 'engines') {
@@ -367,6 +420,40 @@ export class Admin implements OnInit, OnDestroy {
     if (tab === 'ai-providers') {
       this.loadProviders();
     }
+  }
+
+  startOverviewTelemetryPolling() {
+    if (this.overviewTelemetryPollTimer) return;
+    this.pollOverviewTelemetry();
+    this.overviewTelemetryPollTimer = setInterval(() => this.pollOverviewTelemetry(), 3000);
+  }
+
+  stopOverviewTelemetryPolling() {
+    if (this.overviewTelemetryPollTimer) {
+      clearInterval(this.overviewTelemetryPollTimer);
+      this.overviewTelemetryPollTimer = null;
+    }
+  }
+
+  pollOverviewTelemetry() {
+    if (this.activeTab !== 'overview') {
+      this.stopOverviewTelemetryPolling();
+      return;
+    }
+    this.api.getPlatformTelemetry().subscribe({
+      next: (data: any) => {
+        const now = new Date();
+        this.overviewTelemetryHistory.push({
+          time: now,
+          cpu: data.cpu_usage_percent || 0,
+          mem: data.memory_percent || 0
+        });
+        if (this.overviewTelemetryHistory.length > 20) {
+          this.overviewTelemetryHistory.shift();
+        }
+        this.renderResourceUtilizationArea();
+      }
+    });
   }
 
   // ── Trusted cloud ────────────────────────────────────────────────────────
@@ -409,14 +496,14 @@ export class Admin implements OnInit, OnDestroy {
 
   saveTrustedCloud() {
     this.trustedCloudSaving = true;
-    this.trustedCloudSaved  = false;
+    this.trustedCloudSaved = false;
     this.api.updateTrustedCloudSettings({
       keywords: this.trustedCloud.keywords,
-      domains:  this.trustedCloud.domains,
+      domains: this.trustedCloud.domains,
     }).subscribe({
       next: () => {
         this.trustedCloudSaving = false;
-        this.trustedCloudSaved  = true;
+        this.trustedCloudSaved = true;
         setTimeout(() => { this.trustedCloudSaved = false; }, 3000);
       },
       error: () => { this.trustedCloudSaving = false; },
@@ -431,7 +518,7 @@ export class Admin implements OnInit, OnDestroy {
           this.trustedCloud.keywords.push(org.split(' ')[0]);
         }
       },
-      error: () => {},
+      error: () => { },
     });
   }
 
@@ -440,7 +527,7 @@ export class Admin implements OnInit, OnDestroy {
       next: () => {
         this.trustedCloud.suggestions = this.trustedCloud.suggestions.filter(s => s.org !== org);
       },
-      error: () => {},
+      error: () => { },
     });
   }
 
@@ -448,7 +535,7 @@ export class Admin implements OnInit, OnDestroy {
     this.kafkaLoading = !this.kafkaData;
     this.api.getKafkaStatus().subscribe({
       next: (data: any) => { this.kafkaData = data; this.kafkaLoading = false; },
-      error: ()         => { this.kafkaLoading = false; }
+      error: () => { this.kafkaLoading = false; }
     });
   }
 
@@ -1484,8 +1571,8 @@ export class Admin implements OnInit, OnDestroy {
     };
     this.announcementStartDate = '';
     this.announcementStartTime = '';
-    this.announcementEndDate   = '';
-    this.announcementEndTime   = '';
+    this.announcementEndDate = '';
+    this.announcementEndTime = '';
   }
 
   private buildAnnouncementPayload(announcement: AnnouncementDraft): Partial<Announcement> {
@@ -1574,7 +1661,7 @@ export class Admin implements OnInit, OnDestroy {
    */
   private reloadUsersWithRetry(userId: string, expectedActive: boolean, attempt = 0): void {
     const delays = [1000, 2000, 4000];
-    const delay  = delays[attempt] ?? delays[delays.length - 1];
+    const delay = delays[attempt] ?? delays[delays.length - 1];
 
     setTimeout(() => {
       this.api.getUsers().subscribe({
@@ -1603,7 +1690,7 @@ export class Admin implements OnInit, OnDestroy {
    */
   private reloadTenantsWithRetry(tenantId: string, expectedActive: boolean, attempt = 0): void {
     const delays = [1000, 2000, 4000];
-    const delay  = delays[attempt] ?? delays[delays.length - 1];
+    const delay = delays[attempt] ?? delays[delays.length - 1];
 
     setTimeout(() => {
       this.api.getTenants().subscribe({
@@ -1726,6 +1813,7 @@ export class Admin implements OnInit, OnDestroy {
   }
 
   resetNewProvider() {
+    this.isEditingProvider = false;
     this.newProvider = {
       name: '', provider_type: 'custom', api_key: '', model: '',
       base_url: '', endpoint_path: '/v1/chat/completions',
@@ -1733,23 +1821,271 @@ export class Admin implements OnInit, OnDestroy {
     };
   }
 
+  editProvider(p: AiProvider) {
+    this.isEditingProvider = true;
+    this.newProvider = { ...p, api_key: '' };
+    this.showAddProviderForm = true;
+  }
+
   get defaultBaseUrl(): string {
     switch (this.newProvider.provider_type) {
-      case 'openai':    return 'https://api.openai.com';
+      case 'openai': return 'https://api.openai.com';
       case 'anthropic': return 'https://api.anthropic.com';
-      default:          return '';
+      default: return '';
     }
   }
 
   get defaultModelPlaceholder(): string {
     switch (this.newProvider.provider_type) {
-      case 'openai':    return 'gpt-4o-mini';
+      case 'openai': return 'gpt-4o-mini';
       case 'anthropic': return 'claude-sonnet-4-6';
-      default:          return 'e.g. llama-3.3-70b-versatile';
+      default: return 'e.g. llama-3.3-70b-versatile';
     }
   }
 
   useCaseLabel(uc: string): string {
     return ({ all: 'All', chat: 'Chat', threat: 'Threat' } as any)[uc] || uc;
+  }
+
+  // --- D3 Charts Rendering ---
+  renderD3Charts() {
+    this.renderResourceUtilizationArea();
+    this.renderUserRolesDonut();
+    this.renderTopTenantsBar();
+    this.renderProcessingEnginesDonut();
+  }
+
+  private renderResourceUtilizationArea() {
+    const container = d3.select('#resource-area-chart');
+    container.selectAll('*').remove();
+    if (container.empty()) return;
+
+    const containerNode = container.node() as HTMLElement;
+    const width = containerNode.clientWidth || 800;
+    const height = 320;
+    const margin = { top: 20, right: 30, bottom: 30, left: 50 };
+
+    const svg = container.append('svg')
+      .attr('width', '100%')
+      .attr('height', height)
+      .attr('viewBox', `0 0 ${width} ${height}`)
+      .attr('preserveAspectRatio', 'xMidYMid meet')
+      .append('g')
+      .attr('transform', `translate(${margin.left},${margin.top})`);
+
+    const defs = container.select('svg').append('defs');
+    const gradientCpu = defs.append('linearGradient').attr('id', 'cpu-gradient').attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
+    gradientCpu.append('stop').attr('offset', '0%').attr('stop-color', 'rgba(34, 211, 238, 0.4)');
+    gradientCpu.append('stop').attr('offset', '100%').attr('stop-color', 'rgba(34, 211, 238, 0.01)');
+
+    const gradientMem = defs.append('linearGradient').attr('id', 'mem-gradient').attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
+    gradientMem.append('stop').attr('offset', '0%').attr('stop-color', 'rgba(99, 102, 241, 0.4)');
+    gradientMem.append('stop').attr('offset', '100%').attr('stop-color', 'rgba(99, 102, 241, 0.01)');
+
+    const innerW = width - margin.left - margin.right;
+    const innerH = height - margin.top - margin.bottom;
+
+    const data = this.overviewTelemetryHistory.length > 0 ? this.overviewTelemetryHistory : [{ time: new Date(), cpu: 0, mem: 0 }];
+
+    const x = d3.scaleTime().domain(d3.extent(data, (d: any) => d.time) as [Date, Date]).range([0, innerW]);
+    const y = d3.scaleLinear().domain([0, 100]).range([innerH, 0]);
+
+    const xAxisGrid = d3.axisBottom(x).tickSize(-innerH).tickFormat(() => '').ticks(5);
+    const yAxisGrid = d3.axisLeft(y).tickSize(-innerW).tickFormat(() => '').ticks(5);
+    svg.append('g').attr('class', 'chart-grid').attr('transform', `translate(0,${innerH})`).call(xAxisGrid);
+    svg.append('g').attr('class', 'chart-grid').call(yAxisGrid);
+
+    const xAxis = d3.axisBottom(x).ticks(5).tickSizeOuter(0).tickFormat((d: any) => d3.timeFormat('%H:%M:%S')(d));
+    const yAxis = d3.axisLeft(y).ticks(5).tickSizeOuter(0).tickFormat(d => d + '%');
+    svg.append('g').attr('class', 'chart-axis').attr('transform', `translate(0,${innerH})`).call(xAxis).selectAll('text').attr('transform', 'translate(0, 5)');
+    svg.append('g').attr('class', 'chart-axis').call(yAxis);
+
+    const cpuLine = d3.line<any>().x(d => x(d.time)).y(d => y(d.cpu)).curve(d3.curveMonotoneX);
+    const cpuArea = d3.area<any>().x(d => x(d.time)).y0(innerH).y1(d => y(d.cpu)).curve(d3.curveMonotoneX);
+    svg.append('path').datum(data).attr('fill', 'url(#cpu-gradient)').attr('d', cpuArea);
+    svg.append('path').datum(data).attr('fill', 'none').attr('stroke', '#22d3ee').attr('stroke-width', 2).attr('d', cpuLine);
+
+    const memLine = d3.line<any>().x(d => x(d.time)).y(d => y(d.mem)).curve(d3.curveMonotoneX);
+    const memArea = d3.area<any>().x(d => x(d.time)).y0(innerH).y1(d => y(d.mem)).curve(d3.curveMonotoneX);
+    svg.append('path').datum(data).attr('fill', 'url(#mem-gradient)').attr('d', memArea);
+    svg.append('path').datum(data).attr('fill', 'none').attr('stroke', '#6366f1').attr('stroke-width', 2).attr('d', memLine);
+  }
+
+  private renderUserRolesDonut() {
+    const container = d3.select('#user-roles-donut-chart');
+    container.selectAll('*').remove();
+    if (container.empty()) return;
+
+    const roles: any = { 'Platform Admin': 0, 'Tenant Admin': 0, 'Analyst': 0, 'Viewer': 0, 'Other': 0 };
+    for (const u of this.users) {
+      if (u.role === 'admin' || u.role === 'super_admin') roles['Platform Admin']++;
+      else if (u.role === 'tenant_admin') roles['Tenant Admin']++;
+      else if (u.role === 'analyst' || u.role === 'senior_analyst') roles['Analyst']++;
+      else if (u.role === 'viewer') roles['Viewer']++;
+      else roles['Other']++;
+    }
+    const data = Object.entries(roles).filter(([k, v]: [string, any]) => v > 0).map(([label, value]) => ({ label, value }));
+    if (data.length === 0) data.push({ label: 'No Users', value: 1 });
+
+    const containerNode = container.node() as HTMLElement;
+    const width = containerNode.clientWidth || 300;
+    const height = 300;
+    const radius = Math.min(width, height) / 2 - 20;
+
+    const svg = container.append('svg')
+      .attr('width', '100%').attr('height', height)
+      .attr('viewBox', `0 0 ${width} ${height}`)
+      .attr('preserveAspectRatio', 'xMidYMid meet')
+      .append('g').attr('transform', `translate(${width / 2},${height / 2})`);
+
+    const color = d3.scaleOrdinal<string>().domain(data.map(d => d.label))
+      .range(['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#64748b']);
+    
+    const pie = d3.pie<any>().value(d => d.value).sort(null);
+    const arc = d3.arc<any>().innerRadius(radius * 0.6).outerRadius(radius);
+    const hoverArc = d3.arc<any>().innerRadius(radius * 0.6).outerRadius(radius + 10);
+
+    const arcs = svg.selectAll('path').data(pie(data)).enter().append('path')
+      .attr('d', arc).attr('fill', d => color(d.data.label))
+      .attr('stroke', '#0f172a').style('stroke-width', '2px');
+
+    let tooltip: any = d3.select('body').select('.d3-tooltip');
+    if (tooltip.empty()) tooltip = d3.select('body').append('div').attr('class', 'd3-tooltip').style('opacity', 0);
+
+    arcs.on('mouseover', function(event, d: any) {
+      d3.select(this).transition().duration(200).attr('d', hoverArc);
+      tooltip.transition().duration(50).style('opacity', 1);
+      tooltip.html(`<strong>${d.data.label}</strong><br/>Users: ${d.data.value}`)
+        .style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+    })
+    .on('mousemove', function(event) {
+      tooltip.style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+    })
+    .on('mouseout', function() {
+      d3.select(this).transition().duration(200).attr('d', arc);
+      tooltip.transition().duration(200).style('opacity', 0);
+    });
+
+    const total = d3.sum(data, (d: any) => d.label === 'No Users' ? 0 : Number(d.value));
+    svg.append('text').attr('text-anchor', 'middle').attr('dy', '-0.2em').attr('fill', '#f1f5f9')
+      .style('font-size', '24px').style('font-weight', '600').text(total);
+    svg.append('text').attr('text-anchor', 'middle').attr('dy', '1.2em').attr('fill', '#94a3b8')
+      .style('font-size', '12px').text('Total Users');
+  }
+
+  private renderTopTenantsBar() {
+    const container = d3.select('#tenant-bar-chart');
+    container.selectAll('*').remove();
+    if (container.empty()) return;
+
+    const tenantUserCounts: any = {};
+    for (const t of this.tenants) tenantUserCounts[t.id] = { name: t.name, count: 0 };
+    for (const u of this.users) {
+      if (u.tenant_id && tenantUserCounts[u.tenant_id]) tenantUserCounts[u.tenant_id].count++;
+    }
+    
+    let data = Object.values(tenantUserCounts).filter((t: any) => t.count > 0).sort((a: any, b: any) => b.count - a.count).slice(0, 5) as {name: string, count: number}[];
+    if (data.length === 0) data = [{ name: 'No Data', count: 0 }];
+
+    const containerNode = container.node() as HTMLElement;
+    const width = containerNode.clientWidth || 400;
+    const height = 300;
+    const margin = { top: 20, right: 30, bottom: 40, left: 100 };
+
+    const svg = container.append('svg').attr('width', '100%').attr('height', height)
+      .attr('viewBox', `0 0 ${width} ${height}`).attr('preserveAspectRatio', 'xMidYMid meet')
+      .append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+    const innerW = width - margin.left - margin.right;
+    const innerH = height - margin.top - margin.bottom;
+
+    const x = d3.scaleLinear().domain([0, d3.max(data, d => d.count) || 1]).range([0, innerW]);
+    const y = d3.scaleBand().domain(data.map(d => d.name)).range([0, innerH]).padding(0.3);
+
+    const xAxisGrid = d3.axisBottom(x).tickSize(-innerH).tickFormat(() => '').ticks(5);
+    svg.append('g').attr('class', 'chart-grid').attr('transform', `translate(0,${innerH})`).call(xAxisGrid);
+
+    const xAxis = d3.axisBottom(x).ticks(5).tickSizeOuter(0);
+    const yAxis = d3.axisLeft(y).tickSizeOuter(0);
+
+    svg.append('g').attr('class', 'chart-axis').attr('transform', `translate(0,${innerH})`).call(xAxis);
+    svg.append('g').attr('class', 'chart-axis').call(yAxis);
+
+    const bars = svg.selectAll('.bar').data(data).enter().append('rect').attr('class', 'bar')
+      .attr('x', 0).attr('y', d => y(d.name)!).attr('height', y.bandwidth())
+      .attr('width', d => x(d.count)).attr('fill', '#8b5cf6').attr('rx', 4).style('opacity', 0.85);
+
+    let tooltip: any = d3.select('body').select('.d3-tooltip');
+    if (tooltip.empty()) tooltip = d3.select('body').append('div').attr('class', 'd3-tooltip').style('opacity', 0);
+
+    bars.on('mouseover', function(event, d: any) {
+      d3.select(this).style('opacity', 1).attr('fill', '#a78bfa').style('cursor', 'pointer');
+      tooltip.transition().duration(50).style('opacity', 1);
+      tooltip.html(`<strong>${d.name}</strong><br/>Users: ${d.count}`)
+        .style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+    }).on('mousemove', function(event) {
+      tooltip.style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+    }).on('mouseout', function() {
+      d3.select(this).style('opacity', 0.85).attr('fill', '#8b5cf6');
+      tooltip.transition().duration(200).style('opacity', 0);
+    });
+  }
+
+  private renderProcessingEnginesDonut() {
+    const container = d3.select('#engines-donut-chart');
+    container.selectAll('*').remove();
+    if (container.empty()) return;
+
+    let up = 0, offline = 0;
+    for (const e of this.engines) {
+      if (e.status && (e.status.toLowerCase().includes('up') || e.status.toLowerCase().includes('running'))) up++;
+      else offline++;
+    }
+    const data = [
+      { label: 'Running', value: up },
+      { label: 'Offline / Exited', value: offline }
+    ].filter(d => d.value > 0);
+    if (data.length === 0) data.push({ label: 'No Engines', value: 1 });
+
+    const containerNode = container.node() as HTMLElement;
+    const width = containerNode.clientWidth || 300;
+    const height = 300;
+    const radius = Math.min(width, height) / 2 - 20;
+
+    const svg = container.append('svg').attr('width', '100%').attr('height', height)
+      .attr('viewBox', `0 0 ${width} ${height}`).attr('preserveAspectRatio', 'xMidYMid meet')
+      .append('g').attr('transform', `translate(${width / 2},${height / 2})`);
+
+    const color = d3.scaleOrdinal<string>().domain(['Running', 'Offline / Exited', 'No Engines'])
+      .range(['#10b981', '#ef4444', '#64748b']);
+    
+    const pie = d3.pie<any>().value(d => d.value).sort(null);
+    const arc = d3.arc<any>().innerRadius(radius * 0.6).outerRadius(radius);
+    const hoverArc = d3.arc<any>().innerRadius(radius * 0.6).outerRadius(radius + 10);
+
+    const arcs = svg.selectAll('path').data(pie(data)).enter().append('path')
+      .attr('d', arc).attr('fill', d => color(d.data.label))
+      .attr('stroke', '#0f172a').style('stroke-width', '2px');
+
+    let tooltip: any = d3.select('body').select('.d3-tooltip');
+    if (tooltip.empty()) tooltip = d3.select('body').append('div').attr('class', 'd3-tooltip').style('opacity', 0);
+
+    arcs.on('mouseover', function(event, d: any) {
+      d3.select(this).transition().duration(200).attr('d', hoverArc);
+      tooltip.transition().duration(50).style('opacity', 1);
+      tooltip.html(`<strong>${d.data.label}</strong><br/>Nodes: ${d.data.value}`)
+        .style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+    }).on('mousemove', function(event) {
+      tooltip.style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+    }).on('mouseout', function() {
+      d3.select(this).transition().duration(200).attr('d', arc);
+      tooltip.transition().duration(200).style('opacity', 0);
+    });
+
+    const total = d3.sum(data, (d: any) => d.label === 'No Engines' ? 0 : Number(d.value));
+    svg.append('text').attr('text-anchor', 'middle').attr('dy', '-0.2em').attr('fill', '#f1f5f9')
+      .style('font-size', '24px').style('font-weight', '600').text(total);
+    svg.append('text').attr('text-anchor', 'middle').attr('dy', '1.2em').attr('fill', '#94a3b8')
+      .style('font-size', '12px').text('Total Nodes');
   }
 }

@@ -21,6 +21,11 @@
       </div>
 
       <button class="primary-action">Force Scan</button>
+
+      <button class="ai-report-action" (click)="openAiReport()" title="Generate AI-powered threat intelligence report">
+        <lucide-icon [name]="BotIcon" class="w-4 h-4"></lucide-icon>
+        AI Report
+      </button>
     </div>
   </div>
 
@@ -44,7 +49,7 @@
       <div>
         <h3>Total Events</h3>
         <p class="metric-value">{{ totalEvents().toLocaleString() }}</p>
-        <p class="metric-detail">Zeek {{ zeekEvents() }} / Suricata {{ suricataEvents() }}</p>
+        <p class="metric-detail">Agent-Z {{ zeekEvents() }} / Agent-S {{ suricataEvents() }}</p>
       </div>
       
       <div class="metric-wave" style="--accent: #c6cede;">

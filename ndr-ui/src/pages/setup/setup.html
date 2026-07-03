@@ -79,7 +79,7 @@
         </div>
         <div>
           <h3>Network Interface</h3>
-          <p>Interface used by Zeek and Suricata for packet capture.</p>
+          <p>Interface used by Agent-Z and Agent-S for packet capture.</p>
         </div>
       </div>
 
@@ -121,7 +121,7 @@
       <div class="engine-list">
         <article class="engine-row">
           <div class="engine-copy">
-            <strong>Zeek IDS</strong>
+            <strong>Agent-Z IDS</strong>
             <span>Traffic analysis engine</span>
           </div>
           <span class="engine-badge" [class.running]="zeekStatus === 'running'">
@@ -131,7 +131,7 @@
 
         <article class="engine-row">
           <div class="engine-copy">
-            <strong>Suricata EVE</strong>
+            <strong>Agent-S EVE</strong>
             <span>Intrusion detection system</span>
           </div>
           <span class="engine-badge" [class.running]="suricataStatus === 'running'">
@@ -141,7 +141,7 @@
 
         <article class="engine-row">
           <div class="engine-copy">
-            <strong>Vector</strong>
+            <strong>Telemetry Pipeline</strong>
             <span>Log shipping pipeline</span>
           </div>
           <span class="engine-badge" [class.running]="vectorStatus === 'running'">
@@ -151,7 +151,7 @@
 
         <article class="engine-row">
           <div class="engine-copy">
-            <strong>Arkime</strong>
+            <strong>PCAP Engine</strong>
             <span>Full packet capture</span>
           </div>
           <span class="engine-badge" [class.running]="arkimeStatus === 'running'">
@@ -308,15 +308,15 @@
 
         <div class="service-stack">
           <div class="service-row">
-            <span>Zeek</span>
+            <span>Agent-Z</span>
             <span class="engine-badge neutral">{{ getServiceLabel(sensor.zeek) }}</span>
           </div>
           <div class="service-row">
-            <span>Suricata</span>
+            <span>Agent-S</span>
             <span class="engine-badge neutral">{{ getServiceLabel(sensor.suricata) }}</span>
           </div>
           <div class="service-row">
-            <span>Vector</span>
+            <span>Telemetry Pipeline</span>
             <span class="engine-badge neutral">{{ getServiceLabel(sensor.vector) }}</span>
           </div>
         </div>

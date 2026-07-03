@@ -63,6 +63,7 @@ export class Sidebar implements OnInit, OnDestroy {
 
     if (this.auth.isAdmin()) {
       this.navItems = [
+        { label: 'Overview',      route: '/admin', queryParams: { tab: 'overview' },      icon: LayoutDashboard },
         { label: 'Tenants',       route: '/admin', queryParams: { tab: 'tenants' },       icon: Building2 },
         { label: 'Users',         route: '/admin', queryParams: { tab: 'users' },          icon: Users },
         { label: 'Engines',       route: '/admin', queryParams: { tab: 'engines' },        icon: Gauge },
@@ -76,17 +77,14 @@ export class Sidebar implements OnInit, OnDestroy {
       this.navItems = [
         { label: 'Tenant Users', route: '/tenant-admin', icon: Users },
         { label: 'Sensor Setup', route: '/setup',        icon: Settings },
-        { label: 'Evidence',     route: '/evidence',     icon: FolderSearch },
-        { label: 'AI Activity',  route: '/ai-activity',  icon: Bot },
       ];
     } else {
       this.navItems = [
         { label: 'Dashboard',    route: '/dashboard',    icon: LayoutDashboard, permission: 'dashboard' },
         { label: 'Alerts',       route: '/alerts',       icon: Bell,            permission: 'alerts' },
-        { label: 'Network Logs', route: '/logs',         icon: FileText,        permission: 'logs' },
-        { label: 'Live Stream',  route: '/live',         icon: Activity,        permission: 'live' },
+        { label: 'Network',      route: '/logs',         icon: FileText,        permission: 'logs' },
         { label: 'Network Map',  route: '/network-map',  icon: Network,         permission: 'network-map' },
-        { label: 'Assets',       route: '/assets',       icon: Server,          permission: 'alerts' },
+        { label: 'Assets',       route: '/assets',       icon: Server,          permission: 'assets' },
         { label: 'Rules',        route: '/rules',        icon: ShieldAlert,     permission: 'rules' },
         { label: 'Threat Intel', route: '/intel',        icon: Search,          permission: 'intel' },
         { label: 'System Health',route: '/health',       icon: Database,        permission: 'health' },
@@ -100,9 +98,11 @@ export class Sidebar implements OnInit, OnDestroy {
         this.navItems.push({ label: 'SOAR', route: '/soar', icon: Zap, permission: 'soar' });
       }
 
-      if (this.auth.hasPermission('alerts')) {
-        this.navItems.push({ label: 'Evidence',    route: '/evidence',    icon: FolderSearch, permission: 'alerts' });
-        this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot,          permission: 'alerts' });
+      if (this.auth.hasPermission('evidence')) {
+        this.navItems.push({ label: 'Evidence',    route: '/evidence',    icon: FolderSearch, permission: 'evidence' });
+      }
+      if (this.auth.hasPermission('ai-activity')) {
+        this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot,          permission: 'ai-activity' });
       }
     }
 
