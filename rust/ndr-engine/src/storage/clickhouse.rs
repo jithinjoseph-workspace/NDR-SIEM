@@ -283,6 +283,10 @@ pub fn tenant_db_pub(tenant_id: &str) -> String {
     tenant_db(tenant_id)
 }
 
+pub fn sql_escape_pub(value: &str) -> String {
+    sql_escape(value)
+}
+
 fn get_base_domain(domain: &str) -> String {
     let parts: Vec<&str> = domain.split('.').collect();
     if parts.len() <= 2 {
@@ -1821,6 +1825,65 @@ pub async fn get_high_volume_clean_dst_ips(
         .fetch_all::<(String, u64)>()
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))
+}
+
+/// Returns (src_ip, dst_ip, Vec<unix_timestamp_secs>) for pairs that have
+/// >= min_conns connections in the last `hours` hours, excluding private→private
+/// and excluding known-malicious dst IPs (threat_intel hits).
+pub async fn get_beacon_candidates(
+    &self,
+    tenant_id: &str,
+    hours:     u32,
+    min_conns: u64,
+) -> anyhow::Result<Vec<(String, String, Vec<i64>)>> {
+    let db = tenant_db(tenant_id);
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct PairRow { src_ip: String, dst_ip: String, cnt: u64 }
+
+    // Step 1: find (src, dst) pairs with enough connections
+    let pairs = self.client.query(&format!(
+        "SELECT src_ip, dst_ip, count() as cnt
+         FROM {db}.ndr_events
+         WHERE timestamp > now() - INTERVAL {hours} HOUR
+           AND source = 'zeek'
+           AND src_ip != '' AND dst_ip != ''
+           AND NOT (src_ip LIKE '10.%' AND dst_ip LIKE '10.%')
+           AND NOT (src_ip LIKE '192.168.%' AND dst_ip LIKE '192.168.%')
+           AND NOT (src_ip LIKE '172.%' AND dst_ip LIKE '172.%')
+         GROUP BY src_ip, dst_ip
+         HAVING cnt >= {min_conns}
+         ORDER BY cnt DESC
+         LIMIT 200",
+        db = db, hours = hours, min_conns = min_conns
+    )).fetch_all::<PairRow>().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    if pairs.is_empty() { return Ok(vec![]); }
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct TsRow { src_ip: String, dst_ip: String, ts: i64 }
+
+    let mut result = Vec::new();
+    for pair in &pairs {
+        let timestamps = self.client.query(&format!(
+            "SELECT src_ip, dst_ip, toUnixTimestamp(timestamp) as ts
+             FROM {db}.ndr_events
+             WHERE timestamp > now() - INTERVAL {hours} HOUR
+               AND source = 'zeek'
+               AND src_ip = '{src}' AND dst_ip = '{dst}'
+             ORDER BY timestamp ASC
+             LIMIT 500",
+            db = db, hours = hours,
+            src = sql_escape(&pair.src_ip),
+            dst = sql_escape(&pair.dst_ip),
+        )).fetch_all::<TsRow>().await.unwrap_or_default();
+
+        let ts_vec: Vec<i64> = timestamps.into_iter().map(|r| r.ts).collect();
+        if ts_vec.len() >= min_conns as usize {
+            result.push((pair.src_ip.clone(), pair.dst_ip.clone(), ts_vec));
+        }
+    }
+    Ok(result)
 }
 
 // ── AI Provider registry ───────────────────────────────────────────────────

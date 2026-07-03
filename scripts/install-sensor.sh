@@ -77,7 +77,7 @@ if [ -z "$IFACE" ]; then
 
   if [ "$IFACE_COUNT" -eq 0 ]; then
     read -rp "Enter interface (e.g. eth0, eno1): " \
-      IFACE
+      IFACE < /dev/tty
     IFACE=${IFACE:-eth0}
   elif [ "$IFACE_COUNT" -eq 1 ]; then
     IFACE=$(echo "$IFACES" | head -1)
@@ -94,7 +94,7 @@ if [ -z "$IFACE" ]; then
       i=$((i+1))
     done <<< "$IFACES"
     echo "─────────────────────"
-    read -rp "Select interface [1]: " IFACE_NUM
+    read -rp "Select interface [1]: " IFACE_NUM < /dev/tty
     IFACE_NUM=${IFACE_NUM:-1}
     IFACE=$(echo "$IFACES" | \
       sed -n "${IFACE_NUM}p")
@@ -126,7 +126,7 @@ if [ -z "$SENSOR_MODE" ]; then
   echo "                   being monitored (EC2, GCP VM, etc.)"
   echo "                   Server's own traffic IS what we monitor."
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  read -rp "Select mode [1/2]: " MODE_NUM
+  read -rp "Select mode [1/2]: " MODE_NUM < /dev/tty
   case "${MODE_NUM:-1}" in
     1) SENSOR_MODE="tap"   ;;
     2) SENSOR_MODE="agent" ;;

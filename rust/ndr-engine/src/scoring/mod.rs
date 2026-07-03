@@ -247,6 +247,7 @@ impl RiskScorer {
         // Cap score only when there is no real threat signal.
         if is_trusted_cloud {
             let has_real_signal = is_malicious
+                || tags.contains(&"beaconing".to_string()) // beacon hits bypass trusted-cloud cap
                 || (suricata.event_type.as_deref() == Some("alert")
                     && !suricata.alert.as_ref()
                         .map(|a| a.signature.starts_with("SURICATA "))

@@ -157,15 +157,17 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     // Proactive speech bubbles every 18s when chat is closed
     this.proactiveSub = setInterval(() => {
       if (!this.isOpen) {
-        this.speechText = this.proactiveMessages[this.proactiveIndex];
-        this.proactiveIndex = (this.proactiveIndex + 1) % this.proactiveMessages.length;
-        this.showSpeech = true;
-        this.cdr.detectChanges();
-        clearTimeout(this.speechTimer);
-        this.speechTimer = setTimeout(() => {
-          this.showSpeech = false;
+        setTimeout(() => {
+          this.speechText = this.proactiveMessages[this.proactiveIndex];
+          this.proactiveIndex = (this.proactiveIndex + 1) % this.proactiveMessages.length;
+          this.showSpeech = true;
           this.cdr.detectChanges();
-        }, 6000);
+          clearTimeout(this.speechTimer);
+          this.speechTimer = setTimeout(() => {
+            this.showSpeech = false;
+            this.cdr.detectChanges();
+          }, 6000);
+        }, 0);
       }
     }, 18000);
   }
@@ -499,8 +501,12 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   showSpeechBubble(text: string) {
     this.speechText = text;
     this.showSpeech = true;
+    this.cdr.detectChanges();
     clearTimeout(this.speechTimer);
-    this.speechTimer = setTimeout(() => { this.showSpeech = false; }, 7000);
+    this.speechTimer = setTimeout(() => {
+      this.showSpeech = false;
+      this.cdr.detectChanges();
+    }, 7000);
   }
 
   scrollToBottom() {
