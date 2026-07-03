@@ -1,4 +1,4 @@
-﻿.admin-shell {
+.admin-shell {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
@@ -1484,4 +1484,135 @@ code,
   .premium-stats {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- Telemetry Panel Redesign --- */
+.telemetry-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  width: 100%;
+}
+
+.telemetry-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.telemetry-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(34, 211, 238, 0.3);
+  box-shadow: 0 10px 30px -10px rgba(34, 211, 238, 0.15);
+}
+
+.telemetry-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.telemetry-title {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+
+.telemetry-title h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f8fafc;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.telemetry-subtitle {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-top: 0.25rem;
+}
+
+.telemetry-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s ease;
+}
+
+.telemetry-value.danger {
+  color: #ef4444;
+  text-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+}
+
+.telemetry-card.radial {
+  align-items: center;
+  text-align: center;
+}
+
+.telemetry-card.radial .telemetry-header {
+  flex-direction: column;
+}
+
+.telemetry-card.radial .telemetry-title {
+  align-items: center;
+}
+
+.radial-gauge-container {
+  width: 100%;
+  max-width: 180px;
+  margin: 0 auto;
+}
+
+.circular-chart {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  max-height: 250px;
+  filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.3));
+}
+
+.circle-bg {
+  fill: none;
+  stroke: rgba(15, 23, 42, 0.6);
+  stroke-width: 3.8;
+}
+
+.circle {
+  fill: none;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke: #22d3ee;
+  transition: stroke-dasharray 0.8s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.3s ease;
+}
+
+.circle.danger {
+  stroke: #ef4444;
+  filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
+}
+
+.percentage {
+  fill: #f8fafc;
+  font-family: inherit;
+  font-size: 0.45em;
+  text-anchor: middle;
+  font-weight: 700;
+  transition: fill 0.3s ease;
+}
+
+.percentage.danger {
+  fill: #ef4444;
 }

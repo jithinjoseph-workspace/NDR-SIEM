@@ -26,8 +26,8 @@ export class Health implements OnInit, OnDestroy {
   services: any[] = [
     { name: 'Agent-Z IDS',        status: 'unknown', type: 'zeek',       label: 'Tenant Sensor'     },
     { name: 'Agent-S EVE',    status: 'unknown', type: 'suricata',   label: 'Tenant Sensor'     },
-    { name: 'Vector Pipeline', status: 'unknown', type: 'vector',     label: 'Tenant Sensor'     },
-    { name: 'Arkime PCAP',     status: 'unknown', type: 'arkime',     label: 'Tenant Sensor'     },
+    { name: 'Telemetry Pipeline', status: 'unknown', type: 'vector',     label: 'Tenant Sensor'     },
+    { name: 'PCAP Engine',     status: 'unknown', type: 'arkime',     label: 'Tenant Sensor'     },
     { name: 'Kafka Broker',    status: 'unknown', type: 'kafka',      label: 'Platform Service'  },
     { name: 'NDR Engine',      status: 'unknown', type: 'engine',     label: 'Platform Service'  },
     { name: 'ClickHouse DB',   status: 'unknown', type: 'clickhouse', label: 'Platform Service'  },

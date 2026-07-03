@@ -386,7 +386,7 @@
               </table>
             </div>
 
-            <h4 style="margin-top:20px">Arkime Session Metadata</h4>
+            <h4 style="margin-top:20px">PCAP Engine Session Metadata</h4>
             <div *ngIf="bundleContents()?.session_metadata" class="conn-details">
               <table class="info-table">
                 <tr><td>Session ID</td>
@@ -717,8 +717,8 @@
               <h4>PCAP Not Available</h4>
               <p>Possible reasons:</p>
               <ul>
-                <li>Session rotated out of Arkime storage before capture</li>
-                <li>Arkime not running at capture time</li>
+                <li>Session rotated out of PCAP Engine storage before capture</li>
+                <li>PCAP Engine not running at capture time</li>
                 <li>OpenSearch session not indexed yet</li>
               </ul>
               <p>All other evidence files (alerts, connection, threat intel) are still available above.</p>

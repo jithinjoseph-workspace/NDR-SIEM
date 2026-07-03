@@ -141,7 +141,7 @@
 
         <article class="engine-row">
           <div class="engine-copy">
-            <strong>Vector</strong>
+            <strong>Telemetry Pipeline</strong>
             <span>Log shipping pipeline</span>
           </div>
           <span class="engine-badge" [class.running]="vectorStatus === 'running'">
@@ -151,7 +151,7 @@
 
         <article class="engine-row">
           <div class="engine-copy">
-            <strong>Arkime</strong>
+            <strong>PCAP Engine</strong>
             <span>Full packet capture</span>
           </div>
           <span class="engine-badge" [class.running]="arkimeStatus === 'running'">
@@ -316,7 +316,7 @@
             <span class="engine-badge neutral">{{ getServiceLabel(sensor.suricata) }}</span>
           </div>
           <div class="service-row">
-            <span>Vector</span>
+            <span>Telemetry Pipeline</span>
             <span class="engine-badge neutral">{{ getServiceLabel(sensor.vector) }}</span>
           </div>
         </div>

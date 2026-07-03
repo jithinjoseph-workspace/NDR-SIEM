@@ -467,7 +467,7 @@
                     <td class="py-1.5 font-mono text-on-surface-variant">{{ formatTs(e.ts) }}</td>
                     <td class="py-1.5">
                       <span [class]="'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (e.source === 'zeek' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400')">
-                        {{ e.source | uppercase }}
+                        {{ e.source === 'zeek' ? 'AGENT-Z' : (e.source === 'suricata' ? 'AGENT-S' : (e.source | uppercase)) }}
                       </span>
                     </td>
                     <td class="py-1.5 text-primary">{{ e.event_type || 'conn' }}</td>
