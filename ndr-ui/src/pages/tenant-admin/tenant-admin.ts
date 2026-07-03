@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import {
@@ -12,10 +12,33 @@ import {
   Trash2,
   X,
   Save,
+  Activity,
+  ChartColumn,
+  Shield,
+  Search,
+  Filter,
+  ArrowUpDown,
+  MoreVertical,
+  Building2,
+  Fingerprint,
+  LayoutDashboard,
+  Bell,
+  FileText,
+  Radio,
+  Network,
+  Globe,
+  Gem,
+  Settings,
+  UserCircle,
+  ChevronRight,
+  Server,
+  FolderSearch,
+  Bot
 } from 'lucide-angular';
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Subscription } from 'rxjs';
+import { BaseChartDirective } from 'ng2-charts';
 
 interface TenantUser {
   id: string;
@@ -31,12 +54,13 @@ interface PermissionOption {
   key: string;
   label: string;
   description: string;
+  icon: any;
 }
 
 @Component({
   selector: 'app-tenant-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule, LucideAngularModule],
+  imports: [CommonModule, FormsModule, LucideAngularModule, BaseChartDirective, DatePipe],
   templateUrl: './tenant-admin.html',
   styleUrl: './tenant-admin.css',
 })
@@ -49,8 +73,77 @@ export class TenantAdmin implements OnInit, OnDestroy {
   TrashIcon = Trash2;
   XIcon = X;
   SaveIcon = Save;
+  ActivityIcon = Activity;
+  ChartIcon = ChartColumn;
+  ShieldIconAlt = Shield;
+  SearchIcon = Search;
+  FilterIcon = Filter;
+  SortIcon = ArrowUpDown;
+  MoreIcon = MoreVertical;
+  BuildingIcon = Building2;
+  FingerprintIcon = Fingerprint;
+  LayoutDashboardIcon = LayoutDashboard;
+  BellIcon = Bell;
+  FileTextIcon = FileText;
+  RadioIcon = Radio;
+  NetworkIcon = Network;
+  GlobeIcon = Globe;
+  GemIcon = Gem;
+  SettingsIcon = Settings;
+  UserCircleIcon = UserCircle;
+  ChevronRightIcon = ChevronRight;
+  ServerIcon = Server;
+  FolderSearchIcon = FolderSearch;
+  BotIcon = Bot;
+
+  // Bulk Selection
+  selectedUserIds: Set<string> = new Set();
 
   activeTab: 'users' = 'users';
+  
+  // Data Grid specific
+  searchTerm = '';
+  sortField: keyof TenantUser | 'status' = 'username';
+  sortAscending = true;
+
+  // Chart Data Configurations
+  public roleChartData: any = { labels: [], datasets: [] };
+  public statusChartData: any = { labels: [], datasets: [] };
+
+  public donutChartOptions: any = {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: '78%',
+    plugins: {
+      legend: {
+        display: false
+      },
+      tooltip: {
+        backgroundColor: '#0C1220',
+        titleColor: '#EFF6FF',
+        bodyColor: '#94A3B8',
+        borderColor: 'rgba(255,255,255,0.10)',
+        borderWidth: 1,
+        padding: 14,
+        cornerRadius: 10,
+        displayColors: true,
+        boxWidth: 8,
+        boxHeight: 8
+      }
+    },
+    elements: {
+      arc: { 
+        borderWidth: 4, 
+        borderColor: '#0B1120',
+        borderRadius: 4,
+        hoverOffset: 6 
+      }
+    }
+  };
+
+  tenantSystemStatus: 'OPERATIONAL' | 'DEGRADED' | 'CHECKING...' = 'CHECKING...';
+  private statusInterval: ReturnType<typeof setInterval> | null = null;
+
   currentUser: any = {};
   tenantId = '';
   tenantName = 'Organization';
@@ -62,26 +155,66 @@ export class TenantAdmin implements OnInit, OnDestroy {
   message = '';
   messageType: 'success' | 'error' = 'success';
   usernameStatus: 'idle' | 'checking' | 'available' | 'taken' | 'unavailable' = 'idle';
+  usernameTouched = false;
+  passwordTouched = false;
   private usernameTimer: ReturnType<typeof setTimeout> | null = null;
   private usernameCheckSub: Subscription | null = null;
   private readonly usernamePattern = /^[A-Za-z0-9._-]+$/;
 
   permissionOptions: PermissionOption[] = [
-    { key: 'dashboard', label: 'Dashboard', description: 'Operational overview and metrics' },
-    { key: 'alerts', label: 'Alerts', description: 'Correlation hits and alert triage' },
-    { key: 'logs', label: 'Network Logs', description: 'Agent-Z and Agent-S event records' },
-    { key: 'live', label: 'Live Stream', description: 'Real-time network activity' },
-    { key: 'network-map', label: 'Network Map', description: 'Source and destination topology' },
-    { key: 'intel', label: 'Threat Intel', description: 'IOC lookup and enrichment' },
-    { key: 'health', label: 'System Health', description: 'Service and sensor status' },
-    { key: 'rules', label: 'Rules View', description: 'Read-only detection rule access' },
-    { key: 'soar', label: 'SOAR View', description: 'Read-only automation visibility' },
+    { key: 'dashboard', label: 'Dashboard', description: 'Operational overview and key metrics', icon: this.LayoutDashboardIcon },
+    { key: 'alerts', label: 'Alerts', description: 'Correlation hits and alert triage', icon: this.BellIcon },
+    { key: 'assets', label: 'Assets', description: 'Asset inventory and tracking', icon: this.ServerIcon },
+    { key: 'logs', label: 'Network Logs', description: 'Zeek and Suricata event records', icon: this.FileTextIcon },
+    { key: 'live', label: 'Live Stream', description: 'Real-time network activity', icon: this.RadioIcon },
+    { key: 'network-map', label: 'Network Map', description: 'Source and destination topology', icon: this.NetworkIcon },
+    { key: 'intel', label: 'Threat Intel', description: 'IOC lookup and enrichment', icon: this.GlobeIcon },
+    { key: 'health', label: 'System Health', description: 'Service and sensor status', icon: this.ActivityIcon },
+    { key: 'rules', label: 'Rules View', description: 'Read-only detection rule access', icon: this.GemIcon },
+    { key: 'evidence', label: 'Evidence', description: 'Evidence and artifact locker', icon: this.FolderSearchIcon },
+    { key: 'soar', label: 'SOAR View', description: 'Read-only automation visibility', icon: this.SettingsIcon },
+    { key: 'ai-activity', label: 'AI Activity', description: 'Aria analyst interactions', icon: this.BotIcon },
+  ];
+
+  permissionCategories = [
+    {
+      title: 'CORE',
+      options: [
+        this.permissionOptions.find(p => p.key === 'dashboard')!,
+        this.permissionOptions.find(p => p.key === 'alerts')!,
+        this.permissionOptions.find(p => p.key === 'assets')!,
+      ]
+    },
+    {
+      title: 'NETWORK',
+      options: [
+        this.permissionOptions.find(p => p.key === 'logs')!,
+        this.permissionOptions.find(p => p.key === 'network-map')!,
+        this.permissionOptions.find(p => p.key === 'live')!,
+      ]
+    },
+    {
+      title: 'SECURITY',
+      options: [
+        this.permissionOptions.find(p => p.key === 'intel')!,
+        this.permissionOptions.find(p => p.key === 'rules')!,
+        this.permissionOptions.find(p => p.key === 'evidence')!,
+      ]
+    },
+    {
+      title: 'OPERATIONS',
+      options: [
+        this.permissionOptions.find(p => p.key === 'health')!,
+        this.permissionOptions.find(p => p.key === 'soar')!,
+        this.permissionOptions.find(p => p.key === 'ai-activity')!,
+      ]
+    }
   ];
 
   roleOptions = [
-    { value: 'analyst', label: 'Analyst' },
-    { value: 'senior_analyst', label: 'Senior Analyst' },
-    { value: 'viewer', label: 'Viewer' },
+    { value: 'analyst', label: 'Analyst', tier: 'blue' },
+    { value: 'senior_analyst', label: 'Senior Analyst', tier: 'violet' },
+    { value: 'viewer', label: 'Viewer', tier: 'slate' },
   ];
 
   userForm = {
@@ -92,11 +225,13 @@ export class TenantAdmin implements OnInit, OnDestroy {
     permissions: [
       'dashboard',
       'alerts',
+      'assets',
       'logs',
       'live',
       'network-map',
       'intel',
       'health',
+      'evidence',
     ] as string[],
   };
 
@@ -118,11 +253,15 @@ export class TenantAdmin implements OnInit, OnDestroy {
       return;
     }
 
+    this.refreshTenantSystemStatus();
+    this.statusInterval = setInterval(() => this.refreshTenantSystemStatus(), 10000);
+
     this.loadUsers();
   }
 
   ngOnDestroy(): void {
     this.clearUsernameCheck();
+    if (this.statusInterval) clearInterval(this.statusInterval);
   }
 
   get activeUsers() {
@@ -194,6 +333,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
             active: user.active !== false,
             permissions: this.normalizePermissions(user.permissions, user.role),
           }));
+        this.updateCharts();
         this.loading = false;
         this.cdr.detectChanges();
       },
@@ -207,6 +347,8 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   openCreateForm() {
     this.clearUsernameCheck();
+    this.usernameTouched = false;
+    this.passwordTouched = false;
     this.editingUser = null;
     this.userForm = {
       username: '',
@@ -220,6 +362,8 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   openEditForm(user: TenantUser) {
     this.clearUsernameCheck();
+    this.usernameTouched = false;
+    this.passwordTouched = false;
     this.editingUser = user;
     this.userForm = {
       username: user.username,
@@ -382,6 +526,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
         ? { ...user, permissions, active }
         : user
     );
+    this.updateCharts();
     this.closeForm();
     this.showMessage(
       active ? 'User updated successfully' : 'User disabled successfully',
@@ -420,6 +565,12 @@ export class TenantAdmin implements OnInit, OnDestroy {
     if (!this.editingUser) {
       this.userForm.permissions = this.defaultPermissionsFor(this.userForm.role);
     }
+  }
+
+  selectRole(value: string) {
+    if (this.editingUser) return;
+    this.userForm.role = value;
+    this.onRoleChange();
   }
 
   getUserStatus(user: TenantUser): 'active' | 'disabled' {
@@ -553,5 +704,234 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.usernameCheckSub?.unsubscribe();
     this.usernameCheckSub = null;
     this.usernameStatus = 'idle';
+  }
+
+  // Enterprise Data Grid Getters
+  get filteredAndSortedUsers() {
+    let result = this.users;
+    
+    // Filter
+    if (this.searchTerm) {
+      const term = this.searchTerm.toLowerCase();
+      result = result.filter(u => 
+        u.username.toLowerCase().includes(term) || 
+        this.getRoleLabel(u.role).toLowerCase().includes(term)
+      );
+    }
+    
+    // Sort
+    result = [...result].sort((a, b) => {
+      let valA: any = a[this.sortField as keyof TenantUser];
+      let valB: any = b[this.sortField as keyof TenantUser];
+      
+      if (this.sortField === 'status') {
+        valA = a.active ? 1 : 0;
+        valB = b.active ? 1 : 0;
+      }
+      
+      if (typeof valA === 'string') valA = valA.toLowerCase();
+      if (typeof valB === 'string') valB = valB.toLowerCase();
+      
+      if (valA < valB) return this.sortAscending ? -1 : 1;
+      if (valA > valB) return this.sortAscending ? 1 : -1;
+      return 0;
+    });
+    
+    return result;
+  }
+  
+  toggleSort(field: keyof TenantUser | 'status') {
+    if (this.sortField === field) {
+      this.sortAscending = !this.sortAscending;
+    } else {
+      this.sortField = field;
+      this.sortAscending = true;
+    }
+  }
+
+  // Chart Generation Logic
+  private updateCharts() {
+    this.generateRoleChart();
+    this.generateStatusChart();
+  }
+
+  private generateRoleChart() {
+    const roles = {
+      Analyst: 0,
+      'Senior Analyst': 0,
+      Viewer: 0
+    };
+    
+    this.users.forEach(u => {
+      if (u.role === 'analyst') roles.Analyst++;
+      else if (u.role === 'senior_analyst') roles['Senior Analyst']++;
+      else if (u.role === 'viewer') roles.Viewer++;
+    });
+
+    this.roleChartData = {
+      labels: ['Analyst', 'Senior Analyst', 'Viewer'],
+      datasets: [{
+        data: [roles.Analyst, roles['Senior Analyst'], roles.Viewer],
+        backgroundColor: ['#0EA5E9', '#8B5CF6', '#10B981'],
+        hoverBackgroundColor: ['#38BDF8', '#A78BFA', '#34D399'],
+        borderWidth: 4,
+        borderColor: '#0B1120',
+        hoverOffset: 6
+      }]
+    };
+  }
+
+  private generateStatusChart() {
+    const active = this.activeUsers;
+    const disabled = this.users.length - active;
+
+    this.statusChartData = {
+      labels: ['Active', 'Disabled'],
+      datasets: [{
+        data: [active, disabled],
+        backgroundColor: ['#10B981', '#475569'],
+        hoverBackgroundColor: ['#34D399', '#64748B'],
+        borderWidth: 4,
+        borderColor: '#0B1120',
+        hoverOffset: 6
+      }]
+    };
+  }
+
+  // Bulk Actions
+  toggleSelection(userId: string) {
+    if (this.selectedUserIds.has(userId)) {
+      this.selectedUserIds.delete(userId);
+    } else {
+      this.selectedUserIds.add(userId);
+    }
+  }
+
+  toggleAll() {
+    const visibleUsers = this.filteredAndSortedUsers;
+    if (this.isAllSelected()) {
+      this.selectedUserIds.clear();
+    } else {
+      visibleUsers.forEach(u => this.selectedUserIds.add(u.id));
+    }
+  }
+
+  isAllSelected(): boolean {
+    const visibleUsers = this.filteredAndSortedUsers;
+    return visibleUsers.length > 0 && visibleUsers.every(u => this.selectedUserIds.has(u.id));
+  }
+
+  bulkUpdateStatus(active: boolean) {
+    if (this.selectedUserIds.size === 0) return;
+    const action = active ? 'enable' : 'disable';
+    if (!confirm(`Are you sure you want to ${action} ${this.selectedUserIds.size} users?`)) return;
+
+    let completed = 0;
+    const total = this.selectedUserIds.size;
+    this.saving = true;
+
+    this.selectedUserIds.forEach(id => {
+      this.api.setUserStatus(id, active).subscribe({
+        next: () => {
+          completed++;
+          if (completed === total) {
+            this.selectedUserIds.clear();
+            this.saving = false;
+            this.showMessage(`Successfully ${action}d ${total} users`, 'success');
+            this.loadUsers();
+          }
+        },
+        error: () => {
+          completed++;
+          if (completed === total) {
+            this.saving = false;
+            this.loadUsers();
+          }
+        }
+      });
+    });
+  }
+
+  exportToCSV() {
+    const data = this.filteredAndSortedUsers.map(u => ({
+      Username: u.username,
+      Role: this.getRoleLabel(u.role),
+      Status: u.active ? 'Active' : 'Disabled',
+      Created: u.created_at ? new Date(u.created_at).toLocaleString() : 'Unknown',
+      Permissions: this.normalizePermissions(u.permissions, u.role).join('; ')
+    }));
+
+    if (data.length === 0) {
+      this.showMessage('No users to export', 'error');
+      return;
+    }
+
+    const headers = Object.keys(data[0]);
+    const csvContent = [
+      headers.join(','),
+      ...data.map(row => headers.map(h => `"${(row as any)[h]}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `tenant_users_export_${new Date().getTime()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  private refreshTenantSystemStatus() {
+    this.api.getSensorKeys().subscribe({
+      next: (sensors: any[]) => {
+        const tenantSensors = sensors.filter(sensor =>
+          sensor.tenant_id === this.tenantId && sensor.active !== false
+        );
+        const healthyPipeline = tenantSensors.length === 0 || tenantSensors.some(sensor =>
+          this.isRecentlySeen(sensor.last_seen) &&
+          (this.isRunning(sensor.zeek) ||
+           this.isRunning(sensor.suricata) ||
+           this.isRunning(sensor.vector))
+        );
+
+        this.api.getDashboardStats().subscribe({
+          next: data => {
+            const services = data?.services || {};
+            const platformHealthy =
+              this.isRunning(services.kafka) &&
+              this.isRunning(services.clickhouse) &&
+              this.isRunning(services.engine || 'running');
+
+            this.tenantSystemStatus = healthyPipeline && platformHealthy ? 'OPERATIONAL' : 'DEGRADED';
+            this.cdr.detectChanges();
+          },
+          error: () => {
+            this.tenantSystemStatus = 'DEGRADED';
+            this.cdr.detectChanges();
+          },
+        });
+      },
+      error: () => {
+        this.tenantSystemStatus = 'DEGRADED';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  private isRunning(status: unknown) {
+    const value = String(status || '').toLowerCase().trim();
+    if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return true;
+    return /^\d+$/.test(value);
+  }
+
+  private isRecentlySeen(value: string | undefined) {
+    if (!value) return false;
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+    const withTimezone = /Z$|[+-]\d{2}:\d{2}$/.test(normalized)
+      ? normalized
+      : `${normalized}Z`;
+    const timestamp = new Date(withTimezone).getTime();
+    return !Number.isNaN(timestamp) && Date.now() - timestamp <= 2 * 60 * 1000;
   }
 }

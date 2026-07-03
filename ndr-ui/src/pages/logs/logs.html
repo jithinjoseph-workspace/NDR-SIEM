@@ -24,12 +24,8 @@
       <div class="logs-actions">
         <label class="logs-search">
           <lucide-icon [name]="SearchIcon" class="search-icon"></lucide-icon>
-          <input
-            type="text"
-            [(ngModel)]="searchText"
-            (ngModelChange)="onSearch()"
-            placeholder="Filter IP, protocol, source"
-          />
+          <input type="text" [(ngModel)]="searchText" (ngModelChange)="onSearch()"
+            placeholder="Filter IP, protocol, source" />
         </label>
 
         <button (click)="loadLogs()" class="refresh-button" title="Refresh logs" aria-label="Refresh logs">
