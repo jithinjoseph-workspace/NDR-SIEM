@@ -245,7 +245,7 @@ export class Setup implements OnInit, OnDestroy {
       error: (error) => {
         this.status = 'Stopped';
         this.cdr.detectChanges();
-        this.showError('Start Monitoring Failed', error?.error?.message || 'Failed to start local sensor monitoring services (Agent-Z, Agent-S, Vector). Please check host status.');
+        this.showError('Start Monitoring Failed', error?.error?.message || 'Failed to start local sensor monitoring services (Agent-Z, Agent-S, Telemetry Pipeline). Please check host status.');
       },
     });
   }

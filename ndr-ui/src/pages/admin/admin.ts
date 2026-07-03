@@ -29,7 +29,9 @@ import {
   AlertTriangle,
   Activity,
   Save,
-  LayoutDashboard
+  LayoutDashboard,
+  Cpu,
+  MemoryStick
 } from 'lucide-angular';
 import * as d3 from 'd3';
 import { Announcement, Api, SensorKey } from '../../services/api/api';
@@ -97,6 +99,8 @@ export class Admin implements OnInit, OnDestroy {
   LoadingIcon = LoaderCircle;
   SaveIcon = Save;
   LayoutDashboardIcon = LayoutDashboard;
+  CpuIcon = Cpu;
+  MemoryStickIcon = MemoryStick;
 
   // AI Providers state
   providers: AiProvider[] = [];
