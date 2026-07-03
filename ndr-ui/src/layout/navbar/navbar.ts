@@ -61,7 +61,7 @@ export class Navbar implements OnInit, OnDestroy {
   private announcementInterval: ReturnType<typeof setInterval> | null = null;
 
   get permittedSuggestions() {
-    return this.suggestions.filter(s => this.canOpenPermission(s.permission));
+    return this.suggestions.filter(s => this.canAccessRoute(s.route, s.permission));
   }
 
   get canViewAlerts() {
@@ -158,12 +158,12 @@ export class Navbar implements OnInit, OnDestroy {
     }
 
     this.filteredSuggestions = this.suggestions.filter(s =>
-      this.canOpenPermission(s.permission) &&
+      this.canAccessRoute(s.route, s.permission) &&
       (s.label.toLowerCase().includes(term) || s.hint.toLowerCase().includes(term))
     );
 
     const ipPattern = /^[\d\.:a-f]+$/i;
-    if (ipPattern.test(term) && this.canOpenPermission('logs')) {
+    if (ipPattern.test(term) && this.canAccessRoute('/logs', 'logs')) {
       this.filteredSuggestions.unshift({
         label: `Search IP: ${this.searchText}`,
         hint: 'Search in Network Logs',
@@ -172,7 +172,7 @@ export class Navbar implements OnInit, OnDestroy {
       });
     }
 
-    if (term.length > 2 && this.canOpenPermission('rules')) {
+    if (term.length > 2 && this.canAccessRoute('/rules', 'rules')) {
       this.filteredSuggestions.push({
         label: `Search rules: "${this.searchText}"`,
         hint: 'Find SIGMA rules',
@@ -221,7 +221,7 @@ export class Navbar implements OnInit, OnDestroy {
   }
 
   selectSuggestion(suggestion: any) {
-    if (this.canOpenPermission(suggestion.permission)) {
+    if (this.canAccessRoute(suggestion.route, suggestion.permission)) {
       this.router.navigateByUrl(suggestion.route);
     } else {
       this.router.navigate([this.auth.getDefaultRoute()]);
@@ -284,6 +284,20 @@ export class Navbar implements OnInit, OnDestroy {
   }
 
   private canOpenPermission(permission: string) {
+    return this.auth.hasPermission(permission);
+  }
+
+  private canAccessRoute(route: string, permission: string): boolean {
+    const user = this.auth.getUser();
+    if (!user) return false;
+
+    const analystRoutes = ['/logs', '/alerts', '/rules', '/intel', '/network-map', '/health', '/live'];
+    if (analystRoutes.includes(route) || route.startsWith('/logs?') || route.startsWith('/rules?')) {
+      if (this.auth.isAdmin() || user.role === 'tenant_admin') {
+        return false;
+      }
+    }
+
     return this.auth.hasPermission(permission);
   }
 
@@ -396,7 +410,7 @@ export class Navbar implements OnInit, OnDestroy {
   }
 
   private navigateIfAllowed(route: string, permission: string, queryParams?: Record<string, string>) {
-    if (!this.canOpenPermission(permission)) {
+    if (!this.canAccessRoute(route, permission)) {
       this.router.navigate([this.auth.getDefaultRoute()]);
       return;
     }

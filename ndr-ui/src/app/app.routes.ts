@@ -106,21 +106,21 @@ export const routes: Routes = [
   {
     path: 'evidence',
     canActivate: [authGuard],
-    data: { permission: 'alerts' },
+    data: { role: 'analyst', permission: 'alerts' },
     loadComponent: () => import('../pages/evidence/evidence')
       .then(m => m.EvidenceComponent)
   },
   {
     path: 'ai-activity',
     canActivate: [authGuard],
-    data: { permission: 'alerts' },
+    data: { role: 'analyst', permission: 'alerts' },
     loadComponent: () => import('../pages/ai-activity/ai-activity')
       .then(m => m.AiActivity)
   },
   {
     path: 'ai-report',
     canActivate: [authGuard],
-    data: { permission: 'alerts' },
+    data: { role: 'analyst', permission: 'alerts' },
     loadComponent: () => import('../pages/ai-report/ai-report')
       .then(m => m.AiReport)
   },
