@@ -30,8 +30,8 @@ interface ExternalSensorCard extends SensorKey {
   hostname: string;
   interface: string;
   os: string;
-  zeek: ExternalServiceStatus;
-  suricata: ExternalServiceStatus;
+  'agent-z': ExternalServiceStatus;
+  'agent-s': ExternalServiceStatus;
   vector: ExternalServiceStatus;
   online: boolean;
 }
@@ -47,8 +47,8 @@ export class Setup implements OnInit, OnDestroy {
   interfaces: string[] = [];
   selectedInterface = '';
   status: 'Ready' | 'Starting...' | 'Running' | 'Stopping...' | 'Stopped' = 'Ready';
-  zeekStatus = 'stopped';
-  suricataStatus = 'stopped';
+  agentZStatus = 'stopped';
+  agentSStatus = 'stopped';
   vectorStatus = 'stopped';
   arkimeStatus = 'stopped';
   activeTab: SetupTab = 'local';
@@ -137,7 +137,7 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   get localRunningCount(): number {
-    return [this.zeekStatus, this.suricataStatus, this.vectorStatus, this.arkimeStatus]
+    return [this.agentZStatus, this.agentSStatus, this.vectorStatus, this.arkimeStatus]
       .filter(status => status === 'running').length;
   }
 
@@ -194,15 +194,15 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   updateStatus(data: any) {
-    this.zeekStatus = this.normalizeStatus(data.zeek);
-    this.suricataStatus = this.normalizeStatus(data.suricata);
+    this.agentZStatus = this.normalizeStatus(data['agent-z']);
+    this.agentSStatus = this.normalizeStatus(data['agent-s']);
     this.vectorStatus = this.normalizeStatus(data.vector);
     this.arkimeStatus = this.normalizeStatus(data.arkime);
     this.selectedInterface = data.interface || this.selectedInterface;
 
     if (
-      this.zeekStatus === 'running' &&
-      this.suricataStatus === 'running' &&
+      this.agentZStatus === 'running' &&
+      this.agentSStatus === 'running' &&
       this.vectorStatus === 'running' &&
       this.arkimeStatus === 'running'
     ) {
@@ -387,7 +387,7 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   isSensorRunning(sensor: ExternalSensorCard): boolean {
-    return sensor.zeek === 'running' || sensor.suricata === 'running' || sensor.vector === 'running';
+    return sensor['agent-z'] === 'running' || sensor['agent-s'] === 'running' || sensor.vector === 'running';
   }
 
   isCommandPending(sensor: ExternalSensorCard, command?: SensorControlCommand): boolean {
@@ -447,12 +447,12 @@ export class Setup implements OnInit, OnDestroy {
         next: (data: any) => {
           if (data) {
             const allRunning =
-              this.normalizeStatus(data.zeek) === 'running' &&
-              this.normalizeStatus(data.suricata) === 'running' &&
+              this.normalizeStatus(data['agent-z']) === 'running' &&
+              this.normalizeStatus(data['agent-s']) === 'running' &&
               this.normalizeStatus(data.vector) === 'running';
             const noneRunning =
-              this.normalizeStatus(data.zeek) !== 'running' &&
-              this.normalizeStatus(data.suricata) !== 'running' &&
+              this.normalizeStatus(data['agent-z']) !== 'running' &&
+              this.normalizeStatus(data['agent-s']) !== 'running' &&
               this.normalizeStatus(data.vector) !== 'running';
 
             const matched =
@@ -564,8 +564,8 @@ export class Setup implements OnInit, OnDestroy {
       hostname: this.cleanLabel(sensor.hostname) || 'Unregistered host',
       interface: sensor.interface || 'Unavailable',
       os: sensor.os || 'Unavailable',
-      zeek: this.normalizeExternalStatus(sensor.zeek),
-      suricata: this.normalizeExternalStatus(sensor.suricata),
+      'agent-z': this.normalizeExternalStatus(sensor['agent-z']),
+      'agent-s': this.normalizeExternalStatus(sensor['agent-s']),
       vector: this.normalizeExternalStatus(sensor.vector),
       online: sensor.active && this.isRecentlySeen(sensor.last_seen),
     };

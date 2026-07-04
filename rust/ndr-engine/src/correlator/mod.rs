@@ -53,18 +53,18 @@ impl CorrelationEngine {
                         zeek:         z.clone(),
                         suricata:     s.clone(),
                         hit_time:     now,
-                        source:       "zeek+suricata".to_string(),
+                        source:       "agent-z+agent-s".to_string(),
                     });
                 }
 
-                // Fire from Zeek alone immediately
+                // Fire from Agent-Z alone immediately
                 if let Some(z) = &session.zeek {
                     return Some(CorrelationHit {
                         community_id: cid,
                         zeek:         z.clone(),
                         suricata:     z.clone(),
                         hit_time:     now,
-                        source:       "zeek".to_string(),
+                        source:       "agent-z".to_string(),
                     });
                 }
             }
@@ -82,18 +82,18 @@ impl CorrelationEngine {
                         zeek:         z.clone(),
                         suricata:     s.clone(),
                         hit_time:     now,
-                        source:       "zeek+suricata".to_string(),
+                        source:       "agent-z+agent-s".to_string(),
                     });
                 }
 
-                // Fire from Suricata alone immediately
+                // Fire from Agent-S alone immediately
                 if let Some(s) = &session.suricata {
                     return Some(CorrelationHit {
                         community_id: cid,
                         zeek:         s.clone(),
                         suricata:     s.clone(),
                         hit_time:     now,
-                        source:       "suricata".to_string(),
+                        source:       "agent-s".to_string(),
                     });
                 }
             }

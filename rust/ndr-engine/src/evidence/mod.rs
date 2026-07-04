@@ -72,7 +72,7 @@ async fn fill_rule_names(
     let sig_rows = query_ch(http, ch_url, ch_user, ch_pass, &format!(
         "SELECT JSONExtractString(raw, 'alert', 'signature') as sig \
          FROM {}.ndr_events \
-         WHERE community_id = '{}' AND source = 'suricata' AND event_type = 'alert' \
+         WHERE community_id = '{}' AND source = 'agent-s' AND event_type = 'alert' \
          LIMIT 1",
         db, community_id
     )).await;
@@ -107,7 +107,7 @@ async fn query_suricata_events(
 ) -> Vec<Value> {
     let sql = format!(
         "SELECT raw FROM {}.ndr_events \
-         WHERE community_id = '{}' AND source = 'suricata' \
+         WHERE community_id = '{}' AND source = 'agent-s' \
          AND JSONExtractString(raw, 'event_type') = '{}' \
          ORDER BY timestamp ASC LIMIT {}",
         db, community_id, event_type, limit
@@ -305,7 +305,7 @@ pub async fn fetch_live_investigation(
          FROM {}.ndr_events \
          WHERE community_id = '{}' AND src_ip != '' \
          ORDER BY \
-           multiIf(source='zeek', 0, \
+           multiIf(source='agent-z', 0, \
                    JSONExtractString(raw,'event_type')='flow', 1, \
                    JSONExtractString(raw,'event_type')='alert', 2, 3) ASC, \
            timestamp ASC \
@@ -321,7 +321,7 @@ pub async fn fetch_live_investigation(
     let all_uids: Vec<String> = query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
         "SELECT DISTINCT JSONExtractString(raw,'uid') as uid \
          FROM {}.ndr_events \
-         WHERE community_id = '{}' AND source = 'zeek' \
+         WHERE community_id = '{}' AND source = 'agent-z' \
          AND JSONExtractString(raw,'uid') != ''",
         db, community_id
     )).await
@@ -366,7 +366,7 @@ pub async fn fetch_live_investigation(
     }
 
     let zeek_conn_json = json!({
-        "source": "zeek_conn",
+        "source": "agent-z-conn",
         "community_id": community_id,
         "uid": uid,
         "record": conn_record
@@ -574,7 +574,7 @@ pub async fn fetch_live_investigation(
     });
 
     let suricata_dns_json = json!({
-        "source": "suricata",
+        "source": "agent-s",
         "queries": suricata_dns_queries,
         "total":   suri_dns_raw.len(),
         "resolves_to_target_ip": suri_resolves_to_target
@@ -670,7 +670,7 @@ pub async fn fetch_live_investigation(
     }).collect();
 
     let suricata_files_json = json!({
-        "source": "suricata",
+        "source": "agent-s",
         "files":  suricata_files_list,
         "total":  suri_files_raw.len()
     });
@@ -689,7 +689,7 @@ pub async fn fetch_live_investigation(
     }).collect();
 
     let suricata_anomaly_json = json!({
-        "source": "suricata",
+        "source": "agent-s",
         "events": suricata_anomaly_events,
         "total":  suri_anomaly_raw.len()
     });
@@ -1009,7 +1009,7 @@ async fn build_evidence_bundle_inner(
         "SELECT src_ip, dst_ip, src_port, dst_port, proto, event_type, \
          toString(timestamp) as timestamp, community_id, source, raw \
          FROM {}.ndr_events \
-         WHERE community_id = '{}' AND source = 'zeek' \
+         WHERE community_id = '{}' AND source = 'agent-z' \
          ORDER BY timestamp DESC LIMIT 1",
         db, community_id
     )).await;
@@ -1023,7 +1023,7 @@ async fn build_evidence_bundle_inner(
         .unwrap_or_else(|| community_id.to_string());
 
     let zeek_conn_json = json!({
-        "source": "zeek_conn",
+        "source": "agent-z-conn",
         "community_id": community_id,
         "uid": uid,
         "record": zeek_conn_rows.as_array().and_then(|a| a.first()).cloned().unwrap_or(json!(null))

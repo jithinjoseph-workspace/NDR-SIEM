@@ -424,7 +424,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
                 svc, src, dst, proto, cs,
                 event.community_id.as_deref().unwrap_or("?"));
             json!({
-                "type": "zeek",
+                "type": "agent-z",
                 "ts":   ts,
                 "event_type": if svc != "-" { svc } else { cs },
                 "cid":  event.community_id,
@@ -446,7 +446,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
             trace!("suricata {} | {}→{} cid={}",
                 et, src, dst, event.community_id.as_deref().unwrap_or("?"));
             json!({
-                "type": "suricata",
+                "type": "agent-s",
                 "ts":   ts,
                 "event_type": et,
                 "cid":  event.community_id,
@@ -534,11 +534,11 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let soar_threshold     = settings["soar_threshold"].as_f64().unwrap_or(75.0) as f32;
         
     let (src, dst) = match hit.source.as_str() {
-        "zeek" => (
+        "agent-z" => (
             hit.zeek.source_ip.as_deref().unwrap_or("-"),
             hit.zeek.dest_ip.as_deref().unwrap_or("-"),
         ),
-        "suricata" => (
+        "agent-s" => (
             hit.suricata.source_ip.as_deref().unwrap_or("-"),
             hit.suricata.dest_ip.as_deref().unwrap_or("-"),
         ),
@@ -922,7 +922,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let threat_intel_flag = enrichment.is_malicious as u8;
 
     let zeek_details = serde_json::to_string(&hit.zeek.raw).unwrap_or_else(|_| "{}".into());
-    let suricata_details = if hit_source == "zeek+suricata" || hit_source == "suricata" {
+    let suricata_details = if hit_source == "agent-z+agent-s" || hit_source == "agent-s" {
         serde_json::to_string(&hit.suricata.raw).unwrap_or_else(|_| "{}".into())
     } else {
         "{}".into()
@@ -935,8 +935,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         .unwrap_or_default();
 
     let corr_status = match hit_source.as_str() {
-        "zeek+suricata" => "corroborated",
-        "suricata"      => "suricata_only",
+        "agent-z+agent-s" => "corroborated",
+        "agent-s" => "agent-s-only",
         _               => "zeek_only",
     }.to_string();
 
@@ -956,7 +956,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         correlation_status: corr_status,
         zeek_details:       zeek_details,
         suricata_details:   suricata_details,
-        corroborated_at:    if hit_source == "zeek+suricata" { now_ts } else { 0 },
+        corroborated_at:    if hit_source == "agent-z+agent-s" { now_ts } else { 0 },
         suricata_rule_id:   suricata_rule_id,
         suricata_category:  suricata_category,
         updated_at:         now_ts,
@@ -1564,11 +1564,11 @@ for integration in &integrations {
         "src_asn":         enrichment.src_asn.as_ref().map(|a| &a.full),
         "dst_asn":         enrichment.dst_asn.as_ref().map(|a| &a.full),
         "sigma_hits":      sigma_hits,
-        "suricata": {
+        "agent-s": {
             "src": hit.suricata.source_ip, "src_port": hit.suricata.source_port,
             "dst": hit.suricata.dest_ip,   "dst_port": hit.suricata.dest_port,
         },
-        "zeek": {
+        "agent-z": {
             "src": hit.zeek.source_ip, "dst": hit.zeek.dest_ip,
             "proto":            hit.zeek.proto,
             "service":          hit.zeek.network_protocol,
@@ -1613,11 +1613,11 @@ pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMa
         "events_total":    ch_stats.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
         "hits_total":      ch_stats.get("hits_total").and_then(|v| v.as_u64()).unwrap_or(0),
         "events_1h":       ch_stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
-        "zeek_events":     ch_stats.get("zeek_events").and_then(|v| v.as_u64()).unwrap_or(0),
-        "suricata_events": ch_stats.get("suricata_events").and_then(|v| v.as_u64()).unwrap_or(0),
+        "agent_z_events":     ch_stats.get("agent_z_events").and_then(|v| v.as_u64()).unwrap_or(0),
+        "agent_s_events": ch_stats.get("agent_s_events").and_then(|v| v.as_u64()).unwrap_or(0),
         "services": {
-            "zeek":       "unknown",
-            "suricata":   "unknown",
+            "agent-z":       "unknown",
+            "agent-s":   "unknown",
             "vector":     "unknown",
             "kafka":      kafka_status,
             "clickhouse": clickhouse_status,
@@ -1698,16 +1698,16 @@ pub async fn get_agent_status() -> Json<Value> {
     match reqwest::get(&url).await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!({
-                "zeek": "stopped",
-                "suricata": "stopped",
+                "agent-z": "stopped",
+                "agent-s": "stopped",
                 "vector": "stopped",
                 "interface": "eth0"
             }));
             Json(data)
         }
         Err(_) => Json(json!({
-            "zeek": "stopped",
-            "suricata": "stopped",
+            "agent-z": "stopped",
+            "agent-s": "stopped",
             "vector": "stopped",
             "interface": "eth0"
         }))
@@ -1729,8 +1729,8 @@ pub async fn get_stats(State(state): State<AppState>, headers: axum::http::Heade
                 "hits_total": 0,
                 "events_1h": 0,
                 "hits_1h": 0,
-                "zeek_events": 0,
-                "suricata_events": 0,
+                "agent_z_events": 0,
+                "agent_s_events": 0,
             }))
         }
     }
@@ -2752,9 +2752,9 @@ let rules = state.detection.read().await.get_rules();
                 .and_then(|v| v.as_u64()).unwrap_or(0),
             "events_1h":       stats.get("events_1h")
                 .and_then(|v| v.as_u64()).unwrap_or(0),
-            "zeek_events":     stats.get("zeek_events")
+            "agent_z_events":     stats.get("agent_z_events")
                 .and_then(|v| v.as_u64()).unwrap_or(0),
-            "suricata_events": stats.get("suricata_events")
+            "agent_s_events": stats.get("agent_s_events")
                 .and_then(|v| v.as_u64()).unwrap_or(0),
             "active_rules":    rules.len(),
         },
@@ -5179,8 +5179,8 @@ pub async fn sensor_heartbeat(
         None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
     };
 
-    let zeek = payload["zeek"].as_str().unwrap_or("unknown");
-    let suricata = payload["suricata"].as_str().unwrap_or("unknown");
+    let zeek = payload["agent-z"].as_str().unwrap_or("unknown");
+    let suricata = payload["agent-s"].as_str().unwrap_or("unknown");
     let vector = payload["vector"].as_str().unwrap_or("unknown");
     let arkime = payload["arkime"].as_str().unwrap_or("unknown");
     let arkime_url = payload["arkime_url"].as_str().unwrap_or("");
@@ -5373,8 +5373,10 @@ pub struct CheckinRequest {
     pub sensor_ip:      Option<String>,
     pub arkime_url:     Option<String>,
     pub arkime_pass:    Option<String>,
-    pub zeek:           Option<String>,
-    pub suricata:       Option<String>,
+    #[serde(rename = "agent-z")]
+    pub agent_z:        Option<String>,
+    #[serde(rename = "agent-s")]
+    pub agent_s:        Option<String>,
     pub vector:         Option<String>,
     pub arkime_capture: Option<String>,
     pub arkime_viewer:  Option<String>,
@@ -5402,8 +5404,8 @@ pub async fn sensor_checkin(
     // ── 1. Heartbeat / status update (throttled via Redis) ───────────────
     // Only write to ClickHouse when status changes or every 5 minutes —
     // avoids a SELECT FINAL + INSERT on every checkin under stable conditions.
-    let zeek_s     = payload.zeek.as_deref().unwrap_or("unknown");
-    let suricata_s = payload.suricata.as_deref().unwrap_or("unknown");
+    let zeek_s     = payload.agent_z.as_deref().unwrap_or("unknown");
+    let suricata_s = payload.agent_s.as_deref().unwrap_or("unknown");
     let vector_s   = payload.vector.as_deref().unwrap_or("unknown");
     let arkime_status = payload.arkime_capture.as_deref()
         .or(payload.arkime_viewer.as_deref())

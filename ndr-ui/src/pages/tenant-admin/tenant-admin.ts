@@ -165,7 +165,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
     { key: 'dashboard', label: 'Dashboard', description: 'Operational overview and key metrics', icon: this.LayoutDashboardIcon },
     { key: 'alerts', label: 'Alerts', description: 'Correlation hits and alert triage', icon: this.BellIcon },
     { key: 'assets', label: 'Assets', description: 'Asset inventory and tracking', icon: this.ServerIcon },
-    { key: 'logs', label: 'Network Logs', description: 'Zeek and Suricata event records', icon: this.FileTextIcon },
+    { key: 'logs', label: 'Network Logs', description: 'Agent-Z and Agent-S event records', icon: this.FileTextIcon },
     { key: 'live', label: 'Live Stream', description: 'Real-time network activity', icon: this.RadioIcon },
     { key: 'network-map', label: 'Network Map', description: 'Source and destination topology', icon: this.NetworkIcon },
     { key: 'intel', label: 'Threat Intel', description: 'IOC lookup and enrichment', icon: this.GlobeIcon },

@@ -547,8 +547,8 @@ async fn main() {
                     if let Ok(data) = resp.json::<serde_json::Value>().await {
                         let msg = serde_json::json!({
                             "type": "agent_status",
-                            "zeek": data.get("zeek").and_then(|v| v.as_str()).unwrap_or("stopped"),
-                            "suricata": data.get("suricata").and_then(|v| v.as_str()).unwrap_or("stopped"),
+                            "agent-z": data.get("agent-z").and_then(|v| v.as_str()).unwrap_or("stopped"),
+                            "agent-s": data.get("agent-s").and_then(|v| v.as_str()).unwrap_or("stopped"),
                             "vector": data.get("vector").and_then(|v| v.as_str()).unwrap_or("stopped"),
 
                             "interface": data.get("interface").and_then(|v| v.as_str()).unwrap_or("eth0"),

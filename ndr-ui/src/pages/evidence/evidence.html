@@ -334,8 +334,8 @@
             <h4>Connection Record
               <span *ngIf="bundleContents()?.zeek_conn?.record?.source"
                     class="source-badge"
-                    [class.zeek-badge]="bundleContents()?.zeek_conn.record.source === 'zeek'"
-                    [class.suri-badge]="bundleContents()?.zeek_conn.record.source === 'suricata'">
+                    [class.zeek-badge]="bundleContents()?.zeek_conn.record.source === 'agent-z'"
+                    [class.suri-badge]="bundleContents()?.zeek_conn.record.source === 'agent-s'">
                 {{ bundleContents()?.zeek_conn.record.source | titlecase }}
               </span>
             </h4>
@@ -399,7 +399,7 @@
 
           <!-- DNS LOOKUPS -->
           <div *ngIf="activeContentSection()==='dns'" class="content-section">
-            <!-- Zeek DNS -->
+            <!-- Agent-Z DNS -->
             <div class="source-section">
               <div class="source-label zeek-label">Agent-Z DNS Lookups ({{ bundleContents()?.zeek_dns?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.zeek_dns?.resolves_to_target_ip" class="warning-row">
@@ -422,7 +422,7 @@
               <div *ngIf="!bundleContents()?.zeek_dns?.total" class="empty">No Agent-Z DNS logs for this session uid.</div>
             </div>
 
-            <!-- Suricata DNS -->
+            <!-- Agent-S DNS -->
             <div class="source-section">
               <div class="source-label suri-label">Agent-S DNS Events ({{ bundleContents()?.suricata_dns?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.suricata_dns?.resolves_to_target_ip" class="warning-row">
@@ -443,7 +443,7 @@
 
           <!-- HTTP REQUESTS -->
           <div *ngIf="activeContentSection()==='http'" class="content-section">
-            <!-- Zeek HTTP -->
+            <!-- Agent-Z HTTP -->
             <div class="source-section">
               <div class="source-label zeek-label">Agent-Z HTTP ({{ bundleContents()?.zeek_http?.total || 0 }})</div>
               <div *ngFor="let h of bundleContents()?.zeek_http?.requests || []" class="http-row">
@@ -461,7 +461,7 @@
               <div *ngIf="!bundleContents()?.zeek_http?.total" class="empty">No Agent-Z HTTP logs for this session uid.</div>
             </div>
 
-            <!-- Suricata HTTP -->
+            <!-- Agent-S HTTP -->
             <div class="source-section">
               <div class="source-label suri-label">Agent-S HTTP ({{ bundleContents()?.suricata_http?.total || 0 }})</div>
               <div *ngFor="let h of bundleContents()?.suricata_http?.requests || []" class="http-row">
@@ -484,7 +484,7 @@
 
           <!-- TLS/SSL -->
           <div *ngIf="activeContentSection()==='ssl'" class="content-section">
-            <!-- Zeek SSL -->
+            <!-- Agent-Z SSL -->
             <div class="source-section">
               <div class="source-label zeek-label">Agent-Z TLS/SSL ({{ bundleContents()?.zeek_ssl?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.zeek_ssl?.any_self_signed" class="warning-row">
@@ -511,7 +511,7 @@
               <div *ngIf="!bundleContents()?.zeek_ssl?.total" class="empty">No Agent-Z TLS/SSL logs for this session uid.</div>
             </div>
 
-            <!-- Suricata TLS -->
+            <!-- Agent-S TLS -->
             <div class="source-section">
               <div class="source-label suri-label">Agent-S TLS ({{ bundleContents()?.suricata_tls?.total || 0 }})</div>
               <div *ngIf="bundleContents()?.suricata_tls?.any_self_signed" class="warning-row">
@@ -541,7 +541,7 @@
 
           <!-- FILE TRANSFERS -->
           <div *ngIf="activeContentSection()==='files'" class="content-section">
-            <!-- Zeek Files -->
+            <!-- Agent-Z Files -->
             <div class="source-section">
               <div class="source-label zeek-label">Agent-Z File Transfers ({{ bundleContents()?.zeek_files?.total || 0 }})</div>
               <div *ngFor="let f of bundleContents()?.zeek_files?.files || []" class="file-row">
@@ -564,7 +564,7 @@
               <div *ngIf="!bundleContents()?.zeek_files?.total" class="empty">No Agent-Z file logs for this session uid.</div>
             </div>
 
-            <!-- Suricata File Info -->
+            <!-- Agent-S File Info -->
             <div class="source-section">
               <div class="source-label suri-label">Agent-S File Info ({{ bundleContents()?.suricata_files?.total || 0 }})</div>
               <div *ngFor="let f of bundleContents()?.suricata_files?.files || []" class="file-row">
@@ -584,7 +584,7 @@
 
           <!-- ANOMALIES -->
           <div *ngIf="activeContentSection()==='weird'" class="content-section">
-            <!-- Zeek Weird -->
+            <!-- Agent-Z Weird -->
             <div class="source-section">
               <div class="source-label zeek-label">Agent-Z Protocol Anomalies ({{ bundleContents()?.zeek_weird?.total || 0 }})</div>
               <div *ngFor="let w of bundleContents()?.zeek_weird?.events || []" class="weird-row">
@@ -598,7 +598,7 @@
               <div *ngIf="!bundleContents()?.zeek_weird?.total" class="empty">No Agent-Z protocol anomalies for this session uid.</div>
             </div>
 
-            <!-- Suricata Anomaly -->
+            <!-- Agent-S Anomaly -->
             <div class="source-section">
               <div class="source-label suri-label">Agent-S Anomalies ({{ bundleContents()?.suricata_anomaly?.total || 0 }})</div>
               <div *ngFor="let w of bundleContents()?.suricata_anomaly?.events || []" class="weird-row">

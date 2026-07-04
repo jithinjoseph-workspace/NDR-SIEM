@@ -1275,8 +1275,8 @@ def check_and_restart():
 
     if MANUALLY_STOPPED:
         # Services were intentionally stopped — report stopped, do not restart
-        statuses['zeek']          = 'stopped'
-        statuses['suricata']      = 'stopped'
+        statuses['agent-z']       = 'stopped'
+        statuses['agent-s']       = 'stopped'
         statuses['vector']        = 'stopped'
         statuses['arkime_capture'] = 'stopped'
         return statuses
@@ -1284,16 +1284,16 @@ def check_and_restart():
     if not is_running('zeek'):
         print("[NDR] Zeek down — restarting")
         start_zeek()
-        statuses['zeek'] = 'restarting'
+        statuses['agent-z'] = 'restarting'
     else:
-        statuses['zeek'] = 'running'
+        statuses['agent-z'] = 'running'
 
     if not is_running('suricata'):
         print("[NDR] Suricata down — restarting")
         start_suricata()
-        statuses['suricata'] = 'restarting'
+        statuses['agent-s'] = 'restarting'
     else:
-        statuses['suricata'] = 'running'
+        statuses['agent-s'] = 'running'
 
     if not is_running('vector'):
         print("[NDR] Vector down — restarting")
@@ -1333,8 +1333,8 @@ def report_status(statuses):
             timeout=5
         )
         print(f"[NDR] Heartbeat sent: "
-              f"zeek={statuses.get('zeek')} "
-              f"suricata={statuses.get('suricata')} "
+              f"agent-z={statuses.get('agent-z')} "
+              f"agent-s={statuses.get('agent-s')} "
               f"capture={statuses.get('arkime_capture')}")
     except Exception as e:
         print(f"[NDR] Heartbeat failed: {e}")
@@ -1564,8 +1564,8 @@ def do_checkin():
         'sensor_ip':      sensor_ip,
         'arkime_url':     f'http://{sensor_ip}:8005',
         'arkime_pass':    ARKIME_PASS,
-        'zeek':           statuses.get('zeek', 'unknown'),
-        'suricata':       statuses.get('suricata', 'unknown'),
+        'agent-z':        statuses.get('agent-z', 'unknown'),
+        'agent-s':        statuses.get('agent-s', 'unknown'),
         'vector':         statuses.get('vector', 'unknown'),
         'arkime_capture': statuses.get('arkime_capture', 'unknown'),
         'arkime_viewer':  statuses.get('arkime_viewer', 'unknown'),
@@ -1584,8 +1584,8 @@ def do_checkin():
 
         data = resp.json()
         print(f"[NDR] Checkin ok — "
-              f"zeek={payload['zeek']} "
-              f"suricata={payload['suricata']} "
+              f"agent-z={payload['agent-z']} "
+              f"agent-s={payload['agent-s']} "
               f"arkime={payload['arkime_capture']}")
 
         cmd = data.get('command', '').strip()

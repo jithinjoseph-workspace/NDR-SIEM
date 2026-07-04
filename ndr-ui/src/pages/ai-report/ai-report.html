@@ -20,6 +20,14 @@
         <button [class.active]="reportPeriod() === '30d'" (click)="setPeriod('30d')">30d</button>
       </div>
 
+      <button class="ar-customize-btn" *ngIf="!generating()"
+              (click)="customMode.set(!customMode())"
+              [class.active]="customMode()"
+              [disabled]="!generated()">
+        <lucide-icon [name]="ListIcon" class="w-4 h-4"></lucide-icon>
+        {{ customMode() ? 'Close Builder' : 'Customize' }}
+      </button>
+
       <button class="ar-generate-btn" (click)="generateReport()" [disabled]="generating()">
         <lucide-icon [name]="generating() ? LoadingIcon : RefreshIcon"
                      class="w-4 h-4" [class.spin]="generating()"></lucide-icon>
@@ -89,10 +97,60 @@
     </div>
   </div>
 
+  <!-- ══ Report Builder Panel ════════════════════════════════════════════ -->
+  <div class="ar-customizer no-print" *ngIf="customMode() && generated()">
+    <div class="ar-customizer-header">
+      <div class="ar-customizer-title">
+        <lucide-icon [name]="ListIcon" class="w-4 h-4"></lucide-icon>
+        Report Builder
+      </div>
+      <p class="ar-customizer-desc">Drag to reorder · click Included / Excluded to toggle sections</p>
+      <button class="ar-reset-btn" (click)="resetToDefault()">
+        <lucide-icon [name]="RefreshIcon" class="w-3 h-3"></lucide-icon>
+        Reset to default
+      </button>
+    </div>
+
+    <div class="ar-builder-list">
+      <div class="ar-builder-tile"
+           *ngFor="let id of sectionOrder(); let i = index"
+           [class.tile-disabled]="!isSectionEnabled(id)"
+           [class.tile-dragging]="dragSrcIdx() === i"
+           [class.tile-dragover]="dragOverIdx() === i"
+           draggable="true"
+           (dragstart)="onDragStart(i, $event)"
+           (dragover)="onDragOver(i, $event)"
+           (drop)="onDrop(i, $event)"
+           (dragend)="onDragEnd()">
+        <lucide-icon [name]="GripIcon" class="ar-grip-icon"></lucide-icon>
+        <span class="ar-tile-num">{{ getSectionDef(id)?.num }}</span>
+        <span class="ar-tile-title">{{ getSectionDef(id)?.title }}</span>
+        <div class="ar-tile-actions">
+          <span class="ar-tile-required" *ngIf="getSectionDef(id)?.required">Required</span>
+          <button class="ar-tile-toggle"
+                  [class.included]="isSectionEnabled(id)"
+                  [class.excluded]="!isSectionEnabled(id)"
+                  (click)="toggleSection(id)"
+                  [disabled]="getSectionDef(id)?.required">
+            {{ isSectionEnabled(id) ? 'Included' : 'Excluded' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ar-customizer-footer">
+      <span>{{ enabledCount() }} of {{ sectionDefs.length }} sections included in report</span>
+      <span class="ar-customizer-hint">Changes apply instantly — drag to reorder, toggle to include/exclude</span>
+    </div>
+  </div>
+
   <!-- ══════════════════════════════════════════════════════════════════════
        REPORT DOCUMENT — fully structured, printable
   ══════════════════════════════════════════════════════════════════════════ -->
   <div class="ar-report-doc" *ngIf="generated()">
+
+    <!-- Watermark — hidden on screen, fixed on every printed/PDF page -->
+    <div class="ar-watermark" aria-hidden="true">CONFIDENTIAL</div>
 
     <!-- ─── COVER PAGE ───────────────────────────────────────────────────── -->
     <div class="ar-cover page-break-after" id="cover-page">
@@ -162,7 +220,7 @@
         <h2>Table of Contents</h2>
       </div>
       <ol class="ar-toc-list">
-        <li *ngFor="let s of tocSections" class="ar-toc-item" (click)="scrollToSection(s.id)">
+        <li *ngFor="let s of activeTocSections()" class="ar-toc-item" (click)="scrollToSection(s.id)">
           <span class="ar-toc-num">{{ s.num }}</span>
           <span class="ar-toc-title">{{ s.title }}</span>
           <span class="ar-toc-dots"></span>
@@ -174,7 +232,7 @@
     <div class="ar-toc-print print-only">
       <h2>Table of Contents</h2>
       <ol class="ar-toc-print-list">
-        <li *ngFor="let s of tocSections">
+        <li *ngFor="let s of activeTocSections()">
           <span class="ar-toc-num">{{ s.num }}</span>
           <span class="ar-toc-title">{{ s.title }}</span>
         </li>
@@ -182,7 +240,9 @@
     </div>
 
     <!-- ─── SECTION 01: EXECUTIVE SUMMARY ────────────────────────────────── -->
-    <div class="ar-section" id="section-exec">
+    <div class="ar-section" id="section-exec"
+         *ngIf="isSectionEnabled('section-exec')"
+         [style.order]="sectionCssOrder('section-exec')">
       <div class="ar-section-header">
         <div class="ar-section-num">01</div>
         <div>
@@ -237,7 +297,9 @@
     </div>
 
     <!-- ─── SECTION 02: KPI STRIP ─────────────────────────────────────────── -->
-    <div class="ar-section" id="section-kpis">
+    <div class="ar-section" id="section-kpis"
+         *ngIf="isSectionEnabled('section-kpis')"
+         [style.order]="sectionCssOrder('section-kpis')">
       <div class="ar-section-header">
         <div class="ar-section-num">02</div>
         <div>
@@ -315,11 +377,11 @@
             <span class="ar-kpi-label">Agent-Z / Agent-S Split</span>
             <span class="ar-kpi-info" title="Event volume contribution from Agent-Z vs Agent-S sensors">ⓘ</span>
           </div>
-          <div class="ar-kpi-value" [class.kpi-na]="!kpiZeekRatio()">
-            {{ kpiZeekRatio() ?? 'N/A' }}
+          <div class="ar-kpi-value" [class.kpi-na]="!kpiAgentZRatio()">
+            {{ kpiAgentZRatio() ?? 'N/A' }}
           </div>
           <div class="ar-kpi-formula">Agent-Z events / Agent-S events</div>
-          <div class="ar-kpi-data">{{ stats()?.zeek_events?.toLocaleString() ?? 0 }} / {{ stats()?.suricata_events?.toLocaleString() ?? 0 }}</div>
+          <div class="ar-kpi-data">{{ stats()?.agent_z_events?.toLocaleString() ?? 0 }} / {{ stats()?.agent_s_events?.toLocaleString() ?? 0 }}</div>
         </div>
 
       </div>
@@ -331,7 +393,9 @@
     </div>
 
     <!-- ─── SECTION 03: THREAT LANDSCAPE ──────────────────────────────────── -->
-    <div class="ar-section" id="section-threat">
+    <div class="ar-section" id="section-threat"
+         *ngIf="isSectionEnabled('section-threat')"
+         [style.order]="sectionCssOrder('section-threat')">
       <div class="ar-section-header">
         <div class="ar-section-num">03</div>
         <div>
@@ -402,7 +466,9 @@
     </div>
 
     <!-- ─── SECTION 04: AI THREAT ANALYSES + MITRE ATT&CK ─────────────────── -->
-    <div class="ar-section" id="section-analyses">
+    <div class="ar-section" id="section-analyses"
+         *ngIf="isSectionEnabled('section-analyses')"
+         [style.order]="sectionCssOrder('section-analyses')">
       <div class="ar-section-header">
         <div class="ar-section-num">04</div>
         <div>
@@ -459,7 +525,9 @@
     </div>
 
     <!-- ─── SECTION 05: THREAT PREDICTIONS ───────────────────────────────── -->
-    <div class="ar-section" id="section-predictions">
+    <div class="ar-section" id="section-predictions"
+         *ngIf="isSectionEnabled('section-predictions')"
+         [style.order]="sectionCssOrder('section-predictions')">
       <div class="ar-section-header">
         <div class="ar-section-num">05</div>
         <div>
@@ -518,7 +586,9 @@
     </div>
 
     <!-- ─── SECTION 06: SUPPRESSION DECISIONS ─────────────────────────────── -->
-    <div class="ar-section" id="section-suppressions">
+    <div class="ar-section" id="section-suppressions"
+         *ngIf="isSectionEnabled('section-suppressions')"
+         [style.order]="sectionCssOrder('section-suppressions')">
       <div class="ar-section-header">
         <div class="ar-section-num">06</div>
         <div>
@@ -574,78 +644,12 @@
       </div>
     </div>
 
-    <!-- ─── SECTION 07: AI ENGINE CONFIGURATION ───────────────────────────── -->
-    <div class="ar-section" id="section-aiconfig">
+    <!-- ─── SECTION 07: RECOMMENDATIONS ────────────────────────────────────── -->
+    <div class="ar-section" id="section-recommendations"
+         *ngIf="isSectionEnabled('section-recommendations')"
+         [style.order]="sectionCssOrder('section-recommendations')">
       <div class="ar-section-header">
         <div class="ar-section-num">07</div>
-        <div>
-          <h2 class="ar-section-title">AI Engine Configuration</h2>
-          <p class="ar-section-desc">Active AI providers, models, and pipeline configuration</p>
-        </div>
-        <lucide-icon [name]="CpuIcon" class="ar-section-icon"></lucide-icon>
-      </div>
-
-      <div class="ar-table-wrap" *ngIf="aiProviders().length > 0">
-        <table class="ar-table">
-          <thead>
-            <tr>
-              <th>Provider Name</th>
-              <th>Type</th>
-              <th>Model</th>
-              <th>Use Case</th>
-              <th>Priority</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr *ngFor="let p of aiProviders()">
-              <td><strong>{{ p.name }}</strong></td>
-              <td>{{ p.provider_type || p.type || '—' }}</td>
-              <td class="mono">{{ p.model }}</td>
-              <td>{{ p.use_case || '—' }}</td>
-              <td>{{ p.priority ?? '—' }}</td>
-              <td>
-                <span class="ar-status-badge" [class.active]="p.enabled" [class.inactive]="!p.enabled">
-                  {{ p.enabled ? 'Enabled' : 'Disabled' }}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="ar-config-grid" *ngIf="aiConfig()">
-        <div class="ar-config-item" *ngIf="aiConfig().ai_provider">
-          <span class="ar-config-label">Default Provider</span>
-          <span class="ar-config-value">{{ aiConfig().ai_provider }}</span>
-        </div>
-        <div class="ar-config-item" *ngIf="aiConfig().ai_model">
-          <span class="ar-config-label">Default Model</span>
-          <span class="ar-config-value mono">{{ aiConfig().ai_model }}</span>
-        </div>
-        <div class="ar-config-item" *ngIf="aiConfig().ai_base_url">
-          <span class="ar-config-label">Base URL</span>
-          <span class="ar-config-value mono">{{ aiConfig().ai_base_url }}</span>
-        </div>
-        <div class="ar-config-item" *ngIf="aiConfig().ai_msg_format">
-          <span class="ar-config-label">Message Format</span>
-          <span class="ar-config-value">{{ aiConfig().ai_msg_format }}</span>
-        </div>
-        <div class="ar-config-item">
-          <span class="ar-config-label">API Key</span>
-          <span class="ar-config-value">{{ aiConfig().ai_key_set ? '✓ Configured' : '✗ Not Set' }}</span>
-        </div>
-      </div>
-
-      <div class="ar-empty-state" *ngIf="!aiConfig() && aiProviders().length === 0">
-        No AI configuration data available.
-      </div>
-    </div>
-
-    <!-- ─── SECTION 08: RECOMMENDATIONS ──────────────────────────────────── -->
-    <div class="ar-section" id="section-recommendations">
-      <div class="ar-section-header">
-        <div class="ar-section-num">08</div>
         <div>
           <h2 class="ar-section-title">Recommendations &amp; Remediation</h2>
           <p class="ar-section-desc">ARIA-generated operational action items based on observed threats</p>
@@ -672,7 +676,9 @@
     </div>
 
     <!-- ─── APPENDIX A: SYSTEM HEALTH ─────────────────────────────────────── -->
-    <div class="ar-section ar-appendix" id="section-appendix">
+    <div class="ar-section ar-appendix" id="section-appendix"
+         *ngIf="isSectionEnabled('section-appendix')"
+         [style.order]="sectionCssOrder('section-appendix')">
       <div class="ar-section-header">
         <div class="ar-section-num">A</div>
         <div>

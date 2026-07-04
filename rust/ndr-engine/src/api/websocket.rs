@@ -141,10 +141,10 @@ async fn handle_ws(
             if let Ok(data) = resp.json::<serde_json::Value>().await {
                 let msg = serde_json::json!({
                     "type": "agent_status",
-                    "zeek": data.get("zeek")
+                    "agent-z": data.get("agent-z")
                         .and_then(|v| v.as_str())
                         .unwrap_or("stopped"),
-                    "suricata": data.get("suricata")
+                    "agent-s": data.get("agent-s")
                         .and_then(|v| v.as_str())
                         .unwrap_or("stopped"),
                     "interface": data.get("interface")
@@ -191,8 +191,8 @@ async fn handle_ws(
                             let telemetry = serde_json::json!({
                                 "type":             "telemetry",
                                 "total_events":     stats.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
-                                "zeek_events":      stats.get("zeek_events").and_then(|v| v.as_u64()).unwrap_or(0),
-                                "suricata_events":  stats.get("suricata_events").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "agent_z_events":   stats.get("agent_z_events").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "agent_s_events":   stats.get("agent_s_events").and_then(|v| v.as_u64()).unwrap_or(0),
                                 "correlation_hits": stats.get("hits_total").and_then(|v| v.as_u64()).unwrap_or(0),
                                 "events_1h":        stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
                                 "severity":         severity.ok(),

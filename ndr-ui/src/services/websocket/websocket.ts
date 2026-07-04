@@ -18,7 +18,7 @@ export class Websocket {
   public hits$ = this.messages$.pipe(filter(m => m.type === 'hit'));
   public telemetry$ = this.messages$.pipe(filter(m => m.type === 'telemetry'));
   public events$ = this.messages$.pipe(
-    filter(m => m.type === 'zeek' || m.type === 'suricata')
+    filter(m => m.type === 'agent-z' || m.type === 'agent-s')
   );
 
   private hitsHistory: any[] = [];

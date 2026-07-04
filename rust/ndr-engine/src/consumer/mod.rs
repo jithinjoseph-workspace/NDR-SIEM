@@ -169,8 +169,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     .to_string();
 
                 let source_str = match event.event_source {
-                    EventSource::Zeek     => "zeek",
-                    EventSource::Suricata => "suricata",
+                    EventSource::Zeek     => "agent-z",
+                    EventSource::Suricata => "agent-s",
                     _ => "unknown",
                 }.to_string();
 

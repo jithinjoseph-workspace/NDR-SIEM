@@ -335,8 +335,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eth0"
 
             self.send_json({
-                "zeek":       "running" if zeek       else "stopped",
-                "suricata":   "running" if suri        else "stopped",
+                "agent-z":    "running" if zeek       else "stopped",
+                "agent-s":    "running" if suri        else "stopped",
                 "vector":     "running" if vector      else "stopped",
                 "kafka":      "running" if kafka       else "stopped",
                 "clickhouse": "running" if clickhouse  else "stopped",

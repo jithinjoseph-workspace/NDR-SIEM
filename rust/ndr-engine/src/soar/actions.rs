@@ -23,11 +23,11 @@ pub async fn execute_action(
     let config: Value = serde_json::from_str(&pb.action_config).unwrap_or(json!({}));
     
     let (src, dst) = match hit.source.as_str() {
-        "zeek" => (
+        "agent-z" => (
             hit.zeek.source_ip.as_deref().unwrap_or("-"),
             hit.zeek.dest_ip.as_deref().unwrap_or("-"),
         ),
-        "suricata" => (
+        "agent-s" => (
             hit.suricata.source_ip.as_deref().unwrap_or("-"),
             hit.suricata.dest_ip.as_deref().unwrap_or("-"),
         ),

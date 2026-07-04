@@ -11,8 +11,8 @@ export interface SensorKey {
   hostname?: string;
   interface?: string;
   os?: string;
-  zeek?: string;
-  suricata?: string;
+  'agent-z'?: string;
+  'agent-s'?: string;
   vector?: string;
   arkime?: string;
   arkime_url?: string;

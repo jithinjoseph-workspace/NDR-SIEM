@@ -76,7 +76,7 @@ impl NormalizedEvent {
         let source = raw.get("source").and_then(|v| v.as_str()).unwrap_or("");
 
         // Use explicit source tag from Vector, fallback to heuristic
-        let is_zeek = source == "zeek"
+        let is_zeek = source == "agent-z" || source == "zeek"
             || raw.get("uid").is_some()
             || raw.get("_path").is_some()
             || (raw.get("proto").is_some() && raw.get("conn_state").is_some());
@@ -91,6 +91,20 @@ impl NormalizedEvent {
     /// True if this event should be silently dropped before correlation.
     /// Mirrors Malcolm's LOGSTASH_ZEEK_IGNORED_LOGS list and Suricata noise filter.
     pub fn should_drop(&self) -> bool {
+        // Drop conn-log entries with no IP endpoints — malformed packet fragments
+        // Zeek couldn't fully decode (show as "- -> -" in UI). Only applies to
+        // conn/flow logs; dhcp, weird, files etc. legitimately lack the IP tuple.
+        let is_conn_log = self.log_source.as_deref()
+            .map(|s| matches!(s, "conn" | "flow"))
+            .unwrap_or(false);
+        if is_conn_log {
+            let no_src = self.source_ip.as_deref().map(|s| s.is_empty()).unwrap_or(true);
+            let no_dst = self.dest_ip.as_deref().map(|s| s.is_empty()).unwrap_or(true);
+            if no_src && no_dst {
+                return true;
+            }
+        }
+
         if let Some(ls) = &self.log_source {
             matches!(
                 ls.as_str(),
@@ -131,8 +145,8 @@ impl NormalizedEvent {
         "src_port"  => self.source_port.map(|p| p.to_string()),
         "dst_port"  => self.dest_port.map(|p| p.to_string()),
         "source"    => Some(match self.event_source {
-                          EventSource::Zeek     => "zeek".to_string(),
-                          EventSource::Suricata => "suricata".to_string(),
+                          EventSource::Zeek     => "agent-z".to_string(),
+                          EventSource::Suricata => "agent-s".to_string(),
                           EventSource::Unknown  => "unknown".to_string(),
                        }),
 

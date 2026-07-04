@@ -124,8 +124,8 @@
             <strong>Agent-Z IDS</strong>
             <span>Traffic analysis engine</span>
           </div>
-          <span class="engine-badge" [class.running]="zeekStatus === 'running'">
-            {{ zeekStatus === 'running' ? 'Running' : 'Stopped' }}
+          <span class="engine-badge" [class.running]="agentZStatus === 'running'">
+            {{ agentZStatus === 'running' ? 'Running' : 'Stopped' }}
           </span>
         </article>
 
@@ -134,8 +134,8 @@
             <strong>Agent-S EVE</strong>
             <span>Intrusion detection system</span>
           </div>
-          <span class="engine-badge" [class.running]="suricataStatus === 'running'">
-            {{ suricataStatus === 'running' ? 'Running' : 'Stopped' }}
+          <span class="engine-badge" [class.running]="agentSStatus === 'running'">
+            {{ agentSStatus === 'running' ? 'Running' : 'Stopped' }}
           </span>
         </article>
 
@@ -309,11 +309,11 @@
         <div class="service-stack">
           <div class="service-row">
             <span>Agent-Z</span>
-            <span class="engine-badge neutral">{{ getServiceLabel(sensor.zeek) }}</span>
+            <span class="engine-badge neutral">{{ getServiceLabel(sensor['agent-z']) }}</span>
           </div>
           <div class="service-row">
             <span>Agent-S</span>
-            <span class="engine-badge neutral">{{ getServiceLabel(sensor.suricata) }}</span>
+            <span class="engine-badge neutral">{{ getServiceLabel(sensor['agent-s']) }}</span>
           </div>
           <div class="service-row">
             <span>Telemetry Pipeline</span>

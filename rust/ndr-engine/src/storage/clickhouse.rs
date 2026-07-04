@@ -1361,13 +1361,13 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             .unwrap_or(0);
 
         let zeek_count: u64 = self.client
-            .query("SELECT count() FROM ndr_events WHERE source = 'zeek'")
+            .query("SELECT count() FROM ndr_events WHERE source = 'agent-z'")
             .fetch_one::<u64>()
             .await
             .unwrap_or(0);
 
         let suricata_count: u64 = self.client
-            .query("SELECT count() FROM ndr_events WHERE source = 'suricata'")
+            .query("SELECT count() FROM ndr_events WHERE source = 'agent-s'")
             .fetch_one::<u64>()
             .await
             .unwrap_or(0);
@@ -1377,8 +1377,8 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             "hits_total":      hits_total,
             "events_1h":       events_1h,
             "hits_1h":         hits_1h,
-            "zeek_events":     zeek_count,
-            "suricata_events": suricata_count,
+            "agent_z_events":     zeek_count,
+            "agent_s_events": suricata_count,
         }))
     }
     
@@ -1846,7 +1846,7 @@ pub async fn get_beacon_candidates(
         "SELECT src_ip, dst_ip, count() as cnt
          FROM {db}.ndr_events
          WHERE timestamp > now() - INTERVAL {hours} HOUR
-           AND source = 'zeek'
+           AND source = 'agent-z'
            AND src_ip != '' AND dst_ip != ''
            AND NOT (src_ip LIKE '10.%' AND dst_ip LIKE '10.%')
            AND NOT (src_ip LIKE '192.168.%' AND dst_ip LIKE '192.168.%')
@@ -1869,7 +1869,7 @@ pub async fn get_beacon_candidates(
             "SELECT src_ip, dst_ip, toUnixTimestamp(timestamp) as ts
              FROM {db}.ndr_events
              WHERE timestamp > now() - INTERVAL {hours} HOUR
-               AND source = 'zeek'
+               AND source = 'agent-z'
                AND src_ip = '{src}' AND dst_ip = '{dst}'
              ORDER BY timestamp ASC
              LIMIT 500",
@@ -2144,8 +2144,8 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             self.client.query(&format!(
                 "SELECT count() as events_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as events_1h, \
-                 countIf(source='zeek') as zeek_events, \
-                 countIf(source='suricata') as suricata_events \
+                 countIf(source='agent-z') as agent_z_events, \
+                 countIf(source='agent-s') as agent_s_events \
                  FROM {}.ndr_events", db_name))
                 .fetch_one::<(u64, u64, u64, u64)>(),
             self.client.query(&format!(
@@ -2157,7 +2157,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::json!({
             "events_total": events_row.0, "hits_total": hits_row.0,
             "events_1h": events_row.1,   "hits_1h": hits_row.1,
-            "zeek_events": events_row.2,  "suricata_events": events_row.3
+            "agent_z_events": events_row.2,  "agent_s_events": events_row.3
         }))
     }
 
@@ -2726,8 +2726,8 @@ pub async fn get_sensor_keys(
         "hostname": r.hostname,
         "interface": r.interface_name,
         "os": r.os_name,
-        "zeek": r.zeek_status,
-        "suricata": r.suricata_status,
+        "agent-z": r.zeek_status,
+        "agent-s": r.suricata_status,
         "vector": r.vector_status,
         "arkime": r.arkime_status,
         "arkime_url": r.arkime_url,

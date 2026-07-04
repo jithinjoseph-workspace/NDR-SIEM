@@ -73,8 +73,8 @@
         <div class="log-list">
           <div *ngFor="let log of filteredLogs; trackBy: trackByLog" class="log-grid log-row">
             <span class="log-time">{{ log.ts }}</span>
-            <span [class]="'source-badge ' + (log.source === 'suricata' ? 'source-suricata' : 'source-zeek')">
-              {{ log.source === 'zeek' ? 'AGENT-Z' : (log.source === 'suricata' ? 'AGENT-S' : log.source?.toUpperCase()) }}
+            <span [class]="'source-badge ' + (log.source === 'agent-s' ? 'source-suricata' : 'source-zeek')">
+              {{ log.source === 'agent-z' ? 'AGENT-Z' : (log.source === 'agent-s' ? 'AGENT-S' : log.source?.toUpperCase()) }}
             </span>
             <span [class]="'proto-badge proto-' + (log.proto || '').toLowerCase()">
               {{ log.proto }}

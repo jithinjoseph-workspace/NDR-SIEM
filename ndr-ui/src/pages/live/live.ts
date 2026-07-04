@@ -50,12 +50,12 @@ export class Live implements OnInit, OnDestroy {
         let data = '';
         let color = 'border-primary/30';
 
-        if (msg.type === 'zeek') {
+        if (msg.type === 'agent-z') {
           event = 'ZEEK';
           data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.proto || '-'}] ${msg.service || ''} ${msg.conn_state || ''}`;
           color = 'border-primary/30';
           this.eventCount++;
-        } else if (msg.type === 'suricata') {
+        } else if (msg.type === 'agent-s') {
           event = 'SURICATA';
           data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.event_type || '-'}]`;
           color = 'border-secondary/30';
