@@ -182,7 +182,9 @@
               [class.badge-pending]="item.status === 'sending' || item.status === 'syncing'"
               [class.badge-reviewed]="item.status === 'reviewed'"
             >
-              {{ statusLabel(item) }}
+              <div class="status-indicator" [attr.data-status]="item.status">
+              {{ item.statusLabelText }}
+              </div>
             </span>
             <span *ngIf="item.tenant_id" class="tenant-chip">{{ item.tenant_id }}</span>
           </div>
@@ -198,7 +200,7 @@
           <div class="reply-box-header">
             <lucide-icon [name]="ReplyIcon" class="w-3 h-3"></lucide-icon>
             <span>Reply from <strong>{{ item.replied_by || 'admin' }}</strong></span>
-            <small>{{ formatDate(item.replied_at) }}</small>
+            <small>{{ item.formattedRepliedAt }}</small>
           </div>
           <p class="reply-text">{{ item.admin_reply }}</p>
         </div>
@@ -212,9 +214,9 @@
         <!-- Card Footer -->
         <div class="card-footer">
           <div class="card-timestamps">
-            <span>Created {{ formatDate(item.created_at) }}</span>
+            <span>Created {{ item.formattedCreatedAt }}</span>
             <span class="ts-sep">·</span>
-            <span>Updated {{ formatDate(item.updated_at) }}</span>
+            <span>Updated {{ item.formattedUpdatedAt }}</span>
           </div>
 
           <div *ngIf="isManager" class="card-actions">

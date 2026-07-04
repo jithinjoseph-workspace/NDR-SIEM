@@ -18,6 +18,13 @@ import { timeout } from 'rxjs/operators';
 import { Api, SupportMessage } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 
+export interface SupportMessageView extends SupportMessage {
+  statusLabelText: string;
+  formattedCreatedAt: string;
+  formattedRepliedAt: string;
+  formattedUpdatedAt: string;
+}
+
 @Component({
   selector: 'app-support',
   standalone: true,
@@ -26,7 +33,7 @@ import { AuthService } from '../../services/auth/auth';
   styleUrl: './support.css',
 })
 export class Support implements OnInit, OnDestroy {
-  messages: SupportMessage[] = [];
+  messages: SupportMessageView[] = [];
   loading = false;
   error = '';
   actionMessage = '';
@@ -139,7 +146,7 @@ export class Support implements OnInit, OnDestroy {
     }
 
     const optimisticId = `pending-${Date.now()}`;
-    const optimisticMessage = this.buildLocalMessage(optimisticId, subject, this.category, message, 'sending');
+    const optimisticMessage = this.enrichMessage(this.buildLocalMessage(optimisticId, subject, this.category, message, 'sending'));
     this.messages = [optimisticMessage, ...this.messages];
     this.locallyTrackedUntil[optimisticId] = Date.now() + 60000;
     this.busyAction = { id: 'new', action: 'send' };
@@ -162,12 +169,12 @@ export class Support implements OnInit, OnDestroy {
           const savedId = response.id || optimisticId;
           delete this.locallyTrackedUntil[optimisticId];
           this.locallyTrackedUntil[savedId] = Date.now() + 60000;
-          this.replaceLocalMessage(optimisticId, {
+          this.replaceLocalMessage(optimisticId, this.enrichMessage({
             ...optimisticMessage,
             id: savedId,
             status: 'open',
             updated_at: new Date().toISOString(),
-          });
+          }));
           this.cdr.detectChanges();
           this.loadSupportMessages(true);
         } else {
@@ -178,11 +185,11 @@ export class Support implements OnInit, OnDestroy {
       },
       error: error => {
         this.busyAction = null;
-        this.replaceLocalMessage(optimisticId, {
+        this.replaceLocalMessage(optimisticId, this.enrichMessage({
           ...optimisticMessage,
           status: 'syncing',
           updated_at: new Date().toISOString(),
-        });
+        }));
         this.error = error?.error?.message || error?.message || 'Support request is still syncing. Use Refresh to confirm.';
         this.cdr.detectChanges();
       },
@@ -318,7 +325,7 @@ export class Support implements OnInit, OnDestroy {
     };
   }
 
-  private replaceLocalMessage(id: string, next: SupportMessage): void {
+  private replaceLocalMessage(id: string, next: SupportMessageView): void {
     this.messages = this.messages.map(item => item.id === id ? next : item);
   }
 
@@ -327,7 +334,7 @@ export class Support implements OnInit, OnDestroy {
     this.messages = this.messages.filter(item => item.id !== id);
   }
 
-  private mergePendingMessages(messages: SupportMessage[]): SupportMessage[] {
+  private mergePendingMessages(messages: SupportMessage[]): SupportMessageView[] {
     const now = Date.now();
     const backendIds = new Set(messages.map(item => item.id));
     for (const id of Object.keys(this.locallyTrackedUntil)) {
@@ -342,7 +349,7 @@ export class Support implements OnInit, OnDestroy {
         (this.locallyTrackedUntil[item.id] || 0) > now
       )
     );
-    return [...localMessages, ...messages];
+    return [...localMessages, ...messages.map(m => this.enrichMessage(m))];
   }
 
   private applyActionLocally(item: SupportMessage, action: string): void {
@@ -375,6 +382,16 @@ export class Support implements OnInit, OnDestroy {
       next.replied_at = updatedAt;
     }
 
-    this.replaceLocalMessage(item.id, next);
+    this.replaceLocalMessage(item.id, this.enrichMessage(next));
+  }
+
+  private enrichMessage(item: SupportMessage): SupportMessageView {
+    return {
+      ...item,
+      statusLabelText: this.statusLabel(item),
+      formattedCreatedAt: this.formatDate(item.created_at),
+      formattedRepliedAt: this.formatDate(item.replied_at),
+      formattedUpdatedAt: this.formatDate(item.updated_at)
+    };
   }
 }
