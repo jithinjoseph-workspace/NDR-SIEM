@@ -15,6 +15,13 @@ import {
   ShieldCheck,
   Square,
   AlertTriangle,
+  Monitor,
+  Link,
+  ClipboardList,
+  MoreVertical,
+  Wifi,
+  WifiOff,
+  Clock
 } from 'lucide-angular';
 import { Subscription, timer } from 'rxjs';
 import { filter } from 'rxjs/operators';
@@ -85,6 +92,13 @@ export class Setup implements OnInit, OnDestroy {
   ActivityIcon = Activity;
   ServerIcon = Server;
   AlertIcon = AlertTriangle;
+  MonitorIcon = Monitor;
+  LinkIcon = Link;
+  ClipboardListIcon = ClipboardList;
+  MoreVerticalIcon = MoreVertical;
+  WifiIcon = Wifi;
+  WifiOffIcon = WifiOff;
+  ClockIcon = Clock;
 
   constructor(
     private api: Api,
@@ -520,7 +534,7 @@ export class Setup implements OnInit, OnDestroy {
     );
   }
 
-  private loadExternalSensors(silent = false) {
+  loadExternalSensors(silent = false) {
     if (!this.canViewExternalSensors) {
       return;
     }
