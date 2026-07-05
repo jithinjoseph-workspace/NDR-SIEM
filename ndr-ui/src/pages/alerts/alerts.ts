@@ -79,14 +79,14 @@ export class Alerts implements OnInit, OnDestroy {
         
         const formattedHits = hits.map(hit => ({
           severity: hit.severity?.toUpperCase() || 'LOW',
-          source: `${hit.src || hit.suricata?.src || hit.zeek?.src || '-'} -> ${hit.dst || hit.suricata?.dst || hit.zeek?.dst || '-'}`,
+          source: `${hit.src || hit['agent-z']?.src || hit['agent-s']?.src || '-'} -> ${hit.dst || hit['agent-z']?.dst || hit['agent-s']?.dst || '-'}`,
           description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
           time: hit.ts
             ? new Date(hit.ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
           score: hit.score,
           community_id: hit.cid || hit.community_id || '',
-          src_country: this.formatOrigin(hit.src || hit.suricata?.src || hit.zeek?.src, hit.src_country),
+          src_country: this.formatOrigin(hit.src || hit['agent-z']?.src || hit['agent-s']?.src, hit.src_country),
           dst_country: hit.dst_country,
         }));
         

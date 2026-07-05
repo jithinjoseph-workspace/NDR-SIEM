@@ -110,8 +110,8 @@ impl RiskScorer {
         let mut tags       = Vec::<String>::new();
         let mut reasons    = Vec::<String>::new();
 
-        let zeek     = &hit.zeek;
-        let suricata = &hit.suricata;
+        let zeek     = &hit.agent_z;
+        let suricata = &hit.agent_s;
 
         // ── 1. Threat intel (highest signal) ─────────────────────────
         if is_malicious {
@@ -129,9 +129,9 @@ impl RiskScorer {
             if is_suricata_internal {
                 // Internal Suricata engine diagnostics (protocol anomalies, stream
                 // quirks) — not real threat detections. Tag but do not boost score.
-                tags.push("suricata-internal".into());
+                tags.push("agent-s-internal".into());
                 if let Some(alert) = &suricata.alert {
-                    reasons.push(format!("Suricata internal diagnostic: {}", alert.signature));
+                    reasons.push(format!("Agent-S internal diagnostic: {}", alert.signature));
                 }
             } else {
                 score += 60.0;

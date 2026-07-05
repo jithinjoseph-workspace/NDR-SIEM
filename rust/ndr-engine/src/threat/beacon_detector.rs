@@ -132,7 +132,7 @@ async fn store_beacon_hit(
     let q = format!(
         "INSERT INTO {db}.ndr_hits \
          (community_id, tenant_id, src_ip, dst_ip, score, severity, tags, \
-          threat_intel, timestamp, correlation_status, zeek_details, suricata_details) \
+          threat_intel, timestamp, correlation_status, agent_z_details, agent_s_details) \
          VALUES \
          ('{cid}', '{tid}', '{src}', '{dst}', {score:.1}, '{sev}', {tags}, \
           0, now(), 'beacon', '{details}', '{{}}')",

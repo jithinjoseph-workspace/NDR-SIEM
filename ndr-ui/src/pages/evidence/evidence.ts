@@ -29,6 +29,11 @@ export class EvidenceComponent implements OnInit {
   contentsError    = signal('');
   verifyResult     = signal<any>(null);
 
+  // ── AI verdict signals ────────────────────────────────────────────
+  ariaVerdict       = signal<any>(null);
+  ariaInvestigating = signal(false);
+  ariaError         = signal('');
+
   // ── UI state signals ──────────────────────────────────────────────
   activeTab            = signal('bundles');
   activeContentSection = signal('attack_summary');
@@ -102,6 +107,52 @@ export class EvidenceComponent implements OnInit {
     this.loadLog(b.community_id);
     this.loadAnnotations(b.id);
     this.loadBundleContents(b.id);
+    this.loadVerdict(b.community_id);
+  }
+
+  loadVerdict(communityId: string) {
+    this.ariaVerdict.set(null);
+    this.ariaError.set('');
+    this.evidenceService.getVerdict(communityId).subscribe({
+      next: (r: any) => {
+        if (r.status === 'ok' && r.verdict) {
+          this.ariaVerdict.set(r.verdict);
+        }
+      },
+      error: () => {}
+    });
+  }
+
+  runInvestigation(b: any) {
+    this.ariaInvestigating.set(true);
+    this.ariaError.set('');
+    this.activeContentSection.set('aria_verdict');
+    this.evidenceService.runInvestigation(b.community_id).subscribe({
+      next: (r: any) => {
+        this.ariaInvestigating.set(false);
+        if (r.status === 'ok') {
+          this.ariaVerdict.set(r);
+        } else {
+          this.ariaError.set(r.error || 'Investigation failed');
+        }
+      },
+      error: () => {
+        this.ariaInvestigating.set(false);
+        this.ariaError.set('AI investigation failed — check AI provider configuration in Settings.');
+      }
+    });
+  }
+
+  verdictClass(verdict: string): string {
+    if (verdict === 'TRUE_POSITIVE')  return 'verdict-true';
+    if (verdict === 'FALSE_POSITIVE') return 'verdict-false';
+    return 'verdict-suspicious';
+  }
+
+  verdictLabel(verdict: string): string {
+    if (verdict === 'TRUE_POSITIVE')  return 'TRUE POSITIVE';
+    if (verdict === 'FALSE_POSITIVE') return 'FALSE POSITIVE';
+    return 'SUSPICIOUS';
   }
 
   loadBundleContents(bundleId: string) {

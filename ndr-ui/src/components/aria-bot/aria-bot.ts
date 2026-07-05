@@ -93,6 +93,9 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   startRight = 24;
   startBottom = 24;
 
+  // ── Theme state ──
+  botTheme: 'light' | 'dark' = 'dark';
+
   // ── Alert tracking ──
   criticalCount = 0;
   highCount = 0;
@@ -111,20 +114,22 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   private proactiveSub?: any;
 
   private proactiveMessages = [
-    "👀 Anything look suspicious? Ask me!",
-    "📋 Got pending alerts to review — click me!",
-    "🔍 Want me to scan for lateral movement?",
-    "📊 Network summary ready — tap to see!",
-    "🛡️ I'm watching all traffic. Everything okay?",
-    "⚡ Quick check — any IPs you want me to look up?",
+    "Anything look suspicious? Ask me!",
+    "Got pending alerts to review — click me!",
+    "Want me to scan for lateral movement?",
+    "Network summary ready — tap to see!",
+    "I'm watching all traffic. Everything okay?",
+    "Quick check — any IPs you want me to look up?",
   ];
   private proactiveIndex = 0;
 
   quickReplies = [
-    { text: 'Any critical alerts?',  icon: '🚨' },
-    { text: 'Show latest evidence',  icon: '🔍' },
-    { text: 'Any lateral movement?', icon: '🕸' },
-    { text: 'System status',         icon: '💚' },
+    { text: 'Check alerts',          icon: 'shield-alert' },
+    { text: 'System status',         icon: 'activity' },
+    { text: 'Lateral movement?',     icon: 'network' },
+    { text: 'Any critical alerts?',  icon: 'triangle-alert' },
+    { text: 'Show latest evidence',  icon: 'file-text' },
+    { text: 'Top talkers',           icon: 'users' },
   ];
 
   constructor(
@@ -136,6 +141,11 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   // ── LIFECYCLE ──
 
   ngOnInit() {
+    const savedTheme = localStorage.getItem('aria_bot_theme');
+    if (savedTheme === 'light' || savedTheme === 'dark') {
+      this.botTheme = savedTheme;
+    }
+
     this.router.events.subscribe((e: any) => {
       const url = e.urlAfterRedirects || e.url;
       if (url) {
@@ -157,17 +167,15 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     // Proactive speech bubbles every 18s when chat is closed
     this.proactiveSub = setInterval(() => {
       if (!this.isOpen) {
-        setTimeout(() => {
-          this.speechText = this.proactiveMessages[this.proactiveIndex];
-          this.proactiveIndex = (this.proactiveIndex + 1) % this.proactiveMessages.length;
-          this.showSpeech = true;
+        this.speechText = this.proactiveMessages[this.proactiveIndex];
+        this.proactiveIndex = (this.proactiveIndex + 1) % this.proactiveMessages.length;
+        this.showSpeech = true;
+        this.cdr.detectChanges();
+        clearTimeout(this.speechTimer);
+        this.speechTimer = setTimeout(() => {
+          this.showSpeech = false;
           this.cdr.detectChanges();
-          clearTimeout(this.speechTimer);
-          this.speechTimer = setTimeout(() => {
-            this.showSpeech = false;
-            this.cdr.detectChanges();
-          }, 6000);
-        }, 0);
+        }, 6000);
       }
     }, 18000);
   }
@@ -250,16 +258,12 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   bootGreeting() {
     this.setEmotion('wave');
-    this.showSpeechBubble("Hi! I'm ARIA 👋 I'm watching your network right now!");
+    this.showSpeechBubble("Hi! I'm ARIA. I'm watching your network right now!");
     // Message added immediately so chat panel is never empty on first open
     this.addBotMessage(
-      "Hey! I'm ARIA, your NDR Security Assistant. I watch your network 24/7 and I'll alert you the moment anything suspicious happens. Ask me anything!",
+      "👋 Hey! I'm ARIA, your NDR Security Assistant. I monitor your network 24/7 and alert you the moment anything suspicious happens. Ask me anything!",
       'idle',
-      [
-        { label: 'Check alerts',    icon: '🚨', action: 'chat', data: 'Any critical alerts?' },
-        { label: 'System status',   icon: '💚', action: 'chat', data: 'System status' },
-        { label: 'Lateral movement?', icon: '🕸', action: 'chat', data: 'Any lateral movement?' },
-      ]
+      []
     );
     this.cdr.detectChanges();
   }
@@ -436,6 +440,12 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   }
 
   dismissAlertBanner() { this.showAlertBanner = false; }
+
+  toggleTheme() {
+    this.botTheme = this.botTheme === 'light' ? 'dark' : 'light';
+    localStorage.setItem('aria_bot_theme', this.botTheme);
+    this.cdr.detectChanges();
+  }
 
   goToAlerts() {
     this.showAlertBanner = false;

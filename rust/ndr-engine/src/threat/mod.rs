@@ -119,8 +119,9 @@ fn spawn_threat_tasks(
     correlator::spawn_correlator(Arc::clone(&ch));
     cloud_suggestions::spawn_suggestion_scanner(Arc::clone(&ch));
     beacon_detector::spawn_beacon_detector(Arc::clone(&ch));
+    crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch));
 
-    tracing::info!("All 7 threat background tasks started on elected leader");
+    tracing::info!("All 8 threat background tasks started on elected leader");
 }
 
 // ── Row structs for ClickHouse queries ───────────────────────────────────────

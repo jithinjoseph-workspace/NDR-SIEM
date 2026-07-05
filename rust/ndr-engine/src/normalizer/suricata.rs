@@ -41,6 +41,8 @@ pub fn normalize_suricata(raw: Value) -> Option<NormalizedEvent> {
     const SUPPRESSED_SIDS: &[u64] = &[
         2066052, // ET INFO ngrok-free.dev TLS SNI — sensor tunnel to cloud
         2066057, // ET INFO ngrok tunneling protocol
+        2049049, // ET INFO DNS query to *.ngrok domain (ngrok-free.dev) — sensor tunnel noise
+        2049052, // ET INFO DNS query to *.ngrok domain (ngrok-free.app) — sensor tunnel noise
     ];
 
     // Parse Suricata alert sub-object only when event_type == "alert"

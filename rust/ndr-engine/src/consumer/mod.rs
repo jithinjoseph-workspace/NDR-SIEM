@@ -383,11 +383,11 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     dst_country:        "".to_string(),
                                     tenant_id:          tid.clone(),
                                     correlation_status: "arp_conflict".to_string(),
-                                    zeek_details:       "{}".to_string(),
-                                    suricata_details:   "{}".to_string(),
+                                    agent_z_details:    "{}".to_string(),
+                                    agent_s_details:    "{}".to_string(),
                                     corroborated_at:    0,
-                                    suricata_rule_id:   "".to_string(),
-                                    suricata_category:  "".to_string(),
+                                    agent_s_rule_id:    "".to_string(),
+                                    agent_s_category:   "".to_string(),
                                     updated_at:         now,
                                 };
                                 let _ = conflict_ch.insert_hit_for_tenant(hit, &tid).await;

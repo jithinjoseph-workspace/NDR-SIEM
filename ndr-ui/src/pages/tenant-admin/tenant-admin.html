@@ -83,19 +83,19 @@
 
         <article class="kpi-widget prop-card glow-green">
           <span class="prop-label">ACTIVE ACCOUNTS</span>
-          <strong class="counter">{{ activeUsers }}</strong>
+          <strong class="counter">{{ activeUsersCount }}</strong>
           <div class="prop-pill pill-green">OPERATIONAL</div>
         </article>
 
         <article class="kpi-widget prop-card glow-purple">
           <span class="prop-label">ANALYSTS & SENIOR ANALYSTS</span>
-          <strong class="counter">{{ analystUsers }}</strong>
+          <strong class="counter">{{ analystUsersCount }}</strong>
           <div class="prop-pill pill-purple">ANALYSTS</div>
         </article>
 
         <article class="kpi-widget prop-card glow-yellow">
           <span class="prop-label">VIEWER ACCOUNTS</span>
-          <strong class="counter">{{ viewerUsers }}</strong>
+          <strong class="counter">{{ viewerUsersCount }}</strong>
           <div class="prop-pill pill-yellow">RESTRICTED</div>
         </article>
 
@@ -127,7 +127,7 @@
             <div class="legend-item">
               <span class="legend-dot" style="background:#0ea5e9; box-shadow:0 0 10px #0ea5e9"></span>
               <div class="legend-text-wrap">
-                <span class="legend-val">{{ analystUsers }}</span>
+                <span class="legend-val">{{ analystUsersCount }}</span>
                 <span class="legend-label">Analyst</span>
               </div>
             </div>
@@ -141,7 +141,7 @@
             <div class="legend-item">
               <span class="legend-dot" style="background:#10b981; box-shadow:0 0 10px #10b981"></span>
               <div class="legend-text-wrap">
-                <span class="legend-val">{{ viewerUsers }}</span>
+                <span class="legend-val">{{ viewerUsersCount }}</span>
                 <span class="legend-label">Viewer</span>
               </div>
             </div>
@@ -162,7 +162,7 @@
           <div class="chart-container">
             <canvas baseChart [data]="statusChartData" [options]="donutChartOptions" [type]="'doughnut'"></canvas>
             <div class="donut-center">
-              <strong>{{ activeUsers }}</strong>
+              <strong>{{ activeUsersCount }}</strong>
               <span>Active</span>
             </div>
           </div>
@@ -171,14 +171,14 @@
             <div class="legend-item">
               <span class="legend-dot" style="background:#10B981; box-shadow:0 0 10px #10b981"></span>
               <div class="legend-text-wrap">
-                <span class="legend-val">{{ activeUsers }}</span>
+                <span class="legend-val">{{ activeUsersCount }}</span>
                 <span class="legend-label">ACTIVE</span>
               </div>
             </div>
             <div class="legend-item">
               <span class="legend-dot" style="background:#EF4444; box-shadow:0 0 10px #ef4444"></span>
               <div class="legend-text-wrap">
-                <span class="legend-val">{{ users.length - activeUsers }} / {{ users.length }}</span>
+                <span class="legend-val">{{ users.length - activeUsersCount }} / {{ users.length }}</span>
                 <span class="legend-label">DISABLED</span>
               </div>
             </div>
@@ -197,7 +197,7 @@
       <div class="grid-toolbar">
         <div class="grid-toolbar-left">
           <h3>User Directory</h3>
-          <p>{{ activeUsers }} active &middot; {{ users.length - activeUsers }} disabled &middot; {{ users.length }} total</p>
+          <p>{{ activeUsersCount }} active &middot; {{ users.length - activeUsersCount }} disabled &middot; {{ users.length }} total</p>
         </div>
 
         <div class="toolbar-actions">
@@ -219,7 +219,7 @@
 
           <div class="search-box">
             <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
-            <input type="text" [(ngModel)]="searchTerm" placeholder="Search accounts...">
+            <input type="text" [ngModel]="searchTerm" (ngModelChange)="onSearchChange($event)" placeholder="Search accounts...">
           </div>
 
           <button class="primary-action" (click)="openCreateForm()">
@@ -253,7 +253,7 @@
         <!-- Table Head -->
         <div class="table-row table-head sticky-head">
           <div class="checkbox-cell">
-            <input type="checkbox" [checked]="isAllSelected()" (change)="toggleAll()">
+            <input type="checkbox" [checked]="allSelected" (change)="toggleAll()">
           </div>
           <span class="sortable" (click)="toggleSort('username')" [class.active-sort]="sortField === 'username'">
             User <lucide-icon [name]="SortIcon" class="w-3 h-3"></lucide-icon>
@@ -274,7 +274,7 @@
         <!-- Data Rows -->
         <div
           class="table-row grid-row"
-          *ngFor="let user of filteredAndSortedUsers"
+          *ngFor="let user of filteredAndSortedUsers; trackBy: trackUser"
           [class.selected-row]="selectedUserIds.has(user.id)"
         >
           <div class="checkbox-cell">
@@ -282,23 +282,23 @@
           </div>
 
           <div class="user-cell">
-            <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
+            <div class="avatar">{{ user.avatarInitial }}</div>
             <div class="user-info">
               <strong>{{ user.username }}</strong>
               <small>{{ user.tenant_id }}</small>
             </div>
           </div>
 
-          <span class="role-pill">{{ getRoleLabel(user.role) }}</span>
+          <span class="role-pill">{{ user.roleLabel }}</span>
 
           <div class="permission-list">
-            <span *ngFor="let label of getPermissionLabels(user).slice(0, 3)">{{ label }}</span>
-            <span *ngIf="getPermissionLabels(user).length > 3" style="color: var(--blue-hover); border-color: rgba(59,130,246,0.2); background: var(--blue-dim)">
-              +{{ getPermissionLabels(user).length - 3 }}
+            <span *ngFor="let label of user.permissionLabels.slice(0, 3)">{{ label }}</span>
+            <span *ngIf="user.permissionLabels.length > 3" style="color: var(--blue-hover); border-color: rgba(59,130,246,0.2); background: var(--blue-dim)">
+              +{{ user.permissionLabels.length - 3 }}
             </span>
           </div>
 
-          <span [class]="'status-pill ' + getUserStatus(user)">{{ getUserStatus(user) }}</span>
+          <span [class]="'status-pill ' + user.statusLabel">{{ user.statusLabel }}</span>
 
           <span class="created-cell">{{ user.created_at ? (user.created_at | date:'MMM d, y') : '—' }}</span>
 

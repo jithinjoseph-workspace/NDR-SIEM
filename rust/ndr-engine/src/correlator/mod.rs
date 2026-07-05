@@ -41,28 +41,28 @@ impl CorrelationEngine {
                 if let Some(p) = &event.proto {
                     session.proto = Some(p.clone());
                 }
-                session.zeek = Some(event);
+                session.agent_z = Some(event);
 
                 // Best — both sources present
                 if let (Some(z), Some(s)) = (
-                    &session.zeek,
-                    &session.suricata
+                    &session.agent_z,
+                    &session.agent_s
                 ) {
                     return Some(CorrelationHit {
                         community_id: cid,
-                        zeek:         z.clone(),
-                        suricata:     s.clone(),
+                        agent_z:      z.clone(),
+                        agent_s:      s.clone(),
                         hit_time:     now,
                         source:       "agent-z+agent-s".to_string(),
                     });
                 }
 
                 // Fire from Agent-Z alone immediately
-                if let Some(z) = &session.zeek {
+                if let Some(z) = &session.agent_z {
                     return Some(CorrelationHit {
                         community_id: cid,
-                        zeek:         z.clone(),
-                        suricata:     z.clone(),
+                        agent_z:      z.clone(),
+                        agent_s:      z.clone(),
                         hit_time:     now,
                         source:       "agent-z".to_string(),
                     });
@@ -70,28 +70,28 @@ impl CorrelationEngine {
             }
 
             EventSource::Suricata => {
-                session.suricata = Some(event);
+                session.agent_s = Some(event);
 
                 // Best — both sources present
                 if let (Some(z), Some(s)) = (
-                    &session.zeek,
-                    &session.suricata
+                    &session.agent_z,
+                    &session.agent_s
                 ) {
                     return Some(CorrelationHit {
                         community_id: cid,
-                        zeek:         z.clone(),
-                        suricata:     s.clone(),
+                        agent_z:      z.clone(),
+                        agent_s:      s.clone(),
                         hit_time:     now,
                         source:       "agent-z+agent-s".to_string(),
                     });
                 }
 
                 // Fire from Agent-S alone immediately
-                if let Some(s) = &session.suricata {
+                if let Some(s) = &session.agent_s {
                     return Some(CorrelationHit {
                         community_id: cid,
-                        zeek:         s.clone(),
-                        suricata:     s.clone(),
+                        agent_z:      s.clone(),
+                        agent_s:      s.clone(),
                         hit_time:     now,
                         source:       "agent-s".to_string(),
                     });

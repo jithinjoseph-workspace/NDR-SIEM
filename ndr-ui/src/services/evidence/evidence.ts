@@ -81,4 +81,14 @@ export class EvidenceService {
     return this.http.get(`/api/evidence/bundle/${bundleId}/contents`,
       { headers: this.headers() });
   }
+
+  runInvestigation(communityId: string): Observable<any> {
+    return this.http.post('/api/aria/investigate',
+      { community_id: communityId }, { headers: this.headers() });
+  }
+
+  getVerdict(communityId: string): Observable<any> {
+    return this.http.get(`/api/aria/verdict?cid=${encodeURIComponent(communityId)}`,
+      { headers: this.headers() });
+  }
 }

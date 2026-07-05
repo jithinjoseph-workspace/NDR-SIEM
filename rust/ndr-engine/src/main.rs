@@ -191,7 +191,7 @@ async fn main() {
         }),
         scorer:     Arc::new(scoring::RiskScorer::new()),
         detection:  Arc::new(tokio::sync::RwLock::new(detection::DetectionEngine::new("rules"))),
-        ch_storage: ch_storage_arc,
+        ch_storage: ch_storage_arc.clone(),
         storage:    Arc::new(storage),
         tx:         tx.clone(),
         redis:      Arc::new(redis_client.clone()),
@@ -430,9 +430,10 @@ async fn main() {
         .route("/api/settings/trusted-cloud", get(api::get_trusted_cloud_settings).put(api::update_trusted_cloud_settings))
         .route("/api/settings/trusted-cloud/suggestions/approve", post(api::approve_trusted_cloud_suggestion))
         .route("/api/settings/trusted-cloud/suggestions/reject",  post(api::reject_trusted_cloud_suggestion))
-        .route("/api/assets",     get(api::get_assets))
-        .route("/api/assets/:ip", get(api::get_asset_by_ip).put(api::update_asset_name))
-        .route("/api/assets/:ip/trusted", patch(api::set_asset_trusted_handler))
+        .route("/api/assets",                  get(api::get_assets))
+        .route("/api/assets/:ip",              get(api::get_asset_by_ip).put(api::update_asset_name))
+        .route("/api/assets/:ip/trusted",      patch(api::set_asset_trusted_handler))
+        .route("/api/assets/subnet-roles",     get(api::get_subnet_roles).put(api::set_subnet_roles))
         .route("/api/ipam/subnets", get(api::get_ipam_subnets))
         .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
         .route("/api/soar/playbook/create",post(api::create_playbook))
@@ -512,8 +513,10 @@ async fn main() {
 .route("/api/evidence/:cid/log", get(api::get_evidence_log))
 .route("/api/evidence/:cid/timeline", get(api::get_evidence_timeline))
 .route("/api/evidence/iocs/check", get(api::check_shared_ioc))
- .route("/api/aria/chat",   post(api::aria_chat))
-.route("/api/aria/status", get(api::aria_status))
+ .route("/api/aria/chat",        post(api::aria_chat))
+.route("/api/aria/status",      get(api::aria_status))
+.route("/api/aria/investigate", post(api::aria_investigate))
+.route("/api/aria/verdict",     get(api::aria_get_verdict))
 .route("/api/ai-activity", get(api::get_ai_activity))
 .route("/api/ai-suppressions/:id/deactivate", patch(api::deactivate_ai_suppression_handler))
 .route("/api/ai-suppressions/:id", delete(api::delete_ai_suppression_handler))
