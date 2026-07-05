@@ -43,8 +43,8 @@ export class Notifications {
 
       if (!isThreatIntel && !isHighRisk) return;
 
-      const srcIp = hit.src || hit.suricata?.src || hit.zeek?.src || '-';
-      const dstIp = hit.dst || hit.suricata?.dst || hit.zeek?.dst || '-';
+      const srcIp = hit.src || hit['agent-z']?.src || hit['agent-s']?.src || '-';
+      const dstIp = hit.dst || hit['agent-z']?.dst || hit['agent-s']?.dst || '-';
 
       // Composite key: deduplicate notifications per IP pair so repeated hits
       // on the same flow increment the hit counter rather than flooding the list.

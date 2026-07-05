@@ -24,16 +24,16 @@ pub async fn execute_action(
     
     let (src, dst) = match hit.source.as_str() {
         "agent-z" => (
-            hit.zeek.source_ip.as_deref().unwrap_or("-"),
-            hit.zeek.dest_ip.as_deref().unwrap_or("-"),
+            hit.agent_z.source_ip.as_deref().unwrap_or("-"),
+            hit.agent_z.dest_ip.as_deref().unwrap_or("-"),
         ),
         "agent-s" => (
-            hit.suricata.source_ip.as_deref().unwrap_or("-"),
-            hit.suricata.dest_ip.as_deref().unwrap_or("-"),
+            hit.agent_s.source_ip.as_deref().unwrap_or("-"),
+            hit.agent_s.dest_ip.as_deref().unwrap_or("-"),
         ),
         _ => (
-            hit.zeek.source_ip.as_deref().or(hit.suricata.source_ip.as_deref()).unwrap_or("-"),
-            hit.zeek.dest_ip.as_deref().or(hit.suricata.dest_ip.as_deref()).unwrap_or("-"),
+            hit.agent_z.source_ip.as_deref().or(hit.agent_s.source_ip.as_deref()).unwrap_or("-"),
+            hit.agent_z.dest_ip.as_deref().or(hit.agent_s.dest_ip.as_deref()).unwrap_or("-"),
         ),
     };
 

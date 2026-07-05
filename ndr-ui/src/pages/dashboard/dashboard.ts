@@ -184,8 +184,8 @@ export class Dashboard implements OnInit, OnDestroy {
         this.hitsLastHour.update(v => v + 1);
 
         const severity = (hit.severity ?? '').toUpperCase() || 'LOW';
-        const srcIp = hit.src || hit.suricata?.src || '-';
-        const dstIp = hit.dst || hit.suricata?.dst || '-';
+        const srcIp = hit.src || hit['agent-z']?.src || hit['agent-s']?.src || '-';
+        const dstIp = hit.dst || hit['agent-z']?.dst || hit['agent-s']?.dst || '-';
         const incidentId = `${srcIp}|${dstIp}|${severity}`;
 
         // ── Real-time severity counter sync ─────────────────────────────────

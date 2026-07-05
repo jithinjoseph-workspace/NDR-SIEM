@@ -142,6 +142,8 @@
       <div class="col-name">Name</div>
       <div class="col-vendor">Vendor</div>
       <div class="col-os">OS</div>
+      <div class="col-role">Role</div>
+      <div class="col-criticality">Risk</div>
       <div class="col-mac">MAC Address</div>
       <div class="col-conns">Conns (24h)</div>
       <div class="col-alerts">Alerts (24h)</div>
@@ -191,8 +193,23 @@
         </div>
         
         <div class="col-vendor">{{ asset.vendor || '--' }}</div>
-        <div class="col-os">{{ asset.os_guess || '--' }}</div>
-        
+        <div class="col-os">{{ asset.ja3_os || asset.os_guess || '--' }}</div>
+
+        <div class="col-role">
+          <span *ngIf="asset.role" class="role-badge" [class]="getRoleClass(asset.role)" [title]="asset.subnet_role ? 'Subnet: ' + asset.subnet_role : ''">
+            {{ asset.role }}
+          </span>
+          <span *ngIf="!asset.role">--</span>
+        </div>
+
+        <div class="col-criticality">
+          <div *ngIf="asset.criticality > 0" class="criticality-bar-wrap" [title]="'Criticality: ' + asset.criticality + '/100'">
+            <div class="criticality-bar" [style.width.%]="asset.criticality" [class]="getCriticalityClass(asset.criticality)"></div>
+            <span class="criticality-val">{{ asset.criticality }}</span>
+          </div>
+          <span *ngIf="!asset.criticality || asset.criticality === 0">--</span>
+        </div>
+
         <div class="col-mac">
           <code>{{ asset.mac || '--' }}</code>
         </div>

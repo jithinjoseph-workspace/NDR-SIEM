@@ -29,12 +29,12 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
     src_country         String,
     dst_country         String,
     tenant_id           String DEFAULT 'default',
-    correlation_status  String DEFAULT 'zeek_only',
-    zeek_details        String DEFAULT '{}',
-    suricata_details    String DEFAULT '{}',
+    correlation_status  String DEFAULT 'agent_z_only',
+    agent_z_details     String DEFAULT '{}',
+    agent_s_details     String DEFAULT '{}',
     corroborated_at     DateTime DEFAULT toDateTime(0),
-    suricata_rule_id    String DEFAULT '',
-    suricata_category   String DEFAULT '',
+    agent_s_rule_id     String DEFAULT '',
+    agent_s_category    String DEFAULT '',
     updated_at          DateTime DEFAULT now()
 ) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_hits', '{replica}', updated_at)
 ORDER BY (tenant_id, community_id)
@@ -256,8 +256,8 @@ CREATE TABLE IF NOT EXISTS ndr.sensor_keys ON CLUSTER ndr_cluster
     hostname    String DEFAULT '',
     interface_name String DEFAULT '',
     os_name     String DEFAULT '',
-    zeek_status String DEFAULT 'unknown',
-    suricata_status String DEFAULT 'unknown',
+    agent_z_status String DEFAULT 'unknown',
+    agent_s_status String DEFAULT 'unknown',
     vector_status String DEFAULT 'unknown',
     arkime_status String DEFAULT 'unknown',
     arkime_url  String DEFAULT '',
@@ -519,17 +519,24 @@ ORDER BY (ioc_type, ioc_value);
 
 CREATE TABLE IF NOT EXISTS ndr.assets ON CLUSTER ndr_cluster
 (
-    ip          String,
-    mac         String DEFAULT '',
-    hostname    String DEFAULT '',
-    vendor      String DEFAULT '',
-    os_guess    String DEFAULT '',
-    device_type String DEFAULT 'unknown',
-    custom_name String DEFAULT '',
-    tenant_id   String DEFAULT 'default',
-    first_seen  DateTime DEFAULT now(),
-    last_seen   DateTime DEFAULT now(),
-    ip_history  String DEFAULT '[]'
+    ip             String,
+    mac            String DEFAULT '',
+    hostname       String DEFAULT '',
+    vendor         String DEFAULT '',
+    os_guess       String DEFAULT '',
+    device_type    String DEFAULT 'unknown',
+    custom_name    String DEFAULT '',
+    tenant_id      String DEFAULT 'default',
+    first_seen     DateTime DEFAULT now(),
+    last_seen      DateTime DEFAULT now(),
+    ip_history     String DEFAULT '[]',
+    trusted        UInt8  DEFAULT 0,
+    threat_flagged UInt8  DEFAULT 0,
+    role           String DEFAULT '',
+    criticality    UInt8  DEFAULT 0,
+    open_ports     String DEFAULT '[]',
+    subnet_role    String DEFAULT '',
+    ja3_os         String DEFAULT ''
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/assets', '{replica}', last_seen)
 ORDER BY (tenant_id, ip);

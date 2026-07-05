@@ -890,8 +890,8 @@ export class TenantAdmin implements OnInit, OnDestroy {
         );
         const healthyPipeline = tenantSensors.length === 0 || tenantSensors.some(sensor =>
           this.isRecentlySeen(sensor.last_seen) &&
-          (this.isRunning(sensor.zeek) ||
-           this.isRunning(sensor.suricata) ||
+          (this.isRunning(sensor['agent-z']) ||
+           this.isRunning(sensor['agent-s']) ||
            this.isRunning(sensor.vector))
         );
 

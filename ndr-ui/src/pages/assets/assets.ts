@@ -322,6 +322,23 @@ export class Assets implements OnInit {
     return new Date(ts * 1000).toLocaleString();
   }
 
+  getRoleClass(role: string): string {
+    if (!role) return '';
+    const r = role.toLowerCase();
+    if (r.includes('server'))   return 'role-server';
+    if (r.includes('gateway') || r.includes('router')) return 'role-network';
+    if (r.includes('workstation')) return 'role-workstation';
+    if (r.includes('iot'))      return 'role-iot';
+    if (r.includes('database')) return 'role-database';
+    return 'role-default';
+  }
+
+  getCriticalityClass(score: number): string {
+    if (score >= 70) return 'crit-high';
+    if (score >= 40) return 'crit-medium';
+    return 'crit-low';
+  }
+
   selectAsset(asset: any) {
     this.selectedAsset = asset;
   }

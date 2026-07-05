@@ -165,10 +165,10 @@ impl SqliteStorage {
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
-        let src_ip   = hit.suricata.source_ip.as_deref().or(hit.zeek.source_ip.as_deref()).unwrap_or("-");
-        let dst_ip   = hit.suricata.dest_ip.as_deref().or(hit.zeek.dest_ip.as_deref()).unwrap_or("-");
-        let src_port = hit.suricata.source_port.or(hit.zeek.source_port).unwrap_or(0) as i64;
-        let dst_port = hit.suricata.dest_port.or(hit.zeek.dest_port).unwrap_or(0) as i64;
+        let src_ip   = hit.agent_s.source_ip.as_deref().or(hit.agent_z.source_ip.as_deref()).unwrap_or("-");
+        let dst_ip   = hit.agent_s.dest_ip.as_deref().or(hit.agent_z.dest_ip.as_deref()).unwrap_or("-");
+        let src_port = hit.agent_s.source_port.or(hit.agent_z.source_port).unwrap_or(0) as i64;
+        let dst_port = hit.agent_s.dest_port.or(hit.agent_z.dest_port).unwrap_or(0) as i64;
 
         conn.execute(
             "INSERT INTO ndr_hits (
@@ -180,13 +180,13 @@ impl SqliteStorage {
                 hit.hit_time as i64,
                 hit.community_id,
                 src_ip, dst_ip, src_port, dst_port,
-                hit.zeek.proto.as_deref().unwrap_or("-"),
-                hit.suricata.event_type.as_deref().unwrap_or("-"),
+                hit.agent_z.proto.as_deref().unwrap_or("-"),
+                hit.agent_s.event_type.as_deref().unwrap_or("-"),
                 risk.score as f64,
                 risk.severity.as_str(),
                 risk.tags.join(","),
                 risk.reasons.join("|"),
-                hit.zeek.conn_state.as_deref().unwrap_or("-"),
+                hit.agent_z.conn_state.as_deref().unwrap_or("-"),
                 detections.iter().map(|d| d.title.as_str()).collect::<Vec<_>>().join(","),
                 enrichment.src_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or(""),
                 enrichment.dst_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or(""),
