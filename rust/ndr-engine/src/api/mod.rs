@@ -7481,6 +7481,91 @@ pub async fn aria_status(
     }))
 }
 
+/// POST /api/aria/investigate
+/// Body: { "community_id": "..." }
+/// Runs AI auto-investigation on the evidence bundle and returns + stores a verdict.
+/// Also accepts GET /api/aria/investigate?cid=... to retrieve a cached verdict.
+pub async fn aria_investigate(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+
+    let community_id = match payload["community_id"].as_str().filter(|s| !s.is_empty()) {
+        Some(cid) => cid.to_string(),
+        None => return Json(json!({"error": "community_id required"})),
+    };
+
+    match crate::ai::investigator::auto_investigate(
+        &state.ch_storage,
+        &claims.tenant_id,
+        &community_id,
+    ).await {
+        Ok(verdict) => {
+            let verdict_json = serde_json::to_string(&verdict).unwrap_or_default();
+            if let Err(e) = state.ch_storage.save_aria_verdict(
+                &claims.tenant_id,
+                &community_id,
+                &verdict_json,
+            ).await {
+                tracing::warn!("aria_investigate: failed to save verdict: {}", e);
+            }
+            Json(json!({
+                "status":             "ok",
+                "community_id":       community_id,
+                "verdict":            verdict.verdict,
+                "confidence":         verdict.confidence,
+                "reasoning":          verdict.reasoning,
+                "recommended_action": verdict.recommended_action,
+                "mitre_techniques":   verdict.mitre_techniques,
+                "generated_at":       verdict.generated_at,
+            }))
+        }
+        Err(e) => {
+            tracing::error!("aria_investigate: investigation failed: {}", e);
+            Json(json!({"error": e.to_string()}))
+        }
+    }
+}
+
+/// GET /api/aria/verdict?cid=...
+/// Retrieve a previously stored AI verdict without running a new investigation.
+pub async fn aria_get_verdict(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+
+    let community_id = raw_query
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| {
+            let mut p = kv.splitn(2, '=');
+            let k = p.next()?;
+            let v = p.next().unwrap_or("");
+            if k == "cid" { Some(percent_decode(v)) } else { None }
+        })
+        .unwrap_or_default();
+
+    if community_id.is_empty() {
+        return Json(json!({"error": "cid parameter required"}));
+    }
+
+    match state.ch_storage.get_aria_verdict(&claims.tenant_id, &community_id).await {
+        Some(v) => Json(json!({"status": "ok", "verdict": v})),
+        None    => Json(json!({"status": "not_found", "verdict": null})),
+    }
+}
+
 /// GET /api/ai-activity
 /// Returns AI suppression decisions and AI evidence analysis annotations.
 pub async fn get_ai_activity(

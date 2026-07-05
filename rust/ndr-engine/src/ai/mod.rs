@@ -2,6 +2,7 @@
 //! Handles OpenAI / Anthropic / custom Chat Completions API calls with live NDR context.
 
 pub mod provider;
+pub mod investigator;
 
 use serde_json::{json, Value};
 

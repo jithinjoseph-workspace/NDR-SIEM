@@ -236,7 +236,7 @@ fn build_attack_summary(
 
     if files_transferred > 0 {
         narrative.push_str(&format!(
-            " {} file(s) transferred during session — hashes available in zeek_files.json for VirusTotal lookup.",
+            " {} file(s) transferred during session — hashes available in agent_z_files.json for VirusTotal lookup.",
             files_transferred
         ));
     }
@@ -247,7 +247,7 @@ fn build_attack_summary(
 
     if zeek_anomalies > 0 {
         narrative.push_str(&format!(
-            " Zeek detected {} protocol anomaly/anomalies — see zeek_weird.json.", zeek_anomalies
+            " Agent-Z detected {} protocol anomaly/anomalies — see agent_z_weird.json.", zeek_anomalies
         ));
     }
 
@@ -822,8 +822,8 @@ pub async fn fetch_live_investigation(
         "zeek_dns":          zeek_dns_json,
         "zeek_http":         zeek_http_json,
         "zeek_ssl":          zeek_ssl_json,
-        "zeek_files":        zeek_files_json,
-        "zeek_weird":        zeek_weird_json,
+        "agent_z_files":     zeek_files_json,
+        "agent_z_weird":     zeek_weird_json,
         "suricata_dns":      suricata_dns_json,
         "suricata_http":     suricata_http_json,
         "suricata_tls":      suricata_tls_json,
@@ -1074,14 +1074,25 @@ async fn build_evidence_bundle_inner(
 
     let zeek_http_requests: Vec<Value> = raw_http.iter().map(|raw| {
         let ts = raw["ts"].as_f64().unwrap_or(0.0);
-        let host = raw["host"].as_str().unwrap_or("");
-        let uri  = raw["uri"].as_str().unwrap_or("/");
+        let host = raw["host"].as_str().filter(|s| !s.is_empty() && *s != "-").unwrap_or("");
+        let uri  = raw["uri"].as_str().filter(|s| !s.is_empty() && *s != "-").unwrap_or("/");
+        // Zeek sees asymmetric traffic (responses only) so host/method/uri may be absent.
+        // Fall back to the responder IP so full_url is at least navigable.
+        let resp_ip   = raw["id.resp_h"].as_str().unwrap_or("");
+        let resp_port = raw["id.resp_p"].as_u64().unwrap_or(80);
+        let display_host = if !host.is_empty() {
+            host.to_string()
+        } else if !resp_ip.is_empty() {
+            if resp_port == 80 { resp_ip.to_string() } else { format!("{}:{}", resp_ip, resp_port) }
+        } else {
+            String::new()
+        };
         json!({
             "timestamp":      unix_to_iso(ts),
             "method":         raw["method"],
-            "host":           host,
+            "host":           display_host,
             "uri":            uri,
-            "full_url":       format!("http://{}{}", host, uri),
+            "full_url":       format!("http://{}{}", display_host, uri),
             "user_agent":     raw["user_agent"],
             "status_code":    raw["status_code"],
             "content_type":   raw["resp_mime_types"],
@@ -1095,10 +1106,12 @@ async fn build_evidence_bundle_inner(
         })
     }).collect();
 
+    // Zeek only sees server responses so user_agent is absent; fall back to Arkime session UA.
     let http_user_agent = zeek_http_requests.first()
         .and_then(|r| r["user_agent"].as_str())
-        .unwrap_or("")
-        .to_string();
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| alert_json["user_agent"].as_str().unwrap_or("").to_string());
 
     let zeek_http_json = json!({
         "requests": zeek_http_requests,
@@ -1381,8 +1394,8 @@ async fn build_evidence_bundle_inner(
             "zeek_dns.json":         { "sha256": sha256_of(zeek_dns_str.as_bytes()),    "size_bytes": zeek_dns_str.len() },
             "zeek_http.json":        { "sha256": sha256_of(zeek_http_str.as_bytes()),   "size_bytes": zeek_http_str.len() },
             "zeek_ssl.json":         { "sha256": sha256_of(zeek_ssl_str.as_bytes()),    "size_bytes": zeek_ssl_str.len() },
-            "zeek_files.json":       { "sha256": sha256_of(zeek_files_str.as_bytes()), "size_bytes": zeek_files_str.len() },
-            "zeek_weird.json":       { "sha256": sha256_of(zeek_weird_str.as_bytes()), "size_bytes": zeek_weird_str.len() },
+            "agent_z_files.json":    { "sha256": sha256_of(zeek_files_str.as_bytes()), "size_bytes": zeek_files_str.len() },
+            "agent_z_weird.json":    { "sha256": sha256_of(zeek_weird_str.as_bytes()), "size_bytes": zeek_weird_str.len() },
             "suricata_alerts.json":  { "sha256": sha256_of(suricata_str.as_bytes()),   "size_bytes": suricata_str.len() },
             "sigma_matches.json":    { "sha256": sha256_of(sigma_str.as_bytes()),      "size_bytes": sigma_str.len() },
             "threat_intel.json":     { "sha256": sha256_of(intel_str.as_bytes()),      "size_bytes": intel_str.len() },
@@ -1443,10 +1456,10 @@ async fn build_evidence_bundle_inner(
         zip.start_file("zeek_ssl.json", opts)?;
         zip.write_all(zeek_ssl_str.as_bytes())?;
 
-        zip.start_file("zeek_files.json", opts)?;
+        zip.start_file("agent_z_files.json", opts)?;
         zip.write_all(zeek_files_str.as_bytes())?;
 
-        zip.start_file("zeek_weird.json", opts)?;
+        zip.start_file("agent_z_weird.json", opts)?;
         zip.write_all(zeek_weird_str.as_bytes())?;
 
         zip.start_file("suricata_alerts.json", opts)?;

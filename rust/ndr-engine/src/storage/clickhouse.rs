@@ -4019,6 +4019,59 @@ pub async fn get_annotations(
     })).collect())
 }
 
+/// Save an AI investigation verdict for a community_id.
+/// Stored in evidence_annotations with tag='aria_verdict'.
+/// Multiple calls for the same community_id are additive — the newest is always read.
+pub async fn save_aria_verdict(
+    &self,
+    tenant_id:    &str,
+    community_id: &str,
+    verdict_json: &str,
+) -> anyhow::Result<()> {
+    let db  = tenant_db(tenant_id);
+    let cid = sql_escape(community_id);
+    let note = sql_escape(verdict_json);
+
+    // Resolve bundle_id for this community_id (empty string if not found)
+    let bundle_id: String = self.client.query(&format!(
+        "SELECT id FROM {db}.evidence_bundles FINAL \
+         WHERE community_id = '{cid}' LIMIT 1",
+        db = db, cid = cid
+    )).fetch_one::<String>().await.unwrap_or_default();
+
+    self.client.query(&format!(
+        "INSERT INTO {db}.evidence_annotations \
+         (bundle_id, community_id, author, note, tag) \
+         VALUES ('{bid}', '{cid}', 'aria', '{note}', 'aria_verdict')",
+        db = db,
+        bid  = sql_escape(&bundle_id),
+        cid  = cid,
+        note = note
+    )).execute().await?;
+    Ok(())
+}
+
+/// Retrieve the most recent AI verdict for a community_id.
+/// Returns None if no investigation has been run yet.
+pub async fn get_aria_verdict(
+    &self,
+    tenant_id:    &str,
+    community_id: &str,
+) -> Option<serde_json::Value> {
+    let db  = tenant_db(tenant_id);
+    let cid = sql_escape(community_id);
+
+    let rows: Vec<String> = self.client.query(&format!(
+        "SELECT note FROM {db}.evidence_annotations \
+         WHERE community_id = '{cid}' AND tag = 'aria_verdict' \
+         ORDER BY created_at DESC LIMIT 1",
+        db = db, cid = cid
+    )).fetch_all::<String>().await.unwrap_or_default();
+
+    rows.into_iter().next()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
 pub async fn get_all_ai_annotations(
     &self,
     tenant_id: &str,
