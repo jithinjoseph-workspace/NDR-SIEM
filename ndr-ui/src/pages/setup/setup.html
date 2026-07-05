@@ -22,6 +22,155 @@
     </div>
   </header>
 
+  <!-- ── SENSOR STRIP ── -->
+  <div class="sensor-strip" *ngIf="activeTab === 'local'; else externalStrip">
+    <div>
+      <span>Capture Interface</span>
+      <strong>{{ selectedInterface || 'None' }}</strong>
+    </div>
+    <div>
+      <span>Engines Running</span>
+      <strong>{{ localRunningCount() }}/3</strong>
+    </div>
+    <div>
+      <span>Pipeline</span>
+      <strong [class.degraded]="status() !== 'Running'">
+        {{ status() === 'Running' ? 'Monitoring Active' : 'Monitoring Idle' }}
+      </strong>
+    </div>
+  </div>
+
+  <ng-template #externalStrip>
+    <div class="sensor-strip">
+      <div>
+        <span>Registered Sensors</span>
+        <strong>{{ externalSensors.length }}</strong>
+      </div>
+      <div>
+        <span>Seen Recently</span>
+        <strong>{{ externalOnlineCount }}</strong>
+      </div>
+      <div>
+        <span>Control Path</span>
+        <strong [class.degraded]="!canViewExternalSensors">
+          {{ canViewExternalSensors ? 'Command Queue Ready' : 'Restricted' }}
+        </strong>
+      </div>
+    </div>
+  </ng-template>
+
+  <!-- ── TABS ── -->
+  <div class="setup-tabs" role="tablist" aria-label="Sensor setup views" *ngIf="canViewLocalSensor">
+    <button type="button" (click)="selectTab('local')" [class.active]="activeTab === 'local'">
+      <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
+      Local Sensor
+    </button>
+    <button *ngIf="!isDefaultTenant" type="button" (click)="selectTab('external')" [class.active]="activeTab === 'external'">
+      <lucide-icon [name]="ServerIcon" class="w-4 h-4"></lucide-icon>
+      External Sensors
+    </button>
+  </div>
+
+  <!-- ── LOCAL SENSOR PANEL ── -->
+  <div *ngIf="activeTab === 'local' && canViewLocalSensor" class="setup-grid">
+    <section class="panel interface-panel">
+      <div class="panel-heading">
+        <div class="panel-icon secondary">
+          <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <div>
+          <h3>Network Interface</h3>
+          <p>Interface used by Agent-Z and Agent-S for packet capture.</p>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label for="capture-interface">Capture NIC</label>
+        <select id="capture-interface" [(ngModel)]="selectedInterface">
+          <option value="" disabled>Select an interface</option>
+          <option *ngFor="let iface of interfaces" [value]="iface">{{ iface }}</option>
+        </select>
+      </div>
+
+      <div class="selected-chip">
+        <span>Selected</span>
+        <strong>{{ selectedInterface || 'None' }}</strong>
+      </div>
+
+      <button type="button" class="secondary-action" (click)="applyInterface()" [disabled]="!selectedInterface">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Apply Interface
+      </button>
+    </section>
+
+    <section class="panel engine-panel">
+      <div class="panel-heading">
+        <div class="panel-icon">
+          <lucide-icon [name]="SettingsIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <div>
+          <h3>Engine Management</h3>
+          <p>Runtime control for the local monitoring pipeline.</p>
+        </div>
+      </div>
+
+      <div class="engine-list">
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>Agent-Z IDS</strong>
+            <span>Traffic analysis engine</span>
+          </div>
+          <span class="engine-badge" [class.running]="agentZStatus() === 'running'">
+            {{ agentZStatus() === 'running' ? 'Running' : 'Stopped' }}
+          </span>
+        </article>
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>Agent-S EVE</strong>
+            <span>Intrusion detection system</span>
+          </div>
+          <span class="engine-badge" [class.running]="agentSStatus() === 'running'">
+            {{ agentSStatus() === 'running' ? 'Running' : 'Stopped' }}
+          </span>
+        </article>
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>Telemetry Pipeline</strong>
+            <span>Log shipping pipeline</span>
+          </div>
+          <span class="engine-badge" [class.running]="vectorStatus() === 'running'">
+            {{ vectorStatus() === 'running' ? 'Running' : 'Stopped' }}
+          </span>
+        </article>
+        <article class="engine-row">
+          <div class="engine-copy">
+            <strong>PCAP Engine</strong>
+            <span>Full packet capture</span>
+          </div>
+          <span class="engine-badge" [class.running]="arkimeStatus() === 'running'">
+            {{ arkimeStatus() === 'running' ? 'Running' : 'Stopped' }}
+          </span>
+        </article>
+      </div>
+
+      <div class="engine-actions">
+        <button type="button" class="primary-action"
+          (click)="startMonitoring()"
+          [disabled]="status() === 'Starting...' || status() === 'Stopping...' || status() === 'Running'">
+          <lucide-icon [name]="PlayIcon" class="w-4 h-4" *ngIf="status() !== 'Running'"></lucide-icon>
+          <lucide-icon [name]="ShieldIcon" class="w-4 h-4" *ngIf="status() === 'Running'"></lucide-icon>
+          {{ status() === 'Starting...' ? 'Starting...' : status() === 'Running' ? 'Monitoring Active' : 'Start Monitoring' }}
+        </button>
+        <button type="button" class="stop-action"
+          (click)="stopMonitoring()"
+          [disabled]="localRunningCount() === 0 || status() === 'Stopping...' || status() === 'Starting...'">
+          <lucide-icon [name]="StopIcon" class="w-4 h-4"></lucide-icon>
+          {{ status() === 'Stopping...' ? 'Stopping...' : 'Stop Monitoring' }}
+        </button>
+      </div>
+    </section>
+  </div>
+
   <!-- ── KPI GRID ── -->
   <div class="kpi-grid" *ngIf="activeTab === 'external'">
     <article class="kpi-card blue-glow">
@@ -177,17 +326,17 @@
       <div class="sensor-services-status">
         <div class="service-status-col">
           <div class="service-status-item">
-            <span>Zeek</span>
-            <div class="service-badge" [class.running]="sensor.zeek === 'running'">
-              <span class="service-dot" [class.green]="sensor.zeek === 'running'"></span>
-              {{ getServiceLabel(sensor.zeek) }}
+            <span>Agent-Z</span>
+            <div class="service-badge" [class.running]="sensor['agent-z'] === 'running'">
+              <span class="service-dot" [class.green]="sensor['agent-z'] === 'running'"></span>
+              {{ getServiceLabel(sensor['agent-z']) }}
             </div>
           </div>
           <div class="service-status-item">
-            <span>Suricata</span>
-            <div class="service-badge" [class.running]="sensor.suricata === 'running'">
-              <span class="service-dot" [class.green]="sensor.suricata === 'running'"></span>
-              {{ getServiceLabel(sensor.suricata) }}
+            <span>Agent-S</span>
+            <div class="service-badge" [class.running]="sensor['agent-s'] === 'running'">
+              <span class="service-dot" [class.green]="sensor['agent-s'] === 'running'"></span>
+              {{ getServiceLabel(sensor['agent-s']) }}
             </div>
           </div>
           <div class="service-status-item">
