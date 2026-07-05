@@ -441,10 +441,23 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   dismissAlertBanner() { this.showAlertBanner = false; }
 
-  toggleTheme() {
+  toggleTheme(event?: Event) {
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
     this.botTheme = this.botTheme === 'light' ? 'dark' : 'light';
     localStorage.setItem('aria_bot_theme', this.botTheme);
     this.cdr.detectChanges();
+  }
+
+  closeChat(event?: Event) {
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+    this.isOpen = false;
+    this.hasMoved = false;
   }
 
   goToAlerts() {

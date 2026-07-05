@@ -20,10 +20,9 @@
         <button [class.active]="reportPeriod() === '30d'" (click)="setPeriod('30d')">30d</button>
       </div>
 
-      <button class="ar-customize-btn" *ngIf="!generating()"
+      <button class="ar-customize-btn" *ngIf="generated() && !generating()"
               (click)="customMode.set(!customMode())"
-              [class.active]="customMode()"
-              [disabled]="!generated()">
+              [class.active]="customMode()">
         <lucide-icon [name]="ListIcon" class="w-4 h-4"></lucide-icon>
         {{ customMode() ? 'Close Builder' : 'Customize' }}
       </button>
@@ -123,7 +122,7 @@
            (drop)="onDrop(i, $event)"
            (dragend)="onDragEnd()">
         <lucide-icon [name]="GripIcon" class="ar-grip-icon"></lucide-icon>
-        <span class="ar-tile-num">{{ getSectionDef(id)?.num }}</span>
+        <span class="ar-tile-num">{{ sectionNumbers()[id] }}</span>
         <span class="ar-tile-title">{{ getSectionDef(id)?.title }}</span>
         <div class="ar-tile-actions">
           <span class="ar-tile-required" *ngIf="getSectionDef(id)?.required">Required</span>
@@ -244,7 +243,7 @@
          *ngIf="isSectionEnabled('section-exec')"
          [style.order]="sectionCssOrder('section-exec')">
       <div class="ar-section-header">
-        <div class="ar-section-num">01</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-exec'] }}</div>
         <div>
           <h2 class="ar-section-title">Executive Summary</h2>
           <p class="ar-section-desc">AI-generated strategic overview · Period: {{ periodLabel() }}</p>
@@ -301,7 +300,7 @@
          *ngIf="isSectionEnabled('section-kpis')"
          [style.order]="sectionCssOrder('section-kpis')">
       <div class="ar-section-header">
-        <div class="ar-section-num">02</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-kpis'] }}</div>
         <div>
           <h2 class="ar-section-title">Key Performance Indicators</h2>
           <p class="ar-section-desc">Metrics computed from live NDR telemetry · {{ periodLabel() }}</p>
@@ -397,7 +396,7 @@
          *ngIf="isSectionEnabled('section-threat')"
          [style.order]="sectionCssOrder('section-threat')">
       <div class="ar-section-header">
-        <div class="ar-section-num">03</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-threat'] }}</div>
         <div>
           <h2 class="ar-section-title">Threat Landscape Overview</h2>
           <p class="ar-section-desc">Current threat posture and network telemetry · {{ periodLabel() }}</p>
@@ -470,7 +469,7 @@
          *ngIf="isSectionEnabled('section-analyses')"
          [style.order]="sectionCssOrder('section-analyses')">
       <div class="ar-section-header">
-        <div class="ar-section-num">04</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-analyses'] }}</div>
         <div>
           <h2 class="ar-section-title">AI Threat Analyses &amp; MITRE ATT&CK Mapping</h2>
           <p class="ar-section-desc">ARIA deep-dive analyses with ATT&CK framework classification · {{ periodLabel() }}</p>
@@ -529,7 +528,7 @@
          *ngIf="isSectionEnabled('section-predictions')"
          [style.order]="sectionCssOrder('section-predictions')">
       <div class="ar-section-header">
-        <div class="ar-section-num">05</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-predictions'] }}</div>
         <div>
           <h2 class="ar-section-title">Predictive Threat Intelligence</h2>
           <p class="ar-section-desc">Forward-looking AI predictions from observed network patterns · {{ periodLabel() }}</p>
@@ -590,7 +589,7 @@
          *ngIf="isSectionEnabled('section-suppressions')"
          [style.order]="sectionCssOrder('section-suppressions')">
       <div class="ar-section-header">
-        <div class="ar-section-num">06</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-suppressions'] }}</div>
         <div>
           <h2 class="ar-section-title">Autonomous Suppression Decisions</h2>
           <p class="ar-section-desc">AI-driven false-positive suppression rules applied by ARIA · {{ periodLabel() }}</p>
@@ -649,7 +648,7 @@
          *ngIf="isSectionEnabled('section-recommendations')"
          [style.order]="sectionCssOrder('section-recommendations')">
       <div class="ar-section-header">
-        <div class="ar-section-num">07</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-recommendations'] }}</div>
         <div>
           <h2 class="ar-section-title">Recommendations &amp; Remediation</h2>
           <p class="ar-section-desc">ARIA-generated operational action items based on observed threats</p>
@@ -680,7 +679,7 @@
          *ngIf="isSectionEnabled('section-appendix')"
          [style.order]="sectionCssOrder('section-appendix')">
       <div class="ar-section-header">
-        <div class="ar-section-num">A</div>
+        <div class="ar-section-num">{{ sectionNumbers()['section-appendix'] }}</div>
         <div>
           <h2 class="ar-section-title">Appendix — System Health</h2>
           <p class="ar-section-desc">NDR engine status and infrastructure telemetry snapshot</p>
