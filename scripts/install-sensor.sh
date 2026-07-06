@@ -327,6 +327,11 @@ if ! command -v vector &>/dev/null; then
 fi
 log "✅ Vector: $(vector --version 2>/dev/null)"
 
+# ── Install auditd for Linux endpoint telemetry ───
+log "Installing auditd for endpoint visibility..."
+apt-get install -y -qq auditd audispd-plugins > /dev/null 2>&1 || true
+log "✅ auditd: $(auditd --version 2>/dev/null | head -1 || echo installed)"
+
 # ── Create directories ────────────────────────────
 log "Creating directories..."
 mkdir -p /opt/arkime/raw \
@@ -684,6 +689,57 @@ else
 fi
 log "✅ Suricata suppressions written to $THRESHOLD_FILE"
 
+# ── Configure auditd NDR rules ────────────────────
+log "Writing NDR auditd rules..."
+mkdir -p /etc/audit/rules.d
+cat > /etc/audit/rules.d/ndr.rules << 'AUDITEOF'
+# NDR Endpoint Telemetry Rules — process, privilege, network, persistence
+
+# Process execution
+-a always,exit -F arch=b64 -S execve -k process_execution
+-a always,exit -F arch=b32 -S execve -k process_execution
+
+# Privilege escalation calls
+-a always,exit -F arch=b64 -S setuid,setgid,setreuid,setregid,setresuid,setresgid -k priv_escalation
+
+# Outbound network connections (detects C2/reverse shells)
+-a always,exit -F arch=b64 -S connect -k network_connect
+
+# Sensitive credential files
+-w /etc/passwd  -p wa -k credential_access
+-w /etc/shadow  -p wa -k credential_access
+-w /etc/sudoers -p wa -k priv_escalation
+-w /etc/sudoers.d -p wa -k priv_escalation
+
+# Persistence via cron and init
+-w /etc/crontab         -p wa -k persistence
+-w /var/spool/cron      -p wa -k persistence
+-w /etc/cron.d          -p wa -k persistence
+-w /etc/rc.local        -p wa -k persistence
+-w /etc/systemd/system  -p wa -k persistence
+
+# SSH key manipulation
+-w /root/.ssh -p wa -k ssh_key_access
+-w /home      -p wa -k ssh_key_access
+
+# Execution from noisy/suspicious locations
+-w /tmp     -p x -k tmp_exec
+-w /dev/shm -p x -k shm_exec
+-w /var/tmp -p x -k tmp_exec
+
+# Kernel module loading (rootkit detection)
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k kernel_module
+
+# Log tampering
+-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat -F dir=/var/log -k log_tampering
+AUDITEOF
+
+# Apply rules immediately
+augenrules --load > /dev/null 2>&1 || auditctl -R /etc/audit/rules.d/ndr.rules > /dev/null 2>&1 || true
+systemctl enable auditd > /dev/null 2>&1 || true
+systemctl restart auditd 2>/dev/null || service auditd restart 2>/dev/null || true
+log "✅ auditd rules loaded ($(auditctl -l 2>/dev/null | grep -c '\-a\|\-w') rules active)"
+
 # ── Configure Vector with ALL log sources + HTTP sink ─
 log "Configuring Vector → HTTP @ $CLOUD_URL/api/ingest"
 HOSTNAME_VAL=$(hostname)
@@ -930,6 +986,70 @@ if err == null {
 } else { abort }
 '''
 
+# ── SOURCE + TRANSFORM: Linux auditd endpoint logs ──
+[sources.auditd]
+type = "file"
+include = ["/var/log/audit/audit.log"]
+read_from = "end"
+glob_minimum_cooldown_ms = 200
+
+[transforms.auditd_json]
+type = "remap"
+inputs = ["auditd"]
+source = '''
+msg = string!(.message)
+
+# Extract record type — skip noisy/irrelevant types early
+type_m = parse_regex(msg, r'type=(?P<t>[A-Z_]+)') ?? {}
+rec_type = string(type_m.t) ?? "UNKNOWN"
+if !includes(["EXECVE","SYSCALL","PATH","PROCTITLE","SOCKADDR","USER_AUTH","USER_LOGIN","USER_CMD","CWD","BPRM_FCAPS"], rec_type) { abort }
+.record_type = rec_type
+
+# Extract audit timestamp and serial number
+ts_m = parse_regex(msg, r'msg=audit\((?P<ts>[0-9.]+):(?P<serial>[0-9]+)\)') ?? {}
+.audit_ts     = string(ts_m.ts)     ?? ""
+.audit_serial = string(ts_m.serial) ?? ""
+
+# Strip header, parse remaining key=value pairs
+kv_str = replace(msg, r'^type=\S+ msg=audit\([^)]+\):\s*', "", count: 1)
+kv, kv_err = parse_key_value(kv_str, field_delimiter: " ", value_delimiter: "=")
+if kv_err == null {
+  if exists(kv.exe)     { .exe     = string!(kv.exe) }
+  if exists(kv.comm)    { .comm    = string!(kv.comm) }
+  if exists(kv.pid)     { .pid     = string!(kv.pid) }
+  if exists(kv.ppid)    { .ppid    = string!(kv.ppid) }
+  if exists(kv.uid)     { .uid     = string!(kv.uid) }
+  if exists(kv.auid)    { .auid    = string!(kv.auid) }
+  if exists(kv.key)     { .key     = string!(kv.key) }
+  if exists(kv.syscall) { .syscall = string!(kv.syscall) }
+  if exists(kv.success) { .success = string!(kv.success) }
+  if exists(kv.name)    { .TargetFilename = string!(kv.name) }
+
+  # EXECVE: reconstruct CommandLine from a0 a1 a2 ... a7
+  if rec_type == "EXECVE" {
+    parts = []
+    if exists(kv.a0) { parts = push(parts, string!(kv.a0)) }
+    if exists(kv.a1) { parts = push(parts, string!(kv.a1)) }
+    if exists(kv.a2) { parts = push(parts, string!(kv.a2)) }
+    if exists(kv.a3) { parts = push(parts, string!(kv.a3)) }
+    if exists(kv.a4) { parts = push(parts, string!(kv.a4)) }
+    if exists(kv.a5) { parts = push(parts, string!(kv.a5)) }
+    if exists(kv.a6) { parts = push(parts, string!(kv.a6)) }
+    if exists(kv.a7) { parts = push(parts, string!(kv.a7)) }
+    if length(parts) > 0 { .CommandLine = join!(parts, " ") }
+  }
+}
+
+# Map to SIGMA-compatible field names (Linux SIGMA rules use these)
+.Image = .exe ?? .comm ?? ""
+if !exists(.CommandLine) { .CommandLine = .comm ?? "" }
+
+.source      = "linux"
+.log_type    = "auditd"
+.tenant_id   = "${TENANT_ID}"
+.sensor_host = "${HOSTNAME_VAL}"
+'''
+
 # ── SINK: HTTP POST to cloud /api/ingest ─────────
 # Works through ngrok, reverse proxy, or direct IP.
 # Sends NDJSON batches; ingest endpoint handles it.
@@ -947,7 +1067,8 @@ inputs = [
   "zeek_quic_json",
   "zeek_arp_json",
   "zeek_software_json",
-  "zeek_ipam_json"
+  "zeek_ipam_json",
+  "auditd_json"
 ]
 uri = "${CLOUD_URL}/api/ingest"
 method = "post"

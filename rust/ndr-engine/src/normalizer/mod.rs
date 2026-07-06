@@ -4,9 +4,11 @@
 
 mod zeek;
 mod suricata;
+mod linux;
 
 pub use zeek::normalize_zeek;
 pub use suricata::normalize_suricata;
+pub use linux::normalize_linux;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,6 +20,7 @@ use serde_json::Value;
 pub enum EventSource {
     Zeek,
     Suricata,
+    Linux,
     Unknown,
 }
 
@@ -74,6 +77,11 @@ impl NormalizedEvent {
     /// Returns None if the event is missing a community_id or is totally malformed.
     pub fn from_raw(raw: Value) -> Option<Self> {
         let source = raw.get("source").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Linux endpoint events from auditd take priority — they have no community_id
+        if source == "linux" {
+            return normalize_linux(raw);
+        }
 
         // Use explicit source tag from Vector, fallback to heuristic
         let is_zeek = source == "agent-z" || source == "zeek"
@@ -139,6 +147,25 @@ impl NormalizedEvent {
         "alert.category"   => self.alert.as_ref().map(|a| a.category.clone()),
         "alert.severity"   => self.alert.as_ref().map(|a| a.severity.to_string()),
 
+        // ── Linux endpoint fields (SIGMA linux rules) ─────────────────────
+        "Image"               => self.raw.get("Image").and_then(|v| v.as_str()).map(String::from),
+        "CommandLine"         => self.raw.get("CommandLine").and_then(|v| v.as_str()).map(String::from),
+        "ParentImage"         => self.raw.get("ParentImage").and_then(|v| v.as_str()).map(String::from),
+        "ParentCommandLine"   => self.raw.get("ParentCommandLine").and_then(|v| v.as_str()).map(String::from),
+        "User"                => self.raw.get("User").and_then(|v| v.as_str()).map(String::from),
+        "ProcessId"           => self.raw.get("pid").and_then(|v| v.as_str()).map(String::from),
+        "ParentProcessId"     => self.raw.get("ppid").and_then(|v| v.as_str()).map(String::from),
+        "TargetFilename"      => self.raw.get("TargetFilename").and_then(|v| v.as_str()).map(String::from),
+        "DestinationIp"       => self.dest_ip.clone()
+                                    .or_else(|| self.raw.get("DestinationIp").and_then(|v| v.as_str()).map(String::from)),
+        "DestinationPort"     => self.dest_port.map(|p| p.to_string())
+                                    .or_else(|| self.raw.get("DestinationPort").and_then(|v| v.as_str()).map(String::from)),
+        "DestinationHostname" => self.raw.get("DestinationHostname").and_then(|v| v.as_str()).map(String::from),
+        "Initiated"           => self.raw.get("Initiated").and_then(|v| v.as_str()).map(String::from),
+        "type"                => self.raw.get("record_type").and_then(|v| v.as_str()).map(String::from),
+        "exe"                 => self.raw.get("exe").and_then(|v| v.as_str()).map(String::from),
+        "comm"                => self.raw.get("comm").and_then(|v| v.as_str()).map(String::from),
+
         // ── Aliases ───────────────────────────────
         "src_ip"    => self.source_ip.clone(),
         "dst_ip"    => self.dest_ip.clone(),
@@ -147,13 +174,32 @@ impl NormalizedEvent {
         "source"    => Some(match self.event_source {
                           EventSource::Zeek     => "agent-z".to_string(),
                           EventSource::Suricata => "agent-s".to_string(),
+                          EventSource::Linux    => "linux".to_string(),
                           EventSource::Unknown  => "unknown".to_string(),
                        }),
 
-        // ── Fallback to raw JSON ──────────────────
-        _ => self.raw.get(field)
-                .and_then(|v| v.as_str())
-                .map(String::from),
+        // ── Fallback to raw JSON with dot-path traversal ─────────────────
+        // Handles both flat keys ("query") and nested paths ("certificate.serial")
+        _ => {
+            // Try exact flat key first
+            if let Some(v) = self.raw.get(field).and_then(|v| v.as_str()) {
+                return Some(v.to_string());
+            }
+            // Traverse dot-separated path through nested objects
+            let parts: Vec<&str> = field.split('.').collect();
+            if parts.len() > 1 {
+                let mut cur = &self.raw;
+                for part in &parts {
+                    match cur.get(*part) {
+                        Some(v) => cur = v,
+                        None    => return None,
+                    }
+                }
+                return cur.as_str().map(String::from)
+                    .or_else(|| if cur.is_null() { None } else { Some(cur.to_string()) });
+            }
+            None
+        }
     }
 }
 }

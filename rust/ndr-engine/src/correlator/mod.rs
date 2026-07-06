@@ -98,7 +98,8 @@ impl CorrelationEngine {
                 }
             }
 
-            EventSource::Unknown => {}
+            // Linux endpoint events are handled at ingest time — they never reach the correlator.
+            EventSource::Linux | EventSource::Unknown => {}
         }
 
         None

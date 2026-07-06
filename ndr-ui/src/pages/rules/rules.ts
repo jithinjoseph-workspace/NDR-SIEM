@@ -2,7 +2,8 @@ import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
-import { LucideAngularModule, Gavel, Plus, Edit, Trash2, Power, RefreshCcw, X, Info } from 'lucide-angular';
+import { AuthService } from '../../services/auth/auth';
+import { LucideAngularModule, Gavel, Plus, Edit, Trash2, Power, RefreshCcw, X, Info, Download } from 'lucide-angular';
 
 @Component({
   selector: 'app-rules',
@@ -96,6 +97,55 @@ export class Rules implements OnInit {
       description: 'Agent-Z log type',
       examples: ['conn', 'dns', 'http', 'ssl', 'ssh']
     },
+    // ── Linux endpoint fields (auditd) ──────────────────────────────────
+    {
+      value: 'Image',
+      label: 'Process Image',
+      description: 'Full path of the executed binary',
+      examples: ['/bin/bash', '/usr/bin/curl', '/tmp/malware', '/bin/sh']
+    },
+    {
+      value: 'CommandLine',
+      label: 'Command Line',
+      description: 'Full command including arguments',
+      examples: ['curl http://', 'chmod +x', 'wget ', 'nc -e /bin/sh']
+    },
+    {
+      value: 'ParentImage',
+      label: 'Parent Process',
+      description: 'Path of the parent process that spawned this one',
+      examples: ['/bin/bash', '/usr/sbin/sshd', '/bin/sh']
+    },
+    {
+      value: 'TargetFilename',
+      label: 'Target Filename',
+      description: 'File path written or modified',
+      examples: ['/etc/crontab', '/root/.ssh/', '/tmp/', '/etc/passwd']
+    },
+    {
+      value: 'DestinationIp',
+      label: 'Destination IP (Endpoint)',
+      description: 'Outbound connection destination from a Linux process',
+      examples: ['10.0.0.1', '192.168.', '8.8.8.8']
+    },
+    {
+      value: 'DestinationPort',
+      label: 'Destination Port (Endpoint)',
+      description: 'Outbound connection port from a Linux process',
+      examples: ['4444', '1337', '31337', '443']
+    },
+    {
+      value: 'User',
+      label: 'User',
+      description: 'Linux user account running the process',
+      examples: ['root', 'www-data', 'nobody']
+    },
+    {
+      value: 'type',
+      label: 'Auditd Record Type',
+      description: 'Type of auditd event record',
+      examples: ['EXECVE', 'SYSCALL', 'PATH', 'SOCKADDR']
+    },
   ];
 
   connStateHelp = [
@@ -130,8 +180,37 @@ export class Rules implements OnInit {
   RefreshIcon = RefreshCcw;
   XIcon = X;
   InfoIcon = Info;
+  DownloadIcon = Download;
 
-  constructor(private api: Api, private cdr: ChangeDetectorRef) { }
+  syncing = false;
+
+  constructor(
+    private api: Api,
+    private auth: AuthService,
+    private cdr: ChangeDetectorRef,
+  ) { }
+
+  get isAdmin() { return this.auth.isAdmin(); }
+
+  syncCommunityRules() {
+    this.syncing = true;
+    this.api.syncCommunityRules().subscribe({
+      next: (res: any) => {
+        this.syncing = false;
+        this.showMessage(
+          res.new_rules > 0
+            ? `${res.new_rules} SigmaHQ rules synced — engine reloaded`
+            : 'No new rules found (library is already up to date)',
+          'success',
+        );
+        this.loadRules();
+      },
+      error: (err: any) => {
+        this.syncing = false;
+        this.showMessage(err?.error?.error || 'Sync failed — check engine connectivity', 'error');
+      },
+    });
+  }
 
   get selectedField() {
     return this.fieldOptions.find(f => f.value === this.ruleForm.field);
@@ -155,38 +234,33 @@ export class Rules implements OnInit {
           name: r.title || 'Unknown',
           type: 'SIGMA',
           severity: (r.severity || 'medium').toUpperCase(),
-          status: r.enabled ? 'ACTIVE' : 'INACTIVE',  // ← only this line changed
+          status: r.enabled ? 'ACTIVE' : 'INACTIVE',
           id: r.id,
           description: r.description || '',
           tags: r.tags || [],
           conditions: r.conditions || 0,
+          hits: 0,
         }));
         this.loading = false;
         this.cdr.detectChanges();
+
+        // Load hit counts after rules are set to avoid race condition
+        this.api.getRuleHitCounts().subscribe({
+          next: (hitCounts: { [ruleName: string]: number }) => {
+            this.totalHits = Object.values(hitCounts).reduce((a, b) => a + b, 0);
+            this.rules = this.rules.map(r => ({
+              ...r,
+              hits: hitCounts[r.name] || 0
+            }));
+            this.cdr.detectChanges();
+          },
+          error: () => { }
+        });
       },
       error: () => {
         this.loading = false;
         this.cdr.detectChanges();
       }
-    });
-
-    this.api.getAlerts().subscribe({
-      next: (data: any[]) => {
-        this.totalHits = data.length;
-        // Count hits per rule
-        const hitCounts: any = {};
-        data.forEach((h: any) => {
-          (h.sigma_hits || []).forEach((rule: string) => {
-            hitCounts[rule] = (hitCounts[rule] || 0) + 1;
-          });
-        });
-        this.rules = this.rules.map(r => ({
-          ...r,
-          hits: hitCounts[r.name] || 0
-        }));
-        this.cdr.detectChanges();
-      },
-      error: () => { }
     });
   }
 

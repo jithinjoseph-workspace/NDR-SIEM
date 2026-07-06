@@ -66,6 +66,7 @@ export class Sidebar implements OnInit, OnDestroy {
         { label: 'Users',         route: '/admin', queryParams: { tab: 'users' },          icon: Users },
         { label: 'Engines',       route: '/admin', queryParams: { tab: 'engines' },        icon: Gauge },
         { label: 'Sensors',       route: '/admin', queryParams: { tab: 'sensors' },        icon: KeyRound },
+        { label: 'Rules',         route: '/rules',                                          icon: ShieldAlert },
         { label: 'Announcements', route: '/admin', queryParams: { tab: 'announcements' },   icon: Megaphone },
         { label: 'Telemetry',     route: '/admin', queryParams: { tab: 'telemetry' },       icon: Activity },
         { label: 'Trusted Cloud', route: '/admin', queryParams: { tab: 'trusted-cloud' },   icon: ShieldCheck },

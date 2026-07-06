@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleCheck,
   Copy,
+  Download,
   Edit,
   Gauge,
   KeyRound,
@@ -101,6 +102,30 @@ export class Admin implements OnInit, OnDestroy {
   LayoutDashboardIcon = LayoutDashboard;
   CpuIcon = Cpu;
   MemoryStickIcon = MemoryStick;
+  DownloadIcon = Download;
+
+  // Community rules sync state
+  syncingRules = false;
+  syncMessage = '';
+  syncError = false;
+
+  syncCommunityRules() {
+    this.syncingRules = true;
+    this.syncMessage = '';
+    this.syncError = false;
+    this.api.syncCommunityRules().subscribe({
+      next: (res: any) => {
+        this.syncingRules = false;
+        this.syncMessage = res.message || `${res.new_rules ?? 0} community rules synced from SigmaHQ`;
+        this.syncError = false;
+      },
+      error: (err: any) => {
+        this.syncingRules = false;
+        this.syncMessage = err?.error?.error || 'Sync failed';
+        this.syncError = true;
+      }
+    });
+  }
 
   // AI Providers state
   providers: AiProvider[] = [];

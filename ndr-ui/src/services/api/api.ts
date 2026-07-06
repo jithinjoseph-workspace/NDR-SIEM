@@ -187,6 +187,13 @@ export class Api {
   reloadRules(): Observable<any> {
     return this.http.post(`${this.baseUrl}/rules/reload`, {});
   }
+  syncCommunityRules(): Observable<any> {
+    return this.http.post(`${this.baseUrl}/rules/sync-community`, {});
+  }
+
+  getRuleHitCounts(): Observable<{ [ruleName: string]: number }> {
+    return this.http.get<{ [ruleName: string]: number }>(`${this.baseUrl}/rules/hit-counts`);
+  }
 
   getRuleById(id: string): Observable<any> {
     return this.http.get(`${this.baseUrl}/rules/${id}`);
