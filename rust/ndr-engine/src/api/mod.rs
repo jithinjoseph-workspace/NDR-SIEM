@@ -615,17 +615,33 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     // Score — use tenant-configured severity thresholds so critical_threshold
     // and alert_threshold bands from the Settings page are respected.
     let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud);
+
+    // Trusted-asset check: if src is a user-marked trusted device, halve score and tag it
+    let is_trusted_asset = state.ch_storage
+        .get_asset_by_ip(&tenant_id, src)
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.trusted == 1)
+        .unwrap_or(false);
+
+    let adjusted_score = if is_trusted_asset { raw_risk.score * 0.5 } else { raw_risk.score };
+    let mut adjusted_tags = raw_risk.tags.clone();
+    if is_trusted_asset && !adjusted_tags.contains(&"trusted-asset".to_string()) {
+        adjusted_tags.push("trusted-asset".to_string());
+    }
+
     let severity = crate::scoring::Severity::from_score_with_thresholds(
-        raw_risk.score,
+        adjusted_score,
         critical_threshold,
         alert_threshold as u32,
         50,
         25,
     );
     let risk = crate::scoring::RiskResult {
-        score:    raw_risk.score,
+        score:    adjusted_score,
         severity,
-        tags:     raw_risk.tags,
+        tags:     adjusted_tags,
         reasons:  raw_risk.reasons,
     };
 
@@ -755,15 +771,16 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                         if ip.is_empty() { continue; }
                                         let rows = ch.client
                                             .query(&format!(
-                                                "SELECT hostname, mac, vendor, os_guess, device_type, custom_name \
+                                                "SELECT hostname, mac, vendor, os_guess, device_type, custom_name, trusted \
                                                  FROM ndr.assets WHERE ip = '{}' AND tenant_id = '{}' LIMIT 1",
                                                 ip.replace('\'', "''"), tenant
                                             ))
-                                            .fetch_all::<(String,String,String,String,String,String)>()
+                                            .fetch_all::<(String,String,String,String,String,String,u8)>()
                                             .await
                                             .unwrap_or_default();
-                                        if let Some((hostname, mac, vendor, os_guess, device_type, custom_name)) = rows.first() {
+                                        if let Some((hostname, mac, vendor, os_guess, device_type, custom_name, trusted)) = rows.first() {
                                             let mut info = Vec::new();
+                                            if *trusted == 1            { info.push("TRUSTED INTERNAL DEVICE".to_string()); }
                                             if !hostname.is_empty()    { info.push(format!("hostname={}", hostname)); }
                                             if !mac.is_empty()         { info.push(format!("mac={}", mac)); }
                                             if !vendor.is_empty()      { info.push(format!("vendor={}", vendor)); }

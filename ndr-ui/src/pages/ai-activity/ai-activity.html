@@ -53,7 +53,21 @@
         <div class="analysis-header" (click)="toggleAnalysis(a.id)">
           <div class="analysis-meta">
             <span class="sev-badge" [class]="sevClass(a.severity)">{{ a.severity || 'UNKNOWN' }}</span>
-            <span class="flow">{{ a.src_ip }} → {{ a.dst_ip }}</span>
+            <span class="flow">
+              <span class="flow-ep">
+                {{ a.src_asset?.hostname || a.src_ip }}
+                <span *ngIf="a.src_asset?.trusted" class="mini-trusted" title="Trusted device">✓</span>
+                <span *ngIf="a.src_asset?.threat_flagged && !a.src_asset?.trusted" class="mini-threat" title="AI flagged">!</span>
+              </span>
+              →
+              <span class="flow-ep">
+                {{ a.dst_asset?.hostname || a.dst_ip }}
+                <span *ngIf="a.dst_asset?.trusted" class="mini-trusted" title="Trusted device">✓</span>
+              </span>
+            </span>
+            <span class="flow-raw" *ngIf="a.src_asset?.hostname || a.dst_asset?.hostname">
+              {{ a.src_ip }} → {{ a.dst_ip }}
+            </span>
             <span class="cid-short" [title]="a.community_id">{{ (a.community_id || '').slice(0, 24) }}…</span>
           </div>
           <div class="analysis-right">

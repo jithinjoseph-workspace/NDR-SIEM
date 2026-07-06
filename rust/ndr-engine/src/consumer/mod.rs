@@ -133,10 +133,25 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             ip_history:     m.get("ip_history").cloned().unwrap_or_else(|| "[]".to_string()),
                             trusted:        0,
                             threat_flagged: 0,
+                            role:           String::new(),
+                            criticality:    0,
+                            open_ports:     "[]".to_string(),
+                            subnet_role:    String::new(),
+                            ja3_os:         String::new(),
                         };
                         let ch2 = ch_flush.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = ch2.upsert_asset(&asset).await {
+                            let mut final_asset = asset;
+                            if let Ok(Some(existing)) = ch2.get_asset_by_ip(&final_asset.tenant_id.clone(), &ip).await {
+                                if existing.trusted != 0 { final_asset.trusted = existing.trusted; }
+                                if existing.threat_flagged != 0 { final_asset.threat_flagged = existing.threat_flagged; }
+                                if !existing.role.is_empty() { final_asset.role = existing.role; }
+                                if existing.criticality != 0 { final_asset.criticality = existing.criticality; }
+                                if existing.open_ports != "[]" && !existing.open_ports.is_empty() { final_asset.open_ports = existing.open_ports; }
+                                if !existing.subnet_role.is_empty() { final_asset.subnet_role = existing.subnet_role; }
+                                if !existing.ja3_os.is_empty() { final_asset.ja3_os = existing.ja3_os; }
+                            }
+                            if let Err(e) = ch2.upsert_asset(&final_asset).await {
                                 warn!("Asset flush error {}: {}", ip, e);
                             }
                         });
@@ -242,6 +257,11 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             ip_history:     "[]".to_string(),
                             trusted:        0,
                             threat_flagged: 0,
+                            role:           String::new(),
+                            criticality:    0,
+                            open_ports:     "[]".to_string(),
+                            subnet_role:    String::new(),
+                            ja3_os:         String::new(),
                         };
                         let ch_clone = state.ch_storage.clone();
                         let mac_clone = mac.to_string();
@@ -286,16 +306,27 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     } else {
                                         final_asset.ip_history = existing_by_mac.ip_history.clone();
                                     }
+                                    // Preserve user-set fields that the pipeline never overwrites
+                                    if existing_by_mac.trusted != 0 { final_asset.trusted = existing_by_mac.trusted; }
+                                    if existing_by_mac.threat_flagged != 0 { final_asset.threat_flagged = existing_by_mac.threat_flagged; }
+                                    if !existing_by_mac.role.is_empty() { final_asset.role = existing_by_mac.role.clone(); }
+                                    if existing_by_mac.criticality != 0 { final_asset.criticality = existing_by_mac.criticality; }
+                                    if existing_by_mac.open_ports != "[]" && !existing_by_mac.open_ports.is_empty() { final_asset.open_ports = existing_by_mac.open_ports.clone(); }
+                                    if !existing_by_mac.subnet_role.is_empty() { final_asset.subnet_role = existing_by_mac.subnet_role.clone(); }
+                                    if !existing_by_mac.ja3_os.is_empty() { final_asset.ja3_os = existing_by_mac.ja3_os.clone(); }
                                 }
                             } else {
                                 if let Ok(Some(existing)) = ch_clone.get_asset_by_ip(&final_asset.tenant_id, &final_asset.ip).await {
-                                    if !existing.os_guess.is_empty() {
-                                        final_asset.os_guess = existing.os_guess;
-                                    }
-                                    if existing.first_seen > 0 {
-                                        final_asset.first_seen = existing.first_seen;
-                                    }
+                                    if !existing.os_guess.is_empty() { final_asset.os_guess = existing.os_guess; }
+                                    if existing.first_seen > 0 { final_asset.first_seen = existing.first_seen; }
                                     final_asset.ip_history = existing.ip_history;
+                                    if existing.trusted != 0 { final_asset.trusted = existing.trusted; }
+                                    if existing.threat_flagged != 0 { final_asset.threat_flagged = existing.threat_flagged; }
+                                    if !existing.role.is_empty() { final_asset.role = existing.role; }
+                                    if existing.criticality != 0 { final_asset.criticality = existing.criticality; }
+                                    if existing.open_ports != "[]" && !existing.open_ports.is_empty() { final_asset.open_ports = existing.open_ports; }
+                                    if !existing.subnet_role.is_empty() { final_asset.subnet_role = existing.subnet_role; }
+                                    if !existing.ja3_os.is_empty() { final_asset.ja3_os = existing.ja3_os; }
                                 }
                             }
 
@@ -326,6 +357,36 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 }
                             }
                         });
+                    }
+                } else if event.log_source.as_deref() == Some("http") {
+                    let ip = raw.get("id.orig_h")
+                        .or_else(|| raw.get("src_ip"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let user_agent = raw.get("user_agent")
+                        .or_else(|| raw.get("useragent"))
+                        .and_then(|v| v.as_str())
+                        .or_else(|| raw.get("http").and_then(|h| h.get("http_user_agent")).and_then(|v| v.as_str()))
+                        .unwrap_or("");
+
+                    if !ip.is_empty() && !user_agent.is_empty() {
+                        let os_guess = guess_os_from_ua(user_agent);
+                        if !os_guess.is_empty() {
+                            let ch_clone = state.ch_storage.clone();
+                            let ip_clone = ip.to_string();
+                            let tenant_clone = tenant_id.clone();
+                            tokio::spawn(async move {
+                                if let Ok(Some(mut asset)) = ch_clone.get_asset_by_ip(&tenant_clone, &ip_clone).await {
+                                    if asset.os_guess.is_empty() {
+                                        asset.os_guess = os_guess;
+                                        asset.last_seen = chrono::Utc::now().timestamp() as u32;
+                                        if let Err(e) = ch_clone.upsert_asset(&asset).await {
+                                            warn!("Asset OS (UA) upsert error: {}", e);
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
                 } else if event.log_source.as_deref() == Some("arp") {
                     let mac = raw.get("mac").or_else(|| raw.get("SHA")).and_then(|v| v.as_str()).unwrap_or("");
@@ -585,4 +646,20 @@ pub async fn start_consumer(state: Arc<AppState>) {
             }
         }
     }
+}
+
+fn guess_os_from_ua(ua: &str) -> String {
+    if ua.contains("Windows NT 10") || ua.contains("Windows NT 11") {
+        return "Windows 10/11".to_string();
+    }
+    if ua.contains("Windows NT 6.3") { return "Windows 8.1".to_string(); }
+    if ua.contains("Windows NT 6.1") { return "Windows 7".to_string(); }
+    if ua.contains("Windows") { return "Windows".to_string(); }
+    if ua.contains("iPhone") || ua.contains("iPad") { return "iOS".to_string(); }
+    if ua.contains("Android") { return "Android".to_string(); }
+    if ua.contains("Mac OS X") { return "macOS".to_string(); }
+    if ua.contains("Ubuntu") { return "Ubuntu Linux".to_string(); }
+    if ua.contains("Debian") { return "Debian Linux".to_string(); }
+    if ua.contains("Linux") { return "Linux".to_string(); }
+    String::new()
 }

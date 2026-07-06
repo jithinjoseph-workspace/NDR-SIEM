@@ -64,7 +64,23 @@
             </td>
             <td>
               <div class="flow-cell">
-                <span>{{ alert.source }}</span>
+                <span class="flow-ips">
+                  <span class="flow-endpoint">
+                    {{ alert.src_asset?.hostname || alert.src_ip || '-' }}
+                    <span *ngIf="alert.src_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
+                    <span *ngIf="alert.src_asset?.threat_flagged && !alert.src_asset?.trusted" class="asset-threat-badge" title="AI flagged">!</span>
+                  </span>
+                  <span class="flow-arrow">→</span>
+                  <span class="flow-endpoint">
+                    {{ alert.dst_asset?.hostname || alert.dst_ip || '-' }}
+                    <span *ngIf="alert.dst_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
+                  </span>
+                </span>
+                <small class="flow-meta">
+                  {{ alert.src_ip }}
+                  <span *ngIf="alert.src_asset?.vendor" class="flow-vendor">· {{ alert.src_asset.vendor }}</span>
+                  <span *ngIf="alert.tags?.includes('trusted-asset')" class="trusted-score-note">· score halved (trusted)</span>
+                </small>
                 <small>
                   {{ alert.src_country || 'Origin unavailable' }}
                   <span *ngIf="alert.threat_intel" class="intel-flag">
