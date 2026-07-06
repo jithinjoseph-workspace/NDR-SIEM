@@ -367,6 +367,10 @@ export class Api {
     return this.http.post(`${this.baseUrl}/auth/tenants/${id}/status`, { active });
   }
 
+  setTenantAiEnabled(id: string, enabled: boolean): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/tenants/${id}/ai-enabled`, { enabled });
+  }
+
   getAnnouncements(): Observable<Announcement[]> {
     return this.http
       .get<AnnouncementListResponse>(`${this.baseUrl}/announcements`)

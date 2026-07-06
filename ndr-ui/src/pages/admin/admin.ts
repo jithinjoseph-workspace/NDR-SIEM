@@ -1044,6 +1044,28 @@ export class Admin implements OnInit, OnDestroy {
     });
   }
 
+  toggleTenantAI(tenant: any, enabled: boolean) {
+    const previous = tenant.ai_enabled;
+    tenant.ai_enabled = enabled;
+    this.cdr.detectChanges();
+    this.api.setTenantAiEnabled(tenant.id, enabled).subscribe({
+      next: (data: any) => {
+        if (data.status === 'ok') {
+          this.showMsg(`AI features ${enabled ? 'enabled' : 'disabled'} for ${tenant.name}`, 'success');
+        } else {
+          tenant.ai_enabled = previous;
+          this.showMsg(data.message || 'Failed to update AI setting', 'error');
+          this.cdr.detectChanges();
+        }
+      },
+      error: () => {
+        tenant.ai_enabled = previous;
+        this.showMsg('Failed to update AI setting', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
   loadSensorKeys() {
     this.loadingSensorKeys = true;
     this.api.getSensorKeys().subscribe({

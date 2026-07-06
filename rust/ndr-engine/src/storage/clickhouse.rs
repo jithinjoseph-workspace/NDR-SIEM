@@ -631,14 +631,41 @@ pub async fn get_tenants(
     &self
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let result = self.client
-        .query("SELECT id, name, active FROM ndr.tenants FINAL ORDER BY created_at")
-        .fetch_all::<(String,String,u8)>()
+        .query("SELECT id, name, active, ai_enabled FROM ndr.tenants FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,u8,u8)>()
         .await?;
     Ok(result.iter().map(|r| json!({
-        "id": r.0,
-        "name": r.1,
-        "active": r.2 == 1
+        "id":         r.0,
+        "name":       r.1,
+        "active":     r.2 == 1,
+        "ai_enabled": r.3 == 1
     })).collect())
+}
+
+pub async fn get_tenant_ai_enabled(&self, tenant_id: &str) -> bool {
+    let id = sql_escape(tenant_id);
+    self.client
+        .query(&format!(
+            "SELECT ai_enabled FROM ndr.tenants FINAL WHERE id = '{}' LIMIT 1", id
+        ))
+        .fetch_all::<u8>()
+        .await
+        .unwrap_or_default()
+        .first()
+        .map(|v| *v == 1)
+        .unwrap_or(true)
+}
+
+pub async fn set_tenant_ai_enabled(&self, tenant_id: &str, enabled: bool) -> anyhow::Result<()> {
+    let id = sql_escape(tenant_id);
+    self.client.query(&format!(
+        "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
+         SELECT id, name, active, {val}, now(), created_at \
+         FROM ndr.tenants FINAL WHERE id = '{id}'",
+        val = if enabled { 1 } else { 0 },
+        id  = id,
+    )).execute().await?;
+    Ok(())
 }
 
 pub async fn get_all_tenants(
@@ -768,18 +795,14 @@ pub async fn update_tenant(
 ) -> anyhow::Result<()> {
     let esc_id   = sql_escape(id);
     let esc_name = sql_escape(name);
-    // Direct in-place mutation — consistent with set_tenant_active.
-    // No read-then-rewrite; eliminates the ReplacingMergeTree FINAL race.
-    // updated_at is refreshed so the version column stays current.
-    let query = format!(
-        "ALTER TABLE ndr.tenants \
-         UPDATE name = '{}', active = {}, updated_at = now() \
-         WHERE id = '{}'",
-        esc_name,
-        if active { 1 } else { 0 },
-        esc_id
-    );
-    self.client.query(&query).execute().await?;
+    self.client.query(&format!(
+        "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
+         SELECT id, '{name}', {active}, ai_enabled, now(), created_at \
+         FROM ndr.tenants FINAL WHERE id = '{id}'",
+        name   = esc_name,
+        active = if active { 1 } else { 0 },
+        id     = esc_id,
+    )).execute().await?;
     Ok(())
 }
 
@@ -789,16 +812,13 @@ pub async fn set_tenant_active(
     active: bool,
 ) -> anyhow::Result<()> {
     let id = sql_escape(id);
-    // ALTER TABLE UPDATE is an atomic, in-place mutation.
-    // It does NOT require reading the row first, eliminating the
-    // ReplacingMergeTree async-merge race condition entirely.
-    // updated_at is also refreshed so the version column stays current.
-    let query = format!(
-        "ALTER TABLE ndr.tenants UPDATE active = {}, updated_at = now() WHERE id = '{}'",
-        if active { 1 } else { 0 },
-        id
-    );
-    self.client.query(&query).execute().await?;
+    self.client.query(&format!(
+        "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
+         SELECT id, name, {active}, ai_enabled, now(), created_at \
+         FROM ndr.tenants FINAL WHERE id = '{id}'",
+        active = if active { 1 } else { 0 },
+        id     = id,
+    )).execute().await?;
     Ok(())
 }
 
@@ -4914,7 +4934,7 @@ pub async fn get_ioc_hits(
         let db = tenant_db(tenant_id);
         let ip_list = ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
         let query = format!(
-            "ALTER TABLE {}.assets UPDATE threat_flagged = 1, threat_flagged_at = now() \
+            "ALTER TABLE {}.assets UPDATE threat_flagged = 1 \
              WHERE tenant_id = '{}' AND ip IN ({}) SETTINGS mutations_sync=0",
             db, sql_escape(tenant_id), ip_list
         );
@@ -5028,7 +5048,7 @@ pub async fn get_ioc_hits(
             if open_ports != "[]" && !open_ports.is_empty() { asset.open_ports = open_ports.to_string(); }
             if !subnet_role.is_empty() { asset.subnet_role = subnet_role.to_string(); }
             if !ja3_os.is_empty()      { asset.ja3_os      = ja3_os.to_string(); }
-            asset.last_seen = chrono::Utc::now().timestamp() as u32;
+            // last_seen intentionally not updated — enrichment is not a network observation
             self.upsert_asset(&asset).await?;
         }
         Ok(())

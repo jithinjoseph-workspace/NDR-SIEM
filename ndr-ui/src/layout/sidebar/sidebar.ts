@@ -101,7 +101,7 @@ export class Sidebar implements OnInit, OnDestroy {
       if (this.auth.hasPermission('evidence')) {
         this.navItems.push({ label: 'Evidence',    route: '/evidence',    icon: FolderSearch, permission: 'evidence' });
       }
-      if (this.auth.hasPermission('ai-activity')) {
+      if (this.auth.hasPermission('ai-activity') && this.auth.isTenantAiEnabled()) {
         this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot,          permission: 'ai-activity' });
       }
     }

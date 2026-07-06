@@ -11,14 +11,15 @@ pub fn spawn_correlator(ch: Arc<crate::storage::ClickhouseStorage>) {
             match ch.get_all_tenants().await {
                 Ok(tenants) => {
                     for tenant_id in tenants {
-                        if let Err(e) = run_correlation(&ch, &tenant_id).await {
+                        let ai_enabled = ch.get_tenant_ai_enabled(&tenant_id).await;
+                        if let Err(e) = run_correlation(&ch, &tenant_id, ai_enabled).await {
                             warn!("Correlation failed for {}: {}", tenant_id, e);
                         }
                     }
                 }
                 Err(e) => warn!("correlator: failed to get tenants: {}", e),
             }
-            info!("AI correlation cycle complete — next run in 6 hours");
+            info!("Correlation cycle complete — next run in 6 hours");
             tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
         }
     });
@@ -27,6 +28,7 @@ pub fn spawn_correlator(ch: Arc<crate::storage::ClickhouseStorage>) {
 async fn run_correlation(
     ch: &crate::storage::ClickhouseStorage,
     tenant_id: &str,
+    ai_enabled: bool,
 ) -> anyhow::Result<()> {
     let db = tenant_db_pub(tenant_id);
 
@@ -179,10 +181,9 @@ async fn run_correlation(
             m.evidence, m.description, m.attack_type, m.severity
         );
 
-        let briefing = {
+        let briefing = if ai_enabled {
             let raw = generate(ch, UseCase::ThreatPrediction, &system, &prompt).await;
             if raw.is_empty() {
-                // AI unavailable — generate briefing from known data, no hallucination
                 format!(
                     "Confirmed: {} {} appeared {} time(s) in network logs in the last 6 hours. \
                      Investigate and block this {} immediately.",
@@ -191,6 +192,12 @@ async fn run_correlation(
             } else {
                 raw.chars().take(500).collect::<String>()
             }
+        } else {
+            format!(
+                "Confirmed: {} {} appeared {} time(s) in network logs in the last 6 hours. \
+                 Investigate and block this {} immediately.",
+                m.ioc_type, m.ioc_value, m.hit_count, m.ioc_type
+            )
         };
 
         let alert_level = if m.probability >= 0.75     { "critical" }

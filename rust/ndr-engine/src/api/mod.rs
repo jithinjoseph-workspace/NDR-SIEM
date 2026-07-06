@@ -861,6 +861,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                      Provide your comprehensive threat analysis.",
                                 );
 
+                                if !ch.get_tenant_ai_enabled(&tenant).await {
+                                    return;
+                                }
+
                                 match crate::ai::provider::generate_chat(
                                     &ch, system_prompt, &[], &question
                                 ).await {
@@ -1114,6 +1118,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                      Is this a false positive?",
                     tls_sni_display = if tls_sni.is_empty() { "none".to_string() } else { tls_sni },
                 );
+
+                if !ch3.get_tenant_ai_enabled(&tid3).await {
+                    return;
+                }
 
                 if let Ok((reply, _)) = crate::ai::provider::generate_chat(
                     &ch3, prompt, &[], &question
@@ -3350,6 +3358,11 @@ pub async fn login(
                 tenant_id,
                 permissions_vec.clone(),
             );
+            let ai_enabled = if role == "super_admin" {
+                true
+            } else {
+                state.ch_storage.get_tenant_ai_enabled(tenant_id).await
+            };
             tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
             (
                 StatusCode::OK,
@@ -3361,7 +3374,8 @@ pub async fn login(
                         "username": username,
                         "role": role,
                         "tenant_id": tenant_id,
-                        "permissions": permissions_vec
+                        "permissions": permissions_vec,
+                        "ai_enabled": ai_enabled
                     }
                 }))
             ).into_response()
@@ -4101,6 +4115,25 @@ pub async fn set_tenant_status_api(
             "status": "error",
             "message": e.to_string()
         }))
+    }
+}
+
+pub async fn set_tenant_ai_enabled_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let enabled = payload["enabled"].as_bool().unwrap_or(true);
+    match state.ch_storage.set_tenant_ai_enabled(&id, enabled).await {
+        Ok(_) => {
+            tracing::info!("AI {} for tenant {} by super_admin", if enabled { "enabled" } else { "disabled" }, id);
+            Json(json!({"status": "ok", "ai_enabled": enabled}))
+        },
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
 }
 
@@ -7383,6 +7416,13 @@ pub async fn aria_chat(
         })),
     };
 
+    if claims.role != "super_admin" && !state.ch_storage.get_tenant_ai_enabled(&claims.tenant_id).await {
+        return Json(json!({
+            "reply": "AI features are not enabled for your organization. Contact your administrator.",
+            "emotion": "neutral"
+        }));
+    }
+
     // Keep last 6 messages only — prevents prompt bloat on long conversations
     let history_full = payload["history"].as_array().cloned().unwrap_or_default();
     let history = if history_full.len() > 6 {
@@ -7516,6 +7556,10 @@ pub async fn aria_investigate(
         Some(cid) => cid.to_string(),
         None => return Json(json!({"error": "community_id required"})),
     };
+
+    if claims.role != "super_admin" && !state.ch_storage.get_tenant_ai_enabled(&claims.tenant_id).await {
+        return Json(json!({"error": "AI features are not enabled for your tenant. Contact your administrator."}));
+    }
 
     match crate::ai::investigator::auto_investigate(
         &state.ch_storage,

@@ -461,6 +461,7 @@ async fn main() {
         .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
         .route("/api/auth/tenants/:id", put(api::update_tenant_api))
         .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))
+        .route("/api/auth/tenants/:id/ai-enabled", post(api::set_tenant_ai_enabled_api))
         .route("/api/announcements",
             get(api::get_announcements_api)
             .post(api::create_announcement_api))
