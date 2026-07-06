@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth/auth';
-import { LucideAngularModule, Search, Bell, User, ChevronDown, HelpCircle } from 'lucide-angular';
+import { LucideAngularModule, Search, Bell, User, ChevronDown, HelpCircle, Settings, LogOut } from 'lucide-angular';
 import { Websocket } from '../../services/websocket/websocket';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Announcement, Api } from '../../services/api/api';
@@ -22,6 +22,8 @@ export class Navbar implements OnInit, OnDestroy {
   UserIcon = User;
   ChevronDownIcon = ChevronDown;
   HelpCircleIcon = HelpCircle;
+  SettingsIcon = Settings;
+  LogOutIcon = LogOut;
 
   systemStatus = 'OPERATIONAL';
   searchText = '';
@@ -82,6 +84,10 @@ export class Navbar implements OnInit, OnDestroy {
 
   get hasNotificationItems() {
     return this.activeAnnouncements.length > 0 || (this.canViewAlerts && this.recentAlerts.length > 0);
+  }
+
+  get canViewSettings() {
+    return !this.auth.isAdmin();
   }
 
   get canViewTutorial() {
@@ -274,7 +280,18 @@ export class Navbar implements OnInit, OnDestroy {
     return this.auth.getUser();
   }
 
+  goToSettings() {
+    this.showUserMenu = false;
+    this.router.navigate(['/settings']);
+  }
+
+  goToSupport() {
+    this.showUserMenu = false;
+    this.router.navigate(['/support']);
+  }
+
   logout() {
+    this.showUserMenu = false;
     this.auth.logout();
   }
 

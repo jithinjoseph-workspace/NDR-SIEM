@@ -15,10 +15,4 @@
     </a>
   </nav>
 
-  <div class="sidebar-footer">
-    <a *ngFor="let item of bottomItems" [routerLink]="item.route" class="footer-link">
-      <lucide-icon [name]="item.icon" class="w-4 h-4"></lucide-icon>
-      <span>{{ item.label }}</span>
-    </a>
-  </div>
 </aside>
