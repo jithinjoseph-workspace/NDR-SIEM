@@ -165,6 +165,11 @@ pub struct AssetRow {
     pub ip_history: String,
     pub trusted: u8,
     pub threat_flagged: u8,
+    pub role: String,
+    pub criticality: u8,
+    pub open_ports: String,
+    pub subnet_role: String,
+    pub ja3_os: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -2257,23 +2262,55 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
              ORDER BY timestamp DESC LIMIT {}", db_name, limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
-        Ok(rows.iter().map(|r| serde_json::json!({
-            "timestamp":          r.timestamp,
-            "community_id":       r.community_id,
-            "src_ip":             r.src_ip,
-            "dst_ip":             r.dst_ip,
-            "score":              r.score,
-            "severity":           r.severity,
-            "tags":               r.tags,
-            "sigma_hits":         r.sigma_hits,
-            "threat_intel":       r.threat_intel != 0,
-            "src_country":        r.src_country,
-            "dst_country":        r.dst_country,
-            "correlation_status": r.correlation_status,
-            "corroborated":       r.correlation_status == "corroborated",
-            "agent_s_rule_id":    r.agent_s_rule_id,
-            "corroborated_at":    r.corroborated_at,
-        })).collect())
+
+        // Bulk asset lookup for src/dst IPs
+        let unique_ips: Vec<String> = rows.iter()
+            .flat_map(|r| [r.src_ip.clone(), r.dst_ip.clone()])
+            .filter(|ip| !ip.is_empty())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let mut asset_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        if !unique_ips.is_empty() {
+            let ip_list = unique_ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
+            if let Ok(assets) = self.client.query(&format!(
+                "SELECT ip, hostname, mac, vendor, device_type, trusted, threat_flagged \
+                 FROM {db}.assets FINAL WHERE ip IN ({ip_list}) AND tenant_id = '{tid}'",
+                db = db_name, ip_list = ip_list, tid = sql_escape(tenant_id)
+            )).fetch_all::<(String,String,String,String,String,u8,u8)>().await {
+                for (ip, hostname, mac, vendor, device_type, trusted, threat_flagged) in assets {
+                    asset_map.insert(ip, serde_json::json!({
+                        "hostname": hostname, "mac": mac, "vendor": vendor,
+                        "device_type": device_type,
+                        "trusted": trusted != 0, "threat_flagged": threat_flagged != 0
+                    }));
+                }
+            }
+        }
+
+        Ok(rows.iter().map(|r| {
+            let src_asset = asset_map.get(&r.src_ip).cloned().unwrap_or(serde_json::Value::Null);
+            let dst_asset = asset_map.get(&r.dst_ip).cloned().unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "timestamp":          r.timestamp,
+                "community_id":       r.community_id,
+                "src_ip":             r.src_ip,
+                "dst_ip":             r.dst_ip,
+                "score":              r.score,
+                "severity":           r.severity,
+                "tags":               r.tags,
+                "sigma_hits":         r.sigma_hits,
+                "threat_intel":       r.threat_intel != 0,
+                "src_country":        r.src_country,
+                "dst_country":        r.dst_country,
+                "correlation_status": r.correlation_status,
+                "corroborated":       r.correlation_status == "corroborated",
+                "agent_s_rule_id":    r.agent_s_rule_id,
+                "corroborated_at":    r.corroborated_at,
+                "src_asset":          src_asset,
+                "dst_asset":          dst_asset,
+            })
+        }).collect())
     }
 
     pub async fn get_events_by_community_id(
@@ -4099,11 +4136,42 @@ pub async fn get_all_ai_annotations(
          LIMIT 50",
         db = db
     )).fetch_all::<(String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
-    Ok(rows.iter().map(|r| serde_json::json!({
-        "id": r.0, "bundle_id": r.1, "community_id": r.2,
-        "analysis": r.3, "created_at": r.4,
-        "severity": r.5, "src_ip": r.6, "dst_ip": r.7
-    })).collect())
+
+    // Bulk asset lookup for all unique IPs that appear in these analyses
+    let unique_ips: Vec<String> = rows.iter()
+        .flat_map(|r| [r.6.clone(), r.7.clone()])
+        .filter(|ip| !ip.is_empty())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut asset_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    if !unique_ips.is_empty() {
+        let ip_list = unique_ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
+        if let Ok(assets) = self.client.query(&format!(
+            "SELECT ip, hostname, mac, vendor, device_type, trusted, threat_flagged \
+             FROM {db}.assets FINAL WHERE ip IN ({ip_list}) AND tenant_id = '{tid}'",
+            db = db, ip_list = ip_list, tid = sql_escape(tenant_id)
+        )).fetch_all::<(String,String,String,String,String,u8,u8)>().await {
+            for (ip, hostname, mac, vendor, device_type, trusted, threat_flagged) in assets {
+                asset_map.insert(ip, serde_json::json!({
+                    "hostname": hostname, "mac": mac, "vendor": vendor,
+                    "device_type": device_type,
+                    "trusted": trusted != 0, "threat_flagged": threat_flagged != 0
+                }));
+            }
+        }
+    }
+
+    Ok(rows.iter().map(|r| {
+        let src_asset = asset_map.get(&r.6).cloned().unwrap_or(serde_json::Value::Null);
+        let dst_asset = asset_map.get(&r.7).cloned().unwrap_or(serde_json::Value::Null);
+        serde_json::json!({
+            "id": r.0, "bundle_id": r.1, "community_id": r.2,
+            "analysis": r.3, "created_at": r.4,
+            "severity": r.5, "src_ip": r.6, "dst_ip": r.7,
+            "src_asset": src_asset, "dst_asset": dst_asset
+        })
+    }).collect())
 }
 
 /// Returns all evidence bundles for a given community_id (used for grouped AI analysis).
@@ -4708,14 +4776,22 @@ pub async fn get_ioc_hits(
         let db = tenant_db(&asset.tenant_id);
         let safe_history = sql_escape(&asset.ip_history);
         let query = format!(
-            "INSERT INTO {}.assets (ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, first_seen, last_seen, ip_history) \
-             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', toDateTime({}), toDateTime({}), '{}')",
+            "INSERT INTO {}.assets \
+             (ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
+              first_seen, last_seen, ip_history, trusted, threat_flagged, \
+              role, criticality, open_ports, subnet_role, ja3_os) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', \
+                     toDateTime({}), toDateTime({}), '{}', {}, {}, \
+                     '{}', {}, '{}', '{}', '{}')",
             db,
             sql_escape(&asset.ip), sql_escape(&asset.mac), sql_escape(&asset.hostname),
             sql_escape(&asset.vendor), sql_escape(&asset.os_guess), sql_escape(&asset.device_type),
             sql_escape(&asset.custom_name), sql_escape(&asset.tenant_id),
             asset.first_seen, asset.last_seen,
-            safe_history
+            safe_history,
+            asset.trusted, asset.threat_flagged,
+            sql_escape(&asset.role), asset.criticality,
+            sql_escape(&asset.open_ports), sql_escape(&asset.subnet_role), sql_escape(&asset.ja3_os)
         );
         self.client.query(&query).execute().await?;
         Ok(())
@@ -4737,7 +4813,8 @@ pub async fn get_ioc_hits(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, \
              toUnixTimestamp(last_seen) as last_seen, \
-             ip_history, trusted, threat_flagged \
+             ip_history, trusted, threat_flagged, \
+             role, criticality, open_ports, subnet_role, ja3_os \
              FROM {}.assets FINAL WHERE tenant_id = '{}' \
              ORDER BY ip ASC",
             db, sql_escape(tenant_id)
@@ -4752,7 +4829,8 @@ pub async fn get_ioc_hits(
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
-             ip_history, trusted, threat_flagged \
+             ip_history, trusted, threat_flagged, \
+             role, criticality, open_ports, subnet_role, ja3_os \
              FROM {}.assets FINAL WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(mac)
         );
@@ -4799,7 +4877,8 @@ pub async fn get_ioc_hits(
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
-             ip_history, trusted, threat_flagged \
+             ip_history, trusted, threat_flagged, \
+             role, criticality, open_ports, subnet_role, ja3_os \
              FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}' LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(ip)
         );
@@ -4808,13 +4887,11 @@ pub async fn get_ioc_hits(
     }
 
     pub async fn update_asset_name(&self, tenant_id: &str, ip: &str, custom_name: &str) -> anyhow::Result<()> {
-        let db = tenant_db(tenant_id);
-        let query = format!(
-            "ALTER TABLE {}.assets UPDATE custom_name = '{}', last_seen = now() \
-             WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
-            db, sql_escape(custom_name), sql_escape(tenant_id), sql_escape(ip)
-        );
-        self.client.query(&query).execute().await?;
+        if let Ok(Some(mut asset)) = self.get_asset_by_ip(tenant_id, ip).await {
+            asset.custom_name = custom_name.to_string();
+            asset.last_seen   = chrono::Utc::now().timestamp() as u32;
+            self.upsert_asset(&asset).await?;
+        }
         Ok(())
     }
 
@@ -4945,24 +5022,15 @@ pub async fn get_ioc_hits(
         subnet_role: &str,
         ja3_os:      &str,
     ) -> anyhow::Result<()> {
-        let db = tenant_db(tenant_id);
-        let query = format!(
-            "ALTER TABLE {db}.assets \
-             UPDATE role = '{role}', criticality = {criticality}, \
-                    open_ports = '{ports}', subnet_role = '{subnet_role}', \
-                    ja3_os = '{ja3_os}', last_seen = now() \
-             WHERE tenant_id = '{tid}' AND ip = '{ip}' \
-             SETTINGS mutations_sync=0",
-            db          = db,
-            role        = sql_escape(role),
-            criticality = criticality,
-            ports       = sql_escape(open_ports),
-            subnet_role = sql_escape(subnet_role),
-            ja3_os      = sql_escape(ja3_os),
-            tid         = sql_escape(tenant_id),
-            ip          = sql_escape(ip),
-        );
-        self.client.query(&query).execute().await?;
+        if let Ok(Some(mut asset)) = self.get_asset_by_ip(tenant_id, ip).await {
+            if !role.is_empty()        { asset.role        = role.to_string(); }
+            if criticality != 0        { asset.criticality = criticality; }
+            if open_ports != "[]" && !open_ports.is_empty() { asset.open_ports = open_ports.to_string(); }
+            if !subnet_role.is_empty() { asset.subnet_role = subnet_role.to_string(); }
+            if !ja3_os.is_empty()      { asset.ja3_os      = ja3_os.to_string(); }
+            asset.last_seen = chrono::Utc::now().timestamp() as u32;
+            self.upsert_asset(&asset).await?;
+        }
         Ok(())
     }
 
@@ -4987,13 +5055,12 @@ pub async fn get_ioc_hits(
     }
 
     pub async fn set_asset_trusted(&self, tenant_id: &str, ip: &str, trusted: bool) -> anyhow::Result<()> {
-        let db = tenant_db(tenant_id);
-        let query = format!(
-            "ALTER TABLE {}.assets UPDATE trusted = {}, threat_flagged = 0, last_seen = now() \
-             WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
-            db, if trusted { 1 } else { 0 }, sql_escape(tenant_id), sql_escape(ip)
-        );
-        self.client.query(&query).execute().await?;
+        if let Ok(Some(mut asset)) = self.get_asset_by_ip(tenant_id, ip).await {
+            asset.trusted = if trusted { 1 } else { 0 };
+            if trusted { asset.threat_flagged = 0; }
+            asset.last_seen = chrono::Utc::now().timestamp() as u32;
+            self.upsert_asset(&asset).await?;
+        }
         Ok(())
     }
 
