@@ -1,108 +1,178 @@
 <section class="network-shell">
-  <div class="network-header">
-    <div>
-      <div class="eyebrow">Topology</div>
+
+  <!-- Ambient background glow orbs -->
+  <div class="ambient-orbs" aria-hidden="true">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <!-- ── Page Header ─────────────────────────────── -->
+  <header class="network-header">
+    <div class="header-left">
+      <div class="eyebrow">
+        <span class="eyebrow-dot"></span>
+        Live Topology
+      </div>
       <h2>Network Map</h2>
-      <p>Live host communication graph from the last hour.</p>
+      <p>Real-time host communication graph · Last hour of traffic</p>
     </div>
 
     <div class="network-actions">
       <div class="metric-pill">
-        <lucide-icon [name]="NetworkIcon" class="w-4 h-4"></lucide-icon>
-        <span>Nodes</span>
-        <strong>{{ nodeCount }}</strong>
+        <div class="metric-icon metric-icon--green">
+          <lucide-icon [name]="NetworkIcon" class="w-3.5 h-3.5"></lucide-icon>
+        </div>
+        <div class="metric-body">
+          <span class="metric-label">Nodes</span>
+          <strong class="metric-value">{{ nodeCount }}</strong>
+        </div>
       </div>
 
-      <div class="metric-pill accent-blue">
-        <lucide-icon [name]="GitBranchIcon" class="w-4 h-4"></lucide-icon>
-        <span>Connections</span>
-        <strong>{{ edgeCount }}</strong>
+      <div class="metric-pill metric-pill--blue">
+        <div class="metric-icon metric-icon--blue">
+          <lucide-icon [name]="GitBranchIcon" class="w-3.5 h-3.5"></lucide-icon>
+        </div>
+        <div class="metric-body">
+          <span class="metric-label">Connections</span>
+          <strong class="metric-value">{{ edgeCount }}</strong>
+        </div>
       </div>
 
-      <button class="primary-action" type="button" (click)="loadMap()">
+      <button class="refresh-btn" type="button" (click)="loadMap()">
+        <span class="refresh-btn__glow"></span>
         <lucide-icon [name]="RefreshIcon" class="w-4 h-4" [class.spin]="viewState === 'loading'"></lucide-icon>
-        Refresh
+        <span>Refresh</span>
       </button>
     </div>
-  </div>
+  </header>
 
-  <div class="status-strip">
-    <div>
-      <span class="status-dot"></span>
-      Topology renderer active
+  <!-- ── Status Bar ──────────────────────────────── -->
+  <div class="status-bar">
+    <div class="status-bar__left">
+      <div class="live-indicator">
+        <span class="live-dot"></span>
+        <span>Topology renderer active</span>
+      </div>
+      <div class="status-divider"></div>
+      <div class="status-item">
+        <lucide-icon [name]="NetworkIcon" class="w-3 h-3"></lucide-icon>
+        Window: last 1 hour
+      </div>
     </div>
-    <div>Window: last 1 hour</div>
-    <div>Last updated: {{ lastUpdated }}</div>
+    <div class="status-bar__right">
+      <div class="status-item muted">
+        Updated {{ lastUpdated }}
+      </div>
+    </div>
   </div>
 
+  <!-- ── Map Workspace ───────────────────────────── -->
   <div class="map-workspace" [class.has-selection]="selectedNode">
+
+    <!-- Map Panel -->
     <section class="map-panel">
+      <!-- Grid overlay -->
+      <div class="map-grid-overlay" aria-hidden="true"></div>
+
+      <!-- Toolbar row -->
       <div class="map-toolbar">
-        <div class="legend">
-          <span class="legend-item internal">
-            <lucide-icon [name]="RouterIcon" class="w-3.5 h-3.5"></lucide-icon>
-            Internal
-          </span>
-          <span class="legend-item external">
-            <lucide-icon [name]="GlobeIcon" class="w-3.5 h-3.5"></lucide-icon>
-            External
-          </span>
-          <span class="legend-item threat">
-            <lucide-icon [name]="ThreatIcon" class="w-3.5 h-3.5"></lucide-icon>
-            Threat
-          </span>
-          <span class="legend-item traffic">
-            <lucide-icon [name]="GitBranchIcon" class="w-3.5 h-3.5"></lucide-icon>
-            Heavy traffic
-          </span>
+        <div class="toolbar-row">
+          <!-- Legend -->
+          <div class="legend">
+            <span class="legend-item legend-item--internal">
+              <lucide-icon [name]="RouterIcon" class="w-3.5 h-3.5"></lucide-icon>
+              Internal
+            </span>
+            <span class="legend-item legend-item--external">
+              <lucide-icon [name]="GlobeIcon" class="w-3.5 h-3.5"></lucide-icon>
+              External
+            </span>
+            <span class="legend-item legend-item--threat">
+              <lucide-icon [name]="ThreatIcon" class="w-3.5 h-3.5"></lucide-icon>
+              Threat
+            </span>
+            <span class="legend-item legend-item--traffic">
+              <lucide-icon [name]="GitBranchIcon" class="w-3.5 h-3.5"></lucide-icon>
+              Heavy Traffic
+            </span>
+          </div>
+
+          <!-- Hint badge -->
+          <div class="map-hint">
+            <lucide-icon [name]="NetworkIcon" class="w-3 h-3"></lucide-icon>
+            Drag · Scroll to zoom
+          </div>
         </div>
 
-        <div class="map-hint">Drag nodes. Scroll to zoom.</div>
-        <div class="search-container" *ngIf="!focusMode">
-          <input type="search" placeholder="Search IP, hostname..." (input)="onSearchChange($event)" />
-        </div>
-        <div class="search-container" *ngIf="focusMode">
-          <button class="back-to-map-btn" (click)="clearSelection()">
+        <!-- Search / Back-to-map row -->
+        <div class="toolbar-row toolbar-row--search">
+          <div class="search-wrapper" *ngIf="!focusMode">
+            <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input
+              type="search"
+              class="search-input"
+              placeholder="Search IP, hostname…"
+              (input)="onSearchChange($event)" />
+          </div>
+
+          <button class="back-btn" *ngIf="focusMode" (click)="clearSelection()">
             <lucide-icon [name]="ArrowLeftIcon" class="w-4 h-4"></lucide-icon>
             Back to full map
           </button>
         </div>
       </div>
 
+      <!-- State overlays -->
       <div *ngIf="viewState === 'loading'" class="state-overlay">
-        <div class="state-icon">
-          <lucide-icon [name]="CircleDotIcon" class="w-6 h-6"></lucide-icon>
+        <div class="state-card">
+          <div class="state-spinner">
+            <div class="spinner-ring"></div>
+            <div class="spinner-core">
+              <lucide-icon [name]="CircleDotIcon" class="w-5 h-5"></lucide-icon>
+            </div>
+          </div>
+          <strong>Mapping network topology</strong>
+          <span>Collecting hosts and communication paths…</span>
         </div>
-        <strong>Mapping network topology</strong>
-        <span>Collecting hosts and communication paths.</span>
       </div>
 
-      <div *ngIf="viewState === 'error'" class="state-overlay error">
-        <div class="state-icon error-icon" style="color: #ff716a;">
-          <lucide-icon [name]="ThreatIcon" class="w-6 h-6"></lucide-icon>
+      <div *ngIf="viewState === 'error'" class="state-overlay state-overlay--error">
+        <div class="state-card state-card--error">
+          <div class="state-icon-wrap state-icon-wrap--error">
+            <lucide-icon [name]="ThreatIcon" class="w-6 h-6"></lucide-icon>
+          </div>
+          <strong>Connection Lost</strong>
+          <span>{{ errorMessage || 'Failed to load network topology.' }}</span>
+          <button class="retry-btn" (click)="loadMap()">
+            <lucide-icon [name]="RefreshIcon" class="w-3.5 h-3.5"></lucide-icon>
+            Retry
+          </button>
         </div>
-        <strong style="color: #ff918b;">Connection Lost</strong>
-        <span style="color: #d8deec;">{{ errorMessage || 'Failed to load network topology.' }}</span>
       </div>
 
       <div *ngIf="viewState === 'empty'" class="state-overlay">
-        <div class="state-icon muted">
-          <lucide-icon [name]="ServerIcon" class="w-6 h-6"></lucide-icon>
+        <div class="state-card">
+          <div class="state-icon-wrap state-icon-wrap--muted">
+            <lucide-icon [name]="ServerIcon" class="w-6 h-6"></lucide-icon>
+          </div>
+          <strong>No network data yet</strong>
+          <span>Start monitoring to see the topology graph.</span>
         </div>
-        <strong>No network data yet</strong>
-        <span>Start monitoring to see topology.</span>
       </div>
 
       <svg #mapSvg class="map-canvas"></svg>
     </section>
 
-    <app-device-drawer 
+    <!-- Device Drawer -->
+    <app-device-drawer
       *ngIf="selectedNode"
-      [node]="selectedNode" 
-      [focusModeActive]="focusMode" 
-      (closeDrawer)="clearSelection()" 
+      [node]="selectedNode"
+      [focusModeActive]="focusMode"
+      (closeDrawer)="clearSelection()"
       (focusRequested)="toggleFocus()">
     </app-device-drawer>
+
   </div>
 
 </section>

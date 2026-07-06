@@ -125,13 +125,29 @@
       </span>
       <lucide-icon [name]="ChevronDownIcon" class="w-3 h-3 chevron-icon"></lucide-icon>
       <!-- Dropdown -->
-      <div *ngIf="showUserMenu" style="position:absolute;top:100%;right:0;
-        background:#1a1a2e;border:1px solid rgba(255,255,255,0.1);
-        border-radius:8px;padding:8px;min-width:150px;z-index:1000">
-        <button (click)="logout()" style="width:100%;text-align:left;padding:8px 12px;
-          color:#ff4444;font-size:12px;border-radius:4px;
-          background:none;border:none;cursor:pointer">
-          🚪 Logout
+      <div *ngIf="showUserMenu" class="user-dropdown-menu">
+        <div class="dropdown-header">
+          <div class="dropdown-avatar">
+            <lucide-icon [name]="UserIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div class="dropdown-user-info">
+            <strong>{{ currentUser?.username || 'User' }}</strong>
+            <small>{{ currentUser?.email || currentUser?.role || 'analyst' }}</small>
+          </div>
+        </div>
+        <div class="dropdown-divider"></div>
+        <button *ngIf="canViewSettings" (click)="goToSettings()" class="dropdown-item">
+          <lucide-icon [name]="SettingsIcon" class="w-4 h-4"></lucide-icon>
+          <span>Settings</span>
+        </button>
+        <button (click)="goToSupport()" class="dropdown-item">
+          <lucide-icon [name]="HelpCircleIcon" class="w-4 h-4"></lucide-icon>
+          <span>Support</span>
+        </button>
+        <div class="dropdown-divider"></div>
+        <button (click)="logout()" class="dropdown-item logout-item">
+          <lucide-icon [name]="LogOutIcon" class="w-4 h-4"></lucide-icon>
+          <span>Logout</span>
         </button>
       </div>
     </button>
