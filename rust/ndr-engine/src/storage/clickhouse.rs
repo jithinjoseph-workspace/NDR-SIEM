@@ -2200,6 +2200,27 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         })).collect())
     }
 
+    pub async fn export_events_by_tenant(
+        &self, tenant_id: &str, hours: u32, limit: u64
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db_name = tenant_db(tenant_id);
+        let rows = self.client.query(&format!(
+            "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp) \
+             FROM {}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL {} HOUR \
+             ORDER BY timestamp DESC LIMIT {}", db_name, hours, limit))
+            .fetch_all::<(String, String, String, String, String, u32)>()
+            .await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({
+            "src_ip":     r.0,
+            "dst_ip":     r.1,
+            "proto":      r.2,
+            "source":     r.3,
+            "event_type": r.4,
+            "timestamp":  r.5
+        })).collect())
+    }
+
     pub async fn get_top_protocols_by_tenant(
         &self, limit: u64, tenant_id: &str
     ) -> anyhow::Result<Vec<serde_json::Value>> {

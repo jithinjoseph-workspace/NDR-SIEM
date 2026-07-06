@@ -480,11 +480,6 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  toggleTheme() {
-    this.botTheme = this.botTheme === 'light' ? 'dark' : 'light';
-    localStorage.setItem('aria_bot_theme', this.botTheme);
-    this.cdr.detectChanges();
-  }
 
   // ── DRAGGING ──
 

@@ -2970,6 +2970,113 @@ tr:nth-child(even){{background:#f9f9f9}}
     }
 }
 
+pub async fn export_logs(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let tenant_id = extract_claims(&headers)
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
+    
+    let format = params.get("format").map(|s: &String| s.as_str()).unwrap_or("csv");
+    let hours: u32 = params.get("hours").and_then(|h: &String| h.parse().ok()).unwrap_or(24);
+    let limit: u64 = 10000; // Hard limit to prevent crashing
+    
+    let events = state.ch_storage.export_events_by_tenant(&tenant_id, hours, limit).await.unwrap_or_default();
+    
+    match format {
+        "csv" => {
+            let mut csv = String::new();
+            csv.push_str("Timestamp,Source IP,Dest IP,Protocol,Source,Event Type\n");
+            
+            for event in events {
+                csv.push_str(&format!("{},{},{},{},{},{}\n",
+                    event["timestamp"].as_u64().unwrap_or(0),
+                    event["src_ip"].as_str().unwrap_or("-"),
+                    event["dst_ip"].as_str().unwrap_or("-"),
+                    event["proto"].as_str().unwrap_or("-"),
+                    event["source"].as_str().unwrap_or("-"),
+                    event["event_type"].as_str().unwrap_or("-"),
+                ));
+            }
+            
+            axum::response::Response::builder()
+                .header("content-type", "text/csv")
+                .header("content-disposition", format!("attachment; filename=\"ndr-logs-{}h.csv\"", hours))
+                .body(axum::body::Body::from(csv))
+                .unwrap()
+        }
+        "pdf" | "html" => {
+            let rows = events.iter().map(|event| format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                event["timestamp"].as_u64().unwrap_or(0),
+                event["src_ip"].as_str().unwrap_or("-"),
+                event["dst_ip"].as_str().unwrap_or("-"),
+                event["proto"].as_str().unwrap_or("-"),
+                event["source"].as_str().unwrap_or("-"),
+                event["event_type"].as_str().unwrap_or("-")
+            )).collect::<Vec<_>>().join("");
+            
+            let html = format!(r#"<!DOCTYPE html>
+<html>
+<head>
+<title>NDR Network Logs</title>
+<style>
+body{{font-family:Arial,sans-serif;margin:40px;color:#333}}
+h1{{color:#1a1a2e;border-bottom:3px solid #69f6b8;padding-bottom:10px}}
+table{{width:100%;border-collapse:collapse;margin:15px 0}}
+th{{background:#1a1a2e;color:#69f6b8;padding:10px;text-align:left}}
+td{{padding:8px 10px;border-bottom:1px solid #ddd}}
+tr:nth-child(even){{background:#f9f9f9}}
+@media print{{button{{display:none}}}}
+</style>
+</head>
+<body>
+<button onclick="window.print()"
+  style="background:#69f6b8;border:none;padding:10px 20px;
+  border-radius:5px;cursor:pointer;font-weight:bold;margin-bottom:20px">
+  Print / Save as PDF
+</button>
+<h1>NDR Network Logs</h1>
+<p><strong>Generated:</strong> {}</p>
+<p><strong>Time Range:</strong> Last {} hours</p>
+<p><strong>Total Logs (Max 10,000):</strong> {}</p>
+<table>
+  <tr><th>Timestamp</th><th>Source IP</th><th>Dest IP</th><th>Protocol</th><th>Source</th><th>Event Type</th></tr>
+  {}
+</table>
+</body></html>"#,
+                chrono::Utc::now().to_rfc3339(),
+                hours,
+                events.len(),
+                rows
+            );
+            
+            axum::response::Response::builder()
+                .header("content-type", "text/html")
+                .header("content-disposition", format!("attachment; filename=\"ndr-logs-{}h.html\"", hours))
+                .body(axum::body::Body::from(html))
+                .unwrap()
+        }
+        _ => {
+            // json format
+            let json_body = serde_json::json!({
+                "generated_at": chrono::Utc::now().to_rfc3339(),
+                "time_range_hours": hours,
+                "logs_count": events.len(),
+                "logs": events
+            });
+            
+            axum::response::Response::builder()
+                .header("content-type", "application/json")
+                .header("content-disposition", format!("attachment; filename=\"ndr-logs-{}h.json\"", hours))
+                .body(axum::body::Body::from(json_body.to_string()))
+                .unwrap()
+        }
+    }
+}
+
 
 
 // GET /api/soar/integrations
