@@ -31,14 +31,12 @@ export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: R
       }
 
       const isAdmin = auth.isAdmin();
-      const isTenantAdmin = auth.getUser()?.role === 'tenant_admin';
-
       if (requiredRole === 'admin' && !isAdmin) {
         router.navigate([auth.getDefaultRoute()]);
         return false;
       }
 
-      if (requiredRole === 'analyst' && (isAdmin || isTenantAdmin)) {
+      if (requiredRole === 'analyst' && isAdmin) {
         router.navigate([auth.getDefaultRoute()]);
         return false;
       }

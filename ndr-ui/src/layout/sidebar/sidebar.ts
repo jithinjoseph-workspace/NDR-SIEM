@@ -11,7 +11,6 @@ import {
   Search,
   Database,
   Settings,
-  HelpCircle,
   Network,
   Zap,
   Users,
@@ -38,7 +37,6 @@ export class Sidebar implements OnInit, OnDestroy {
   orgName = 'NDR';
   systemName = 'Network Detection & Response';
   navItems: any[] = [];
-  bottomItems: any[] = [];
   private navigationSub?: Subscription;
 
   constructor(
@@ -106,11 +104,6 @@ export class Sidebar implements OnInit, OnDestroy {
       }
     }
 
-    this.bottomItems = [];
-    if (!this.auth.isAdmin()) {
-      this.bottomItems.push({ label: 'Settings', route: '/settings', icon: Settings });
-    }
-    this.bottomItems.push({ label: 'Support', route: '/support', icon: HelpCircle });
   }
 
   isActive(item: any): boolean {
