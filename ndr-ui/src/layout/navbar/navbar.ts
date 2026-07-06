@@ -357,8 +357,8 @@ export class Navbar implements OnInit, OnDestroy {
         );
         const healthyPipeline = tenantSensors.length === 0 || tenantSensors.some(sensor =>
           this.isRecentlySeen(sensor.last_seen) &&
-          (this.isRunning(sensor.zeek) ||
-           this.isRunning(sensor.suricata) ||
+          (this.isRunning(sensor['agent-z']) ||
+           this.isRunning(sensor['agent-s']) ||
            this.isRunning(sensor.vector))
         );
 
@@ -387,8 +387,8 @@ export class Navbar implements OnInit, OnDestroy {
   }
 
   private applySystemStatus(data: any) {
-    const zeekRunning = this.isRunning(data?.zeek);
-    const suricataRunning = this.isRunning(data?.suricata);
+    const zeekRunning = this.isRunning(data?.['agent-z']);
+    const suricataRunning = this.isRunning(data?.['agent-s']);
     const vectorRunning = this.isRunning(data?.vector);
     this.systemStatus = zeekRunning || suricataRunning || vectorRunning ? 'OPERATIONAL' : 'DEGRADED';
   }

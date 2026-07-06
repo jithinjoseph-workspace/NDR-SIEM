@@ -29,10 +29,10 @@ export class Live implements OnInit, OnDestroy {
   private scheduleUpdate() {
     if (this.updateScheduled) return;
     this.updateScheduled = true;
-    requestAnimationFrame(() => {
+    setTimeout(() => {
       this.cdr.detectChanges();
       this.updateScheduled = false;
-    });
+    }, 0);
   }
 
   constructor(
@@ -50,13 +50,13 @@ export class Live implements OnInit, OnDestroy {
         let data = '';
         let color = 'border-primary/30';
 
-        if (msg.type === 'zeek') {
-          event = 'ZEEK';
+        if (msg.type === 'agent-z') {
+          event = 'AGENT-Z';
           data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.proto || '-'}] ${msg.service || ''} ${msg.conn_state || ''}`;
           color = 'border-primary/30';
           this.eventCount++;
-        } else if (msg.type === 'suricata') {
-          event = 'SURICATA';
+        } else if (msg.type === 'agent-s') {
+          event = 'AGENT-S';
           data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.event_type || '-'}]`;
           color = 'border-secondary/30';
           this.eventCount++;

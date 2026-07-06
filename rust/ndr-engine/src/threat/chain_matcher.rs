@@ -102,7 +102,7 @@ async fn fetch_filtered_hits(
              FROM {db}.ndr_hits \
              WHERE timestamp >= now() - INTERVAL 6 HOUR \
                AND NOT (severity = 'INFO' AND length(tags) = 0) \
-               AND NOT (arrayStringConcat(tags, ' ') = 'suricata-internal' AND severity = 'INFO') \
+               AND NOT (arrayStringConcat(tags, ' ') = 'agent-s-internal' AND severity = 'INFO') \
              ORDER BY timestamp ASC \
              LIMIT 1000",
             db = db

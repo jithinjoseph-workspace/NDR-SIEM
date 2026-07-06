@@ -131,8 +131,8 @@ export class Dashboard implements OnInit, OnDestroy {
         this.totalHits.set(stats.hits_total);
         this.eventsLastHour.set(stats.events_1h);
         this.hitsLastHour.set(stats.hits_1h);
-        this.zeekEvents.set(stats.zeek_events);
-        this.suricataEvents.set(stats.suricata_events);
+        this.zeekEvents.set(stats.agent_z_events);
+        this.suricataEvents.set(stats.agent_s_events);
       })
     );
 
@@ -154,8 +154,8 @@ export class Dashboard implements OnInit, OnDestroy {
     this.subs.push(
       this.ws.telemetry$.subscribe(t => {
         this.totalEvents.set(t.total_events);
-        this.zeekEvents.set(t.zeek_events);
-        this.suricataEvents.set(t.suricata_events);
+        this.zeekEvents.set(t.agent_z_events);
+        this.suricataEvents.set(t.agent_s_events);
         this.totalHits.set(t.correlation_hits);
         this.eventsLastHour.set(t.events_1h);
         if (t.severity) {
@@ -184,8 +184,8 @@ export class Dashboard implements OnInit, OnDestroy {
         this.hitsLastHour.update(v => v + 1);
 
         const severity = (hit.severity ?? '').toUpperCase() || 'LOW';
-        const srcIp = hit.src || hit.suricata?.src || '-';
-        const dstIp = hit.dst || hit.suricata?.dst || '-';
+        const srcIp = hit.src || hit['agent-z']?.src || hit['agent-s']?.src || '-';
+        const dstIp = hit.dst || hit['agent-z']?.dst || hit['agent-s']?.dst || '-';
         const incidentId = `${srcIp}|${dstIp}|${severity}`;
 
         // ── Real-time severity counter sync ─────────────────────────────────

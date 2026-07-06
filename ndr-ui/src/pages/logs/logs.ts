@@ -35,10 +35,10 @@ export class Logs implements OnInit, OnDestroy {
   private scheduleUpdate() {
     if (this.updateScheduled) return;
     this.updateScheduled = true;
-    requestAnimationFrame(() => {
+    setTimeout(() => {
       this.cdr.detectChanges();
       this.updateScheduled = false;
-    });
+    }, 0);
   }
 
   constructor(

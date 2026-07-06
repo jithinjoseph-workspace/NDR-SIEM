@@ -16,8 +16,8 @@ fn now_secs() -> u64 {
 #[allow(dead_code)]
 pub struct Session {
     pub community_id: String,
-    pub zeek:         Option<NormalizedEvent>,
-    pub suricata:     Option<NormalizedEvent>,
+    pub agent_z:      Option<NormalizedEvent>,
+    pub agent_s:      Option<NormalizedEvent>,
     pub first_seen:   u64,
     pub last_seen:    u64,
     /// Transport protocol — determines which TTL to apply
@@ -29,8 +29,8 @@ impl Session {
         let now = now_secs();
         Self {
             community_id,
-            zeek:       None,
-            suricata:   None,
+            agent_z:    None,
+            agent_s:    None,
             first_seen: now,
             last_seen:  now,
             proto:      None,
@@ -54,8 +54,8 @@ impl Session {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorrelationHit {
     pub community_id: String,
-    pub zeek:         NormalizedEvent,
-    pub suricata:     NormalizedEvent,
+    pub agent_z:      NormalizedEvent,
+    pub agent_s:      NormalizedEvent,
     pub hit_time:     u64,
     pub source:       String,  // ← NEW
 

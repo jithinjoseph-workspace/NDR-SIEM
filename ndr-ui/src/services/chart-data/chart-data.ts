@@ -15,8 +15,8 @@ export interface StatsSnapshot {
   hits_total:      number;
   events_1h:       number;
   hits_1h:         number;
-  zeek_events:     number;
-  suricata_events: number;
+  agent_z_events:     number;
+  agent_s_events: number;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -157,8 +157,8 @@ export class ChartDataService implements OnDestroy {
           hits_total:      raw.hits_total      || 0,
           events_1h:       raw.events_1h       || 0,
           hits_1h:         raw.hits_1h         || 0,
-          zeek_events:     raw.zeek_events     || 0,
-          suricata_events: raw.suricata_events || 0,
+          agent_z_events:     raw.agent_z_events     || 0,
+          agent_s_events: raw.agent_s_events || 0,
         });
 
         // 2. Append a chart data point (events in this interval)

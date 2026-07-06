@@ -8,6 +8,7 @@ pub mod geoip;
 pub mod asn;
 pub mod threat_intel;
 pub mod asset_id;
+pub mod asset_intel;
 use std::sync::Arc;
 
 

@@ -24,8 +24,8 @@ export class Health implements OnInit, OnDestroy {
   lastSensorSeen = '';
 
   services: any[] = [
-    { name: 'Agent-Z IDS',        status: 'unknown', type: 'zeek',       label: 'Tenant Sensor'     },
-    { name: 'Agent-S EVE',    status: 'unknown', type: 'suricata',   label: 'Tenant Sensor'     },
+    { name: 'Agent-Z IDS',        status: 'unknown', type: 'agent-z',       label: 'Tenant Sensor'     },
+    { name: 'Agent-S EVE',    status: 'unknown', type: 'agent-s',   label: 'Tenant Sensor'     },
     { name: 'Telemetry Pipeline', status: 'unknown', type: 'vector',     label: 'Tenant Sensor'     },
     { name: 'PCAP Engine',     status: 'unknown', type: 'arkime',     label: 'Tenant Sensor'     },
     { name: 'Kafka Broker',    status: 'unknown', type: 'kafka',      label: 'Platform Service'  },
@@ -73,7 +73,7 @@ export class Health implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
       error: () => {
-        ['zeek', 'suricata', 'vector', 'kafka', 'engine', 'clickhouse']
+        ['agent-z', 'agent-s', 'vector', 'kafka', 'engine', 'clickhouse']
           .forEach(s => this.updateStatus(s, 'stopped'));
         this.cdr.detectChanges();
       }
@@ -97,8 +97,8 @@ export class Health implements OnInit, OnDestroy {
         this.onlineSensors = sensors.filter(sensor => this.isSensorOnline(sensor)).length;
         this.lastSensorSeen = this.getLatestSeen(sensors);
 
-        this.updateStatus('zeek', this.rollupServiceStatus(sensors, 'zeek'));
-        this.updateStatus('suricata', this.rollupServiceStatus(sensors, 'suricata'));
+        this.updateStatus('agent-z', this.rollupServiceStatus(sensors, 'agent-z'));
+        this.updateStatus('agent-s', this.rollupServiceStatus(sensors, 'agent-s'));
         this.updateStatus('vector', this.rollupServiceStatus(sensors, 'vector'));
         this.updateStatus('arkime', this.rollupServiceStatus(sensors, 'arkime'));
         
@@ -112,7 +112,7 @@ export class Health implements OnInit, OnDestroy {
         this.activeSensors = 0;
         this.onlineSensors = 0;
         this.lastSensorSeen = err.message || 'API Error';
-        ['zeek', 'suricata', 'vector', 'arkime'].forEach(service => this.updateStatus(service, 'unknown'));
+        ['agent-z', 'agent-s', 'vector', 'arkime'].forEach(service => this.updateStatus(service, 'unknown'));
         this.cdr.detectChanges();
       }
     });
@@ -140,7 +140,7 @@ export class Health implements OnInit, OnDestroy {
 
   private rollupServiceStatus(
     sensors: SensorKey[],
-    service: 'zeek' | 'suricata' | 'vector' | 'arkime'
+    service: 'agent-z' | 'agent-s' | 'vector' | 'arkime'
   ): string {
     const onlineSensors = sensors.filter(sensor => this.isSensorOnline(sensor));
     if (onlineSensors.length === 0) return sensors.length ? 'stopped' : 'unknown';

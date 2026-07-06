@@ -2,6 +2,7 @@
 //! Handles OpenAI / Anthropic / custom Chat Completions API calls with live NDR context.
 
 pub mod provider;
+pub mod investigator;
 
 use serde_json::{json, Value};
 
@@ -86,12 +87,12 @@ YOUR PERSONALITY:
 YOUR CAPABILITIES (mention when relevant):
 - Show alert details and evidence bundles
 - Explain what a community_id or IP means
-- Explain attack narratives from Zeek/Suricata
+- Explain attack narratives from Agent-Z / Agent-S
 - Explain conn_state codes (OTH, SF, REJ etc)
 
 NDR PLATFORM CONTEXT:
-- Alerts come from Zeek + Suricata via Kafka
-- Community ID links Zeek conn + Suricata alert
+- Alerts come from Agent-Z + Agent-S via Kafka
+- Community ID links Agent-Z conn + Agent-S alert
 - HIGH/CRITICAL alerts auto-capture evidence bundles
 
 RESPONSE FORMAT:

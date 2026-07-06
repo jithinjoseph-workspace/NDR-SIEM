@@ -6,6 +6,7 @@ pub mod chain_matcher;
 pub mod correlator;
 pub mod cloud_trust;
 pub mod cloud_suggestions;
+pub mod beacon_detector;
 
 use std::sync::Arc;
 
@@ -117,8 +118,10 @@ fn spawn_threat_tasks(
     chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&trusted), Arc::clone(&asn));
     correlator::spawn_correlator(Arc::clone(&ch));
     cloud_suggestions::spawn_suggestion_scanner(Arc::clone(&ch));
+    beacon_detector::spawn_beacon_detector(Arc::clone(&ch));
+    crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch));
 
-    tracing::info!("All 6 threat background tasks started on elected leader");
+    tracing::info!("All 8 threat background tasks started on elected leader");
 }
 
 // ── Row structs for ClickHouse queries ───────────────────────────────────────

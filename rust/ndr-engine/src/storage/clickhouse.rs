@@ -35,11 +35,11 @@ pub struct NdrHit {
     pub dst_country:        String,
     pub tenant_id:          String,
     pub correlation_status: String,
-    pub zeek_details:       String,
-    pub suricata_details:   String,
+    pub agent_z_details:    String,
+    pub agent_s_details:    String,
     pub corroborated_at:    u32,
-    pub suricata_rule_id:   String,
-    pub suricata_category:  String,
+    pub agent_s_rule_id:    String,
+    pub agent_s_category:   String,
     pub updated_at:         u32,
 }
 
@@ -100,7 +100,7 @@ pub struct RecentHitDetail {
     pub src_country:        String,
     pub dst_country:        String,
     pub correlation_status: String,
-    pub suricata_rule_id:   String,
+    pub agent_s_rule_id:    String,
     pub corroborated_at:    u32,
 }
 
@@ -139,8 +139,8 @@ pub struct SensorKeyRow {
     pub hostname: String,
     pub interface_name: String,
     pub os_name: String,
-    pub zeek_status: String,
-    pub suricata_status: String,
+    pub agent_z_status: String,
+    pub agent_s_status: String,
     pub vector_status: String,
     pub arkime_status: String,
     pub arkime_url: String,
@@ -165,6 +165,11 @@ pub struct AssetRow {
     pub ip_history: String,
     pub trusted: u8,
     pub threat_flagged: u8,
+    pub role: String,
+    pub criticality: u8,
+    pub open_ports: String,
+    pub subnet_role: String,
+    pub ja3_os: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -281,6 +286,10 @@ fn tenant_db(tenant_id: &str) -> String {
 
 pub fn tenant_db_pub(tenant_id: &str) -> String {
     tenant_db(tenant_id)
+}
+
+pub fn sql_escape_pub(value: &str) -> String {
+    sql_escape(value)
 }
 
 fn get_base_domain(domain: &str) -> String {
@@ -1116,12 +1125,12 @@ pub async fn delete_announcement(
             for alter in &[
                 "ALTER TABLE ndr.ndr_events ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
-                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS correlation_status String DEFAULT 'zeek_only'",
-                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS zeek_details String DEFAULT '{}'",
-                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS suricata_details String DEFAULT '{}'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS correlation_status String DEFAULT 'agent_z_only'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS agent_z_details String DEFAULT '{}'",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS agent_s_details String DEFAULT '{}'",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS corroborated_at DateTime DEFAULT toDateTime(0)",
-                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS suricata_rule_id String DEFAULT ''",
-                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS suricata_category String DEFAULT ''",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS agent_s_rule_id String DEFAULT ''",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS agent_s_category String DEFAULT ''",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
                 "ALTER TABLE ndr.soar_integrations ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_playbooks ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
@@ -1134,8 +1143,8 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS hostname String DEFAULT ''",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS interface_name String DEFAULT ''",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS os_name String DEFAULT ''",
-                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS zeek_status String DEFAULT 'unknown'",
-                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS suricata_status String DEFAULT 'unknown'",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS agent_z_status String DEFAULT 'unknown'",
+                "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS agent_s_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS vector_status String DEFAULT 'unknown'",
                 "ALTER TABLE ndr.sensor_commands ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
                 "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS announcement_type String DEFAULT 'info'",
@@ -1299,10 +1308,10 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         threat_intel:     u8,
         src_country:      &str,
         dst_country:      &str,
-        zeek_details:     &str,
-        suricata_details: &str,
-        suricata_rule_id: &str,
-        suricata_category: &str,
+        agent_z_details:  &str,
+        agent_s_details:  &str,
+        agent_s_rule_id:  &str,
+        agent_s_category: &str,
     ) -> anyhow::Result<()> {
         let now = chrono::Utc::now().timestamp() as u32;
         let hit = NdrHit {
@@ -1319,11 +1328,11 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             dst_country:        dst_country.to_string(),
             tenant_id:          tenant_id.to_string(),
             correlation_status: "corroborated".to_string(),
-            zeek_details:       zeek_details.to_string(),
-            suricata_details:   suricata_details.to_string(),
+            agent_z_details:    agent_z_details.to_string(),
+            agent_s_details:    agent_s_details.to_string(),
             corroborated_at:    now,
-            suricata_rule_id:   suricata_rule_id.to_string(),
-            suricata_category:  suricata_category.to_string(),
+            agent_s_rule_id:    agent_s_rule_id.to_string(),
+            agent_s_category:   agent_s_category.to_string(),
             updated_at:         now,
         };
         self.insert_hit_for_tenant(hit, tenant_id).await
@@ -1357,13 +1366,13 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             .unwrap_or(0);
 
         let zeek_count: u64 = self.client
-            .query("SELECT count() FROM ndr_events WHERE source = 'zeek'")
+            .query("SELECT count() FROM ndr_events WHERE source = 'agent-z'")
             .fetch_one::<u64>()
             .await
             .unwrap_or(0);
 
         let suricata_count: u64 = self.client
-            .query("SELECT count() FROM ndr_events WHERE source = 'suricata'")
+            .query("SELECT count() FROM ndr_events WHERE source = 'agent-s'")
             .fetch_one::<u64>()
             .await
             .unwrap_or(0);
@@ -1373,8 +1382,8 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             "hits_total":      hits_total,
             "events_1h":       events_1h,
             "hits_1h":         hits_1h,
-            "zeek_events":     zeek_count,
-            "suricata_events": suricata_count,
+            "agent_z_events":     zeek_count,
+            "agent_s_events": suricata_count,
         }))
     }
     
@@ -1808,10 +1817,24 @@ pub async fn get_high_volume_clean_dst_ips(
     self.client
         .query(&format!(
             "SELECT dst_ip, count() as cnt
-             FROM {db}.ndr_hits FINAL
+             FROM {db}.ndr_events
              WHERE timestamp > now() - INTERVAL {hours} HOUR
-               AND threat_intel = 0
+               AND source = 'agent-z'
                AND dst_ip != ''
+               AND dst_ip NOT LIKE '10.%'
+               AND dst_ip NOT LIKE '192.168.%'
+               AND dst_ip NOT LIKE '172.16.%'
+               AND dst_ip NOT LIKE '172.17.%'
+               AND dst_ip NOT LIKE '172.18.%'
+               AND dst_ip NOT LIKE '172.19.%'
+               AND dst_ip NOT LIKE '172.2%.%'
+               AND dst_ip NOT LIKE '172.3%.%'
+               AND dst_ip NOT LIKE '127.%'
+               AND dst_ip NOT IN (
+                   SELECT DISTINCT src_ip FROM {db}.ndr_hits FINAL
+                   WHERE timestamp > now() - INTERVAL {hours} HOUR
+                   AND threat_intel = 1
+               )
              GROUP BY dst_ip
              HAVING cnt >= {min_hits}
              ORDER BY cnt DESC
@@ -1821,6 +1844,65 @@ pub async fn get_high_volume_clean_dst_ips(
         .fetch_all::<(String, u64)>()
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))
+}
+
+/// Returns (src_ip, dst_ip, Vec<unix_timestamp_secs>) for pairs that have
+/// >= min_conns connections in the last `hours` hours, excluding private→private
+/// and excluding known-malicious dst IPs (threat_intel hits).
+pub async fn get_beacon_candidates(
+    &self,
+    tenant_id: &str,
+    hours:     u32,
+    min_conns: u64,
+) -> anyhow::Result<Vec<(String, String, Vec<i64>)>> {
+    let db = tenant_db(tenant_id);
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct PairRow { src_ip: String, dst_ip: String, cnt: u64 }
+
+    // Step 1: find (src, dst) pairs with enough connections
+    let pairs = self.client.query(&format!(
+        "SELECT src_ip, dst_ip, count() as cnt
+         FROM {db}.ndr_events
+         WHERE timestamp > now() - INTERVAL {hours} HOUR
+           AND source = 'agent-z'
+           AND src_ip != '' AND dst_ip != ''
+           AND NOT (src_ip LIKE '10.%' AND dst_ip LIKE '10.%')
+           AND NOT (src_ip LIKE '192.168.%' AND dst_ip LIKE '192.168.%')
+           AND NOT (src_ip LIKE '172.%' AND dst_ip LIKE '172.%')
+         GROUP BY src_ip, dst_ip
+         HAVING cnt >= {min_conns}
+         ORDER BY cnt DESC
+         LIMIT 200",
+        db = db, hours = hours, min_conns = min_conns
+    )).fetch_all::<PairRow>().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    if pairs.is_empty() { return Ok(vec![]); }
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct TsRow { src_ip: String, dst_ip: String, ts: i64 }
+
+    let mut result = Vec::new();
+    for pair in &pairs {
+        let timestamps = self.client.query(&format!(
+            "SELECT src_ip, dst_ip, toUnixTimestamp(timestamp) as ts
+             FROM {db}.ndr_events
+             WHERE timestamp > now() - INTERVAL {hours} HOUR
+               AND source = 'agent-z'
+               AND src_ip = '{src}' AND dst_ip = '{dst}'
+             ORDER BY timestamp ASC
+             LIMIT 500",
+            db = db, hours = hours,
+            src = sql_escape(&pair.src_ip),
+            dst = sql_escape(&pair.dst_ip),
+        )).fetch_all::<TsRow>().await.unwrap_or_default();
+
+        let ts_vec: Vec<i64> = timestamps.into_iter().map(|r| r.ts).collect();
+        if ts_vec.len() >= min_conns as usize {
+            result.push((pair.src_ip.clone(), pair.dst_ip.clone(), ts_vec));
+        }
+    }
+    Ok(result)
 }
 
 // ── AI Provider registry ───────────────────────────────────────────────────
@@ -2077,28 +2159,24 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         // 6 sequential queries → 2 parallel queries using countIf
-        let (events_row, hits_row) = tokio::join!(
+        let (events_row, hits_row) = tokio::try_join!(
             self.client.query(&format!(
                 "SELECT count() as events_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as events_1h, \
-                 countIf(source='zeek') as zeek_events, \
-                 countIf(source='suricata') as suricata_events \
+                 countIf(source='agent-z') as agent_z_events, \
+                 countIf(source='agent-s') as agent_s_events \
                  FROM {}.ndr_events", db_name))
-                .fetch_optional::<(u64, u64, u64, u64)>(),
+                .fetch_one::<(u64, u64, u64, u64)>(),
             self.client.query(&format!(
                 "SELECT count() as hits_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as hits_1h \
                  FROM {}.ndr_hits FINAL", db_name))
-                .fetch_optional::<(u64, u64)>()
-        );
-        
-        let events_row = events_row.unwrap_or(None).unwrap_or((0, 0, 0, 0));
-        let hits_row = hits_row.unwrap_or(None).unwrap_or((0, 0));
-
+                .fetch_one::<(u64, u64)>()
+        )?;
         Ok(serde_json::json!({
             "events_total": events_row.0, "hits_total": hits_row.0,
             "events_1h": events_row.1,   "hits_1h": hits_row.1,
-            "zeek_events": events_row.2,  "suricata_events": events_row.3
+            "agent_z_events": events_row.2,  "agent_s_events": events_row.3
         }))
     }
 
@@ -2179,28 +2257,60 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 toUInt32(timestamp) AS timestamp, \
                 community_id, src_ip, dst_ip, score, severity, \
                 tags, sigma_hits, threat_intel, src_country, dst_country, \
-                correlation_status, suricata_rule_id, toUInt32(corroborated_at) AS corroborated_at \
+                correlation_status, agent_s_rule_id, toUInt32(corroborated_at) AS corroborated_at \
              FROM {}.ndr_hits FINAL \
              ORDER BY timestamp DESC LIMIT {}", db_name, limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
-        Ok(rows.iter().map(|r| serde_json::json!({
-            "timestamp":          r.timestamp,
-            "community_id":       r.community_id,
-            "src_ip":             r.src_ip,
-            "dst_ip":             r.dst_ip,
-            "score":              r.score,
-            "severity":           r.severity,
-            "tags":               r.tags,
-            "sigma_hits":         r.sigma_hits,
-            "threat_intel":       r.threat_intel != 0,
-            "src_country":        r.src_country,
-            "dst_country":        r.dst_country,
-            "correlation_status": r.correlation_status,
-            "corroborated":       r.correlation_status == "corroborated",
-            "suricata_rule_id":   r.suricata_rule_id,
-            "corroborated_at":    r.corroborated_at,
-        })).collect())
+
+        // Bulk asset lookup for src/dst IPs
+        let unique_ips: Vec<String> = rows.iter()
+            .flat_map(|r| [r.src_ip.clone(), r.dst_ip.clone()])
+            .filter(|ip| !ip.is_empty())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let mut asset_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        if !unique_ips.is_empty() {
+            let ip_list = unique_ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
+            if let Ok(assets) = self.client.query(&format!(
+                "SELECT ip, hostname, mac, vendor, device_type, trusted, threat_flagged \
+                 FROM {db}.assets FINAL WHERE ip IN ({ip_list}) AND tenant_id = '{tid}'",
+                db = db_name, ip_list = ip_list, tid = sql_escape(tenant_id)
+            )).fetch_all::<(String,String,String,String,String,u8,u8)>().await {
+                for (ip, hostname, mac, vendor, device_type, trusted, threat_flagged) in assets {
+                    asset_map.insert(ip, serde_json::json!({
+                        "hostname": hostname, "mac": mac, "vendor": vendor,
+                        "device_type": device_type,
+                        "trusted": trusted != 0, "threat_flagged": threat_flagged != 0
+                    }));
+                }
+            }
+        }
+
+        Ok(rows.iter().map(|r| {
+            let src_asset = asset_map.get(&r.src_ip).cloned().unwrap_or(serde_json::Value::Null);
+            let dst_asset = asset_map.get(&r.dst_ip).cloned().unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "timestamp":          r.timestamp,
+                "community_id":       r.community_id,
+                "src_ip":             r.src_ip,
+                "dst_ip":             r.dst_ip,
+                "score":              r.score,
+                "severity":           r.severity,
+                "tags":               r.tags,
+                "sigma_hits":         r.sigma_hits,
+                "threat_intel":       r.threat_intel != 0,
+                "src_country":        r.src_country,
+                "dst_country":        r.dst_country,
+                "correlation_status": r.correlation_status,
+                "corroborated":       r.correlation_status == "corroborated",
+                "agent_s_rule_id":    r.agent_s_rule_id,
+                "corroborated_at":    r.corroborated_at,
+                "src_asset":          src_asset,
+                "dst_asset":          dst_asset,
+            })
+        }).collect())
     }
 
     pub async fn get_events_by_community_id(
@@ -2648,7 +2758,7 @@ pub async fn get_sensor_keys(
         .query(&format!(
             "SELECT id, key_prefix, tenant_id, \
                     name, hostname, interface_name, \
-                    os_name, zeek_status, suricata_status, \
+                    os_name, agent_z_status, agent_s_status, \
                     vector_status, arkime_status, arkime_url, arkime_pass, \
                     active, toString(created_at), \
                     toString(last_seen) \
@@ -2667,8 +2777,8 @@ pub async fn get_sensor_keys(
         "hostname": r.hostname,
         "interface": r.interface_name,
         "os": r.os_name,
-        "zeek": r.zeek_status,
-        "suricata": r.suricata_status,
+        "agent-z": r.agent_z_status,
+        "agent-s": r.agent_s_status,
         "vector": r.vector_status,
         "arkime": r.arkime_status,
         "arkime_url": r.arkime_url,
@@ -2692,9 +2802,9 @@ pub async fn update_sensor_registration(
     let query = format!(
         "INSERT INTO ndr.sensor_keys \
          (id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
-          os_name, zeek_status, suricata_status, vector_status, active, created_at, last_seen) \
+          os_name, agent_z_status, agent_s_status, vector_status, active, created_at, last_seen) \
          SELECT id, key_hash, key_prefix, tenant_id, name, '{}', '{}', '{}', \
-                zeek_status, suricata_status, vector_status, active, created_at, now() \
+                agent_z_status, agent_s_status, vector_status, active, created_at, now() \
          FROM ndr.sensor_keys FINAL \
          WHERE key_prefix = '{}' AND active = 1",
         hostname, interface_name, os_name, key_prefix
@@ -2706,16 +2816,16 @@ pub async fn update_sensor_registration(
 pub async fn update_sensor_heartbeat(
     &self,
     key_prefix: &str,
-    zeek_status: &str,
-    suricata_status: &str,
+    agent_z_status: &str,
+    agent_s_status: &str,
     vector_status: &str,
     arkime_status: &str,
     arkime_url: &str,
     arkime_pass: &str,
 ) -> anyhow::Result<()> {
     let key_prefix = sql_escape(key_prefix);
-    let zeek_status = sql_escape(zeek_status);
-    let suricata_status = sql_escape(suricata_status);
+    let agent_z_status = sql_escape(agent_z_status);
+    let agent_s_status = sql_escape(agent_s_status);
     let vector_status = sql_escape(vector_status);
     let arkime_status = sql_escape(arkime_status);
     let arkime_url = sql_escape(arkime_url);
@@ -2728,13 +2838,13 @@ pub async fn update_sensor_heartbeat(
     let query = format!(
         "INSERT INTO ndr.sensor_keys \
          (id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
-          os_name, zeek_status, suricata_status, vector_status, \
+          os_name, agent_z_status, agent_s_status, vector_status, \
           arkime_status, arkime_url, arkime_pass, active, created_at, last_seen) \
          SELECT id, key_hash, key_prefix, tenant_id, name, hostname, interface_name, \
                 os_name, '{}', '{}', '{}', '{}', '{}', {}, active, created_at, now() \
          FROM ndr.sensor_keys FINAL \
          WHERE key_prefix = '{}' AND active = 1",
-        zeek_status, suricata_status, vector_status,
+        agent_z_status, agent_s_status, vector_status,
         arkime_status, arkime_url, update_pass, key_prefix
     );
     self.client.query(&query).execute().await?;
@@ -3946,6 +4056,59 @@ pub async fn get_annotations(
     })).collect())
 }
 
+/// Save an AI investigation verdict for a community_id.
+/// Stored in evidence_annotations with tag='aria_verdict'.
+/// Multiple calls for the same community_id are additive — the newest is always read.
+pub async fn save_aria_verdict(
+    &self,
+    tenant_id:    &str,
+    community_id: &str,
+    verdict_json: &str,
+) -> anyhow::Result<()> {
+    let db  = tenant_db(tenant_id);
+    let cid = sql_escape(community_id);
+    let note = sql_escape(verdict_json);
+
+    // Resolve bundle_id for this community_id (empty string if not found)
+    let bundle_id: String = self.client.query(&format!(
+        "SELECT id FROM {db}.evidence_bundles FINAL \
+         WHERE community_id = '{cid}' LIMIT 1",
+        db = db, cid = cid
+    )).fetch_one::<String>().await.unwrap_or_default();
+
+    self.client.query(&format!(
+        "INSERT INTO {db}.evidence_annotations \
+         (bundle_id, community_id, author, note, tag) \
+         VALUES ('{bid}', '{cid}', 'aria', '{note}', 'aria_verdict')",
+        db = db,
+        bid  = sql_escape(&bundle_id),
+        cid  = cid,
+        note = note
+    )).execute().await?;
+    Ok(())
+}
+
+/// Retrieve the most recent AI verdict for a community_id.
+/// Returns None if no investigation has been run yet.
+pub async fn get_aria_verdict(
+    &self,
+    tenant_id:    &str,
+    community_id: &str,
+) -> Option<serde_json::Value> {
+    let db  = tenant_db(tenant_id);
+    let cid = sql_escape(community_id);
+
+    let rows: Vec<String> = self.client.query(&format!(
+        "SELECT note FROM {db}.evidence_annotations \
+         WHERE community_id = '{cid}' AND tag = 'aria_verdict' \
+         ORDER BY created_at DESC LIMIT 1",
+        db = db, cid = cid
+    )).fetch_all::<String>().await.unwrap_or_default();
+
+    rows.into_iter().next()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
 pub async fn get_all_ai_annotations(
     &self,
     tenant_id: &str,
@@ -3973,11 +4136,42 @@ pub async fn get_all_ai_annotations(
          LIMIT 50",
         db = db
     )).fetch_all::<(String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
-    Ok(rows.iter().map(|r| serde_json::json!({
-        "id": r.0, "bundle_id": r.1, "community_id": r.2,
-        "analysis": r.3, "created_at": r.4,
-        "severity": r.5, "src_ip": r.6, "dst_ip": r.7
-    })).collect())
+
+    // Bulk asset lookup for all unique IPs that appear in these analyses
+    let unique_ips: Vec<String> = rows.iter()
+        .flat_map(|r| [r.6.clone(), r.7.clone()])
+        .filter(|ip| !ip.is_empty())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut asset_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    if !unique_ips.is_empty() {
+        let ip_list = unique_ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
+        if let Ok(assets) = self.client.query(&format!(
+            "SELECT ip, hostname, mac, vendor, device_type, trusted, threat_flagged \
+             FROM {db}.assets FINAL WHERE ip IN ({ip_list}) AND tenant_id = '{tid}'",
+            db = db, ip_list = ip_list, tid = sql_escape(tenant_id)
+        )).fetch_all::<(String,String,String,String,String,u8,u8)>().await {
+            for (ip, hostname, mac, vendor, device_type, trusted, threat_flagged) in assets {
+                asset_map.insert(ip, serde_json::json!({
+                    "hostname": hostname, "mac": mac, "vendor": vendor,
+                    "device_type": device_type,
+                    "trusted": trusted != 0, "threat_flagged": threat_flagged != 0
+                }));
+            }
+        }
+    }
+
+    Ok(rows.iter().map(|r| {
+        let src_asset = asset_map.get(&r.6).cloned().unwrap_or(serde_json::Value::Null);
+        let dst_asset = asset_map.get(&r.7).cloned().unwrap_or(serde_json::Value::Null);
+        serde_json::json!({
+            "id": r.0, "bundle_id": r.1, "community_id": r.2,
+            "analysis": r.3, "created_at": r.4,
+            "severity": r.5, "src_ip": r.6, "dst_ip": r.7,
+            "src_asset": src_asset, "dst_asset": dst_asset
+        })
+    }).collect())
 }
 
 /// Returns all evidence bundles for a given community_id (used for grouped AI analysis).
@@ -4582,14 +4776,22 @@ pub async fn get_ioc_hits(
         let db = tenant_db(&asset.tenant_id);
         let safe_history = sql_escape(&asset.ip_history);
         let query = format!(
-            "INSERT INTO {}.assets (ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, first_seen, last_seen, ip_history) \
-             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', toDateTime({}), toDateTime({}), '{}')",
+            "INSERT INTO {}.assets \
+             (ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
+              first_seen, last_seen, ip_history, trusted, threat_flagged, \
+              role, criticality, open_ports, subnet_role, ja3_os) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', \
+                     toDateTime({}), toDateTime({}), '{}', {}, {}, \
+                     '{}', {}, '{}', '{}', '{}')",
             db,
             sql_escape(&asset.ip), sql_escape(&asset.mac), sql_escape(&asset.hostname),
             sql_escape(&asset.vendor), sql_escape(&asset.os_guess), sql_escape(&asset.device_type),
             sql_escape(&asset.custom_name), sql_escape(&asset.tenant_id),
             asset.first_seen, asset.last_seen,
-            safe_history
+            safe_history,
+            asset.trusted, asset.threat_flagged,
+            sql_escape(&asset.role), asset.criticality,
+            sql_escape(&asset.open_ports), sql_escape(&asset.subnet_role), sql_escape(&asset.ja3_os)
         );
         self.client.query(&query).execute().await?;
         Ok(())
@@ -4611,7 +4813,8 @@ pub async fn get_ioc_hits(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, \
              toUnixTimestamp(last_seen) as last_seen, \
-             ip_history, trusted, threat_flagged \
+             ip_history, trusted, threat_flagged, \
+             role, criticality, open_ports, subnet_role, ja3_os \
              FROM {}.assets FINAL WHERE tenant_id = '{}' \
              ORDER BY ip ASC",
             db, sql_escape(tenant_id)
@@ -4626,7 +4829,8 @@ pub async fn get_ioc_hits(
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
-             ip_history, trusted, threat_flagged \
+             ip_history, trusted, threat_flagged, \
+             role, criticality, open_ports, subnet_role, ja3_os \
              FROM {}.assets FINAL WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(mac)
         );
@@ -4673,7 +4877,8 @@ pub async fn get_ioc_hits(
         let query = format!(
             "SELECT ip, mac, hostname, vendor, os_guess, device_type, custom_name, tenant_id, \
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
-             ip_history, trusted, threat_flagged \
+             ip_history, trusted, threat_flagged, \
+             role, criticality, open_ports, subnet_role, ja3_os \
              FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}' LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(ip)
         );
@@ -4682,13 +4887,11 @@ pub async fn get_ioc_hits(
     }
 
     pub async fn update_asset_name(&self, tenant_id: &str, ip: &str, custom_name: &str) -> anyhow::Result<()> {
-        let db = tenant_db(tenant_id);
-        let query = format!(
-            "ALTER TABLE {}.assets UPDATE custom_name = '{}', last_seen = now() \
-             WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
-            db, sql_escape(custom_name), sql_escape(tenant_id), sql_escape(ip)
-        );
-        self.client.query(&query).execute().await?;
+        if let Ok(Some(mut asset)) = self.get_asset_by_ip(tenant_id, ip).await {
+            asset.custom_name = custom_name.to_string();
+            asset.last_seen   = chrono::Utc::now().timestamp() as u32;
+            self.upsert_asset(&asset).await?;
+        }
         Ok(())
     }
 
@@ -4720,14 +4923,144 @@ pub async fn get_ioc_hits(
     }
 
     /// Toggle the trusted flag on an asset (0→1 or 1→0).
-    pub async fn set_asset_trusted(&self, tenant_id: &str, ip: &str, trusted: bool) -> anyhow::Result<()> {
+    /// Get per-IP traffic profile from ndr_events for asset intelligence enrichment.
+    pub async fn get_asset_traffic_profile(
+        &self,
+        tenant_id: &str,
+        ip:        &str,
+        hours:     u32,
+    ) -> anyhow::Result<crate::enrichment::asset_intel::AssetTrafficProfile> {
         let db = tenant_db(tenant_id);
-        let query = format!(
-            "ALTER TABLE {}.assets UPDATE trusted = {}, threat_flagged = 0, last_seen = now() \
-             WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
-            db, if trusted { 1 } else { 0 }, sql_escape(tenant_id), sql_escape(ip)
-        );
-        self.client.query(&query).execute().await?;
+        let escaped_ip = sql_escape(ip);
+
+        // Total connections where this IP appears
+        let total: u64 = self.client
+            .query(&format!(
+                "SELECT count() FROM {db}.ndr_events \
+                 WHERE (src_ip = '{escaped_ip}' OR dst_ip = '{escaped_ip}') \
+                 AND timestamp > now() - INTERVAL {hours} HOUR",
+                db = db, escaped_ip = escaped_ip, hours = hours
+            ))
+            .fetch_one::<u64>().await.unwrap_or(0);
+
+        // Inbound: connections where this IP is the destination
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct InboundRow { cnt: u64, unique_srcs: u64, ports: Vec<u16> }
+
+        let inbound = self.client
+            .query(&format!(
+                "SELECT count() as cnt, uniqExact(src_ip) as unique_srcs, \
+                 groupUniqArray(dst_port) as ports \
+                 FROM {db}.ndr_events \
+                 WHERE dst_ip = '{escaped_ip}' \
+                 AND dst_port > 0 \
+                 AND timestamp > now() - INTERVAL {hours} HOUR",
+                db = db, escaped_ip = escaped_ip, hours = hours
+            ))
+            .fetch_optional::<InboundRow>().await
+            .unwrap_or(None);
+
+        let (inbound_cnt, unique_src_ips, mut open_ports) = inbound
+            .map(|r| (r.cnt, r.unique_srcs, r.ports))
+            .unwrap_or((0, 0, vec![]));
+
+        // Keep only well-known service ports (< 32768) and deduplicate
+        open_ports.retain(|&p| p > 0 && p < 32768);
+        open_ports.sort_unstable();
+        open_ports.dedup();
+        open_ports.truncate(20);
+
+        // Unique protocol count
+        let proto_count: u64 = self.client
+            .query(&format!(
+                "SELECT uniqExact(log_type) FROM {db}.ndr_events \
+                 WHERE (src_ip = '{escaped_ip}' OR dst_ip = '{escaped_ip}') \
+                 AND timestamp > now() - INTERVAL {hours} HOUR",
+                db = db, escaped_ip = escaped_ip, hours = hours
+            ))
+            .fetch_one::<u64>().await.unwrap_or(0);
+
+        Ok(crate::enrichment::asset_intel::AssetTrafficProfile {
+            total_conn_count:   total,
+            inbound_conn_count: inbound_cnt,
+            unique_src_ips,
+            protocol_count:     proto_count,
+            open_ports,
+        })
+    }
+
+    /// Get the most common JA3 fingerprint for an IP and map it to an OS label.
+    pub async fn get_ja3_os_for_ip(&self, tenant_id: &str, ip: &str) -> String {
+        let db = tenant_db(tenant_id);
+        let escaped = sql_escape(ip);
+        let ja3: Option<String> = self.client
+            .query(&format!(
+                "SELECT JSONExtractString(raw, 'ja3') as ja3h \
+                 FROM {db}.ndr_events \
+                 WHERE src_ip = '{escaped}' \
+                 AND log_type = 'ssl' \
+                 AND JSONExtractString(raw, 'ja3') != '' \
+                 AND timestamp > now() - INTERVAL 7 DAY \
+                 GROUP BY ja3h ORDER BY count() DESC LIMIT 1",
+                db = db, escaped = escaped
+            ))
+            .fetch_optional::<String>().await
+            .unwrap_or(None);
+
+        ja3.and_then(|h| crate::enrichment::asset_intel::ja3_lookup(&h).map(String::from))
+            .unwrap_or_default()
+    }
+
+    /// Update asset intelligence fields computed by the enrichment task.
+    pub async fn update_asset_intel(
+        &self,
+        tenant_id:   &str,
+        ip:          &str,
+        role:        &str,
+        criticality: u8,
+        open_ports:  &str,
+        subnet_role: &str,
+        ja3_os:      &str,
+    ) -> anyhow::Result<()> {
+        if let Ok(Some(mut asset)) = self.get_asset_by_ip(tenant_id, ip).await {
+            if !role.is_empty()        { asset.role        = role.to_string(); }
+            if criticality != 0        { asset.criticality = criticality; }
+            if open_ports != "[]" && !open_ports.is_empty() { asset.open_ports = open_ports.to_string(); }
+            if !subnet_role.is_empty() { asset.subnet_role = subnet_role.to_string(); }
+            if !ja3_os.is_empty()      { asset.ja3_os      = ja3_os.to_string(); }
+            asset.last_seen = chrono::Utc::now().timestamp() as u32;
+            self.upsert_asset(&asset).await?;
+        }
+        Ok(())
+    }
+
+    /// Read subnet → role mappings from settings (stored as JSON array).
+    pub async fn get_subnet_roles(&self, _tenant_id: &str) -> Vec<(String, String)> {
+        let raw = self.get_global_setting("asset_subnet_roles").await.unwrap_or_default();
+        if raw.is_empty() { return vec![]; }
+        serde_json::from_str::<Vec<serde_json::Value>>(&raw)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| {
+                let cidr = v["cidr"].as_str()?.to_string();
+                let role = v["role"].as_str()?.to_string();
+                Some((cidr, role))
+            })
+            .collect()
+    }
+
+    /// Save subnet → role mappings to settings.
+    pub async fn set_subnet_roles(&self, json: &str) -> anyhow::Result<()> {
+        self.set_global_setting("asset_subnet_roles", json).await
+    }
+
+    pub async fn set_asset_trusted(&self, tenant_id: &str, ip: &str, trusted: bool) -> anyhow::Result<()> {
+        if let Ok(Some(mut asset)) = self.get_asset_by_ip(tenant_id, ip).await {
+            asset.trusted = if trusted { 1 } else { 0 };
+            if trusted { asset.threat_flagged = 0; }
+            asset.last_seen = chrono::Utc::now().timestamp() as u32;
+            self.upsert_asset(&asset).await?;
+        }
         Ok(())
     }
 

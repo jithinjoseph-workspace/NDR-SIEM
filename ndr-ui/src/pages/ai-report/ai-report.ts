@@ -10,7 +10,7 @@ import {
   Bot, FileText, Download, RefreshCw, Shield, AlertTriangle,
   Activity, TrendingUp, TrendingDown, Minus, ShieldOff,
   Server, Zap, ChevronLeft, Clock, CheckCircle2, LoaderCircle,
-  BarChart3, Eye, Lock, Globe, List, Target, Cpu
+  BarChart3, Eye, Lock, Globe, List, Target, GripVertical
 } from 'lucide-angular';
 
 /** MITRE ATT&CK mapping for a single analysis */
@@ -62,7 +62,7 @@ export class AiReport {
   GlobeIcon     = Globe;
   ListIcon      = List;
   TargetIcon    = Target;
-  CpuIcon       = Cpu;
+  GripIcon      = GripVertical;
 
   // ── Report metadata ──────────────────────────────────────────────────────
   reportPeriod = signal<ReportPeriod>('24h');
@@ -83,8 +83,6 @@ export class AiReport {
   topIps       = signal<any>(null);
   protocols    = signal<any[]>([]);
   health       = signal<any>(null);
-  aiConfig     = signal<any>(null);
-  aiProviders  = signal<any[]>([]);
 
   // ── ARIA-generated narrative signals ──────────────────────────────────────
   execSummary     = signal('');
@@ -99,18 +97,53 @@ export class AiReport {
   mitreMap     = signal<Record<string, MitreEntry>>({});
   mitreLoading = signal(false);
 
-  // ── Table of Contents sections ────────────────────────────────────────────
-  readonly tocSections: TocSection[] = [
-    { id: 'section-exec',          num: '01', title: 'Executive Summary' },
-    { id: 'section-kpis',          num: '02', title: 'Key Performance Indicators' },
-    { id: 'section-threat',        num: '03', title: 'Threat Landscape Overview' },
-    { id: 'section-analyses',      num: '04', title: 'AI Threat Analyses & MITRE ATT&CK' },
-    { id: 'section-predictions',   num: '05', title: 'Predictive Threat Intelligence' },
-    { id: 'section-suppressions',  num: '06', title: 'Autonomous Suppression Decisions' },
-    { id: 'section-aiconfig',      num: '07', title: 'AI Engine Configuration' },
-    { id: 'section-recommendations', num: '08', title: 'Recommendations & Remediation' },
-    { id: 'section-appendix',      num: 'A',  title: 'Appendix — System Health' },
+  // ── Report Builder — section registry ────────────────────────────────────
+  readonly sectionDefs = [
+    { id: 'section-exec',            num: '01', title: 'Executive Summary',              required: true  },
+    { id: 'section-kpis',            num: '02', title: 'Key Performance Indicators',     required: false },
+    { id: 'section-threat',          num: '03', title: 'Threat Landscape Overview',      required: false },
+    { id: 'section-analyses',        num: '04', title: 'AI Threat Analyses & MITRE',     required: false },
+    { id: 'section-predictions',     num: '05', title: 'Predictive Threat Intelligence', required: false },
+    { id: 'section-suppressions',    num: '06', title: 'Autonomous Suppression',         required: false },
+    { id: 'section-recommendations', num: '07', title: 'Recommendations & Remediation',  required: false },
+    { id: 'section-appendix',        num: 'A',  title: 'Appendix — System Health',       required: false },
   ];
+
+  private readonly DEFAULT_ORDER = this.sectionDefs.map(s => s.id);
+
+  sectionOrder    = signal<string[]>([...this.sectionDefs.map(s => s.id)]);
+  enabledSections = signal<Set<string>>(new Set(this.sectionDefs.map(s => s.id)));
+  customMode      = signal(false);
+  dragSrcIdx      = signal<number | null>(null);
+  dragOverIdx     = signal<number | null>(null);
+
+  enabledCount = computed(() => this.enabledSections().size);
+
+  sectionNumbers = computed(() => {
+    const nums: Record<string, string> = {};
+    let counter = 1;
+    
+    for (const id of this.sectionOrder()) {
+      if (id === 'section-appendix') {
+        nums[id] = 'A';
+      } else if (this.enabledSections().has(id)) {
+        nums[id] = String(counter++).padStart(2, '0');
+      } else {
+        nums[id] = '--';
+      }
+    }
+    return nums;
+  });
+
+  activeTocSections = computed(() =>
+    this.sectionOrder()
+      .filter(id => this.enabledSections().has(id))
+      .map(id => {
+        const def = this.sectionDefs.find(d => d.id === id)!;
+        return { ...def, num: this.sectionNumbers()[id] };
+      })
+      .filter(Boolean)
+  );
 
   // ── Computed risk values ──────────────────────────────────────────────────
   totalAlerts = computed(() => {
@@ -193,11 +226,11 @@ export class AiReport {
    * Agent-Z/Agent-S ratio:
    *   Shows sensor contribution split from real stats data.
    */
-  kpiZeekRatio = computed(() => {
+  kpiAgentZRatio = computed(() => {
     const st = this.stats();
     if (!st) return null;
-    const z = st.zeek_events || 0;
-    const s = st.suricata_events || 0;
+    const z = st.agent_z_events || 0;
+    const s = st.agent_s_events || 0;
     const total = z + s;
     if (total === 0) return null;
     return `${Math.round((z / total) * 100)}% / ${Math.round((s / total) * 100)}%`;
@@ -240,8 +273,6 @@ export class AiReport {
       topIps:      this.api.getTopIps().pipe(catchError(() => of(null))),
       protocols:   this.api.getProtocols().pipe(catchError(() => of({ protocols: [] }))),
       health:      this.api.getDashboardStats().pipe(catchError(() => of(null))),
-      aiConfig:    this.api.getAiConfig().pipe(catchError(() => of(null))),
-      aiProviders: this.api.listAiProviders().pipe(catchError(() => of([]))),
     }).pipe(
       finalize(() => this.generating.set(false))
     ).subscribe({
@@ -261,10 +292,6 @@ export class AiReport {
         this.protocols.set(data.protocols?.protocols || []);
         this.topIps.set(data.topIps);
         this.health.set(data.health);
-        this.aiConfig.set(data.aiConfig);
-        this.aiProviders.set(
-          Array.isArray(data.aiProviders) ? data.aiProviders : (data.aiProviders?.providers || [])
-        );
 
         // Filter AI activity by selected period
         const allAnalyses   = data.aiActivity?.analyses    || [];
@@ -327,8 +354,8 @@ Verified data:
 - Report period: ${period}
 - Total network events: ${stats.events_total?.toLocaleString() ?? 'N/A'}
 - Total correlation hits: ${stats.hits_total?.toLocaleString() ?? 'N/A'}
-- Agent-Z sensor events: ${stats.zeek_events?.toLocaleString() ?? 'N/A'}
-- Agent-S sensor events: ${stats.suricata_events?.toLocaleString() ?? 'N/A'}
+- Agent-Z sensor events: ${stats.agent_z_events?.toLocaleString() ?? 'N/A'}
+- Agent-S sensor events: ${stats.agent_s_events?.toLocaleString() ?? 'N/A'}
 - Critical alerts: ${sev.critical ?? 0}, High: ${sev.high ?? 0}, Medium: ${sev.medium ?? 0}, Low: ${sev.low ?? 0}
 - Total alerts: ${total}
 - AI threat analyses generated: ${analyses.length}
@@ -511,5 +538,51 @@ ${analysisList}`;
     const h = this.health();
     if (!h || typeof h !== 'object') return [];
     return Object.keys(h).filter(k => typeof h[k] !== 'object' && h[k] !== null).slice(0, 16);
+  }
+
+  // ── Report Builder methods ─────────────────────────────────────────────────
+  getSectionDef(id: string) { return this.sectionDefs.find(d => d.id === id); }
+
+  isSectionEnabled(id: string): boolean { return this.enabledSections().has(id); }
+
+  sectionCssOrder(id: string): number { return this.sectionOrder().indexOf(id) + 10; }
+
+  toggleSection(id: string) {
+    const def = this.sectionDefs.find(d => d.id === id);
+    if (def?.required) return;
+    const s = new Set(this.enabledSections());
+    if (s.has(id)) s.delete(id); else s.add(id);
+    this.enabledSections.set(s);
+  }
+
+  onDragStart(idx: number, e: DragEvent) {
+    this.dragSrcIdx.set(idx);
+    e.dataTransfer?.setData('text/plain', String(idx));
+  }
+
+  onDragOver(idx: number, e: DragEvent) {
+    e.preventDefault();
+    this.dragOverIdx.set(idx);
+  }
+
+  onDrop(targetIdx: number, e: DragEvent) {
+    e.preventDefault();
+    const srcIdx = this.dragSrcIdx();
+    if (srcIdx === null || srcIdx === targetIdx) { this.onDragEnd(); return; }
+    const order = [...this.sectionOrder()];
+    const [moved] = order.splice(srcIdx, 1);
+    order.splice(targetIdx, 0, moved);
+    this.sectionOrder.set(order);
+    this.onDragEnd();
+  }
+
+  onDragEnd() {
+    this.dragSrcIdx.set(null);
+    this.dragOverIdx.set(null);
+  }
+
+  resetToDefault() {
+    this.sectionOrder.set([...this.DEFAULT_ORDER]);
+    this.enabledSections.set(new Set(this.DEFAULT_ORDER));
   }
 }

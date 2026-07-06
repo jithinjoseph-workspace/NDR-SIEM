@@ -45,11 +45,20 @@ async fn run_scan(ch: &Arc<ClickhouseStorage>) {
         .map(|k| k.to_uppercase())
         .collect();
 
-    // Get top clean dst IPs from last 24h
-    let ip_counts = match ch.get_high_volume_clean_dst_ips("default", 24, 30).await {
-        Ok(v) => v,
-        Err(e) => { warn!("cloud_suggestions: query failed — {}", e); return; }
-    };
+    // Get top clean dst IPs from last 24h across ALL active tenants
+    let tenant_ids = ch.get_all_tenants().await.unwrap_or_else(|_| vec!["default".to_string()]);
+    let mut combined: HashMap<String, u64> = HashMap::new();
+    for tid in &tenant_ids {
+        match ch.get_high_volume_clean_dst_ips(tid, 24, 30).await {
+            Ok(v) => {
+                for (ip, cnt) in v {
+                    *combined.entry(ip).or_default() += cnt;
+                }
+            }
+            Err(e) => warn!("cloud_suggestions: query failed for tenant {} — {}", tid, e),
+        }
+    }
+    let ip_counts: Vec<(String, u64)> = combined.into_iter().collect();
 
     // ASN lookup — group IPs by org
     let asn_db = crate::enrichment::AsnLookup::open("data/GeoLite2-ASN.mmdb");

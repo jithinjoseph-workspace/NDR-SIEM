@@ -466,8 +466,8 @@
                   <tr *ngFor="let e of liveEvidence.ndr_events" class="text-white">
                     <td class="py-1.5 font-mono text-on-surface-variant">{{ formatTs(e.ts) }}</td>
                     <td class="py-1.5">
-                      <span [class]="'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (e.source === 'zeek' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400')">
-                        {{ e.source === 'zeek' ? 'AGENT-Z' : (e.source === 'suricata' ? 'AGENT-S' : (e.source | uppercase)) }}
+                      <span [class]="'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (e.source === 'agent-z' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400')">
+                        {{ e.source === 'agent-z' ? 'AGENT-Z' : (e.source === 'agent-s' ? 'AGENT-S' : (e.source | uppercase)) }}
                       </span>
                     </td>
                     <td class="py-1.5 text-primary">{{ e.event_type || 'conn' }}</td>

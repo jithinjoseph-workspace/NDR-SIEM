@@ -61,8 +61,8 @@
         <span class="stream-time">{{ msg.timestamp }}</span>
         <span
           [ngClass]="{
-            zeek: msg.event === 'ZEEK',
-            suricata: msg.event === 'SURICATA',
+            zeek: msg.event === 'AGENT-Z',
+            suricata: msg.event === 'AGENT-S',
             hit: msg.event === 'HIT'
           }"
           class="stream-badge"

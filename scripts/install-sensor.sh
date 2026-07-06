@@ -77,7 +77,7 @@ if [ -z "$IFACE" ]; then
 
   if [ "$IFACE_COUNT" -eq 0 ]; then
     read -rp "Enter interface (e.g. eth0, eno1): " \
-      IFACE
+      IFACE < /dev/tty
     IFACE=${IFACE:-eth0}
   elif [ "$IFACE_COUNT" -eq 1 ]; then
     IFACE=$(echo "$IFACES" | head -1)
@@ -94,7 +94,7 @@ if [ -z "$IFACE" ]; then
       i=$((i+1))
     done <<< "$IFACES"
     echo "─────────────────────"
-    read -rp "Select interface [1]: " IFACE_NUM
+    read -rp "Select interface [1]: " IFACE_NUM < /dev/tty
     IFACE_NUM=${IFACE_NUM:-1}
     IFACE=$(echo "$IFACES" | \
       sed -n "${IFACE_NUM}p")
@@ -126,7 +126,7 @@ if [ -z "$SENSOR_MODE" ]; then
   echo "                   being monitored (EC2, GCP VM, etc.)"
   echo "                   Server's own traffic IS what we monitor."
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  read -rp "Select mode [1/2]: " MODE_NUM
+  read -rp "Select mode [1/2]: " MODE_NUM < /dev/tty
   case "${MODE_NUM:-1}" in
     1) SENSOR_MODE="tap"   ;;
     2) SENSOR_MODE="agent" ;;
@@ -375,26 +375,20 @@ EOF
 # ── Start local OpenSearch for Arkime ────────────
 # FIX: Start OpenSearch FIRST, wait fully,
 #      THEN configure and start Arkime
-log "Checking if OpenSearch is already running on port 9200..."
-if curl -s http://localhost:9200 > /dev/null 2>&1; then
-  log "OpenSearch is already running on port 9200. Using existing instance."
-else
-  log "Starting local OpenSearch for Arkime..."
-  # Remove old container if exists
-  docker rm -f opensearch-arkime 2>/dev/null || true
+log "Starting local OpenSearch for Arkime..."
 
-  log "Pulling OpenSearch image (this may take a few minutes)..."
-  docker pull opensearchproject/opensearch:2.5.0
+# Remove old container if exists
+docker rm -f opensearch-arkime 2>/dev/null || true
 
-  docker run -d \
-    --name opensearch-arkime \
-    -e "discovery.type=single-node" \
-    -e "DISABLE_SECURITY_PLUGIN=true" \
-    -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
-    -p 9200:9200 \
-    --restart unless-stopped \
-    opensearchproject/opensearch:2.5.0
-fi
+docker run -d \
+  --name opensearch-arkime \
+  -e "discovery.type=single-node" \
+  -e "DISABLE_SECURITY_PLUGIN=true" \
+  -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
+  -p 9200:9200 \
+  --restart unless-stopped \
+  opensearchproject/opensearch:2.5.0 \
+    > /dev/null 2>&1
 
 # FIX: Wait properly — up to 3 minutes
 log "Waiting for OpenSearch (up to 3 min)..."
@@ -983,7 +977,7 @@ log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
 """NDR Sensor Agent v2 — monitors and restarts all services"""
-import os, time, subprocess, threading, requests, json, hashlib, re
+import os, time, subprocess, threading, requests, json, hashlib
 from datetime import datetime
 
 config = {}
@@ -1037,7 +1031,7 @@ def start_zeek():
             ["/opt/zeek/bin/zeek", "-i", IFACE,
              "local",
              "Log::default_logdir=/var/log/ndr/zeek"],
-            stdout=open("/var/log/ndr/zeek_stdout.log", "w"),
+            stdout=open("/tmp/zeek.log", "w"),
             stderr=subprocess.STDOUT
         )
         print("[NDR] ✅ Zeek started")
@@ -1067,7 +1061,7 @@ def start_suricata():
              "--pidfile", "/tmp/suricata.pid",
              "--set", "detect.profile=low",
              "--set", "max-pending-packets=128"],
-            stdout=open("/var/log/ndr/suricata_stdout.log", "w"),
+            stdout=open("/tmp/suricata.log", "w"),
             stderr=subprocess.STDOUT
         )
         print("[NDR] ✅ Suricata started")
@@ -1281,8 +1275,8 @@ def check_and_restart():
 
     if MANUALLY_STOPPED:
         # Services were intentionally stopped — report stopped, do not restart
-        statuses['zeek']          = 'stopped'
-        statuses['suricata']      = 'stopped'
+        statuses['agent-z']       = 'stopped'
+        statuses['agent-s']       = 'stopped'
         statuses['vector']        = 'stopped'
         statuses['arkime_capture'] = 'stopped'
         return statuses
@@ -1290,16 +1284,16 @@ def check_and_restart():
     if not is_running('zeek'):
         print("[NDR] Zeek down — restarting")
         start_zeek()
-        statuses['zeek'] = 'restarting'
+        statuses['agent-z'] = 'restarting'
     else:
-        statuses['zeek'] = 'running'
+        statuses['agent-z'] = 'running'
 
     if not is_running('suricata'):
         print("[NDR] Suricata down — restarting")
         start_suricata()
-        statuses['suricata'] = 'restarting'
+        statuses['agent-s'] = 'restarting'
     else:
-        statuses['suricata'] = 'running'
+        statuses['agent-s'] = 'running'
 
     if not is_running('vector'):
         print("[NDR] Vector down — restarting")
@@ -1339,8 +1333,8 @@ def report_status(statuses):
             timeout=5
         )
         print(f"[NDR] Heartbeat sent: "
-              f"zeek={statuses.get('zeek')} "
-              f"suricata={statuses.get('suricata')} "
+              f"agent-z={statuses.get('agent-z')} "
+              f"agent-s={statuses.get('agent-s')} "
               f"capture={statuses.get('arkime_capture')}")
     except Exception as e:
         print(f"[NDR] Heartbeat failed: {e}")
@@ -1570,8 +1564,8 @@ def do_checkin():
         'sensor_ip':      sensor_ip,
         'arkime_url':     f'http://{sensor_ip}:8005',
         'arkime_pass':    ARKIME_PASS,
-        'zeek':           statuses.get('zeek', 'unknown'),
-        'suricata':       statuses.get('suricata', 'unknown'),
+        'agent-z':        statuses.get('agent-z', 'unknown'),
+        'agent-s':        statuses.get('agent-s', 'unknown'),
         'vector':         statuses.get('vector', 'unknown'),
         'arkime_capture': statuses.get('arkime_capture', 'unknown'),
         'arkime_viewer':  statuses.get('arkime_viewer', 'unknown'),
@@ -1590,8 +1584,8 @@ def do_checkin():
 
         data = resp.json()
         print(f"[NDR] Checkin ok — "
-              f"zeek={payload['zeek']} "
-              f"suricata={payload['suricata']} "
+              f"agent-z={payload['agent-z']} "
+              f"agent-s={payload['agent-s']} "
               f"arkime={payload['arkime_capture']}")
 
         cmd = data.get('command', '').strip()
@@ -2219,9 +2213,6 @@ echo "$REG" | grep -q '"status":"ok"' && \
   warn "Registration: $REG"
 
 # ── Verify everything ─────────────────────────────
-log "Waiting 15 seconds for Zeek and Suricata to fully initialize..."
-sleep 15
-
 echo ""
 echo "╔══════════════════════════════════════════╗"
 echo "║    ✅ NDR Sensor Installation Done!      ║"
@@ -2247,10 +2238,6 @@ printf "║  Suricata:     %s                           ║\n" "$S"
 printf "║  Vector:       %s → HTTP                    ║\n" "$V"
 printf "║  Arkime cap:   %s                           ║\n" "$AC"
 echo "╚══════════════════════════════════════════╝"
-echo ""
-
-
-
 echo ""
 log "Config:  /etc/ndr/sensor.conf"
 log "Logs:    journalctl -u ndr-agent -f"

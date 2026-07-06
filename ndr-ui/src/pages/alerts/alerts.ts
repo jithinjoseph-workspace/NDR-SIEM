@@ -77,18 +77,28 @@ export class Alerts implements OnInit, OnDestroy {
       this.ws.continuousHits$.subscribe(hits => {
         if (!hits || hits.length === 0) return;
         
-        const formattedHits = hits.map(hit => ({
-          severity: hit.severity?.toUpperCase() || 'LOW',
-          source: `${hit.src || hit.suricata?.src || hit.zeek?.src || '-'} -> ${hit.dst || hit.suricata?.dst || hit.zeek?.dst || '-'}`,
-          description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
-          time: hit.ts
-            ? new Date(hit.ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          score: hit.score,
-          community_id: hit.cid || hit.community_id || '',
-          src_country: this.formatOrigin(hit.src || hit.suricata?.src || hit.zeek?.src, hit.src_country),
-          dst_country: hit.dst_country,
-        }));
+        const formattedHits = hits.map(hit => {
+          const srcIp = hit.src_ip || hit.src || hit['agent-z']?.src || hit['agent-s']?.src || '';
+          const dstIp = hit.dst_ip || hit.dst || hit['agent-z']?.dst || hit['agent-s']?.dst || '';
+          return {
+            severity: hit.severity?.toUpperCase() || 'LOW',
+            source: `${srcIp || '-'} -> ${dstIp || '-'}`,
+            description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
+            time: hit.ts
+              ? new Date(hit.ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+              : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            score: hit.score,
+            community_id: hit.cid || hit.community_id || '',
+            src_ip: srcIp,
+            dst_ip: dstIp,
+            src_country: this.formatOrigin(srcIp, hit.src_country),
+            dst_country: hit.dst_country,
+            threat_intel: hit.threat_intel || false,
+            tags: hit.tags || [],
+            src_asset: hit.src_asset || null,
+            dst_asset: hit.dst_asset || null,
+          };
+        });
         
         const existingCids = new Set(formattedHits.map(h => h.community_id));
         const oldAlerts = this.allAlerts.filter(a => !existingCids.has(a.community_id));
@@ -112,7 +122,7 @@ export class Alerts implements OnInit, OnDestroy {
         const apiAlerts = data.map(hit => ({
           severity: hit.severity?.toUpperCase() || 'LOW',
           source: `${hit.src_ip || '-'} -> ${hit.dst_ip || '-'}`,
-          description: hit.sigma_hits?.join(', ') || 'Correlation hit',
+          description: hit.sigma_hits?.join(', ') || hit.tags?.join(', ') || 'Correlation hit',
           time: this.formatAlertTime(
             hit.timestamp != null && hit.timestamp !== 0 ? hit.timestamp
               : hit.time != null ? hit.time
@@ -121,8 +131,13 @@ export class Alerts implements OnInit, OnDestroy {
           score: hit.score,
           threat_intel: hit.threat_intel,
           community_id: hit.community_id || hit.cid || '',
+          src_ip: hit.src_ip || '',
+          dst_ip: hit.dst_ip || '',
           src_country: this.formatOrigin(hit.src_ip, hit.src_country),
           dst_country: hit.dst_country,
+          src_asset: hit.src_asset || null,
+          dst_asset: hit.dst_asset || null,
+          tags: hit.tags || [],
         }));
 
         const existingCids = new Set(this.allAlerts.map(a => a.community_id));

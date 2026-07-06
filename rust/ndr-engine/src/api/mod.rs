@@ -424,7 +424,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
                 svc, src, dst, proto, cs,
                 event.community_id.as_deref().unwrap_or("?"));
             json!({
-                "type": "zeek",
+                "type": "agent-z",
                 "ts":   ts,
                 "event_type": if svc != "-" { svc } else { cs },
                 "cid":  event.community_id,
@@ -446,7 +446,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
             trace!("suricata {} | {}→{} cid={}",
                 et, src, dst, event.community_id.as_deref().unwrap_or("?"));
             json!({
-                "type": "suricata",
+                "type": "agent-s",
                 "ts":   ts,
                 "event_type": et,
                 "cid":  event.community_id,
@@ -518,8 +518,8 @@ pub async fn search_network_map(
 }
 
 pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
-    let tenant_id = hit.zeek.raw.get("tenant_id")
-        .or_else(|| hit.suricata.raw.get("tenant_id"))
+    let tenant_id = hit.agent_z.raw.get("tenant_id")
+        .or_else(|| hit.agent_s.raw.get("tenant_id"))
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string();
@@ -534,21 +534,21 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let soar_threshold     = settings["soar_threshold"].as_f64().unwrap_or(75.0) as f32;
         
     let (src, dst) = match hit.source.as_str() {
-        "zeek" => (
-            hit.zeek.source_ip.as_deref().unwrap_or("-"),
-            hit.zeek.dest_ip.as_deref().unwrap_or("-"),
+        "agent-z" => (
+            hit.agent_z.source_ip.as_deref().unwrap_or("-"),
+            hit.agent_z.dest_ip.as_deref().unwrap_or("-"),
         ),
-        "suricata" => (
-            hit.suricata.source_ip.as_deref().unwrap_or("-"),
-            hit.suricata.dest_ip.as_deref().unwrap_or("-"),
+        "agent-s" => (
+            hit.agent_s.source_ip.as_deref().unwrap_or("-"),
+            hit.agent_s.dest_ip.as_deref().unwrap_or("-"),
         ),
         _ => (
             // zeek+suricata — prefer Zeek for flow data
-            hit.zeek.source_ip.as_deref()
-                .or(hit.suricata.source_ip.as_deref())
+            hit.agent_z.source_ip.as_deref()
+                .or(hit.agent_s.source_ip.as_deref())
                 .unwrap_or("-"),
-            hit.zeek.dest_ip.as_deref()
-                .or(hit.suricata.dest_ip.as_deref())
+            hit.agent_z.dest_ip.as_deref()
+                .or(hit.agent_s.dest_ip.as_deref())
                 .unwrap_or("-"),
         ),
     };
@@ -579,8 +579,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     }
 
     // Resolve trusted-cloud flag via dynamic DB-driven TrustedRanges (no hardcoding)
-    let dst_ip_str = hit.zeek.dest_ip.as_deref().unwrap_or("").to_string();
-    let sni_str    = hit.zeek.raw.get("server_name")
+    let dst_ip_str = hit.agent_z.dest_ip.as_deref().unwrap_or("").to_string();
+    let sni_str    = hit.agent_z.raw.get("server_name")
         .and_then(|v| v.as_str()).unwrap_or("").to_string();
     let is_trusted_cloud = {
         let tr = state.trusted.read().await;
@@ -595,7 +595,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 
     // TAP mode: sensor is a passive probe — ALL traffic from sensor IP is noise.
     // Agent mode: sensor IS the monitored host — don't suppress its traffic.
-    let src_ip_parsed: Option<std::net::IpAddr> = hit.zeek.source_ip
+    let src_ip_parsed: Option<std::net::IpAddr> = hit.agent_z.source_ip
         .as_deref().and_then(|s| s.parse().ok());
     let sensor_mode_tap = std::env::var("SENSOR_MODE")
         .map(|m| m.to_lowercase() == "tap")
@@ -615,23 +615,39 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     // Score — use tenant-configured severity thresholds so critical_threshold
     // and alert_threshold bands from the Settings page are respected.
     let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud);
+
+    // Trusted-asset check: if src is a user-marked trusted device, halve score and tag it
+    let is_trusted_asset = state.ch_storage
+        .get_asset_by_ip(&tenant_id, src)
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.trusted == 1)
+        .unwrap_or(false);
+
+    let adjusted_score = if is_trusted_asset { raw_risk.score * 0.5 } else { raw_risk.score };
+    let mut adjusted_tags = raw_risk.tags.clone();
+    if is_trusted_asset && !adjusted_tags.contains(&"trusted-asset".to_string()) {
+        adjusted_tags.push("trusted-asset".to_string());
+    }
+
     let severity = crate::scoring::Severity::from_score_with_thresholds(
-        raw_risk.score,
+        adjusted_score,
         critical_threshold,
         alert_threshold as u32,
         50,
         25,
     );
     let risk = crate::scoring::RiskResult {
-        score:    raw_risk.score,
+        score:    adjusted_score,
         severity,
-        tags:     raw_risk.tags,
+        tags:     adjusted_tags,
         reasons:  raw_risk.reasons,
     };
 
     // Drop hits that are already AI-suppressed — check before storing so
     // suppressed alerts never appear in the UI at all
-    if let Some(alert) = hit.suricata.alert.as_ref() {
+    if let Some(alert) = hit.agent_s.alert.as_ref() {
         let sig_id = alert.signature_id;
         if sig_id > 0 && state.ch_storage
             .is_ai_suppressed(&tenant_id, sig_id, src, dst).await
@@ -656,15 +672,15 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             .unwrap_or_else(|_| "admin".to_string());
         let src_ip_str = src.to_string();
         let dst_ip_str = dst.to_string();
-        let rule_name_str = hit.suricata.alert
+        let rule_name_str = hit.agent_s.alert
             .as_ref().map(|a| a.signature.clone())
-            .or_else(|| hit.zeek.raw.get("rule_name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .or_else(|| hit.agent_z.raw.get("rule_name").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .unwrap_or_default();
-        let suricata_category_str = hit.suricata.alert
+        let suricata_category_str = hit.agent_s.alert
             .as_ref().map(|a| a.category.clone()).unwrap_or_default();
-        let app_proto_str = hit.suricata.raw
+        let app_proto_str = hit.agent_s.raw
             .get("app_proto").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let dns_query_str = hit.suricata.raw
+        let dns_query_str = hit.agent_s.raw
             .get("dns").and_then(|d| d.get("queries")).and_then(|q| q.as_array())
             .and_then(|arr| arr.first()).and_then(|q| q.get("rrname"))
             .and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -755,15 +771,16 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                         if ip.is_empty() { continue; }
                                         let rows = ch.client
                                             .query(&format!(
-                                                "SELECT hostname, mac, vendor, os_guess, device_type, custom_name \
+                                                "SELECT hostname, mac, vendor, os_guess, device_type, custom_name, trusted \
                                                  FROM ndr.assets WHERE ip = '{}' AND tenant_id = '{}' LIMIT 1",
                                                 ip.replace('\'', "''"), tenant
                                             ))
-                                            .fetch_all::<(String,String,String,String,String,String)>()
+                                            .fetch_all::<(String,String,String,String,String,String,u8)>()
                                             .await
                                             .unwrap_or_default();
-                                        if let Some((hostname, mac, vendor, os_guess, device_type, custom_name)) = rows.first() {
+                                        if let Some((hostname, mac, vendor, os_guess, device_type, custom_name, trusted)) = rows.first() {
                                             let mut info = Vec::new();
+                                            if *trusted == 1            { info.push("TRUSTED INTERNAL DEVICE".to_string()); }
                                             if !hostname.is_empty()    { info.push(format!("hostname={}", hostname)); }
                                             if !mac.is_empty()         { info.push(format!("mac={}", mac)); }
                                             if !vendor.is_empty()      { info.push(format!("vendor={}", vendor)); }
@@ -877,10 +894,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     }
 
     // SIGMA detection — only rules belonging to this tenant
-    let mut detections = state.detection.read().await.check_for_tenant(&hit.zeek, &tenant_id);
-    detections.extend(state.detection.read().await.check_for_tenant(&hit.suricata, &tenant_id));
+    let mut detections = state.detection.read().await.check_for_tenant(&hit.agent_z, &tenant_id);
+    detections.extend(state.detection.read().await.check_for_tenant(&hit.agent_s, &tenant_id));
 
-    let cs      = hit.zeek.conn_state.as_deref().unwrap_or("-");
+    let cs      = hit.agent_z.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);
 
     debug!(
@@ -921,23 +938,23 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let dst_country = enrichment.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
     let threat_intel_flag = enrichment.is_malicious as u8;
 
-    let zeek_details = serde_json::to_string(&hit.zeek.raw).unwrap_or_else(|_| "{}".into());
-    let suricata_details = if hit_source == "zeek+suricata" || hit_source == "suricata" {
-        serde_json::to_string(&hit.suricata.raw).unwrap_or_else(|_| "{}".into())
+    let agent_z_details = serde_json::to_string(&hit.agent_z.raw).unwrap_or_else(|_| "{}".into());
+    let agent_s_details = if hit_source == "agent-z+agent-s" || hit_source == "agent-s" {
+        serde_json::to_string(&hit.agent_s.raw).unwrap_or_else(|_| "{}".into())
     } else {
         "{}".into()
     };
-    let suricata_rule_id = hit.suricata.alert.as_ref()
+    let agent_s_rule_id = hit.agent_s.alert.as_ref()
         .map(|a| a.signature_id.to_string())
         .unwrap_or_default();
-    let suricata_category = hit.suricata.alert.as_ref()
+    let agent_s_category = hit.agent_s.alert.as_ref()
         .map(|a| a.category.clone())
         .unwrap_or_default();
 
     let corr_status = match hit_source.as_str() {
-        "zeek+suricata" => "corroborated",
-        "suricata"      => "suricata_only",
-        _               => "zeek_only",
+        "agent-z+agent-s" => "corroborated",
+        "agent-s"         => "agent_s_only",
+        _                 => "agent_z_only",
     }.to_string();
 
     let ch_hit = crate::storage::clickhouse::NdrHit {
@@ -954,11 +971,11 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         dst_country:        dst_country.clone(),
         tenant_id:          tenant_id.clone(),
         correlation_status: corr_status,
-        zeek_details:       zeek_details,
-        suricata_details:   suricata_details,
-        corroborated_at:    if hit_source == "zeek+suricata" { now_ts } else { 0 },
-        suricata_rule_id:   suricata_rule_id,
-        suricata_category:  suricata_category,
+        agent_z_details:    agent_z_details,
+        agent_s_details:    agent_s_details,
+        corroborated_at:    if hit_source == "agent-z+agent-s" { now_ts } else { 0 },
+        agent_s_rule_id:    agent_s_rule_id,
+        agent_s_category:   agent_s_category,
         updated_at:         now_ts,
     };
     tokio::spawn(async move {
@@ -985,7 +1002,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 
     // AI auto-suppression: check IDS alerts for false positives
     if risk.tags.contains(&"ids-alert".to_string()) {
-        if let Some(alert_info) = hit.suricata.alert.as_ref() {
+        if let Some(alert_info) = hit.agent_s.alert.as_ref() {
             let sig_id          = alert_info.signature_id;
             let sig_name        = alert_info.signature.clone();
             let alert_category  = alert_info.category.clone();
@@ -998,14 +1015,14 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 
             // Extra context extracted from raw event — gives AI enough signal
             // to distinguish sensor-to-own-infrastructure FPs from real threats.
-            let app_proto = hit.suricata.raw
+            let app_proto = hit.agent_s.raw
                 .get("app_proto").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-            let direction = hit.suricata.raw
+            let direction = hit.agent_s.raw
                 .get("direction").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let tls_sni = hit.suricata.raw
+            let tls_sni = hit.agent_s.raw
                 .get("tls").and_then(|t| t.get("sni")).and_then(|v| v.as_str())
                 .unwrap_or("").to_string();
-            let zeek_conn_state = hit.zeek.conn_state.clone().unwrap_or_default();
+            let zeek_conn_state = hit.agent_z.conn_state.clone().unwrap_or_default();
             let tags_str        = risk.tags.join(", ");
             let threat_intel    = enrichment.is_malicious;
             let sensitive_ctry  = enrichment.sensitive_country;
@@ -1089,7 +1106,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                      src_ip       : {src_ip} ({src_scope})\n\
                      dst_ip       : {dst_ip} ({dst_scope})\n\
                      TLS SNI      : {tls_sni_display}\n\
-                     Zeek state   : {zeek_conn_state}\n\
+                     Agent-Z state: {zeek_conn_state}\n\
                      Risk tags    : [{tags_str}]\n\
                      Threat intel : {threat_intel}\n\
                      Sensitive cty: {sensitive_ctry}\n\
@@ -1545,13 +1562,13 @@ for integration in &integrations {
 }
 } // end alert_threshold check
 
-    let hit_ts = hit.zeek.timestamp as f64 / 1000.0;
+    let hit_ts = hit.agent_z.timestamp as f64 / 1000.0;
 
     let mut hit_msg = json!({
         "type":            "hit",
         "ts":              hit_ts,
         "cid":             hit.community_id,
-        "event_type":      hit.suricata.event_type,
+        "event_type":      hit.agent_s.event_type,
         "score":           risk.score,
         "severity":        risk.severity.as_str(),
         "severity_colour": risk.severity.colour(),
@@ -1564,15 +1581,15 @@ for integration in &integrations {
         "src_asn":         enrichment.src_asn.as_ref().map(|a| &a.full),
         "dst_asn":         enrichment.dst_asn.as_ref().map(|a| &a.full),
         "sigma_hits":      sigma_hits,
-        "suricata": {
-            "src": hit.suricata.source_ip, "src_port": hit.suricata.source_port,
-            "dst": hit.suricata.dest_ip,   "dst_port": hit.suricata.dest_port,
+        "agent-s": {
+            "src": hit.agent_s.source_ip, "src_port": hit.agent_s.source_port,
+            "dst": hit.agent_s.dest_ip,   "dst_port": hit.agent_s.dest_port,
         },
-        "zeek": {
-            "src": hit.zeek.source_ip, "dst": hit.zeek.dest_ip,
-            "proto":            hit.zeek.proto,
-            "service":          hit.zeek.network_protocol,
-            "conn_state":       hit.zeek.conn_state,
+        "agent-z": {
+            "src": hit.agent_z.source_ip, "dst": hit.agent_z.dest_ip,
+            "proto":            hit.agent_z.proto,
+            "service":          hit.agent_z.network_protocol,
+            "conn_state":       hit.agent_z.conn_state,
             "conn_state_desc":  cs_desc,
         },
     });
@@ -1613,11 +1630,11 @@ pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMa
         "events_total":    ch_stats.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
         "hits_total":      ch_stats.get("hits_total").and_then(|v| v.as_u64()).unwrap_or(0),
         "events_1h":       ch_stats.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
-        "zeek_events":     ch_stats.get("zeek_events").and_then(|v| v.as_u64()).unwrap_or(0),
-        "suricata_events": ch_stats.get("suricata_events").and_then(|v| v.as_u64()).unwrap_or(0),
+        "agent_z_events":     ch_stats.get("agent_z_events").and_then(|v| v.as_u64()).unwrap_or(0),
+        "agent_s_events": ch_stats.get("agent_s_events").and_then(|v| v.as_u64()).unwrap_or(0),
         "services": {
-            "zeek":       "unknown",
-            "suricata":   "unknown",
+            "agent-z":       "unknown",
+            "agent-s":   "unknown",
             "vector":     "unknown",
             "kafka":      kafka_status,
             "clickhouse": clickhouse_status,
@@ -1698,16 +1715,16 @@ pub async fn get_agent_status() -> Json<Value> {
     match reqwest::get(&url).await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!({
-                "zeek": "stopped",
-                "suricata": "stopped",
+                "agent-z": "stopped",
+                "agent-s": "stopped",
                 "vector": "stopped",
                 "interface": "eth0"
             }));
             Json(data)
         }
         Err(_) => Json(json!({
-            "zeek": "stopped",
-            "suricata": "stopped",
+            "agent-z": "stopped",
+            "agent-s": "stopped",
             "vector": "stopped",
             "interface": "eth0"
         }))
@@ -1729,8 +1746,8 @@ pub async fn get_stats(State(state): State<AppState>, headers: axum::http::Heade
                 "hits_total": 0,
                 "events_1h": 0,
                 "hits_1h": 0,
-                "zeek_events": 0,
-                "suricata_events": 0,
+                "agent_z_events": 0,
+                "agent_s_events": 0,
             }))
         }
     }
@@ -2752,9 +2769,9 @@ let rules = state.detection.read().await.get_rules();
                 .and_then(|v| v.as_u64()).unwrap_or(0),
             "events_1h":       stats.get("events_1h")
                 .and_then(|v| v.as_u64()).unwrap_or(0),
-            "zeek_events":     stats.get("zeek_events")
+            "agent_z_events":     stats.get("agent_z_events")
                 .and_then(|v| v.as_u64()).unwrap_or(0),
-            "suricata_events": stats.get("suricata_events")
+            "agent_s_events": stats.get("agent_s_events")
                 .and_then(|v| v.as_u64()).unwrap_or(0),
             "active_rules":    rules.len(),
         },
@@ -2781,10 +2798,10 @@ let rules = state.detection.read().await.get_rules();
                 report["summary"]["total_hits"]));
             csv.push_str(&format!("Events Last Hour,{}\n",
                 report["summary"]["events_1h"]));
-            csv.push_str(&format!("Zeek Events,{}\n",
-                report["summary"]["zeek_events"]));
-            csv.push_str(&format!("Suricata Events,{}\n",
-                report["summary"]["suricata_events"]));
+            csv.push_str(&format!("Agent-Z Events,{}\n",
+                report["summary"]["agent_z_events"]));
+            csv.push_str(&format!("Agent-S Events,{}\n",
+                report["summary"]["agent_s_events"]));
             csv.push_str(&format!("Active Rules,{}\n\n",
                 report["summary"]["active_rules"]));
 
@@ -2903,8 +2920,8 @@ tr:nth-child(even){{background:#f9f9f9}}
   <div class="card"><div class="val">{}</div><div class="lbl">Total Events</div></div>
   <div class="card"><div class="val">{}</div><div class="lbl">Hits</div></div>
   <div class="card"><div class="val">{}</div><div class="lbl">Active Rules</div></div>
-  <div class="card"><div class="val">{}</div><div class="lbl">Zeek Events</div></div>
-  <div class="card"><div class="val">{}</div><div class="lbl">Suricata Events</div></div>
+  <div class="card"><div class="val">{}</div><div class="lbl">Agent-Z Events</div></div>
+  <div class="card"><div class="val">{}</div><div class="lbl">Agent-S Events</div></div>
   <div class="card"><div class="val">{}</div><div class="lbl">Events/Hour</div></div>
 </div>
 <h2>Recent Hits</h2>
@@ -2925,8 +2942,8 @@ tr:nth-child(even){{background:#f9f9f9}}
                 report["summary"]["total_events"],
                 report["summary"]["total_hits"],
                 report["summary"]["active_rules"],
-                report["summary"]["zeek_events"],
-                report["summary"]["suricata_events"],
+                report["summary"]["agent_z_events"],
+                report["summary"]["agent_s_events"],
                 report["summary"]["events_1h"],
                 hits_rows,
                 ip_rows,
@@ -5179,8 +5196,8 @@ pub async fn sensor_heartbeat(
         None => return Json(json!({"status": "error", "message": "Invalid or missing X-Sensor-Key"})),
     };
 
-    let zeek = payload["zeek"].as_str().unwrap_or("unknown");
-    let suricata = payload["suricata"].as_str().unwrap_or("unknown");
+    let zeek = payload["agent-z"].as_str().unwrap_or("unknown");
+    let suricata = payload["agent-s"].as_str().unwrap_or("unknown");
     let vector = payload["vector"].as_str().unwrap_or("unknown");
     let arkime = payload["arkime"].as_str().unwrap_or("unknown");
     let arkime_url = payload["arkime_url"].as_str().unwrap_or("");
@@ -5373,8 +5390,10 @@ pub struct CheckinRequest {
     pub sensor_ip:      Option<String>,
     pub arkime_url:     Option<String>,
     pub arkime_pass:    Option<String>,
-    pub zeek:           Option<String>,
-    pub suricata:       Option<String>,
+    #[serde(rename = "agent-z")]
+    pub agent_z:        Option<String>,
+    #[serde(rename = "agent-s")]
+    pub agent_s:        Option<String>,
     pub vector:         Option<String>,
     pub arkime_capture: Option<String>,
     pub arkime_viewer:  Option<String>,
@@ -5402,8 +5421,8 @@ pub async fn sensor_checkin(
     // ── 1. Heartbeat / status update (throttled via Redis) ───────────────
     // Only write to ClickHouse when status changes or every 5 minutes —
     // avoids a SELECT FINAL + INSERT on every checkin under stable conditions.
-    let zeek_s     = payload.zeek.as_deref().unwrap_or("unknown");
-    let suricata_s = payload.suricata.as_deref().unwrap_or("unknown");
+    let zeek_s     = payload.agent_z.as_deref().unwrap_or("unknown");
+    let suricata_s = payload.agent_s.as_deref().unwrap_or("unknown");
     let vector_s   = payload.vector.as_deref().unwrap_or("unknown");
     let arkime_status = payload.arkime_capture.as_deref()
         .or(payload.arkime_viewer.as_deref())
@@ -6145,6 +6164,35 @@ pub async fn set_asset_trusted_handler(
     let trusted = payload.get("trusted").and_then(|v| v.as_bool()).unwrap_or(false);
     match state.ch_storage.set_asset_trusted(&tenant_id, &ip, trusted).await {
         Ok(_)  => axum::Json(json!({"status": "ok", "trusted": trusted})),
+        Err(e) => axum::Json(json!({"error": e.to_string()})),
+    }
+}
+
+pub async fn get_subnet_roles(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::Json<serde_json::Value> {
+    if extract_claims(&headers).is_none() {
+        return axum::Json(json!({"error": "unauthorized"}));
+    }
+    let roles = state.ch_storage.get_subnet_roles("default").await;
+    let out: Vec<serde_json::Value> = roles.iter()
+        .map(|(cidr, role)| json!({"cidr": cidr, "role": role}))
+        .collect();
+    axum::Json(json!(out))
+}
+
+pub async fn set_subnet_roles(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    if extract_claims(&headers).is_none() {
+        return axum::Json(json!({"error": "unauthorized"}));
+    }
+    let json_str = serde_json::to_string(&payload).unwrap_or_default();
+    match state.ch_storage.set_subnet_roles(&json_str).await {
+        Ok(_)  => axum::Json(json!({"status": "ok"})),
         Err(e) => axum::Json(json!({"error": e.to_string()})),
     }
 }
@@ -7448,6 +7496,91 @@ pub async fn aria_status(
         "prediction_expl":      pred_expl,
         "emotion": if critical > 0 || !pred_id.is_empty() { "alert" } else { "idle" }
     }))
+}
+
+/// POST /api/aria/investigate
+/// Body: { "community_id": "..." }
+/// Runs AI auto-investigation on the evidence bundle and returns + stores a verdict.
+/// Also accepts GET /api/aria/investigate?cid=... to retrieve a cached verdict.
+pub async fn aria_investigate(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+
+    let community_id = match payload["community_id"].as_str().filter(|s| !s.is_empty()) {
+        Some(cid) => cid.to_string(),
+        None => return Json(json!({"error": "community_id required"})),
+    };
+
+    match crate::ai::investigator::auto_investigate(
+        &state.ch_storage,
+        &claims.tenant_id,
+        &community_id,
+    ).await {
+        Ok(verdict) => {
+            let verdict_json = serde_json::to_string(&verdict).unwrap_or_default();
+            if let Err(e) = state.ch_storage.save_aria_verdict(
+                &claims.tenant_id,
+                &community_id,
+                &verdict_json,
+            ).await {
+                tracing::warn!("aria_investigate: failed to save verdict: {}", e);
+            }
+            Json(json!({
+                "status":             "ok",
+                "community_id":       community_id,
+                "verdict":            verdict.verdict,
+                "confidence":         verdict.confidence,
+                "reasoning":          verdict.reasoning,
+                "recommended_action": verdict.recommended_action,
+                "mitre_techniques":   verdict.mitre_techniques,
+                "generated_at":       verdict.generated_at,
+            }))
+        }
+        Err(e) => {
+            tracing::error!("aria_investigate: investigation failed: {}", e);
+            Json(json!({"error": e.to_string()}))
+        }
+    }
+}
+
+/// GET /api/aria/verdict?cid=...
+/// Retrieve a previously stored AI verdict without running a new investigation.
+pub async fn aria_get_verdict(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+
+    let community_id = raw_query
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| {
+            let mut p = kv.splitn(2, '=');
+            let k = p.next()?;
+            let v = p.next().unwrap_or("");
+            if k == "cid" { Some(percent_decode(v)) } else { None }
+        })
+        .unwrap_or_default();
+
+    if community_id.is_empty() {
+        return Json(json!({"error": "cid parameter required"}));
+    }
+
+    match state.ch_storage.get_aria_verdict(&claims.tenant_id, &community_id).await {
+        Some(v) => Json(json!({"status": "ok", "verdict": v})),
+        None    => Json(json!({"status": "not_found", "verdict": null})),
+    }
 }
 
 /// GET /api/ai-activity

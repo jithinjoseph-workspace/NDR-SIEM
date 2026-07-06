@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnDestroy, OnInit, ChangeDetectorRef, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -15,6 +15,13 @@ import {
   ShieldCheck,
   Square,
   AlertTriangle,
+  Monitor,
+  Link,
+  ClipboardList,
+  MoreVertical,
+  Wifi,
+  WifiOff,
+  Clock
 } from 'lucide-angular';
 import { Subscription, timer } from 'rxjs';
 import { filter } from 'rxjs/operators';
@@ -30,8 +37,8 @@ interface ExternalSensorCard extends SensorKey {
   hostname: string;
   interface: string;
   os: string;
-  zeek: ExternalServiceStatus;
-  suricata: ExternalServiceStatus;
+  'agent-z': ExternalServiceStatus;
+  'agent-s': ExternalServiceStatus;
   vector: ExternalServiceStatus;
   online: boolean;
 }
@@ -46,11 +53,11 @@ interface ExternalSensorCard extends SensorKey {
 export class Setup implements OnInit, OnDestroy {
   interfaces: string[] = [];
   selectedInterface = '';
-  status: 'Ready' | 'Starting...' | 'Running' | 'Stopping...' | 'Stopped' = 'Ready';
-  zeekStatus = 'stopped';
-  suricataStatus = 'stopped';
-  vectorStatus = 'stopped';
-  arkimeStatus = 'stopped';
+  status = signal<string>('Ready');
+  agentZStatus = signal<string>('stopped');
+  agentSStatus = signal<string>('stopped');
+  vectorStatus = signal<string>('stopped');
+  arkimeStatus = signal<string>('stopped');
   activeTab: SetupTab = 'local';
   externalSensors: ExternalSensorCard[] = [];
   externalLoading = false;
@@ -85,6 +92,13 @@ export class Setup implements OnInit, OnDestroy {
   ActivityIcon = Activity;
   ServerIcon = Server;
   AlertIcon = AlertTriangle;
+  MonitorIcon = Monitor;
+  LinkIcon = Link;
+  ClipboardListIcon = ClipboardList;
+  MoreVerticalIcon = MoreVertical;
+  WifiIcon = Wifi;
+  WifiOffIcon = WifiOff;
+  ClockIcon = Clock;
 
   constructor(
     private api: Api,
@@ -136,10 +150,10 @@ export class Setup implements OnInit, OnDestroy {
     return this.currentTenantId === 'default';
   }
 
-  get localRunningCount(): number {
-    return [this.zeekStatus, this.suricataStatus, this.vectorStatus, this.arkimeStatus]
-      .filter(status => status === 'running').length;
-  }
+  localRunningCount = computed(() =>
+    [this.agentZStatus(), this.agentSStatus(), this.vectorStatus(), this.arkimeStatus()]
+      .filter(s => s === 'running').length
+  );
 
   get externalOnlineCount(): number {
     return this.externalSensors.filter(sensor => sensor.online).length;
@@ -155,13 +169,13 @@ export class Setup implements OnInit, OnDestroy {
 
   get summaryActive(): boolean {
     return this.activeTab === 'local'
-      ? this.status === 'Running'
+      ? this.status() === 'Running'
       : this.externalOnlineCount > 0;
   }
 
   get summaryTitle(): string {
     if (this.activeTab === 'local') {
-      return this.status;
+      return this.status();
     }
 
     if (!this.canViewExternalSensors) {
@@ -194,21 +208,21 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   updateStatus(data: any) {
-    this.zeekStatus = this.normalizeStatus(data.zeek);
-    this.suricataStatus = this.normalizeStatus(data.suricata);
-    this.vectorStatus = this.normalizeStatus(data.vector);
-    this.arkimeStatus = this.normalizeStatus(data.arkime);
+    if (data['agent-z'] != null) this.agentZStatus.set(this.normalizeStatus(data['agent-z']));
+    if (data['agent-s'] != null) this.agentSStatus.set(this.normalizeStatus(data['agent-s']));
+    if (data.vector != null)     this.vectorStatus.set(this.normalizeStatus(data.vector));
+    if (data.arkime != null)     this.arkimeStatus.set(this.normalizeStatus(data.arkime));
     this.selectedInterface = data.interface || this.selectedInterface;
 
     if (
-      this.zeekStatus === 'running' &&
-      this.suricataStatus === 'running' &&
-      this.vectorStatus === 'running' &&
-      this.arkimeStatus === 'running'
+      this.agentZStatus() === 'running' &&
+      this.agentSStatus() === 'running' &&
+      this.vectorStatus() === 'running' &&
+      this.arkimeStatus() === 'running'
     ) {
-      this.status = 'Running';
-    } else if (this.status !== 'Starting...' && this.status !== 'Stopping...') {
-      this.status = 'Stopped';
+      this.status.set('Running');
+    } else if (this.status() !== 'Starting...' && this.status() !== 'Stopping...') {
+      this.status.set('Stopped');
     }
   }
 
@@ -237,13 +251,13 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   startMonitoring() {
-    this.status = 'Starting...';
+    this.status.set('Starting...');
     this.api.startServices().subscribe({
       next: () => {
         this.pollStatus('Running');
       },
       error: (error) => {
-        this.status = 'Stopped';
+        this.status.set('Stopped');
         this.cdr.detectChanges();
         this.showError('Start Monitoring Failed', error?.error?.message || 'Failed to start local sensor monitoring services (Agent-Z, Agent-S, Telemetry Pipeline). Please check host status.');
       },
@@ -251,13 +265,13 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   stopMonitoring() {
-    this.status = 'Stopping...';
+    this.status.set('Stopping...');
     this.api.stopServices().subscribe({
       next: () => {
         this.pollStatus('Stopped');
       },
       error: (error) => {
-        this.status = 'Running';
+        this.status.set('Running');
         this.cdr.detectChanges();
         this.showError('Stop Monitoring Failed', error?.error?.message || 'Failed to stop local sensor monitoring services. Please verify status on host.');
       },
@@ -387,7 +401,7 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   isSensorRunning(sensor: ExternalSensorCard): boolean {
-    return sensor.zeek === 'running' || sensor.suricata === 'running' || sensor.vector === 'running';
+    return sensor['agent-z'] === 'running' || sensor['agent-s'] === 'running' || sensor.vector === 'running';
   }
 
   isCommandPending(sensor: ExternalSensorCard, command?: SensorControlCommand): boolean {
@@ -447,12 +461,13 @@ export class Setup implements OnInit, OnDestroy {
         next: (data: any) => {
           if (data) {
             const allRunning =
-              this.normalizeStatus(data.zeek) === 'running' &&
-              this.normalizeStatus(data.suricata) === 'running' &&
-              this.normalizeStatus(data.vector) === 'running';
+              this.normalizeStatus(data['agent-z']) === 'running' &&
+              this.normalizeStatus(data['agent-s']) === 'running' &&
+              this.normalizeStatus(data.vector) === 'running' &&
+              (data.arkime == null || this.normalizeStatus(data.arkime) === 'running');
             const noneRunning =
-              this.normalizeStatus(data.zeek) !== 'running' &&
-              this.normalizeStatus(data.suricata) !== 'running' &&
+              this.normalizeStatus(data['agent-z']) !== 'running' &&
+              this.normalizeStatus(data['agent-s']) !== 'running' &&
               this.normalizeStatus(data.vector) !== 'running';
 
             const matched =
@@ -460,7 +475,7 @@ export class Setup implements OnInit, OnDestroy {
               (expected === 'Stopped' && noneRunning);
 
             if (matched || attempts >= 5) {
-              this.status = 'Ready';
+              this.status.set('Ready');
               this.updateStatus(data);
               this.cdr.detectChanges();
             } else {
@@ -472,7 +487,7 @@ export class Setup implements OnInit, OnDestroy {
           if (attempts < 5) {
             this.pollStatus(expected, attempts + 1);
           } else {
-            this.status = 'Stopped';
+            this.status.set('Stopped');
             this.cdr.detectChanges();
           }
         },
@@ -520,7 +535,7 @@ export class Setup implements OnInit, OnDestroy {
     );
   }
 
-  private loadExternalSensors(silent = false) {
+  loadExternalSensors(silent = false) {
     if (!this.canViewExternalSensors) {
       return;
     }
@@ -564,8 +579,8 @@ export class Setup implements OnInit, OnDestroy {
       hostname: this.cleanLabel(sensor.hostname) || 'Unregistered host',
       interface: sensor.interface || 'Unavailable',
       os: sensor.os || 'Unavailable',
-      zeek: this.normalizeExternalStatus(sensor.zeek),
-      suricata: this.normalizeExternalStatus(sensor.suricata),
+      'agent-z': this.normalizeExternalStatus(sensor['agent-z']),
+      'agent-s': this.normalizeExternalStatus(sensor['agent-s']),
       vector: this.normalizeExternalStatus(sensor.vector),
       online: sensor.active && this.isRecentlySeen(sensor.last_seen),
     };
