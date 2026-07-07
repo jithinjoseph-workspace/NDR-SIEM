@@ -129,8 +129,12 @@ export class Api {
     return this.http.get(`${this.baseUrl}/stats`);
   }
 
-  getRecentEvents(): Observable<any[]> {
-    return this.http.get<any[]>(`${this.baseUrl}/events`);
+  getRecentEvents(hours?: number): Observable<any[]> {
+    let url = `${this.baseUrl}/events`;
+    if (hours) {
+      url += `?hours=${hours}`;
+    }
+    return this.http.get<any[]>(url);
   }
 
   getTopIps(): Observable<any> {
@@ -217,6 +221,27 @@ export class Api {
         const contentDisposition = response.headers.get('content-disposition');
         const filename = contentDisposition?.match(/filename="(.+)"/)?.[1]
           ?? `ndr-report.${format === 'pdf' ? 'html' : format}`;
+
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(objectUrl);
+      });
+  }
+
+  exportNetworkLogs(format: string, hours: number = 24): void {
+    const url = `${this.baseUrl}/export-logs?format=${format}&hours=${hours}`;
+
+    this.http.get(url, { responseType: 'blob', observe: 'response' })
+      .subscribe(response => {
+        const blob = response.body;
+        if (!blob) return;
+
+        const contentDisposition = response.headers.get('content-disposition');
+        const filename = contentDisposition?.match(/filename="(.+)"/)?.[1]
+          ?? `ndr-logs.${format === 'pdf' ? 'html' : format}`;
 
         const objectUrl = URL.createObjectURL(blob);
         const link = document.createElement('a');
