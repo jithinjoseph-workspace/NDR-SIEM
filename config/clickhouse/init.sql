@@ -12,10 +12,13 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_events ON CLUSTER ndr_cluster (
     community_id String,
     raw          String,
     tenant_id    String DEFAULT 'default',
-    sensor_id    String DEFAULT ''
+    sensor_id    String DEFAULT '',
+    INDEX idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1,
+    PROJECTION proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))
 ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_events', '{replica}')
 ORDER BY (timestamp, src_ip, dst_ip)
-TTL timestamp + INTERVAL 30 DAY;
+TTL timestamp + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192;
 
 CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
     timestamp           DateTime,
@@ -37,12 +40,24 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
     agent_s_rule_id     String DEFAULT '',
     agent_s_category    String DEFAULT '',
     updated_at          DateTime DEFAULT now(),
-    sensor_id           String DEFAULT ''
+    sensor_id           String DEFAULT '',
+    INDEX idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1,
+    PROJECTION proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))
 ) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_hits', '{replica}', updated_at)
 ORDER BY (tenant_id, community_id)
-TTL timestamp + INTERVAL 90 DAY;
+TTL timestamp + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192, deduplicate_merge_projection_mode = 'rebuild';
 
-CREATE TABLE IF NOT EXISTS ndr.ndr_stats ON CLUSTER ndr_cluster (
+-- Migration: add sensor_id index and projection to existing tables
+-- (CREATE TABLE above has these inline for fresh installs;
+--  these ALTER statements are idempotent and handle existing tables)
+ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster ADD INDEX IF NOT EXISTS idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1;
+ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp));
+ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY SETTING deduplicate_merge_projection_mode = 'rebuild';
+ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster ADD INDEX IF NOT EXISTS idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1;
+ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp));
+
+CREATE TABLE IF NOT EXISTS ndr.ndr_stats ON CLUSTER ndr_cluster ( 
     timestamp      DateTime,
     events_per_min UInt32,
     hits_per_min   UInt32,

@@ -438,25 +438,44 @@
             </ng-template>
           </div>
 
-          <!-- Add Sensor Dropdown -->
+          <!-- Add Sensor Multi-Select -->
           <div class="sa-add-row">
-            <div class="sa-select-wrap">
-              <select
-                [(ngModel)]="pendingSensorAdd[user.id]"
-                class="sa-select"
-                [disabled]="getAvailableSensors(user.id).length === 0 || sensorAssignSaving">
-                <option value="">{{ getAvailableSensors(user.id).length === 0 ? 'All assigned' : 'Select sensor…' }}</option>
-                <option *ngFor="let s of getAvailableSensors(user.id)" [value]="s.key_prefix">
-                  {{ s.name || s.key_prefix }}
-                </option>
-              </select>
+            <div class="sa-multiselect-wrap" [class.open]="sensorDropdownOpen[user.id]" (click)="$event.stopPropagation()">
+              <button
+                class="sa-multiselect-trigger"
+                type="button"
+                [disabled]="getAvailableSensors(user.id).length === 0 || sensorAssignSaving"
+                (click)="toggleSensorDropdown(user.id, $event)">
+                <lucide-icon [name]="CpuIcon" class="w-3.5 h-3.5"></lucide-icon>
+                <span>
+                  {{ getSelectedCount(user.id) > 0
+                      ? getSelectedCount(user.id) + ' sensor(s) selected'
+                      : (getAvailableSensors(user.id).length === 0 ? 'All assigned' : 'Select sensors…') }}
+                </span>
+                <lucide-icon [name]="ChevronDownIcon" class="w-3.5 h-3.5 sa-chevron"></lucide-icon>
+              </button>
+
+              <!-- Dropdown Panel -->
+              <div class="sa-multiselect-panel" *ngIf="sensorDropdownOpen[user.id]">
+                <div
+                  class="sa-check-option"
+                  *ngFor="let s of getAvailableSensors(user.id)"
+                  (click)="toggleSensorSelection(user.id, s.key_prefix)">
+                  <div class="sa-custom-check" [class.checked]="isSensorSelected(user.id, s.key_prefix)">
+                    <lucide-icon *ngIf="isSensorSelected(user.id, s.key_prefix)" [name]="CheckIcon" class="w-3 h-3"></lucide-icon>
+                  </div>
+                  <lucide-icon [name]="CpuIcon" class="w-3 h-3 sa-opt-icon"></lucide-icon>
+                  <span>{{ s.name || s.key_prefix }}</span>
+                </div>
+              </div>
             </div>
+
             <button
               class="sa-assign-btn"
-              [disabled]="!pendingSensorAdd[user.id] || sensorAssignSaving"
-              (click)="addSensorToUser(user.id)">
+              [disabled]="getSelectedCount(user.id) === 0 || sensorAssignSaving"
+              (click)="addSensorsToUser(user.id)">
               <lucide-icon [name]="PlusIcon" class="w-3.5 h-3.5"></lucide-icon>
-              Assign
+              {{ getSelectedCount(user.id) > 0 ? 'Assign ' + getSelectedCount(user.id) : 'Assign' }}
             </button>
           </div>
 

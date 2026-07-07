@@ -3567,11 +3567,13 @@ pub async fn login(
                 .filter(|s| !s.is_empty())
                 .collect();
             // Admins get no sensor restriction (empty = see all sensors).
-            // Analysts get only their assigned sensors.
+            // Analysts get only their assigned sensors — looked up by UUID (the value
+            // stored in user_sensor_assignments, not the username string).
+            let user_uuid = user["id"].as_str().unwrap_or("").to_string();
             let sensor_ids = if role == "super_admin" || role == "tenant_admin" {
                 vec![]
             } else {
-                state.ch_storage.get_user_sensor_ids(&username, tenant_id).await.unwrap_or_default()
+                state.ch_storage.get_user_sensor_ids(&user_uuid, tenant_id).await.unwrap_or_default()
             };
             let token = generate_jwt(
                 &username,
@@ -5644,12 +5646,13 @@ pub async fn ingest_events(
 
     for event in &events_arr {
         // Add tenant_id and sensor_host to event so the consumer can tag hits.
+        // Always overwrite sensor_host with the authenticated key_prefix so that
+        // sensor_id stored in the DB matches what's used in user_sensor_assignments.
         let mut evt = event.clone();
         if let Some(obj) = evt.as_object_mut() {
             obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
             if !key_prefix.is_empty() {
-                obj.entry("sensor_host".to_string())
-                    .or_insert_with(|| serde_json::Value::String(key_prefix.clone()));
+                obj.insert("sensor_host".to_string(), serde_json::Value::String(key_prefix.clone()));
             }
         }
 

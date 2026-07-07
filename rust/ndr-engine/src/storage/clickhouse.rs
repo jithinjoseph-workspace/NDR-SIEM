@@ -1177,6 +1177,11 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS announcement_type String DEFAULT 'info'",
                 "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS audience String DEFAULT 'all'",
                 "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS target_tenants Array(String) DEFAULT []",
+                "ALTER TABLE ndr.ndr_events ADD INDEX IF NOT EXISTS idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1",
+                "ALTER TABLE ndr.ndr_events ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))",
+                "ALTER TABLE ndr.ndr_hits MODIFY SETTING deduplicate_merge_projection_mode = 'rebuild'",
+                "ALTER TABLE ndr.ndr_hits ADD INDEX IF NOT EXISTS idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1",
+                "ALTER TABLE ndr.ndr_hits ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -5145,7 +5150,8 @@ pub async fn get_ioc_hits(
             struct IpRow { ip: String }
             let visible_q = format!(
                 "SELECT DISTINCT arrayJoin([src_ip, dst_ip]) as ip \
-                 FROM {db}.ndr_events WHERE tenant_id = '{tenant}'{sf}",
+                 FROM {db}.ndr_events \
+                 WHERE tenant_id = '{tenant}' AND timestamp > now() - INTERVAL 7 DAY{sf}",
                 db = db, tenant = sql_escape(tenant_id), sf = sf
             );
             let visible: std::collections::HashSet<String> = self.client

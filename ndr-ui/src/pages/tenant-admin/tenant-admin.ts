@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, HostListener } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -38,7 +38,9 @@ import {
   Plus,
   AlertCircle,
   CheckCircle2,
-  XCircle
+  XCircle,
+  ChevronDown,
+  Check
 } from 'lucide-angular';
 import { Api, SensorKey, SensorAssignment } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
@@ -105,14 +107,18 @@ export class TenantAdmin implements OnInit, OnDestroy {
   AlertCircleIcon = AlertCircle;
   CheckCircle2Icon = CheckCircle2;
   XCircleIcon = XCircle;
+  ChevronDownIcon = ChevronDown;
+  CheckIcon = Check;
 
   // Sensor Assignment
   sensorKeys: SensorKey[] = [];
   sensorAssignments: SensorAssignment[] = [];
   sensorAssignLoading = false;
   sensorAssignSaving = false;
-  /** Per-user selected sensor key_prefix in the add-sensor dropdown */
-  pendingSensorAdd: Record<string, string> = {};
+  /** Per-user multi-selected sensor key_prefixes pending assignment */
+  pendingSensorSel: Record<string, string[]> = {};
+  /** Tracks which user's sensor dropdown is open */
+  sensorDropdownOpen: Record<string, boolean> = {};
   activeSectionTab: 'users' | 'sensors' = 'users';
 
   // Bulk Selection
@@ -415,25 +421,76 @@ export class TenantAdmin implements OnInit, OnDestroy {
     return this.sensorKeys.filter(k => !assigned.has(k.key_prefix));
   }
 
-  addSensorToUser(userId: string) {
-    const sensorId = this.pendingSensorAdd[userId];
-    if (!sensorId) return;
+  @HostListener('document:click')
+  closeAllSensorDropdowns() {
+    if (Object.keys(this.sensorDropdownOpen).some(k => this.sensorDropdownOpen[k])) {
+      this.sensorDropdownOpen = {};
+      this.cdr.detectChanges();
+    }
+  }
+
+  toggleSensorDropdown(userId: string, event: Event) {
+    event.stopPropagation();
+    const wasOpen = !!this.sensorDropdownOpen[userId];
+    this.sensorDropdownOpen = {};
+    if (!wasOpen) this.sensorDropdownOpen[userId] = true;
+    this.cdr.detectChanges();
+  }
+
+  isSensorSelected(userId: string, sensorId: string): boolean {
+    return (this.pendingSensorSel[userId] || []).includes(sensorId);
+  }
+
+  toggleSensorSelection(userId: string, sensorId: string) {
+    const current = this.pendingSensorSel[userId] || [];
+    this.pendingSensorSel[userId] = current.includes(sensorId)
+      ? current.filter(id => id !== sensorId)
+      : [...current, sensorId];
+    this.cdr.detectChanges();
+  }
+
+  getSelectedCount(userId: string): number {
+    return (this.pendingSensorSel[userId] || []).length;
+  }
+
+  addSensorsToUser(userId: string) {
+    const toAssign = [...(this.pendingSensorSel[userId] || [])];
+    if (toAssign.length === 0) return;
 
     this.sensorAssignSaving = true;
-    this.api.assignSensor(userId, sensorId).subscribe({
-      next: () => {
-        this.sensorAssignments = [...this.sensorAssignments, { user_id: userId, sensor_id: sensorId }];
-        this.pendingSensorAdd[userId] = '';
-        this.sensorAssignSaving = false;
-        this.showMessage('Sensor assigned. Analyst must log out and back in for changes to take effect.', 'success');
-        this.cdr.detectChanges();
-      },
-      error: () => {
-        this.sensorAssignSaving = false;
-        this.showMessage('Failed to assign sensor', 'error');
-        this.cdr.detectChanges();
-      }
-    });
+    this.sensorDropdownOpen = {};
+    const total = toAssign.length;
+    let done = 0;
+    let errors = 0;
+
+    for (const sensorId of toAssign) {
+      this.api.assignSensor(userId, sensorId).subscribe({
+        next: () => {
+          this.sensorAssignments = [...this.sensorAssignments, { user_id: userId, sensor_id: sensorId }];
+          done++;
+          if (done + errors === total) {
+            this.pendingSensorSel[userId] = [];
+            this.sensorAssignSaving = false;
+            this.showMessage(
+              errors === 0
+                ? `${total} sensor(s) assigned. Analyst must re-login for changes to take effect.`
+                : `${total - errors} assigned, ${errors} failed.`,
+              errors === 0 ? 'success' : 'error'
+            );
+            this.cdr.detectChanges();
+          }
+        },
+        error: () => {
+          errors++;
+          if (done + errors === total) {
+            this.pendingSensorSel[userId] = [];
+            this.sensorAssignSaving = false;
+            this.showMessage(`${total - errors} assigned, ${errors} failed.`, 'error');
+            this.cdr.detectChanges();
+          }
+        }
+      });
+    }
   }
 
   removeSensorFromUser(userId: string, sensorId: string) {

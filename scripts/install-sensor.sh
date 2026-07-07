@@ -378,9 +378,32 @@ INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
 # ── Start local OpenSearch for Arkime ────────────
-# FIX: Start OpenSearch FIRST, wait fully,
-#      THEN configure and start Arkime
+# Start OpenSearch FIRST, wait fully,
+# THEN configure and start Arkime
 log "Starting local OpenSearch for Arkime..."
+
+OS_PORT=9200
+
+# Check if something is already on port 9200
+if ss -tlnp 2>/dev/null | grep -q ":9200 " || \
+   nc -z 127.0.0.1 9200 2>/dev/null; then
+  echo ""
+  echo "⚠️  Port 9200 is already in use."
+  echo "   1) Kill whatever is on port 9200 and use it"
+  echo "   2) Use a different port"
+  read -rp "   Choice [1/2]: " _PORT_CHOICE
+  if [ "$_PORT_CHOICE" = "1" ]; then
+    log "Killing process on port 9200..."
+    fuser -k 9200/tcp 2>/dev/null || \
+      lsof -ti:9200 2>/dev/null | xargs -r kill -9 || true
+    sleep 2
+    OS_PORT=9200
+  else
+    read -rp "   Enter port number [default 9201]: " _NEW_PORT
+    OS_PORT="${_NEW_PORT:-9201}"
+    log "Using port $OS_PORT for OpenSearch"
+  fi
+fi
 
 # Remove old container if exists
 docker rm -f opensearch-arkime 2>/dev/null || true
@@ -390,28 +413,28 @@ docker run -d \
   -e "discovery.type=single-node" \
   -e "DISABLE_SECURITY_PLUGIN=true" \
   -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
-  -p 9200:9200 \
+  -p "${OS_PORT}:9200" \
   --restart unless-stopped \
   opensearchproject/opensearch:2.5.0 \
     > /dev/null 2>&1
 
-# FIX: Wait properly — up to 3 minutes
-log "Waiting for OpenSearch (up to 3 min)..."
+# Wait properly — up to 3 minutes
+log "Waiting for OpenSearch on port ${OS_PORT} (up to 3 min)..."
 TRIES=0
 MAX_TRIES=60   # 60 × 3s = 180s = 3 min
 while [ $TRIES -lt $MAX_TRIES ]; do
-  if curl -s http://localhost:9200 \
+  if curl -s "http://localhost:${OS_PORT}" \
       > /dev/null 2>&1; then
     # Extra check: cluster health green or yellow
     STATUS=$(curl -s \
-      "http://localhost:9200/_cluster/health" \
+      "http://localhost:${OS_PORT}/_cluster/health" \
       2>/dev/null | \
       python3 -c "import sys,json; \
         d=json.load(sys.stdin); \
         print(d.get('status','red'))" \
       2>/dev/null || echo "red")
     if [ "$STATUS" != "red" ]; then
-      log "✅ OpenSearch ready (status: $STATUS)"
+      log "✅ OpenSearch ready on port ${OS_PORT} (status: $STATUS)"
       break
     fi
   fi
@@ -433,7 +456,7 @@ ARKIME_PASS=$(echo "$API_KEY" | \
 
 cat > /opt/arkime/etc/config.ini << EOF
 [default]
-elasticsearch=http://localhost:9200
+elasticsearch=http://localhost:${OS_PORT}
 passwordSecret=${ARKIME_PASS}
 serverSecret=${ARKIME_PASS}
 httpRealm=Arkime
@@ -461,11 +484,11 @@ EOF
 log "Initializing Arkime index in OpenSearch..."
 echo "yes" | timeout 90 \
   /opt/arkime/db/db.pl \
-  http://localhost:9200 init \
+  "http://localhost:${OS_PORT}" init \
   --ifneeded 2>&1 || \
 echo "yes" | timeout 90 \
   /opt/arkime/db/db.pl \
-  http://localhost:9200 init \
+  "http://localhost:${OS_PORT}" init \
   2>&1 || true
 
 # ── Create Arkime admin user ──────────────────────
@@ -1012,7 +1035,7 @@ ts_m = parse_regex(msg, r'msg=audit\((?P<ts>[0-9.]+):(?P<serial>[0-9]+)\)') ?? {
 
 # Strip header, parse remaining key=value pairs
 kv_str = replace(msg, r'^type=\S+ msg=audit\([^)]+\):\s*', "", count: 1)
-kv, kv_err = parse_key_value(kv_str, field_delimiter: " ", value_delimiter: "=")
+kv, kv_err = parse_key_value(kv_str, field_delimiter: " ", key_value_delimiter: "=")
 if kv_err == null {
   if exists(kv.exe)     { .exe     = string!(kv.exe) }
   if exists(kv.comm)    { .comm    = string!(kv.comm) }
@@ -1041,8 +1064,8 @@ if kv_err == null {
 }
 
 # Map to SIGMA-compatible field names (Linux SIGMA rules use these)
-.Image = .exe ?? .comm ?? ""
-if !exists(.CommandLine) { .CommandLine = .comm ?? "" }
+.Image = if exists(.exe) { string!(.exe) } else if exists(.comm) { string!(.comm) } else { "" }
+if !exists(.CommandLine) { .CommandLine = if exists(.comm) { string!(.comm) } else { "" } }
 
 .source      = "linux"
 .log_type    = "auditd"
@@ -2261,6 +2284,11 @@ if __name__ == '__main__':
         try: os.remove(raw_out)
         except: pass
 UPLOADER
+# Patch OpenSearch port into the uploader if a non-default port was chosen
+if [ "${OS_PORT}" != "9200" ]; then
+  sed -i "s|http://localhost:9200/|http://localhost:${OS_PORT}/|g" \
+    /opt/ndr-sensor/pcap-uploader.py
+fi
 chmod +x /opt/ndr-sensor/pcap-uploader.py
 
 # ── Systemd services ──────────────────────────────
