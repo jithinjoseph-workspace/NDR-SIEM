@@ -54,6 +54,9 @@
     </div>
   </div>
 
+  <!-- Sensor scope banner (analysts only) — applies to Asset Inventory and IPAM Subnets -->
+  <app-sensor-scope-banner [sensorIds]="sensorIds"></app-sensor-scope-banner>
+
   <div class="subnet-stats-row" *ngIf="subnets.length > 0 && !loading">
     <div class="subnet-card" *ngFor="let s of subnets" (click)="setSubnetFilter(s.cidr)" [class.active]="filterSubnet === s.cidr">
       <div class="subnet-cidr">{{ s.cidr }}</div>
@@ -76,7 +79,7 @@
           <circle cx="60" cy="60" r="50" class="donut-bg"></circle>
           <!-- The strokes will be set via CSS or we can just use a conic gradient background on a div for easier dynamic sizing. Let's use a pure CSS glowing conic gradient approach instead of complex SVG calculations for easier dynamic binding. -->
         </svg>
-        <div class="donut-css" [style.background]="'conic-gradient(var(--md-sys-color-primary) 0% ' + stats.workstations.percent + '%, var(--md-sys-color-tertiary) ' + stats.workstations.percent + '% ' + (stats.workstations.percent + stats.iot.percent) + '%, var(--md-sys-color-error) ' + (stats.workstations.percent + stats.iot.percent) + '% ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '%, var(--md-sys-color-secondary) ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '% 100%)'">
+        <div class="donut-css" [style.background]="'conic-gradient(#3b82f6 0% ' + stats.workstations.percent + '%, #f43f5e ' + stats.workstations.percent + '% ' + (stats.workstations.percent + stats.iot.percent) + '%, #10b981 ' + (stats.workstations.percent + stats.iot.percent) + '% ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '%, #8b5cf6 ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '% 100%)'">
         </div>
         <div class="donut-inner">
           <span class="total-number">{{ totalAssets }}</span>

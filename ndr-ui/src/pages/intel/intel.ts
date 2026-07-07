@@ -5,11 +5,13 @@ import { Api } from '../../services/api/api';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Subscription } from 'rxjs';
 import { LucideAngularModule, Search, ShieldCheck, CircleAlert, RefreshCw, Hash, Bell } from 'lucide-angular';
+import { AuthService } from '../../services/auth/auth';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
   selector: 'app-intel',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, FormsModule],
+  imports: [CommonModule, LucideAngularModule, FormsModule, SensorScopeBanner],
   templateUrl: './intel.html',
   styleUrl: './intel.css'
 })
@@ -37,13 +39,18 @@ export class Intel implements OnInit, OnDestroy {
   private subs: Subscription[] = [];
   private processedAlertHits = new Map<string, number>();
 
+  /** Sensor IDs this user is scoped to (from JWT). */
+  sensorIds: string[] = [];
+
   constructor(
     private api: Api,
     private notifications: Notifications,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private auth: AuthService
   ) {}
 
   ngOnInit() {
+    this.sensorIds = this.auth.getSensorIds();
     this.loadIntel();
 
     this.subs.push(

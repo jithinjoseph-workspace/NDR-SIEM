@@ -7,11 +7,13 @@ import { Subscription } from 'rxjs';
 import { LucideAngularModule, Search, Terminal, RefreshCw, FileText, Activity, Download } from 'lucide-angular';
 import { ActivatedRoute } from '@angular/router';
 import { Live } from '../live/live';
+import { AuthService } from '../../services/auth/auth';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
   selector: 'app-logs',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, FormsModule, Live],
+  imports: [CommonModule, LucideAngularModule, FormsModule, Live, SensorScopeBanner],
   templateUrl: './logs.html',
   styleUrl: './logs.css'
 })
@@ -32,6 +34,9 @@ export class Logs implements OnInit, OnDestroy {
   ActivityIcon = Activity;
   DownloadIcon = Download;
 
+  /** Sensor IDs this user is scoped to (from JWT). */
+  sensorIds: string[] = [];
+
   private subs: Subscription[] = [];
 
   private updateScheduled = false;
@@ -48,11 +53,13 @@ export class Logs implements OnInit, OnDestroy {
     private api: Api,
     private ws: Websocket,
     private cdr: ChangeDetectorRef,
-    private route: ActivatedRoute  // ← add this
-
+    private route: ActivatedRoute,
+    private auth: AuthService
   ) { }
 
   ngOnInit() {
+    this.sensorIds = this.auth.getSensorIds();
+
     this.route.queryParams.subscribe(params => {
       if (params['search']) {
         this.searchText = params['search'];

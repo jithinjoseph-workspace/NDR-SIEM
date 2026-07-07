@@ -33,9 +33,14 @@ import {
   ChevronRight,
   Server,
   FolderSearch,
-  Bot
+  Bot,
+  Cpu,
+  Plus,
+  AlertCircle,
+  CheckCircle2,
+  XCircle
 } from 'lucide-angular';
-import { Api } from '../../services/api/api';
+import { Api, SensorKey, SensorAssignment } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Subscription } from 'rxjs';
 import { BaseChartDirective } from 'ng2-charts';
@@ -95,6 +100,20 @@ export class TenantAdmin implements OnInit, OnDestroy {
   ServerIcon = Server;
   FolderSearchIcon = FolderSearch;
   BotIcon = Bot;
+  CpuIcon = Cpu;
+  PlusIcon = Plus;
+  AlertCircleIcon = AlertCircle;
+  CheckCircle2Icon = CheckCircle2;
+  XCircleIcon = XCircle;
+
+  // Sensor Assignment
+  sensorKeys: SensorKey[] = [];
+  sensorAssignments: SensorAssignment[] = [];
+  sensorAssignLoading = false;
+  sensorAssignSaving = false;
+  /** Per-user selected sensor key_prefix in the add-sensor dropdown */
+  pendingSensorAdd: Record<string, string> = {};
+  activeSectionTab: 'users' | 'sensors' = 'users';
 
   // Bulk Selection
   selectedUserIds: Set<string> = new Set();
@@ -257,6 +276,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.statusInterval = setInterval(() => this.refreshTenantSystemStatus(), 10000);
 
     this.loadUsers();
+    this.loadSensorData();
   }
 
   ngOnDestroy(): void {
@@ -343,6 +363,101 @@ export class TenantAdmin implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
     });
+  }
+
+  loadSensorData() {
+    this.sensorAssignLoading = true;
+
+    // Load sensor keys for this tenant
+    this.api.getSensorKeys().subscribe({
+      next: (keys) => {
+        this.sensorKeys = keys.filter(k => k.tenant_id === this.tenantId && k.active !== false);
+        this.cdr.detectChanges();
+      },
+      error: () => { this.cdr.detectChanges(); }
+    });
+
+    // Load assignments
+    this.api.getSensorAssignments().subscribe({
+      next: (res) => {
+        this.sensorAssignments = res.assignments || [];
+        this.sensorAssignLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.sensorAssignLoading = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  /** Returns the sensor_ids assigned to a specific user */
+  getUserSensorIds(userId: string): string[] {
+    return this.sensorAssignments
+      .filter(a => a.user_id === userId)
+      .map(a => a.sensor_id);
+  }
+
+  /** Returns sensor key object by key_prefix */
+  getSensorByPrefix(prefix: string): SensorKey | undefined {
+    return this.sensorKeys.find(k => k.key_prefix === prefix);
+  }
+
+  /** Returns sensor name/label for display */
+  getSensorLabel(prefix: string): string {
+    const s = this.getSensorByPrefix(prefix);
+    return s ? (s.name || s.key_prefix) : prefix;
+  }
+
+  /** Available sensors not yet assigned to this user */
+  getAvailableSensors(userId: string): SensorKey[] {
+    const assigned = new Set(this.getUserSensorIds(userId));
+    return this.sensorKeys.filter(k => !assigned.has(k.key_prefix));
+  }
+
+  addSensorToUser(userId: string) {
+    const sensorId = this.pendingSensorAdd[userId];
+    if (!sensorId) return;
+
+    this.sensorAssignSaving = true;
+    this.api.assignSensor(userId, sensorId).subscribe({
+      next: () => {
+        this.sensorAssignments = [...this.sensorAssignments, { user_id: userId, sensor_id: sensorId }];
+        this.pendingSensorAdd[userId] = '';
+        this.sensorAssignSaving = false;
+        this.showMessage('Sensor assigned. Analyst must log out and back in for changes to take effect.', 'success');
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.sensorAssignSaving = false;
+        this.showMessage('Failed to assign sensor', 'error');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  removeSensorFromUser(userId: string, sensorId: string) {
+    this.sensorAssignSaving = true;
+    this.api.unassignSensor(userId, sensorId).subscribe({
+      next: () => {
+        this.sensorAssignments = this.sensorAssignments.filter(
+          a => !(a.user_id === userId && a.sensor_id === sensorId)
+        );
+        this.sensorAssignSaving = false;
+        this.showMessage('Sensor removed. Analyst must log out and back in for changes to take effect.', 'success');
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.sensorAssignSaving = false;
+        this.showMessage('Failed to remove sensor assignment', 'error');
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  /** Users who can have sensor assignments (excludes admins/tenant_admins) */
+  get assignableUsers() {
+    return this.users;
   }
 
   openCreateForm() {

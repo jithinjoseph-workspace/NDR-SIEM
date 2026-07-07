@@ -4,6 +4,9 @@
     <span class="badge">{{ groupedBundles().length }} incidents</span>
   </div>
 
+  <!-- Sensor scope banner (analysts only) -->
+  <app-sensor-scope-banner [sensorIds]="sensorIds"></app-sensor-scope-banner>
+
   <div class="evidence-layout">
 
     <!-- Left: Bundle list (grouped by community_id) -->

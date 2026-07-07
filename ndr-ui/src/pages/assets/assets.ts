@@ -22,11 +22,13 @@ import {
 } from 'lucide-angular';
 
 import { DeviceDrawer } from '../../components/device-drawer/device-drawer';
+import { AuthService } from '../../services/auth/auth';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
   selector: 'app-assets',
   standalone: true,
-  imports: [CommonModule, FormsModule, LucideAngularModule, DeviceDrawer],
+  imports: [CommonModule, FormsModule, LucideAngularModule, DeviceDrawer, SensorScopeBanner],
   templateUrl: './assets.html',
   styleUrl: './assets.css',
 })
@@ -98,9 +100,13 @@ export class Assets implements OnInit {
     networking: { count: 0, percent: 0 }
   };
 
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  /** Sensor IDs this user is scoped to (from JWT). */
+  sensorIds: string[] = [];
+
+  constructor(private api: Api, private cdr: ChangeDetectorRef, private auth: AuthService) {}
 
   ngOnInit() {
+    this.sensorIds = this.auth.getSensorIds();
     this.loadAssets();
     this.loadSubnets();
   }

@@ -21,6 +21,9 @@
         <p>Deep packet inspection log stream from Agent-Z and Agent-S</p>
       </div>
 
+      <!-- Sensor scope banner (analysts only) -->
+      <app-sensor-scope-banner [sensorIds]="sensorIds" style="width:100%"></app-sensor-scope-banner>
+
       <div class="logs-actions">
         <label class="logs-search">
           <lucide-icon [name]="SearchIcon" class="search-icon"></lucide-icon>

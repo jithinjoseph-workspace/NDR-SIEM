@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy, ViewChild, ElementRef, HostListener, signal, computed, effect, untracked, viewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../services/api/api';
+import { AuthService } from '../../services/auth/auth';
 import { Websocket } from '../../services/websocket/websocket';
 import { ChartDataService } from '../../services/chart-data/chart-data';
 import { Subscription } from 'rxjs';
@@ -11,11 +12,12 @@ import {
 } from 'lucide-angular';
 import { Router } from '@angular/router';
 import * as d3 from 'd3';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule],
+  imports: [CommonModule, LucideAngularModule, SensorScopeBanner],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })
@@ -67,11 +69,15 @@ export class Dashboard implements OnInit, OnDestroy {
   // Derived signal for total severity count to use in calculations
   totalSeverityCount = computed(() => (this.critical() + this.high() + this.medium() + this.low()) || 1);
 
+  /** Sensor IDs this user is scoped to (from JWT). Empty = unrestricted. */
+  sensorIds: string[] = [];
+
   constructor(
     private api: Api,
     private ws: Websocket,
     private chartService: ChartDataService,
-    private router: Router
+    private router: Router,
+    private auth: AuthService
   ) {
     // ── Effects for D3 re-rendering ───────────────────────────────────────
     effect(() => {
@@ -100,6 +106,8 @@ export class Dashboard implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
+    this.sensorIds = this.auth.getSensorIds();
+
     // Kick off the single background fetch loop in the service.
     // /api/stats is now called ONCE every 30s — result shared with stat cards.
     this.chartService.start();

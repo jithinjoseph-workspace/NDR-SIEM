@@ -7,22 +7,14 @@ import { ArkimeService } from '../../services/arkime/arkime';
 import { EvidenceService } from '../../services/evidence/evidence';
 import { Subscription } from 'rxjs';
 import { ActivatedRoute, Router } from '@angular/router';
-import {
-  LucideAngularModule,
-  AlertTriangle,
-  Download,
-  ExternalLink,
-  MoreHorizontal,
-  Package,
-  RefreshCw,
-  ShieldAlert,
-  X,
-} from 'lucide-angular';
+import { LucideAngularModule, AlertTriangle, Download, ExternalLink, MoreHorizontal, Package, RefreshCw, ShieldAlert, X } from 'lucide-angular';
+import { AuthService } from '../../services/auth/auth';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
   selector: 'app-alerts',
   standalone: true,
-  imports: [CommonModule, FormsModule, LucideAngularModule],
+  imports: [CommonModule, FormsModule, LucideAngularModule, SensorScopeBanner],
   templateUrl: './alerts.html',
   styleUrl: './alerts.css',
 })
@@ -50,6 +42,9 @@ export class Alerts implements OnInit, OnDestroy {
 
   private subs: Subscription[] = [];
 
+  /** Sensor IDs this user is scoped to (from JWT). */
+  sensorIds: string[] = [];
+
   constructor(
     private api: Api,
     private ws: Websocket,
@@ -58,9 +53,12 @@ export class Alerts implements OnInit, OnDestroy {
     private cdr: ChangeDetectorRef,
     private arkime: ArkimeService,
     private evidenceService: EvidenceService,
+    private auth: AuthService,
   ) {}
 
   ngOnInit() {
+    this.sensorIds = this.auth.getSensorIds();
+
     this.subs.push(
       this.route.queryParamMap.subscribe(params => {
         this.activeSeverity = params.get('severity')?.toUpperCase() || '';

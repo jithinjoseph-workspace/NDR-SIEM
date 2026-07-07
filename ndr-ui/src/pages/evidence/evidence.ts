@@ -1,15 +1,17 @@
-import { Component, OnInit, signal, computed } from '@angular/core';
+import { Component, OnInit, signal, computed, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
 import { EvidenceService } from '../../services/evidence/evidence';
+import { AuthService } from '../../services/auth/auth';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 const SEV_ORDER: Record<string, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 
 @Component({
   selector: 'app-evidence',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SensorScopeBanner],
   templateUrl: './evidence.html',
   styleUrl: './evidence.css'
 })
@@ -67,6 +69,10 @@ export class EvidenceComponent implements OnInit {
   });
 
   private pendingCid: string | null = null;
+  private auth = inject(AuthService);
+
+  /** Sensor IDs this user is scoped to (from JWT). */
+  sensorIds: string[] = [];
 
   constructor(
     private evidenceService: EvidenceService,
@@ -74,6 +80,7 @@ export class EvidenceComponent implements OnInit {
   ) {}
 
   ngOnInit() {
+    this.sensorIds = this.auth.getSensorIds();
     this.route.queryParams.subscribe(params => {
       const cid = params['cid'];
       if (cid) this.pendingCid = cid;

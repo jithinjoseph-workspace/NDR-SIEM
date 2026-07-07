@@ -10,11 +10,13 @@ import {
     RefreshCw, ExternalLink, Plus,
     Trash2, Bell, Mail, Globe, Shield, Activity, ShieldAlert
 } from 'lucide-angular';
+import { AuthService } from '../../services/auth/auth';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
     selector: 'app-soar',
     standalone: true,
-    imports: [CommonModule, LucideAngularModule, FormsModule],
+    imports: [CommonModule, LucideAngularModule, FormsModule, SensorScopeBanner],
     templateUrl: './soar.html',
     styleUrl: './soar.css'
 })
@@ -109,9 +111,13 @@ export class Soar implements OnInit {
     evidenceLoading = false;
     liveEvidence: any = null;
 
-    constructor(private api: Api, private arkime: ArkimeService, private cdr: ChangeDetectorRef) {}
+    /** Sensor IDs this user is scoped to (from JWT). */
+    sensorIds: string[] = [];
+
+    constructor(private api: Api, private arkime: ArkimeService, private cdr: ChangeDetectorRef, private auth: AuthService) {}
 
     ngOnInit() {
+        this.sensorIds = this.auth.getSensorIds();
         this.loadCases();
         this.loadPlaybooks();
         this.loadIntegrations();

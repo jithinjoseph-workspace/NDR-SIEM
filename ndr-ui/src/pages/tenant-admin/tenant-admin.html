@@ -69,8 +69,27 @@
 
   <ng-container *ngIf="activeTab === 'users'">
 
+    <!-- ── SECTION TABS ── -->
+    <div class="section-tab-bar">
+      <button
+        class="section-tab"
+        [class.active]="activeSectionTab === 'users'"
+        (click)="activeSectionTab = 'users'">
+        <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
+        User Directory
+      </button>
+      <button
+        class="section-tab"
+        [class.active]="activeSectionTab === 'sensors'"
+        (click)="activeSectionTab = 'sensors'">
+        <lucide-icon [name]="CpuIcon" class="w-4 h-4"></lucide-icon>
+        Sensor Assignment
+        <span class="section-tab-badge" *ngIf="sensorAssignments.length > 0">{{ sensorAssignments.length }}</span>
+      </button>
+    </div>
+
     <!-- ── EXECUTIVE DASHBOARD ── -->
-    <section class="executive-dashboard">
+    <section class="executive-dashboard" *ngIf="activeSectionTab === 'users'">
 
       <!-- KPI Widgets -->
       <div class="kpi-grid">
@@ -191,7 +210,7 @@
     </section>
 
     <!-- ── ENTERPRISE DATA GRID ── -->
-    <section class="enterprise-grid">
+    <section class="enterprise-grid" *ngIf="activeSectionTab === 'users'">
 
       <!-- Grid Toolbar -->
       <div class="grid-toolbar">
@@ -323,6 +342,136 @@
 
       </div>
     </section>
+
+    <!-- ── SENSOR ASSIGNMENT SECTION ── -->
+    <section class="sensor-assignment-section" *ngIf="activeSectionTab === 'sensors'">
+
+      <!-- Warning Banner -->
+      <div class="sensor-warning-banner">
+        <div class="sensor-warning-inner">
+          <lucide-icon [name]="AlertCircleIcon" class="w-4 h-4"></lucide-icon>
+          <div class="sensor-warning-text">
+            <strong>Changes take effect on the analyst's next login.</strong>
+            Sensor assignments are baked into the JWT at login time — the analyst must log out and back in after any assignment changes.
+          </div>
+        </div>
+      </div>
+
+      <!-- Section Header -->
+      <div class="sa-header">
+        <div class="sa-header-left">
+          <div class="sa-header-icon">
+            <lucide-icon [name]="CpuIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div>
+            <h3>Sensor Assignment</h3>
+            <p>Control which sensor data streams each analyst can access.</p>
+          </div>
+        </div>
+        <div class="sa-header-meta">
+          <div class="sa-stat">
+            <strong>{{ sensorKeys.length }}</strong>
+            <span>Available Sensors</span>
+          </div>
+          <div class="sa-stat">
+            <strong>{{ sensorAssignments.length }}</strong>
+            <span>Total Assignments</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading State -->
+      <div *ngIf="sensorAssignLoading" class="loading-state">
+        <div class="skeleton-row" *ngFor="let r of [1,2,3]"></div>
+      </div>
+
+      <!-- Empty Sensors State -->
+      <div *ngIf="!sensorAssignLoading && sensorKeys.length === 0" class="sa-empty-state">
+        <lucide-icon [name]="CpuIcon" class="w-8 h-8"></lucide-icon>
+        <h4>No Active Sensors</h4>
+        <p>No active sensor keys found for this tenant. Add sensor keys in the platform settings first.</p>
+      </div>
+
+      <!-- Assignment Table -->
+      <div *ngIf="!sensorAssignLoading && sensorKeys.length > 0 && assignableUsers.length > 0" class="sa-table">
+
+        <!-- Table Header -->
+        <div class="sa-table-head">
+          <span>Analyst</span>
+          <span>Role</span>
+          <span>Assigned Sensors</span>
+          <span>Add Sensor</span>
+        </div>
+
+        <!-- Analyst Rows -->
+        <div class="sa-row" *ngFor="let user of assignableUsers">
+
+          <!-- User Cell -->
+          <div class="sa-user-cell">
+            <div class="sa-avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
+            <div class="sa-user-info">
+              <strong>{{ user.username }}</strong>
+              <small [class.inactive-label]="user.active === false">{{ user.active === false ? 'Disabled' : 'Active' }}</small>
+            </div>
+          </div>
+
+          <!-- Role -->
+          <span class="sa-role-pill">{{ getRoleLabel(user.role) }}</span>
+
+          <!-- Assigned Sensors -->
+          <div class="sa-sensor-chips">
+            <ng-container *ngIf="getUserSensorIds(user.id).length > 0; else noSensors">
+              <div class="sa-chip" *ngFor="let sid of getUserSensorIds(user.id)">
+                <lucide-icon [name]="CpuIcon" class="w-3 h-3"></lucide-icon>
+                <span>{{ getSensorLabel(sid) }}</span>
+                <button
+                  class="sa-chip-remove"
+                  title="Remove sensor"
+                  [disabled]="sensorAssignSaving"
+                  (click)="removeSensorFromUser(user.id, sid)">
+                  <lucide-icon [name]="XIcon" class="w-3 h-3"></lucide-icon>
+                </button>
+              </div>
+            </ng-container>
+            <ng-template #noSensors>
+              <span class="sa-unrestricted">Unrestricted (all sensors)</span>
+            </ng-template>
+          </div>
+
+          <!-- Add Sensor Dropdown -->
+          <div class="sa-add-row">
+            <div class="sa-select-wrap">
+              <select
+                [(ngModel)]="pendingSensorAdd[user.id]"
+                class="sa-select"
+                [disabled]="getAvailableSensors(user.id).length === 0 || sensorAssignSaving">
+                <option value="">{{ getAvailableSensors(user.id).length === 0 ? 'All assigned' : 'Select sensor…' }}</option>
+                <option *ngFor="let s of getAvailableSensors(user.id)" [value]="s.key_prefix">
+                  {{ s.name || s.key_prefix }}
+                </option>
+              </select>
+            </div>
+            <button
+              class="sa-assign-btn"
+              [disabled]="!pendingSensorAdd[user.id] || sensorAssignSaving"
+              (click)="addSensorToUser(user.id)">
+              <lucide-icon [name]="PlusIcon" class="w-3.5 h-3.5"></lucide-icon>
+              Assign
+            </button>
+          </div>
+
+        </div><!-- /sa-row -->
+
+        <!-- No Users State -->
+        <div *ngIf="assignableUsers.length === 0" class="sa-empty-state">
+          <lucide-icon [name]="UsersIcon" class="w-8 h-8"></lucide-icon>
+          <h4>No Analyst Users</h4>
+          <p>Create analyst accounts first to manage their sensor assignments.</p>
+        </div>
+
+      </div><!-- /sa-table -->
+
+    </section><!-- /sensor-assignment-section -->
 
   </ng-container>
 

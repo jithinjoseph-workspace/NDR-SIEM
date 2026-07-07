@@ -5,22 +5,24 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { interval, of } from 'rxjs';
 import { catchError, map, startWith, switchMap } from 'rxjs/operators';
 import { Api } from '../../services/api/api';
-import {
-  LucideAngularModule,
-  Bot, ShieldOff, FileText, ChevronDown, ChevronUp,
-  TrendingUp, TrendingDown, Minus, Shield, AlertTriangle, Activity
-} from 'lucide-angular';
+import { LucideAngularModule, Bot, ShieldOff, FileText, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, Shield, AlertTriangle, Activity } from 'lucide-angular';
+import { AuthService } from '../../services/auth/auth';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
   selector: 'app-ai-activity',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule],
+  imports: [CommonModule, LucideAngularModule, SensorScopeBanner],
   templateUrl: './ai-activity.html',
   styleUrl: './ai-activity.css',
 })
 export class AiActivity {
   private api = inject(Api);
   private router = inject(Router);
+  private auth = inject(AuthService);
+
+  /** Sensor IDs this user is scoped to (from JWT). */
+  readonly sensorIds = this.auth.getSensorIds();
 
   BotIcon           = Bot;
   ShieldOffIcon     = ShieldOff;

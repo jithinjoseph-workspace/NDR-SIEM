@@ -2,6 +2,11 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { map, Observable } from 'rxjs';
 
+export interface SensorAssignment {
+  user_id: string;
+  sensor_id: string;
+}
+
 export interface SensorKey {
   id: string;
   key_prefix: string;
@@ -586,7 +591,22 @@ export class Api {
     return this.http.get(`${this.baseUrl}/threat/predictions`);
   }
 
+
   getThreatExposure(): Observable<any> {
     return this.http.get(`${this.baseUrl}/threat/exposure`);
+  }
+
+  // ── Sensor Assignments ────────────────────────────────────────────────────
+
+  getSensorAssignments(): Observable<{ assignments: SensorAssignment[] }> {
+    return this.http.get<{ assignments: SensorAssignment[] }>(`${this.baseUrl}/sensors/assignments`);
+  }
+
+  assignSensor(user_id: string, sensor_id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/sensors/assign`, { user_id, sensor_id });
+  }
+
+  unassignSensor(user_id: string, sensor_id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/sensors/assign`, { body: { user_id, sensor_id } });
   }
 }
