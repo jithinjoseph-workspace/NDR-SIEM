@@ -39,7 +39,7 @@ export const routes: Routes = [
   {
     path: 'rules',
     canActivate: [authGuard],
-    data: { role: 'analyst', permission: 'rules' },
+    data: { permission: 'rules' },
     loadComponent: () => import('../pages/rules/rules')
       .then(m => m.Rules)
   },
