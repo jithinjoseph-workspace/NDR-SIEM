@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_events ON CLUSTER ndr_cluster (
     event_type   String,
     community_id String,
     raw          String,
-    tenant_id    String DEFAULT 'default'
+    tenant_id    String DEFAULT 'default',
+    sensor_id    String DEFAULT ''
 ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_events', '{replica}')
 ORDER BY (timestamp, src_ip, dst_ip)
 TTL timestamp + INTERVAL 30 DAY;
@@ -35,7 +36,8 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
     corroborated_at     DateTime DEFAULT toDateTime(0),
     agent_s_rule_id     String DEFAULT '',
     agent_s_category    String DEFAULT '',
-    updated_at          DateTime DEFAULT now()
+    updated_at          DateTime DEFAULT now(),
+    sensor_id           String DEFAULT ''
 ) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_hits', '{replica}', updated_at)
 ORDER BY (tenant_id, community_id)
 TTL timestamp + INTERVAL 90 DAY;
@@ -742,6 +744,16 @@ CREATE TABLE IF NOT EXISTS ndr.ai_providers ON CLUSTER ndr_cluster
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ai_providers', '{replica}', created_at)
 ORDER BY name;
+
+CREATE TABLE IF NOT EXISTS ndr.user_sensor_assignments ON CLUSTER ndr_cluster
+(
+    user_id    String,
+    sensor_id  String,
+    tenant_id  String,
+    created_at DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/user_sensor_assignments', '{replica}', created_at)
+ORDER BY (tenant_id, user_id, sensor_id);
 
 -- ── Retention TTL migrations (idempotent — safe to re-run on existing tables) ──
 -- Applied here so already-deployed clusters pick up TTLs without a manual ALTER.

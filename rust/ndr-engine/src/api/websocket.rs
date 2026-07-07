@@ -19,6 +19,7 @@ struct WsAuthContext {
     username: String,
     tenant_id: String,
     role: String,
+    sensor_ids: Vec<String>,
 }
 
 pub async fn ws_handler(
@@ -101,9 +102,10 @@ pub async fn ws_handler(
     }
 
     let auth_ctx = WsAuthContext {
-        username: claims.sub,
-        tenant_id: claims.tenant_id,
-        role: claims.role,
+        username:   claims.sub,
+        tenant_id:  claims.tenant_id,
+        role:       claims.role,
+        sensor_ids: claims.sensor_ids,
     };
 
     ws.on_upgrade(move |socket| handle_ws(socket, state, auth_ctx))
@@ -181,11 +183,11 @@ async fn handle_ws(
                     _ = ping_interval.tick() => {
                         // Push live stats + supporting data alongside the keepalive ping
                         let (stats, severity, top_src, top_dst, protocols) = tokio::join!(
-                            state.ch_storage.get_stats_by_tenant(&auth.tenant_id),
-                            state.ch_storage.get_severity_by_tenant(&auth.tenant_id),
-                            state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id),
-                            state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id),
-                            state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id),
+                            state.ch_storage.get_stats_by_tenant(&auth.tenant_id, &auth.sensor_ids),
+                            state.ch_storage.get_severity_by_tenant(&auth.tenant_id, &auth.sensor_ids),
+                            state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
+                            state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
+                            state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
                         );
                         if let Ok(stats) = stats {
                             let telemetry = serde_json::json!({
@@ -293,11 +295,11 @@ async fn handle_ws(
         tokio::select! {
             _ = ping_interval_fb.tick() => {
                 let (stats, severity, top_src, top_dst, protocols) = tokio::join!(
-                    state.ch_storage.get_stats_by_tenant(&auth.tenant_id),
-                    state.ch_storage.get_severity_by_tenant(&auth.tenant_id),
-                    state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id),
-                    state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id),
-                    state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id),
+                    state.ch_storage.get_stats_by_tenant(&auth.tenant_id, &auth.sensor_ids),
+                    state.ch_storage.get_severity_by_tenant(&auth.tenant_id, &auth.sensor_ids),
+                    state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
+                    state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
+                    state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
                 );
                 if let Ok(stats) = stats {
                     let telemetry = serde_json::json!({

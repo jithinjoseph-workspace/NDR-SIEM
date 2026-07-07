@@ -18,6 +18,7 @@ pub struct NdrEvent {
     pub community_id: String,
     pub raw:          String,
     pub tenant_id:    String,
+    pub sensor_id:    String,
 }
 
 #[derive(Debug, Serialize, clickhouse::Row)]
@@ -41,6 +42,7 @@ pub struct NdrHit {
     pub agent_s_rule_id:    String,
     pub agent_s_category:   String,
     pub updated_at:         u32,
+    pub sensor_id:          String,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -102,6 +104,7 @@ pub struct RecentHitDetail {
     pub correlation_status: String,
     pub agent_s_rule_id:    String,
     pub corroborated_at:    u32,
+    pub sensor_id:          String,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -1152,6 +1155,9 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS agent_s_rule_id String DEFAULT ''",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS agent_s_category String DEFAULT ''",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
+                "ALTER TABLE ndr.ndr_events ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
+                "CREATE TABLE IF NOT EXISTS ndr.user_sensor_assignments (user_id String, sensor_id String, tenant_id String, created_at DateTime DEFAULT now()) ENGINE = ReplacingMergeTree(created_at) ORDER BY (tenant_id, user_id, sensor_id)",
                 "ALTER TABLE ndr.soar_integrations ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_playbooks ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.soar_config ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
@@ -1236,8 +1242,9 @@ pub async fn delete_announcement(
 
 
 
-    pub async fn get_threat_intel_hits_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    pub async fn get_threat_intel_hits_by_tenant(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
     let db_name = tenant_db(tenant_id);
+    let sf = Self::sensor_filter(sensor_ids);
     let query = format!("
         SELECT
             src_ip,
@@ -1245,11 +1252,11 @@ pub async fn delete_announcement(
             count() as hits,
             max(timestamp) as last_seen
         FROM {}.ndr_hits
-        WHERE threat_intel = 1
+        WHERE threat_intel = 1{}
         GROUP BY src_ip, dst_ip
         ORDER BY hits DESC
         LIMIT 50
-    ", db_name);
+    ", db_name, sf);
     let hits = self.client.query(&query)
         .fetch_all::<ThreatIntelHit>()
         .await
@@ -1264,7 +1271,7 @@ pub async fn delete_announcement(
 }
 
 pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-    self.get_threat_intel_hits_by_tenant("default").await
+    self.get_threat_intel_hits_by_tenant("default", &[]).await
 }
 
     // ── Insert methods ────────────────────────────────────────────────────
@@ -1355,6 +1362,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             agent_s_rule_id:    agent_s_rule_id.to_string(),
             agent_s_category:   agent_s_category.to_string(),
             updated_at:         now,
+            sensor_id:          String::new(),
         };
         self.insert_hit_for_tenant(hit, tenant_id).await
     }
@@ -1431,6 +1439,84 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(ids)
     }
 
+    // ── Sensor filter helper ─────────────────────────────────────────────────
+
+    /// Returns SQL fragment " AND sensor_id IN ('a','b')" or "" if unrestricted.
+    fn sensor_filter(sensor_ids: &[String]) -> String {
+        if sensor_ids.is_empty() {
+            String::new()
+        } else {
+            let list = sensor_ids.iter().map(|s| format!("'{}'", sql_escape(s))).collect::<Vec<_>>().join(",");
+            format!(" AND sensor_id IN ({})", list)
+        }
+    }
+
+    // ── Sensor assignment functions ───────────────────────────────────────────
+
+    pub async fn assign_sensor_to_user(&self, user_id: &str, sensor_id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        self.client
+            .query("INSERT INTO ndr.user_sensor_assignments (user_id, sensor_id, tenant_id, created_at) VALUES (?, ?, ?, now())")
+            .bind(user_id)
+            .bind(sensor_id)
+            .bind(tenant_id)
+            .execute().await?;
+        Ok(())
+    }
+
+    pub async fn remove_sensor_assignment(&self, user_id: &str, sensor_id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        self.client
+            .query("ALTER TABLE ndr.user_sensor_assignments DELETE WHERE user_id = ? AND sensor_id = ? AND tenant_id = ?")
+            .bind(user_id)
+            .bind(sensor_id)
+            .bind(tenant_id)
+            .execute().await?;
+        Ok(())
+    }
+
+    /// All assignments for a tenant — returns (user_id, sensor_id) pairs.
+    pub async fn get_sensor_assignments(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, String)>> {
+        let rows = self.client
+            .query("SELECT user_id, sensor_id FROM ndr.user_sensor_assignments FINAL WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_all::<(String, String)>()
+            .await
+            .unwrap_or_default();
+        Ok(rows)
+    }
+
+    /// Sensor IDs assigned to a specific user. Empty = no restriction (sees all).
+    pub async fn get_user_sensor_ids(&self, user_id: &str, tenant_id: &str) -> anyhow::Result<Vec<String>> {
+        let rows = self.client
+            .query("SELECT sensor_id FROM ndr.user_sensor_assignments FINAL WHERE user_id = ? AND tenant_id = ?")
+            .bind(user_id)
+            .bind(tenant_id)
+            .fetch_all::<String>()
+            .await
+            .unwrap_or_default();
+        Ok(rows)
+    }
+
+    /// Returns all per-tenant disabled overrides from rules_state.
+    /// Key = tenant_id, Value = set of rule IDs that tenant has disabled.
+    /// Used by DetectionEngine to skip community rules a tenant has disabled.
+    pub async fn get_all_disabled_overrides(
+        &self,
+    ) -> anyhow::Result<std::collections::HashMap<String, std::collections::HashSet<String>>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct OverrideRow { id: String, tenant_id: String }
+        let rows = self.client
+            .query("SELECT id, tenant_id FROM ndr.rules_state FINAL WHERE enabled = 0")
+            .fetch_all::<OverrideRow>()
+            .await
+            .unwrap_or_default();
+        let mut out: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            out.entry(row.tenant_id).or_default().insert(row.id);
+        }
+        Ok(out)
+    }
+
     pub async fn delete_rule_state(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
         self.client
             .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ? AND tenant_id = ?")
@@ -1495,6 +1581,19 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     /// Insert or update a community rule in the global ndr.sigma_rules table.
+    /// Returns the set of all community rule IDs already in the DB.
+    /// Used by the updater to skip re-inserting existing rules (preserves enabled/disabled state).
+    pub async fn get_community_rule_ids(&self) -> anyhow::Result<std::collections::HashSet<String>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct IdRow { id: String }
+        let rows = self.client
+            .query("SELECT DISTINCT id FROM ndr.sigma_rules FINAL WHERE source='community'")
+            .fetch_all::<IdRow>()
+            .await
+            .unwrap_or_default();
+        Ok(rows.into_iter().map(|r| r.id).collect())
+    }
+
     /// Community rules have tenant_id='*' and source='community'.
     /// ReplacingMergeTree deduplicates on id — re-inserting updates the content.
     pub async fn save_community_rule(&self, id: &str, name: &str, content: &str) -> anyhow::Result<()> {
@@ -1532,8 +1631,26 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     pub async fn toggle_sigma_rule(&self, id: &str, enabled: bool, tenant_id: &str) -> anyhow::Result<()> {
+        // Community rules (tenant_id='*') must never be modified directly — use per-tenant
+        // rules_state overrides instead (already written by set_rule_enabled in the caller).
+        let is_community = self.client
+            .query("SELECT count() FROM ndr.sigma_rules FINAL WHERE id = ? AND tenant_id = '*'")
+            .bind(id)
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0) > 0;
+
+        if is_community {
+            // rules_state already updated by set_rule_enabled — nothing more to do here.
+            return Ok(());
+        }
+
+        // Custom rule — update enabled flag directly in the tenant's sigma_rules table.
         let db = tenant_db(tenant_id);
-        let query = format!("INSERT INTO {}.sigma_rules (id, name, content, tenant_id, enabled, updated_at) SELECT id, name, content, tenant_id, ?, now() FROM {}.sigma_rules FINAL WHERE id = ?", db, db);
+        let query = format!(
+            "INSERT INTO {db}.sigma_rules (id, name, content, tenant_id, enabled, updated_at) \
+             SELECT id, name, content, tenant_id, ?, now() FROM {db}.sigma_rules FINAL WHERE id = ?"
+        );
         self.client.query(&query).bind(enabled as u8).bind(id).execute().await?;
         Ok(())
     }
@@ -2221,22 +2338,24 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_stats_by_tenant(
-        &self, tenant_id: &str
+        &self, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
-        // 6 sequential queries → 2 parallel queries using countIf
+        let sf = Self::sensor_filter(sensor_ids);
         let (events_row, hits_row) = tokio::try_join!(
             self.client.query(&format!(
                 "SELECT count() as events_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as events_1h, \
                  countIf(source='agent-z') as agent_z_events, \
                  countIf(source='agent-s') as agent_s_events \
-                 FROM {}.ndr_events", db_name))
+                 FROM {db}.ndr_events WHERE 1=1{sf}",
+                db = db_name, sf = sf))
                 .fetch_one::<(u64, u64, u64, u64)>(),
             self.client.query(&format!(
                 "SELECT count() as hits_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as hits_1h \
-                 FROM {}.ndr_hits FINAL", db_name))
+                 FROM {db}.ndr_hits FINAL WHERE 1=1{sf}",
+                db = db_name, sf = sf))
                 .fetch_one::<(u64, u64)>()
         )?;
         Ok(serde_json::json!({
@@ -2247,13 +2366,16 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_recent_events_by_tenant(
-        &self, limit: u64, tenant_id: &str
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
             "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp) \
-             FROM {}.ndr_events \
-             ORDER BY timestamp DESC LIMIT {}", db_name, limit))
+             FROM {db}.ndr_events \
+             WHERE 1=1{sf} \
+             ORDER BY timestamp DESC LIMIT {limit}",
+             db = db_name, sf = sf, limit = limit))
             .fetch_all::<(String, String, String, String, String, u32)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
@@ -2267,14 +2389,16 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn export_events_by_tenant(
-        &self, tenant_id: &str, hours: u32, limit: u64
+        &self, tenant_id: &str, hours: u32, limit: u64, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
             "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp) \
-             FROM {}.ndr_events \
-             WHERE timestamp >= now() - INTERVAL {} HOUR \
-             ORDER BY timestamp DESC LIMIT {}", db_name, hours, limit))
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL {hours} HOUR{sf} \
+             ORDER BY timestamp DESC LIMIT {limit}",
+             db = db_name, hours = hours, sf = sf, limit = limit))
             .fetch_all::<(String, String, String, String, String, u32)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
@@ -2288,65 +2412,67 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_top_protocols_by_tenant(
-        &self, limit: u64, tenant_id: &str
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
-            "SELECT proto, count() as cnt \
-             FROM {}.ndr_events \
-             WHERE proto != '' AND timestamp >= now() - INTERVAL 1 HOUR \
-             GROUP BY proto ORDER BY cnt DESC LIMIT {}", db_name, limit))
-            .fetch_all::<(String, u64)>()
-            .await.unwrap_or_default();
-        Ok(rows.iter().map(|r| serde_json::json!({
-            "proto": r.0, "count": r.1
-        })).collect())
+            "SELECT proto, count() as cnt FROM {db}.ndr_events \
+             WHERE proto != '' AND timestamp >= now() - INTERVAL 1 HOUR{sf} \
+             GROUP BY proto ORDER BY cnt DESC LIMIT {limit}",
+            db = db_name, sf = sf, limit = limit))
+            .fetch_all::<(String, u64)>().await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({ "proto": r.0, "count": r.1 })).collect())
     }
 
     pub async fn get_top_src_ips_by_tenant(
-        &self, limit: u64, tenant_id: &str
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
-            "SELECT src_ip, count() as cnt \
-             FROM {}.ndr_events \
-             WHERE src_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR \
-             GROUP BY src_ip ORDER BY cnt DESC LIMIT {}", db_name, limit))
-            .fetch_all::<(String,u64)>()
-            .await.unwrap_or_default();
-        Ok(rows.iter().map(|r| serde_json::json!({
-            "ip":r.0,"count":r.1
-        })).collect())
+            "SELECT src_ip, count() as cnt FROM {db}.ndr_events \
+             WHERE src_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR{sf} \
+             GROUP BY src_ip ORDER BY cnt DESC LIMIT {limit}",
+            db = db_name, sf = sf, limit = limit))
+            .fetch_all::<(String, u64)>().await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({ "ip": r.0, "count": r.1 })).collect())
     }
 
     pub async fn get_top_dst_ips_by_tenant(
-        &self, limit: u64, tenant_id: &str
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
-            "SELECT dst_ip, count() as cnt \
-             FROM {}.ndr_events \
-             WHERE dst_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR \
-             GROUP BY dst_ip ORDER BY cnt DESC LIMIT {}", db_name, limit))
-            .fetch_all::<(String,u64)>()
-            .await.unwrap_or_default();
-        Ok(rows.iter().map(|r| serde_json::json!({
-            "ip":r.0,"count":r.1
-        })).collect())
+            "SELECT dst_ip, count() as cnt FROM {db}.ndr_events \
+             WHERE dst_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR{sf} \
+             GROUP BY dst_ip ORDER BY cnt DESC LIMIT {limit}",
+            db = db_name, sf = sf, limit = limit))
+            .fetch_all::<(String, u64)>().await.unwrap_or_default();
+        Ok(rows.iter().map(|r| serde_json::json!({ "ip": r.0, "count": r.1 })).collect())
     }
 
     pub async fn get_recent_hits_by_tenant(
-        &self, limit: u64, tenant_id: &str
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
+        let sensor_filter = if sensor_ids.is_empty() {
+            String::new()
+        } else {
+            let list = sensor_ids.iter().map(|s| format!("'{}'", sql_escape(s))).collect::<Vec<_>>().join(",");
+            format!("AND sensor_id IN ({})", list)
+        };
         let rows = self.client.query(&format!(
             "SELECT \
                 toUInt32(timestamp) AS timestamp, \
                 community_id, src_ip, dst_ip, score, severity, \
                 tags, sigma_hits, threat_intel, src_country, dst_country, \
-                correlation_status, agent_s_rule_id, toUInt32(corroborated_at) AS corroborated_at \
+                correlation_status, agent_s_rule_id, toUInt32(corroborated_at) AS corroborated_at, \
+                sensor_id \
              FROM {}.ndr_hits FINAL \
-             ORDER BY length(sigma_hits) DESC, score DESC, timestamp DESC LIMIT {}", db_name, limit))
+             WHERE 1=1 {} \
+             ORDER BY length(sigma_hits) DESC, score DESC, timestamp DESC LIMIT {}", db_name, sensor_filter, limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
 
@@ -2394,45 +2520,45 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 "corroborated":       r.correlation_status == "corroborated",
                 "agent_s_rule_id":    r.agent_s_rule_id,
                 "corroborated_at":    r.corroborated_at,
+                "sensor_id":          r.sensor_id,
                 "src_asset":          src_asset,
                 "dst_asset":          dst_asset,
             })
         }).collect())
     }
 
-    pub async fn get_rule_hit_counts(&self, tenant_id: &str) -> anyhow::Result<std::collections::HashMap<String, u64>> {
+    pub async fn get_rule_hit_counts(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<std::collections::HashMap<String, u64>> {
         let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
         #[derive(clickhouse::Row, serde::Deserialize)]
         struct RuleCount { rule_name: String, cnt: u64 }
         let rows = self.client
             .query(&format!(
                 "SELECT arrayJoin(sigma_hits) AS rule_name, count() AS cnt \
-                 FROM {}.ndr_hits FINAL \
-                 WHERE length(sigma_hits) > 0 \
-                 GROUP BY rule_name \
-                 ORDER BY cnt DESC",
-                db_name
+                 FROM {db}.ndr_hits FINAL \
+                 WHERE length(sigma_hits) > 0{sf} \
+                 GROUP BY rule_name ORDER BY cnt DESC",
+                db = db_name, sf = sf
             ))
-            .fetch_all::<RuleCount>()
-            .await
-            .unwrap_or_default();
+            .fetch_all::<RuleCount>().await.unwrap_or_default();
         Ok(rows.into_iter().map(|r| (r.rule_name, r.cnt)).collect())
     }
 
     pub async fn get_events_by_community_id(
-        &self, community_id: &str, tenant_id: &str
+        &self, community_id: &str, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let cid = sql_escape(community_id);
+        let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client
             .query(&format!(
                 "SELECT source, event_type, src_ip, dst_ip, \
                         src_port, dst_port, proto, \
                         toUnixTimestamp(toDateTime(timestamp)) AS ts \
                  FROM {}.ndr_events \
-                 WHERE community_id = '{}' \
+                 WHERE community_id = '{}'{} \
                  ORDER BY timestamp DESC LIMIT 50",
-                db_name, cid
+                db_name, cid, sf
             ))
             .fetch_all::<(String, String, String, String, u16, u16, String, u32)>()
             .await
@@ -2451,17 +2577,18 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_severity_by_tenant(
-        &self, tenant_id: &str
+        &self, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
-        // 4 sequential queries → 1 query using countIf
+        let sf = Self::sensor_filter(sensor_ids);
         let row = self.client.query(&format!(
             "SELECT \
              countIf(lower(severity)='critical') as critical, \
              countIf(lower(severity)='high') as high, \
              countIf(lower(severity)='medium') as medium, \
              countIf(lower(severity)='low') as low \
-             FROM {}.ndr_hits", db_name))
+             FROM {db}.ndr_hits WHERE 1=1{sf}",
+            db = db_name, sf = sf))
             .fetch_one::<(u64, u64, u64, u64)>()
             .await.unwrap_or((0, 0, 0, 0));
         Ok(serde_json::json!({
@@ -2481,28 +2608,29 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_network_map_by_tenant(
-        &self, tenant_id: &str, mode: Option<&str>, limit: Option<usize>
+        &self, tenant_id: &str, mode: Option<&str>, limit: Option<usize>, sensor_ids: &[String]
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
         let recent_query = format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
                 groupArray(DISTINCT proto) as protocols
             FROM {db_name}.ndr_events
             WHERE tenant_id = '{tenant_escaped}' AND src_ip != '' AND dst_ip != ''
-              AND timestamp >= (SELECT subtractHours(max(timestamp), 1) FROM {db_name}.ndr_events WHERE tenant_id = '{tenant_escaped}')
+              AND timestamp >= (SELECT subtractHours(max(timestamp), 1) FROM {db_name}.ndr_events WHERE tenant_id = '{tenant_escaped}'){sf}
             GROUP BY src_ip, dst_ip
             ORDER BY connections DESC
-            LIMIT 1000", db_name=db_name, tenant_escaped=sql_escape(tenant_id));
+            LIMIT 1000", db_name=db_name, tenant_escaped=sql_escape(tenant_id), sf=sf);
         let fallback_query = format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
                 groupArray(DISTINCT proto) as protocols
             FROM {db_name}.ndr_events
-            WHERE tenant_id = '{tenant_escaped}' AND src_ip != '' AND dst_ip != ''
+            WHERE tenant_id = '{tenant_escaped}' AND src_ip != '' AND dst_ip != ''{sf}
             GROUP BY src_ip, dst_ip
             ORDER BY connections DESC
-            LIMIT 1000", db_name=db_name, tenant_escaped=sql_escape(tenant_id));
+            LIMIT 1000", db_name=db_name, tenant_escaped=sql_escape(tenant_id), sf=sf);
 
         let mut pairs = self.client.query(&recent_query).fetch_all::<NetworkPair>().await.unwrap_or_default();
         if pairs.is_empty() {
@@ -2695,20 +2823,22 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_network_map_node(
-        &self, tenant_id: &str, target_ip: &str
+        &self, tenant_id: &str, target_ip: &str, sensor_ids: &[String]
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let safe_ip = sql_escape(target_ip);
+        let sf = Self::sensor_filter(sensor_ids);
         let query = format!("
             SELECT src_ip, dst_ip,
                 count() as connections,
                 groupArray(DISTINCT proto) as protocols
-            FROM {}.ndr_events
-            WHERE tenant_id = '{}' AND (src_ip = '{}' OR dst_ip = '{}')
-              AND src_ip != '' AND dst_ip != ''
+            FROM {db}.ndr_events
+            WHERE tenant_id = '{tenant}' AND (src_ip = '{ip}' OR dst_ip = '{ip}')
+              AND src_ip != '' AND dst_ip != ''{sf}
             GROUP BY src_ip, dst_ip
             ORDER BY connections DESC
-            LIMIT 500", db_name, sql_escape(tenant_id), safe_ip, safe_ip);
+            LIMIT 500",
+            db = db_name, tenant = sql_escape(tenant_id), ip = safe_ip, sf = sf);
 
         let pairs = self.client.query(&query).fetch_all::<NetworkPair>().await.unwrap_or_default();
 
@@ -2785,21 +2915,31 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn search_network_map(
-        &self, tenant_id: &str, q: &str
+        &self, tenant_id: &str, q: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<String>> {
         #[derive(clickhouse::Row, serde::Deserialize)]
         struct SearchRow { ip: String }
 
         let db_name = tenant_db(tenant_id);
         let safe_q = sql_escape(q);
+        let sf = Self::sensor_filter(sensor_ids);
+        let sensor_subquery = if sf.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " AND ip IN (SELECT DISTINCT arrayJoin([src_ip, dst_ip]) FROM {db}.ndr_events WHERE 1=1{sf})",
+                db = db_name, sf = sf
+            )
+        };
         let query = format!("
             SELECT ip FROM (
-                SELECT DISTINCT ip FROM {}.assets
-                WHERE ip ILIKE '%{}%' OR hostname ILIKE '%{}%' OR custom_name ILIKE '%{}%' OR ip_history ILIKE '%{}%'
+                SELECT DISTINCT ip FROM {db}.assets
+                WHERE (ip ILIKE '%{q}%' OR hostname ILIKE '%{q}%' OR custom_name ILIKE '%{q}%' OR ip_history ILIKE '%{q}%'){sub}
                 UNION ALL
                 SELECT DISTINCT ip FROM ndr.passive_dns
-                WHERE domain ILIKE '%{}%'
-            ) LIMIT 50", db_name, safe_q, safe_q, safe_q, safe_q, safe_q);
+                WHERE domain ILIKE '%{q}%'{sub}
+            ) LIMIT 50",
+            db = db_name, q = safe_q, sub = sensor_subquery);
 
         let rows = self.client.query(&query).fetch_all::<SearchRow>().await.unwrap_or_default();
         Ok(rows.into_iter().map(|r| r.ip).collect())
@@ -3036,6 +3176,7 @@ pub async fn get_pcap_sessions(
     community_id: Option<&str>,
     src_ip: Option<&str>,
     limit: u32,
+    sensor_ids: &[String],
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let db = tenant_db(tenant_id);
     let tenant_id_esc = sql_escape(tenant_id);
@@ -3046,6 +3187,10 @@ pub async fn get_pcap_sessions(
     if let Some(ip) = src_ip {
         let ip = sql_escape(ip);
         conditions.push_str(&format!(" AND (src_ip = '{}' OR dst_ip = '{}')", ip, ip));
+    }
+    if !sensor_ids.is_empty() {
+        let list = sensor_ids.iter().map(|s| format!("'{}'", sql_escape(s))).collect::<Vec<_>>().join(",");
+        conditions.push_str(&format!(" AND sensor_host IN ({})", list));
     }
     let query = format!(
         "SELECT session_id, any(community_id), any(src_ip), any(dst_ip), \
@@ -3771,8 +3916,14 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
-    pub async fn get_soar_cases(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    pub async fn get_soar_cases(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
+        let sensor_where = if sensor_ids.is_empty() {
+            String::new()
+        } else {
+            let sf = Self::sensor_filter(sensor_ids);
+            format!(" WHERE community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
+        };
         #[derive(clickhouse::Row, serde::Deserialize)]
         struct CaseRow {
             id: String,
@@ -3790,7 +3941,7 @@ pub async fn clear_sensor_command(
             closed_at_ts: Option<u32>,
         }
         let result = self.client
-            .query(&format!("SELECT id, title, description, severity, status, assigned_to, src_ip, dst_ip, community_id, tags, toUnixTimestamp(created_at) as created_at_ts, toUnixTimestamp(updated_at) as updated_at_ts, toUnixTimestamp(closed_at) as closed_at_ts FROM {}.soar_cases FINAL ORDER BY created_at DESC", db))
+            .query(&format!("SELECT id, title, description, severity, status, assigned_to, src_ip, dst_ip, community_id, tags, toUnixTimestamp(created_at) as created_at_ts, toUnixTimestamp(updated_at) as updated_at_ts, toUnixTimestamp(closed_at) as closed_at_ts FROM {db}.soar_cases FINAL{sensor_where} ORDER BY created_at DESC", db = db, sensor_where = sensor_where))
             .fetch_all::<CaseRow>()
             .await?;
         Ok(result.into_iter().map(|r| json!({
@@ -3887,10 +4038,16 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
-    pub async fn get_soar_playbook_runs(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    pub async fn get_soar_playbook_runs(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
+        let hit_filter = if sensor_ids.is_empty() {
+            String::new()
+        } else {
+            let sf = Self::sensor_filter(sensor_ids);
+            format!(" WHERE hit_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
+        };
         let result = self.client
-            .query(&format!("SELECT id, playbook_id, playbook_name, hit_id, status, detail, toUnixTimestamp(created_at) FROM {}.soar_playbook_runs ORDER BY created_at DESC LIMIT 100", db))
+            .query(&format!("SELECT id, playbook_id, playbook_name, hit_id, status, detail, toUnixTimestamp(created_at) FROM {db}.soar_playbook_runs{hit_filter} ORDER BY created_at DESC LIMIT 100", db = db, hit_filter = hit_filter))
             .fetch_all::<(String, String, String, String, String, String, u32)>()
             .await?;
         Ok(result.into_iter().map(|r| json!({
@@ -4068,6 +4225,7 @@ pub async fn list_evidence_bundles(
     &self,
     tenant_id: &str,
     limit: u32,
+    sensor_ids: &[String],
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct EvidenceBundleListRow {
@@ -4085,15 +4243,21 @@ pub async fn list_evidence_bundles(
         severity:      String,
     }
     let db = tenant_db(tenant_id);
+    let sensor_where = if sensor_ids.is_empty() {
+        String::new()
+    } else {
+        let sf = Self::sensor_filter(sensor_ids);
+        format!(" WHERE community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
+    };
     let rows = self.client.query(&format!(
         "SELECT id, community_id, sha256, size_bytes,
          auto_captured,
          formatDateTime(captured_at, '%Y-%m-%dT%H:%i:%SZ') as captured_at,
          formatDateTime(expires_at, '%Y-%m-%dT%H:%i:%SZ') as expires_at,
          status, legal_hold, src_ip, dst_ip, severity
-         FROM {}.evidence_bundles FINAL
-         ORDER BY captured_at DESC LIMIT {}",
-        db, limit
+         FROM {db}.evidence_bundles FINAL{sensor_where}
+         ORDER BY captured_at DESC LIMIT {limit}",
+        db = db, sensor_where = sensor_where, limit = limit
     )).fetch_all::<EvidenceBundleListRow>().await?;
     Ok(rows.iter().map(|r| serde_json::json!({
         "id": r.id, "community_id": r.community_id, "sha256": r.sha256,
@@ -4218,8 +4382,15 @@ pub async fn get_aria_verdict(
 pub async fn get_all_ai_annotations(
     &self,
     tenant_id: &str,
+    sensor_ids: &[String],
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let db = tenant_db(tenant_id);
+    let sensor_cid_filter = if sensor_ids.is_empty() {
+        String::new()
+    } else {
+        let sf = Self::sensor_filter(sensor_ids);
+        format!(" AND ea.community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
+    };
     // One row per community_id — most recent comprehensive analysis
     let rows = self.client.query(&format!(
         "SELECT
@@ -4236,11 +4407,11 @@ pub async fn get_all_ai_annotations(
                     ea.created_at)                 as dst_ip
          FROM {db}.evidence_annotations ea
          LEFT JOIN {db}.evidence_bundles eb ON ea.bundle_id = eb.id
-         WHERE ea.tag = 'ai_analysis'
+         WHERE ea.tag = 'ai_analysis'{scf}
          GROUP BY ea.community_id
          ORDER BY max(ea.created_at) DESC
          LIMIT 50",
-        db = db
+        db = db, scf = sensor_cid_filter
     )).fetch_all::<(String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
 
     // Bulk asset lookup for all unique IPs that appear in these analyses
@@ -4536,8 +4707,10 @@ pub async fn get_recent_hits_for_aria(
 pub async fn get_latest_critical_hit_for_aria(
     &self,
     tenant_id: &str,
+    sensor_ids: &[String],
 ) -> anyhow::Result<Option<serde_json::Value>> {
     let db = tenant_db(tenant_id);
+    let sf = Self::sensor_filter(sensor_ids);
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct HitRow {
         community_id: String,
@@ -4551,9 +4724,9 @@ pub async fn get_latest_critical_hit_for_aria(
         "SELECT community_id, src_ip, dst_ip, rule_name, score,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
          FROM {db}.ndr_hits
-         WHERE severity = 'CRITICAL'
+         WHERE severity = 'CRITICAL'{sf}
          ORDER BY timestamp DESC LIMIT 1",
-        db = db
+        db = db, sf = sf
     )).fetch_all::<HitRow>().await?;
 
     Ok(rows.first().map(|r| serde_json::json!({
@@ -4611,16 +4784,18 @@ pub async fn count_hits_by_severity_aria(
     &self,
     tenant_id: &str,
     severity: &str,
+    sensor_ids: &[String],
 ) -> anyhow::Result<u64> {
     let db = tenant_db(tenant_id);
+    let sf = Self::sensor_filter(sensor_ids);
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct CountRow { cnt: u64 }
     let rows = self.client.query(&format!(
         "SELECT count() as cnt
-         FROM {}.ndr_hits
-         WHERE severity = '{}'
-         AND timestamp >= now() - INTERVAL 24 HOUR",
-        db, severity
+         FROM {db}.ndr_hits
+         WHERE severity = '{sev}'
+         AND timestamp >= now() - INTERVAL 24 HOUR{sf}",
+        db = db, sev = severity, sf = sf
     )).fetch_all::<CountRow>().await?;
     Ok(rows.first().map(|r| r.cnt).unwrap_or(0))
 }
@@ -4629,14 +4804,20 @@ pub async fn count_hits_by_severity_aria(
 pub async fn count_evidence_bundles_aria(
     &self,
     tenant_id: &str,
+    sensor_ids: &[String],
 ) -> anyhow::Result<u64> {
     let db = tenant_db(tenant_id);
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct CountRow { cnt: u64 }
+    let where_clause = if sensor_ids.is_empty() {
+        String::new()
+    } else {
+        let sf = Self::sensor_filter(sensor_ids);
+        format!(" WHERE community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
+    };
     let rows = self.client.query(&format!(
-        "SELECT count() as cnt
-         FROM {}.evidence_bundles",
-        db
+        "SELECT count() as cnt FROM {db}.evidence_bundles FINAL{wc}",
+        db = db, wc = where_clause
     )).fetch_all::<CountRow>().await?;
     Ok(rows.first().map(|r| r.cnt).unwrap_or(0))
 }
@@ -4648,8 +4829,15 @@ pub async fn fetch_aria_context(
     &self,
     tenant_id: &str,
     user_message: &str,
+    sensor_ids: &[String],
 ) -> String {
     let db = tenant_db(tenant_id);
+    let sf = Self::sensor_filter(sensor_ids);
+    let bundle_where = if sensor_ids.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
+    };
     let msg = user_message.to_lowercase();
     let mut ctx = String::new();
 
@@ -4669,8 +4857,9 @@ pub async fn fetch_aria_context(
         "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
          FROM {db}.ndr_hits
+         WHERE 1=1{sf}
          ORDER BY timestamp DESC LIMIT 15",
-        db = db
+        db = db, sf = sf
     )).fetch_all::<HitRow>().await {
         ctx.push_str("=== RECENT ALERTS (last 15, newest first) ===\n");
         if hits.is_empty() {
@@ -4694,9 +4883,9 @@ pub async fn fetch_aria_context(
             "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
              FROM {db}.ndr_hits
-             WHERE src_ip='{ip}' OR dst_ip='{ip}'
+             WHERE (src_ip='{ip}' OR dst_ip='{ip}'){sf}
              ORDER BY timestamp DESC LIMIT 20",
-            db = db, ip = ip
+            db = db, ip = ip, sf = sf
         )).fetch_all::<HitRow>().await {
             ctx.push_str(&format!("=== ALERTS INVOLVING IP {} ===\n", ip));
             if ip_hits.is_empty() {
@@ -4719,9 +4908,9 @@ pub async fn fetch_aria_context(
             "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
              FROM {db}.ndr_hits
-             WHERE lower(tags) LIKE '%lateral%' OR lower(rule_name) LIKE '%lateral%'
+             WHERE (lower(tags) LIKE '%lateral%' OR lower(rule_name) LIKE '%lateral%'){sf}
              ORDER BY timestamp DESC LIMIT 10",
-            db = db
+            db = db, sf = sf
         )).fetch_all::<HitRow>().await {
             ctx.push_str("=== LATERAL MOVEMENT ALERTS ===\n");
             if lat.is_empty() {
@@ -4742,9 +4931,9 @@ pub async fn fetch_aria_context(
         if let Ok(bundles) = self.client.query(&format!(
             "SELECT id, community_id, src_ip, dst_ip, severity,
              formatDateTime(captured_at, '%Y-%m-%dT%H:%i:%SZ') as captured_at
-             FROM {db}.evidence_bundles FINAL
+             FROM {db}.evidence_bundles FINAL{bw}
              ORDER BY captured_at DESC LIMIT 10",
-            db = db
+            db = db, bw = bundle_where
         )).fetch_all::<(String,String,String,String,String,String)>().await {
             ctx.push_str("=== EVIDENCE BUNDLES ===\n");
             if bundles.is_empty() {
@@ -4790,9 +4979,9 @@ pub async fn fetch_aria_context(
             "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
              FROM {db}.ndr_hits
-             WHERE severity='{sev}' AND timestamp >= now() - INTERVAL 24 HOUR
+             WHERE severity='{sev}' AND timestamp >= now() - INTERVAL 24 HOUR{sf}
              ORDER BY timestamp DESC LIMIT 10",
-            db = db, sev = sev
+            db = db, sev = sev, sf = sf
         )).fetch_all::<HitRow>().await {
             ctx.push_str(&format!("=== {} ALERTS (last 24h) ===\n", sev));
             if sev_hits.is_empty() {
@@ -4944,14 +5133,33 @@ pub async fn get_ioc_hits(
         Ok(result)
     }
 
-    pub async fn get_assets_with_counts_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    pub async fn get_assets_with_counts_by_tenant(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
+
         let assets = self.get_assets_by_tenant(tenant_id).await?;
+
+        // When restricted to specific sensors, only show assets that those sensors have seen
+        let filtered_assets: Vec<_> = if !sensor_ids.is_empty() {
+            #[derive(clickhouse::Row, serde::Deserialize)]
+            struct IpRow { ip: String }
+            let visible_q = format!(
+                "SELECT DISTINCT arrayJoin([src_ip, dst_ip]) as ip \
+                 FROM {db}.ndr_events WHERE tenant_id = '{tenant}'{sf}",
+                db = db, tenant = sql_escape(tenant_id), sf = sf
+            );
+            let visible: std::collections::HashSet<String> = self.client
+                .query(&visible_q).fetch_all::<IpRow>().await.unwrap_or_default()
+                .into_iter().map(|r| r.ip).collect();
+            assets.into_iter().filter(|a| visible.contains(&a.ip)).collect()
+        } else {
+            assets
+        };
 
         let q_conns = format!(
             "SELECT arrayJoin([src_ip, dst_ip]) as ip, count() as c \
-             FROM {}.ndr_events WHERE tenant_id = '{}' AND timestamp > now() - INTERVAL 1 DAY GROUP BY ip",
-            db, sql_escape(tenant_id)
+             FROM {db}.ndr_events WHERE tenant_id = '{tenant}' AND timestamp > now() - INTERVAL 1 DAY{sf} GROUP BY ip",
+            db = db, tenant = sql_escape(tenant_id), sf = sf
         );
         let conns: Vec<(String, u64)> = self.client.query(&q_conns).fetch_all().await.unwrap_or_default();
         let mut conn_map = std::collections::HashMap::new();
@@ -4959,15 +5167,15 @@ pub async fn get_ioc_hits(
 
         let q_hits = format!(
             "SELECT arrayJoin([src_ip, dst_ip]) as ip, count() as c \
-             FROM {}.ndr_hits WHERE tenant_id = '{}' AND timestamp > now() - INTERVAL 1 DAY GROUP BY ip",
-            db, sql_escape(tenant_id)
+             FROM {db}.ndr_hits WHERE tenant_id = '{tenant}' AND timestamp > now() - INTERVAL 1 DAY{sf} GROUP BY ip",
+            db = db, tenant = sql_escape(tenant_id), sf = sf
         );
         let hits: Vec<(String, u64)> = self.client.query(&q_hits).fetch_all().await.unwrap_or_default();
         let mut hit_map = std::collections::HashMap::new();
         for (ip, c) in hits { hit_map.insert(ip, c); }
 
         let mut result = Vec::new();
-        for a in assets {
+        for a in filtered_assets {
             let mut val = serde_json::to_value(&a).unwrap();
             if let Some(obj) = val.as_object_mut() {
                 obj.insert("connections_24h".into(), serde_json::json!(conn_map.get(&a.ip).unwrap_or(&0)));
@@ -5192,16 +5400,17 @@ pub async fn get_ioc_hits(
         Ok(())
     }
 
-    pub async fn get_ipam_subnets(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    pub async fn get_ipam_subnets(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
         let assets = self.get_assets_by_tenant(tenant_id).await.unwrap_or_default();
+        let sf = Self::sensor_filter(sensor_ids);
 
         let query = format!(
             "SELECT interface, cidr, local_ip, gateway, sensor_id, \
              toUnixTimestamp(min(first_seen)) as first_seen, toUnixTimestamp(max(last_seen)) as last_seen \
-             FROM {}.ipam_subnets WHERE tenant_id = '{}' \
+             FROM {db}.ipam_subnets WHERE tenant_id = '{tenant}'{sf} \
              GROUP BY interface, cidr, local_ip, gateway, sensor_id ORDER BY cidr",
-            db, sql_escape(tenant_id)
+            db = db, tenant = sql_escape(tenant_id), sf = sf
         );
 
         #[derive(clickhouse::Row, serde::Deserialize)]

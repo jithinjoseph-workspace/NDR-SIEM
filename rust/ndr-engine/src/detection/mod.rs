@@ -7,15 +7,20 @@ pub use sigma::{SigmaRule, DetectionMatch, load_rules_from_dir, parse_rule_conte
 pub use updater::{spawn_sigma_updater, sync_now};
 
 use crate::normalizer::NormalizedEvent;
+use std::collections::{HashMap, HashSet};
 
 pub struct DetectionEngine {
     rules: Vec<SigmaRule>,
+    // Per-tenant disabled overrides for community rules.
+    // Key = tenant_id, Value = set of rule IDs disabled by that tenant.
+    // Empty set = no overrides (tenant sees all community rules).
+    disabled_overrides: HashMap<String, HashSet<String>>,
 }
 
 impl DetectionEngine {
     pub fn new(_rules_dir: &str) -> Self {
         tracing::info!("Detection engine: starting empty, rules load from ClickHouse");
-        Self { rules: Vec::new() }
+        Self { rules: Vec::new(), disabled_overrides: HashMap::new() }
     }
 
     /// Check an event against all loaded rules. Returns all matches.
@@ -26,11 +31,13 @@ impl DetectionEngine {
     }
 
     /// Check rules for a specific tenant.
-    /// Includes rules with tenant_id == "*" (global community rules) plus
-    /// tenant-specific custom rules stored in ClickHouse.
+    /// Community rules (tenant_id="*") are included unless the tenant has
+    /// overridden that rule to disabled in their rules_state.
     pub fn check_for_tenant(&self, event: &NormalizedEvent, tenant_id: &str) -> Vec<DetectionMatch> {
+        let disabled = self.disabled_overrides.get(tenant_id);
         self.rules.iter()
             .filter(|rule| rule.tenant_id == "*" || rule.tenant_id == tenant_id)
+            .filter(|rule| disabled.map_or(true, |d| !d.contains(&rule.id)))
             .filter_map(|rule| self.eval(rule, event))
             .collect()
     }
@@ -62,8 +69,9 @@ impl DetectionEngine {
         })).collect()
     }
 
-pub fn set_rules(&mut self, rules: Vec<SigmaRule>) {
-    tracing::info!("Rules updated: {} loaded", rules.len());
+pub fn set_rules(&mut self, rules: Vec<SigmaRule>, disabled: HashMap<String, HashSet<String>>) {
+    tracing::info!("Rules updated: {} loaded, {} tenants with overrides", rules.len(), disabled.len());
     self.rules = rules;
+    self.disabled_overrides = disabled;
 }
 }

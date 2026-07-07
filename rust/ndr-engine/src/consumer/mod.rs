@@ -207,6 +207,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     community_id: event.community_id.clone().unwrap_or_default(),
                     raw: raw.to_string(),
                     tenant_id: tenant_id.clone(),
+                    sensor_id: raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 };
 
                 // ARP events are only used for asset discovery — never store as ndr_events
@@ -450,6 +451,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     agent_s_rule_id:    "".to_string(),
                                     agent_s_category:   "".to_string(),
                                     updated_at:         now,
+                                    sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                                 };
                                 let _ = conflict_ch.insert_hit_for_tenant(hit, &tid).await;
                             }
@@ -677,6 +679,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             agent_s_rule_id:    String::new(),
                             agent_s_category:   String::new(),
                             updated_at:         now_ts,
+                            sensor_id:          event.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                         };
                         let ch_clone        = state.ch_storage.clone();
                         let tid_clone       = tenant_id.clone();

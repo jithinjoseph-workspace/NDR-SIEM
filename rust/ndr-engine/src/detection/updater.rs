@@ -92,6 +92,9 @@ async fn fetch_all_rules(
         ));
     }
 
+    // Fetch existing community rule IDs so we never overwrite a manually disabled rule
+    let existing_ids = ch.get_community_rule_ids().await.unwrap_or_default();
+
     let mut saved = 0usize;
     for (filename, url) in &all_urls {
         let content = match client.get(url).send().await {
@@ -103,6 +106,11 @@ async fn fetch_all_rules(
             Ok(r)  => r,
             Err(e) => { warn!("SIGMA updater: skipping {} — {}", filename, e); continue; }
         };
+
+        // Skip rules already in DB — preserves enabled/disabled state set by admin
+        if existing_ids.contains(&rule.id) {
+            continue;
+        }
 
         // Save YAML to disk (cache/backup)
         let dest = format!("{}/community_{}", rules_dir, filename);
@@ -180,9 +188,9 @@ async fn reload_engine(
     engine: &Arc<RwLock<DetectionEngine>>,
     ch:     &Arc<crate::storage::ClickhouseStorage>,
 ) {
-    let new_rules = crate::api::load_rules_from_clickhouse(ch, rules_dir).await;
-    let count     = new_rules.len();
-    engine.write().await.set_rules(new_rules);
+    let (new_rules, overrides) = crate::api::load_rules_from_clickhouse(ch, rules_dir).await;
+    let count                  = new_rules.len();
+    engine.write().await.set_rules(new_rules, overrides);
     info!("SIGMA updater: engine reloaded with {} rules", count);
 
     // Notify other engine instances via Redis pub/sub

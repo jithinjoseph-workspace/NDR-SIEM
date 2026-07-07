@@ -232,7 +232,7 @@ pub async fn execute_action(
             } else {
                 // Cloud: PCAP sessions are synced from remote sensor into ClickHouse
                 let sessions = state.ch_storage
-                    .get_pcap_sessions(&pb.tenant_id, Some(cid), None, 5)
+                    .get_pcap_sessions(&pb.tenant_id, Some(cid), None, 5, &[])
                     .await
                     .unwrap_or_default();
                 let count = sessions.len() as u64;
@@ -241,9 +241,9 @@ pub async fn execute_action(
 
             let pcap_evidence = pcap_sessions_json;
 
-            // 2. Pull all ClickHouse events for this community_id
+            // 2. Pull all ClickHouse events for this community_id (internal — unrestricted)
             let ch_events = state.ch_storage
-                .get_events_by_community_id(cid, &pb.tenant_id)
+                .get_events_by_community_id(cid, &pb.tenant_id, &[])
                 .await
                 .unwrap_or_default();
 

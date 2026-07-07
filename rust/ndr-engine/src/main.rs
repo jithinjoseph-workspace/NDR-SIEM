@@ -355,8 +355,8 @@ async fn main() {
         tokio::spawn(async move {
             // Wait briefly for migration to complete
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let rules = api::load_rules_from_clickhouse(&ch, &rules_dir).await;
-            det.write().await.set_rules(rules);
+            let (rules, overrides) = api::load_rules_from_clickhouse(&ch, &rules_dir).await;
+            det.write().await.set_rules(rules, overrides);
         });
     }
 
@@ -374,9 +374,9 @@ async fn main() {
                     let mut stream = pubsub.on_message();
                     while let Some(_) = stream.next().await {
                         tracing::info!("Reloading rules via Redis signal...");
-                        let rules = api::load_rules_from_clickhouse(&ch, &rules_dir).await;
+                        let (rules, overrides) = api::load_rules_from_clickhouse(&ch, &rules_dir).await;
                         let count = rules.len();
-                        det.write().await.set_rules(rules);
+                        det.write().await.set_rules(rules, overrides);
                         tracing::info!("Hot-reloaded {} SIGMA rules from Redis signal", count);
                     }
                 }
@@ -501,6 +501,8 @@ async fn main() {
         .route("/api/sensor/register",  post(api::sensor_register))
         .route("/api/sensor/heartbeat", post(api::sensor_heartbeat))
         .route("/api/sensor/checkin",   post(api::sensor_checkin))
+        .route("/api/sensors/assign",   post(api::assign_sensor_to_user).delete(api::remove_sensor_from_user))
+        .route("/api/sensors/assignments", get(api::list_sensor_assignments))
         .route("/api/ingest",           post(api::ingest_events))
         .route("/api/sensor/command",   get(api::get_sensor_command_api))
         .route("/api/sensor/control",   post(api::sensor_control_api))

@@ -59,12 +59,13 @@ struct Claims {
     tenant_id: String,
     permissions: Vec<String>,
     exp: usize,
+    sensor_ids: Vec<String>,
 }
 
-fn generate_jwt(username: &str, role: &str, 
-    tenant_id: &str, permissions: Vec<String>) -> String {
+fn generate_jwt(username: &str, role: &str,
+    tenant_id: &str, permissions: Vec<String>, sensor_ids: Vec<String>) -> String {
     let secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| 
+        .unwrap_or_else(|_|
             "ndr-secret-key-2026".to_string());
     let expiry = chrono::Utc::now()
         .timestamp() as usize + 86400; // 24 hours
@@ -74,6 +75,7 @@ fn generate_jwt(username: &str, role: &str,
         tenant_id: tenant_id.to_string(),
         permissions,
         exp: expiry,
+        sensor_ids,
     };
     encode(
         &Header::default(),
@@ -197,6 +199,8 @@ pub struct AuthClaims {
     pub tenant_id: String,
     pub permissions: Vec<String>,
     pub exp: usize,
+    #[serde(default)]
+    pub sensor_ids: Vec<String>,
 }
 
 // Accepts token from Authorization header OR ?token= query param (needed for window.open downloads)
@@ -486,8 +490,10 @@ pub async fn get_network_map(
     headers: axum::http::HeaderMap,
     axum::extract::Query(query): axum::extract::Query<NetworkMapQuery>
 ) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_network_map_by_tenant(&tenant_id, query.mode.as_deref(), query.limit).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_network_map_by_tenant(&tenant_id, query.mode.as_deref(), query.limit, &sensor_ids).await {
         Ok(data) => Json(data),
         Err(_) => Json(json!({"nodes": [], "edges": []}))
     }
@@ -498,8 +504,10 @@ pub async fn get_network_map_node(
     headers: axum::http::HeaderMap,
     axum::extract::Path(ip): axum::extract::Path<String>
 ) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_network_map_node(&tenant_id, &ip).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_network_map_node(&tenant_id, &ip, &sensor_ids).await {
         Ok(data) => Json(data),
         Err(_) => Json(json!({"nodes": [], "edges": []}))
     }
@@ -510,8 +518,10 @@ pub async fn search_network_map(
     headers: axum::http::HeaderMap,
     axum::extract::Query(query): axum::extract::Query<SearchQuery>
 ) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.search_network_map(&tenant_id, &query.q).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.search_network_map(&tenant_id, &query.q, &sensor_ids).await {
         Ok(data) => Json(json!(data)),
         Err(_) => Json(json!([]))
     }
@@ -985,6 +995,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         agent_s_rule_id:    agent_s_rule_id,
         agent_s_category:   agent_s_category,
         updated_at:         now_ts,
+        sensor_id:          hit.agent_z.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
     };
     tokio::spawn(async move {
         if let Err(e) = ch.insert_hit_for_tenant(ch_hit, &tenant_id_clone).await {
@@ -1626,8 +1637,10 @@ for integration in &integrations {
 // ── GET /health ───────────────────────────────────────────────────────────
 
 pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    let ch_stats = state.ch_storage.get_stats_by_tenant(&tenant_id).await.unwrap_or(json!({}));
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    let ch_stats = state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await.unwrap_or(json!({}));
     let clickhouse_status = if state.ch_storage.health_check().await {
         "running"
     } else {
@@ -1746,10 +1759,10 @@ pub async fn get_agent_status() -> Json<Value> {
 // ── ClickHouse API endpoints ──────────────────────────────────────────────
 
 pub async fn get_stats(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_stats_by_tenant(&tenant_id).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await {
         Ok(stats) => Json(stats),
         Err(e) => {
             tracing::warn!("Stats query error: {}", e);
@@ -1766,10 +1779,10 @@ pub async fn get_stats(State(state): State<AppState>, headers: axum::http::Heade
 }
 
 pub async fn get_recent_events(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_recent_events_by_tenant(50, &tenant_id).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_recent_events_by_tenant(50, &tenant_id, &sensor_ids).await {
         Ok(events) => Json(json!(events)),
         Err(e) => {
             tracing::warn!("Recent events query error: {}", e);
@@ -1802,7 +1815,7 @@ pub async fn get_events_by_cid(
     if cid.is_empty() {
         return Json(json!({"status":"error","message":"cid required"}));
     }
-    match state.ch_storage.get_events_by_community_id(&cid, &claims.tenant_id).await {
+    match state.ch_storage.get_events_by_community_id(&cid, &claims.tenant_id, &claims.sensor_ids).await {
         Ok(events) => Json(json!({"status":"ok","events":events})),
         Err(_)     => Json(json!({"status":"ok","events":[]})),
     }
@@ -1812,8 +1825,9 @@ pub async fn get_top_ips(State(state): State<AppState>, headers: axum::http::Hea
     let tenant_id = extract_claims(&headers)
         .map(|c| c.tenant_id)
         .unwrap_or_else(|| "default".to_string());
-    let src = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id).await.unwrap_or_default();
-    let dst = state.ch_storage.get_top_dst_ips_by_tenant(10, &tenant_id).await.unwrap_or_default();
+    let sensor_ids = extract_claims(&headers).map(|c| c.sensor_ids).unwrap_or_default();
+    let src = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id, &sensor_ids).await.unwrap_or_default();
+    let dst = state.ch_storage.get_top_dst_ips_by_tenant(10, &tenant_id, &sensor_ids).await.unwrap_or_default();
     Json(json!({
         "top_src_ips": src,
         "top_dst_ips": dst,
@@ -1825,15 +1839,16 @@ pub async fn get_protocols(State(state): State<AppState>, headers: axum::http::H
     let tenant_id = extract_claims(&headers)
         .map(|c| c.tenant_id)
         .unwrap_or_else(|| "default".to_string());
-    let protos = state.ch_storage.get_top_protocols_by_tenant(5, &tenant_id).await.unwrap_or_default();
+    let sensor_ids = extract_claims(&headers).map(|c| c.sensor_ids).unwrap_or_default();
+    let protos = state.ch_storage.get_top_protocols_by_tenant(5, &tenant_id, &sensor_ids).await.unwrap_or_default();
     Json(json!({ "protocols": protos }))
 }
 
 pub async fn get_hits(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_recent_hits_by_tenant(200, &tenant_id).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_recent_hits_by_tenant(200, &tenant_id, &sensor_ids).await {
         Ok(hits) => Json(json!(hits)),
         Err(e) => {
             tracing::warn!("Hits query error: {}", e);
@@ -1844,12 +1859,11 @@ pub async fn get_hits(State(state): State<AppState>, headers: axum::http::Header
 
 pub async fn load_rules_from_clickhouse(
     ch: &crate::storage::ClickhouseStorage,
-    rules_dir: &str,
-) -> Vec<crate::detection::SigmaRule> {
+    _rules_dir: &str,
+) -> (Vec<crate::detection::SigmaRule>, std::collections::HashMap<String, std::collections::HashSet<String>>) {
     // Rules are loaded exclusively from ClickHouse (disk files are download cache only)
     let mut rules: Vec<crate::detection::SigmaRule> = Vec::new();
 
-    // Per-tenant custom rules from ClickHouse (tenant_id set to the owning tenant)
     if let Ok(ch_rules) = ch.get_all_enabled_sigma_rules().await {
         for (id, content, tenant_id) in ch_rules {
             match crate::detection::parse_rule_content(&content) {
@@ -1862,7 +1876,8 @@ pub async fn load_rules_from_clickhouse(
         }
     }
 
-    rules
+    let overrides = ch.get_all_disabled_overrides().await.unwrap_or_default();
+    (rules, overrides)
 }
 
 pub async fn get_rule_by_id(
@@ -2032,16 +2047,20 @@ pub async fn get_rule_hit_counts(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    let counts = state.ch_storage.get_rule_hit_counts(&tenant_id).await.unwrap_or_default();
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    let counts = state.ch_storage.get_rule_hit_counts(&tenant_id, &sensor_ids).await.unwrap_or_default();
     Json(serde_json::to_value(counts).unwrap_or(json!({})))
 }
 
 //threat intelegence endpoint
 pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
-    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
     let ti = &state.enrichment.threat_intel;
-    let detected = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id).await
+    let detected = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or_default();
 
     Json(json!({
@@ -2146,10 +2165,10 @@ pub async fn reload_rules_api(
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
 
-    let active = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
+    let (active, overrides) = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
     let count = active.len();
 
-    state.detection.write().await.set_rules(active);
+    state.detection.write().await.set_rules(active, overrides);
     tracing::info!("Hot-reloaded {} SIGMA rules", count);
 
     // Publish reload rules to Redis channel
@@ -2412,9 +2431,9 @@ pub async fn delete_rule(
 
     if ch_deleted || disk_deleted {
         // Reload rules
-        let active = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
+        let (active, overrides) = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
         let count = active.len();
-        state.detection.write().await.set_rules(active);
+        state.detection.write().await.set_rules(active, overrides);
 
         // Notify all other engine instances to reload
         let redis = state.redis.clone();
@@ -2505,9 +2524,9 @@ pub async fn toggle_rule(
     // Reload rules respecting disabled state
     let rules_dir = std::env::var("RULES_DIR")
         .unwrap_or_else(|_| "rules".to_string());
-    let active = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
+    let (active, overrides) = load_rules_from_clickhouse(&state.ch_storage, &rules_dir).await;
     let count = active.len();
-    state.detection.write().await.set_rules(active);
+    state.detection.write().await.set_rules(active, overrides);
 
     // Notify all other engine instances to reload
     let redis = state.redis.clone();
@@ -2529,6 +2548,79 @@ pub async fn toggle_rule(
     }))
 }
 
+// ── Sensor assignment handlers ────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct SensorAssignPayload {
+    pub user_id:   String,
+    pub sensor_id: String,
+}
+
+/// POST /api/sensors/assign  — tenant_admin assigns a sensor to an analyst
+pub async fn assign_sensor_to_user(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<SensorAssignPayload>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({ "status": "error", "message": "Unauthorized" })),
+    };
+    if claims.role != "tenant_admin" && claims.role != "super_admin" {
+        return Json(json!({ "status": "error", "message": "Forbidden: admin required" }));
+    }
+    match state.ch_storage
+        .assign_sensor_to_user(&payload.user_id, &payload.sensor_id, &claims.tenant_id).await
+    {
+        Ok(_) => Json(json!({ "status": "ok", "user_id": payload.user_id, "sensor_id": payload.sensor_id })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+    }
+}
+
+/// DELETE /api/sensors/assign  — remove a sensor assignment
+pub async fn remove_sensor_from_user(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<SensorAssignPayload>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({ "status": "error", "message": "Unauthorized" })),
+    };
+    if claims.role != "tenant_admin" && claims.role != "super_admin" {
+        return Json(json!({ "status": "error", "message": "Forbidden: admin required" }));
+    }
+    match state.ch_storage
+        .remove_sensor_assignment(&payload.user_id, &payload.sensor_id, &claims.tenant_id).await
+    {
+        Ok(_) => Json(json!({ "status": "ok", "removed": true })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+    }
+}
+
+/// GET /api/sensors/assignments  — list all user→sensor assignments for this tenant
+pub async fn list_sensor_assignments(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({ "status": "error", "message": "Unauthorized" })),
+    };
+    if claims.role != "tenant_admin" && claims.role != "super_admin" {
+        return Json(json!({ "status": "error", "message": "Forbidden: admin required" }));
+    }
+    match state.ch_storage.get_sensor_assignments(&claims.tenant_id).await {
+        Ok(rows) => {
+            let list: Vec<Value> = rows.iter().map(|(uid, sid)| json!({
+                "user_id":   uid,
+                "sensor_id": sid,
+            })).collect();
+            Json(json!({ "status": "ok", "assignments": list }))
+        }
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+    }
+}
 
 //get the executions from the workflow
 // Get settings
@@ -2764,21 +2856,21 @@ pub async fn export_report(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,) -> axum::response::Response {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
     let format = params.get("format").map(|s: &String| s.as_str()).unwrap_or("json");
     let hours: u32 = params.get("hours").and_then(|h: &String| h.parse().ok()).unwrap_or(24);
 
-    let stats    = state.ch_storage.get_stats_by_tenant(&tenant_id).await
+    let stats    = state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or(json!({}));
-    let hits     = state.ch_storage.get_recent_hits_by_tenant(100, &tenant_id).await
+    let hits     = state.ch_storage.get_recent_hits_by_tenant(100, &tenant_id, &sensor_ids).await
         .unwrap_or_default();
-    let top_ips  = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id).await
+    let top_ips  = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id, &sensor_ids).await
         .unwrap_or_default();
-    let severity = state.ch_storage.get_severity_by_tenant(&tenant_id).await
+    let severity = state.ch_storage.get_severity_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or(json!({}));
-    let threat   = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id).await
+    let threat   = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or_default();
 let rules = state.detection.read().await.get_rules();
 
@@ -2998,15 +3090,15 @@ pub async fn export_logs(
     headers: axum::http::HeaderMap,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
-    
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+
     let format = params.get("format").map(|s: &String| s.as_str()).unwrap_or("csv");
     let hours: u32 = params.get("hours").and_then(|h: &String| h.parse().ok()).unwrap_or(24);
     let limit: u64 = 10000; // Hard limit to prevent crashing
-    
-    let events = state.ch_storage.export_events_by_tenant(&tenant_id, hours, limit).await.unwrap_or_default();
+
+    let events = state.ch_storage.export_events_by_tenant(&tenant_id, hours, limit, &sensor_ids).await.unwrap_or_default();
     
     match format {
         "csv" => {
@@ -3354,10 +3446,10 @@ pub async fn update_integration(
 
 //severity
 pub async fn get_severity(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_severity_by_tenant(&tenant_id).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_severity_by_tenant(&tenant_id, &sensor_ids).await {
         Ok(data) => Json(data),
         Err(e) => {
             tracing::warn!("Severity query error: {}", e);
@@ -3474,11 +3566,19 @@ pub async fn login(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+            // Admins get no sensor restriction (empty = see all sensors).
+            // Analysts get only their assigned sensors.
+            let sensor_ids = if role == "super_admin" || role == "tenant_admin" {
+                vec![]
+            } else {
+                state.ch_storage.get_user_sensor_ids(&username, tenant_id).await.unwrap_or_default()
+            };
             let token = generate_jwt(
                 &username,
                 role,
                 tenant_id,
                 permissions_vec.clone(),
+                sensor_ids.clone(),
             );
             let ai_enabled = if role == "super_admin" {
                 true
@@ -5470,6 +5570,7 @@ async fn handle_linux_endpoint_event(state: &AppState, raw: Value, tenant_id: &s
         agent_s_rule_id:    rule_id,
         agent_s_category:   "endpoint".to_string(),
         updated_at:         now,
+        sensor_id:          host.clone(),
     };
 
     if let Err(e) = state.ch_storage.insert_hit_for_tenant(hit, tenant_id).await {
@@ -5538,14 +5639,18 @@ pub async fn ingest_events(
     let mut published = 0u64;
     let mut failed = 0u64;
 
+    // The sensor key prefix identifies which sensor sent these events.
+    let key_prefix = extract_sensor_key_prefix(&headers).unwrap_or_default();
+
     for event in &events_arr {
-        // Add tenant_id to event
+        // Add tenant_id and sensor_host to event so the consumer can tag hits.
         let mut evt = event.clone();
         if let Some(obj) = evt.as_object_mut() {
-            obj.insert(
-                "tenant_id".to_string(),
-                serde_json::Value::String(tenant_id.clone())
-            );
+            obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
+            if !key_prefix.is_empty() {
+                obj.entry("sensor_host".to_string())
+                    .or_insert_with(|| serde_json::Value::String(key_prefix.clone()));
+            }
         }
 
         // Linux auditd endpoint events bypass Kafka — run SIGMA inline and store directly.
@@ -5921,6 +6026,7 @@ pub async fn arkime_sessions(
             community_id.as_deref(),
             src_ip.as_deref(),
             limit,
+            &claims.sensor_ids,
         )
         .await
         .unwrap_or_default();
@@ -6361,10 +6467,10 @@ pub async fn get_assets(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> axum::Json<serde_json::Value> {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_assets_with_counts_by_tenant(&tenant_id).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_assets_with_counts_by_tenant(&tenant_id, &sensor_ids).await {
         Ok(assets) => axum::Json(json!(assets)),
         Err(e)     => axum::Json(json!({"error": e.to_string()})),
     }
@@ -6781,7 +6887,7 @@ pub async fn get_soar_cases(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
 ) -> Json<Value> {
-    match state.ch_storage.get_soar_cases(&claims.tenant_id).await {
+    match state.ch_storage.get_soar_cases(&claims.tenant_id, &claims.sensor_ids).await {
         Ok(cases) => Json(json!({"status": "success", "data": cases})),
         Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
@@ -6906,7 +7012,7 @@ pub async fn get_soar_runs(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
 ) -> Json<Value> {
-    match state.ch_storage.get_soar_playbook_runs(&claims.tenant_id).await {
+    match state.ch_storage.get_soar_playbook_runs(&claims.tenant_id, &claims.sensor_ids).await {
         Ok(runs) => Json(json!({"status": "success", "data": runs})),
         Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
@@ -7066,7 +7172,7 @@ pub async fn list_evidence_bundles(
         .and_then(|l| l.parse::<u32>().ok())
         .unwrap_or(50);
     let bundles = state.ch_storage
-        .list_evidence_bundles(&claims.tenant_id, limit)
+        .list_evidence_bundles(&claims.tenant_id, limit, &claims.sensor_ids)
         .await.unwrap_or_default();
     Json(json!({"bundles": bundles, "count": bundles.len()}))
 }
@@ -7651,12 +7757,12 @@ pub async fn aria_chat(
 
     // Fetch live NDR context — counts + real data based on what user asked
     let (critical, high, bundles) = tokio::join!(
-        state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "CRITICAL"),
-        state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "HIGH"),
-        state.ch_storage.count_evidence_bundles_aria(&claims.tenant_id),
+        state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "CRITICAL", &claims.sensor_ids),
+        state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "HIGH", &claims.sensor_ids),
+        state.ch_storage.count_evidence_bundles_aria(&claims.tenant_id, &claims.sensor_ids),
     );
     let real_context_raw = state.ch_storage
-        .fetch_aria_context(&claims.tenant_id, &user_message)
+        .fetch_aria_context(&claims.tenant_id, &user_message, &claims.sensor_ids)
         .await;
     // Truncate context to avoid rate limits on free-tier AI providers (Groq: 6k TPM)
     let real_context: String = real_context_raw.chars().take(3000).collect();
@@ -7707,16 +7813,16 @@ pub async fn aria_status(
 
     let critical = state.ch_storage
         .count_hits_by_severity_aria(
-            &claims.tenant_id, "CRITICAL")
+            &claims.tenant_id, "CRITICAL", &claims.sensor_ids)
         .await.unwrap_or(0);
 
     let high = state.ch_storage
         .count_hits_by_severity_aria(
-            &claims.tenant_id, "HIGH")
+            &claims.tenant_id, "HIGH", &claims.sensor_ids)
         .await.unwrap_or(0);
 
     let (latest_critical, rising_prediction) = tokio::join!(
-        state.ch_storage.get_latest_critical_hit_for_aria(&claims.tenant_id),
+        state.ch_storage.get_latest_critical_hit_for_aria(&claims.tenant_id, &claims.sensor_ids),
         state.ch_storage.get_rising_critical_prediction(&claims.tenant_id),
     );
 
@@ -7862,7 +7968,7 @@ pub async fn get_ai_activity(
         .unwrap_or_default();
 
     let analyses = state.ch_storage
-        .get_all_ai_annotations(&claims.tenant_id)
+        .get_all_ai_annotations(&claims.tenant_id, &claims.sensor_ids)
         .await
         .unwrap_or_default();
 
@@ -7908,10 +8014,10 @@ pub async fn get_ipam_subnets(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Json<Value> {
-    let tenant_id = extract_claims(&headers)
-        .map(|c| c.tenant_id)
-        .unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_ipam_subnets(&tenant_id).await {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+    match state.ch_storage.get_ipam_subnets(&tenant_id, &sensor_ids).await {
         Ok(subnets) => Json(json!(subnets)),
         Err(e)      => Json(json!({"error": e.to_string()})),
     }
