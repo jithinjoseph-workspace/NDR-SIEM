@@ -35,23 +35,23 @@ interface ChatAction {
 }
 
 const SEGMENTS = {
-  idle:     { start: 0,   end: 29,  loop: true  },
-  yes:      { start: 31,  end: 104, loop: false },
-  no:       { start: 106, end: 179, loop: false },
-  alert:    { start: 181, end: 269, loop: false },
+  idle: { start: 0, end: 29, loop: true },
+  yes: { start: 31, end: 104, loop: false },
+  no: { start: 106, end: 179, loop: false },
+  alert: { start: 181, end: 269, loop: false },
   thinking: { start: 271, end: 389, loop: false },
-  jump:     { start: 391, end: 478, loop: false },
+  jump: { start: 391, end: 478, loop: false },
 };
 
 const EMOTION_MAP: Record<string, keyof typeof SEGMENTS> = {
-  idle:      'idle',
-  think:     'thinking',
-  alert:     'alert',
-  cheer:     'jump',
-  wave:      'yes',
-  sad:       'no',
+  idle: 'idle',
+  think: 'thinking',
+  alert: 'alert',
+  cheer: 'jump',
+  wave: 'yes',
+  sad: 'no',
   confirmed: 'yes',
-  denied:    'no',
+  denied: 'no',
 };
 
 @Component({
@@ -99,8 +99,8 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   // ── Alert tracking ──
   criticalCount = 0;
   highCount = 0;
-  lastSeenCid        = '';
-  lastSeenPredId     = '';
+  lastSeenCid = '';
+  lastSeenPredId = '';
 
   // ── Lottie ──
   private dotLottie: DotLottie | null = null;
@@ -124,19 +124,19 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   private proactiveIndex = 0;
 
   quickReplies = [
-    { text: 'Check alerts',          icon: 'shield-alert' },
-    { text: 'System status',         icon: 'activity' },
-    { text: 'Lateral movement?',     icon: 'network' },
-    { text: 'Any critical alerts?',  icon: 'triangle-alert' },
-    { text: 'Show latest evidence',  icon: 'file-text' },
-    { text: 'Top talkers',           icon: 'users' },
+    { text: 'Check alerts', icon: 'shield-alert' },
+    { text: 'System status', icon: 'activity' },
+    { text: 'Lateral movement?', icon: 'network' },
+    { text: 'Any critical alerts?', icon: 'triangle-alert' },
+    { text: 'Show latest evidence', icon: 'file-text' },
+    { text: 'Top talkers', icon: 'users' },
   ];
 
   constructor(
     private http: HttpClient,
     private router: Router,
     private cdr: ChangeDetectorRef,
-  ) {}
+  ) { }
 
   // ── LIFECYCLE ──
 
@@ -161,7 +161,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
       switchMap(() => this.httpGet('/api/aria/status'))
     ).subscribe({
       next: s => this.handleStatus(s),
-      error: () => {}
+      error: () => { }
     });
 
     // Proactive speech bubbles every 18s when chat is closed
@@ -273,23 +273,23 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   fetchStatus() {
     this.httpGet('/api/aria/status').subscribe({
       next: s => this.handleStatus(s),
-      error: () => {}
+      error: () => { }
     });
   }
 
   handleStatus(s: any) {
     this.criticalCount = s.critical_count || 0;
-    this.highCount     = s.high_count     || 0;
+    this.highCount = s.high_count || 0;
 
     // Real-time CRITICAL alert from live hits
     const newCid = s.latest_community_id || '';
-    const sev    = s.latest_severity     || '';
+    const sev = s.latest_severity || '';
     if (newCid && newCid !== this.lastSeenCid && sev === 'CRITICAL') {
       this.lastSeenCid = newCid;
       this.latestAlert = {
-        severity:     sev,
-        src_ip:       s.latest_src_ip || '',
-        dst_ip:       s.latest_dst_ip || '',
+        severity: sev,
+        src_ip: s.latest_src_ip || '',
+        dst_ip: s.latest_dst_ip || '',
         community_id: newCid,
       };
       this.onNewAlert(this.latestAlert);
@@ -304,15 +304,15 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
       this.unreadCount++;
       this.showAlertBanner = true;
       this.showSpeechBubble(
-        `⚠️ Rising ${(s.prediction_level || '').toUpperCase()} prediction: ${s.prediction_attack} at ${pct}% probability! Click me!`
+        `Rising ${(s.prediction_level || '').toUpperCase()} prediction: ${s.prediction_attack} at ${pct}% probability! Click me!`
       );
       this.addBotMessage(
-        `🔺 RISING THREAT DETECTED — ${s.prediction_attack} attack chain probability is at ${pct}% and increasing.\n\n${s.prediction_expl || ''}\n\nDo you want me to investigate?`,
+        `RISING THREAT DETECTED — ${s.prediction_attack} attack chain probability is at ${pct}% and increasing.\n\n${s.prediction_expl || ''}\n\nDo you want me to investigate?`,
         'alert',
         [
-          { label: '🔍 Show details',       icon: '🔍', action: 'threat_prediction', data: s },
-          { label: '📊 View pattern match', icon: '📊', action: 'pattern_match',     data: s },
-          { label: '🚨 Escalate now',       icon: '🚨', action: 'escalate',          data: s },
+          { label: 'Show details', icon: '', action: 'threat_prediction', data: s },
+          { label: 'View pattern match', icon: '', action: 'pattern_match', data: s },
+          { label: 'Escalate now', icon: '', action: 'escalate', data: s },
         ],
         undefined
       );
@@ -326,16 +326,16 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     this.unreadCount++;
     this.showAlertBanner = true;
     this.showSpeechBubble(
-      `⚠️ ${alert.severity} alert! ${alert.src_ip} is doing something suspicious! Click me!`
+      `${alert.severity} alert! ${alert.src_ip} is doing something suspicious! Click me!`
     );
     this.addBotMessage(
-      `🚨 Hey! I just detected a ${alert.severity} alert! ${alert.src_ip} → ${alert.dst_ip} in a suspicious pattern. Do you want me to help investigate?`,
+      `Hey! I just detected a ${alert.severity} alert! ${alert.src_ip} → ${alert.dst_ip} in a suspicious pattern. Do you want me to help investigate?`,
       'alert',
       [
-        { label: '✅ Yes, show me!',        icon: '🔍', action: 'investigate', data: alert },
-        { label: '📦 Get evidence bundle',  icon: '📦', action: 'evidence',    data: alert },
-        { label: '⏱ View attack timeline', icon: '⏱', action: 'timeline',    data: alert },
-        { label: '🚫 Block this IP',        icon: '🚫', action: 'block',       data: alert },
+        { label: 'Yes, show me!', icon: '', action: 'investigate', data: alert },
+        { label: 'Get evidence bundle', icon: '', action: 'evidence', data: alert },
+        { label: 'View attack timeline', icon: '', action: 'timeline', data: alert },
+        { label: 'Block this IP', icon: '', action: 'block', data: alert },
       ],
       alert
     );
@@ -359,7 +359,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     this.httpPost('/api/aria/chat', { message: msg, history: this.history }).subscribe({
       next: (data: any) => {
         this.isTyping = false;
-        const reply   = data.reply   || 'I had trouble processing that.';
+        const reply = data.reply || 'I had trouble processing that.';
         const emotion = data.emotion || 'idle';
         this.addBotMessage(reply, emotion);
         this.history.push({ role: 'assistant', content: reply });
@@ -433,8 +433,8 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
       `This is a ${alert.severity} alert! ${alert.src_ip} → ${alert.dst_ip}. Want me to take you to the details page?`,
       'alert',
       [
-        { label: '✅ Take me there', icon: '→', action: 'navigate', data: '/alerts' },
-        { label: '📦 Get evidence',  icon: '📦', action: 'evidence', data: alert },
+        { label: 'Take me there', icon: '', action: 'navigate', data: '/alerts' },
+        { label: 'Get evidence', icon: '', action: 'evidence', data: alert },
       ]
     );
   }
@@ -480,6 +480,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+
   // ── DRAGGING ──
 
   @HostListener('document:pointermove', ['$event'])
@@ -504,6 +505,12 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   onBotPointerDown(event: PointerEvent) {
     if (event.button !== 0) return;
+
+    const t = event.target as HTMLElement;
+    if (t.closest('.header-actions') || t.closest('button')) {
+      return; // Do not drag if clicking action buttons
+    }
+
     this.isDragging = true;
     this.hasMoved = false;
     this.dragStartX = event.clientX;
@@ -549,19 +556,19 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   get moodLabel(): string {
     const m: Record<string, string> = {
-      idle:  '😊 All systems nominal',
-      wave:  '👋 Saying hello',
-      alert: '😰 Alert detected!',
-      think: '🤔 Analyzing...',
-      cheer: '🎉 Threat resolved!',
-      sad:   '😟 Worried',
+      idle: 'All systems nominal',
+      wave: 'Saying hello',
+      alert: 'Alert detected!',
+      think: 'Analyzing...',
+      cheer: 'Threat resolved!',
+      sad: 'Worried',
     };
     return m[this.emotion] || m['idle'];
   }
 
   get statusColor(): string {
     if (this.criticalCount > 0) return '#ef4444';
-    if (this.highCount > 0)     return '#f59e0b';
+    if (this.highCount > 0) return '#f59e0b';
     return '#22c55e';
   }
 

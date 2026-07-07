@@ -39,7 +39,7 @@ export const routes: Routes = [
   {
     path: 'rules',
     canActivate: [authGuard],
-    data: { role: 'analyst', permission: 'rules' },
+    data: { permission: 'rules' },
     loadComponent: () => import('../pages/rules/rules')
       .then(m => m.Rules)
   },
@@ -60,7 +60,7 @@ export const routes: Routes = [
   {
     path: 'setup',
     canActivate: [authGuard],
-    data: { role: 'analyst', permission: 'setup' },
+    data: { permission: 'setup' },
     loadComponent: () => import('../pages/setup/setup')
       .then(m => m.Setup)
   },

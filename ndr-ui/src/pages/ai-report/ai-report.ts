@@ -119,10 +119,29 @@ export class AiReport {
 
   enabledCount = computed(() => this.enabledSections().size);
 
+  sectionNumbers = computed(() => {
+    const nums: Record<string, string> = {};
+    let counter = 1;
+    
+    for (const id of this.sectionOrder()) {
+      if (id === 'section-appendix') {
+        nums[id] = 'A';
+      } else if (this.enabledSections().has(id)) {
+        nums[id] = String(counter++).padStart(2, '0');
+      } else {
+        nums[id] = '--';
+      }
+    }
+    return nums;
+  });
+
   activeTocSections = computed(() =>
     this.sectionOrder()
       .filter(id => this.enabledSections().has(id))
-      .map(id => this.sectionDefs.find(d => d.id === id)!)
+      .map(id => {
+        const def = this.sectionDefs.find(d => d.id === id)!;
+        return { ...def, num: this.sectionNumbers()[id] };
+      })
       .filter(Boolean)
   );
 

@@ -31,6 +31,22 @@
         <button (click)="loadLogs()" class="refresh-button" title="Refresh logs" aria-label="Refresh logs">
           <lucide-icon [name]="RefreshIcon" class="action-icon"></lucide-icon>
         </button>
+
+        <div class="export-group" style="display: flex; align-items: center; background: var(--bg-surface-raised, #101c35); border: 1px solid var(--border-color, #1a2a4f); border-radius: 6px; overflow: hidden;">
+          <select [(ngModel)]="timeRange" (change)="onTimeRangeChange()" style="background: transparent; border: none; color: var(--text-primary, #d8deec); outline: none; cursor: pointer; font-size: 0.85rem; padding: 0.5rem; border-right: 1px solid var(--border-color, #1a2a4f);">
+            <option [ngValue]="24">1 Day</option>
+            <option [ngValue]="168">7 Days</option>
+          </select>
+          <select [(ngModel)]="exportFormat" style="background: transparent; border: none; color: var(--text-primary, #d8deec); outline: none; cursor: pointer; font-size: 0.85rem; padding: 0.5rem; border-right: 1px solid var(--border-color, #1a2a4f);">
+            <option value="csv">CSV</option>
+            <option value="json">JSON</option>
+            <option value="pdf">PDF</option>
+          </select>
+          <button (click)="exportLogs()" class="primary-action" [title]="'Export logs as ' + exportFormat.toUpperCase()" aria-label="Export logs" style="padding: 0.5rem 1rem; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; background: var(--accent-blue, #2463eb); color: white; border: none; cursor: pointer; transition: all 0.2s;">
+            <lucide-icon [name]="DownloadIcon" class="action-icon" style="width: 14px; height: 14px;"></lucide-icon>
+            Export
+          </button>
+        </div>
       </div>
     </div>
 

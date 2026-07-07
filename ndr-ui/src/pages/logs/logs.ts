@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
 import { Websocket } from '../../services/websocket/websocket';
 import { Subscription } from 'rxjs';
-import { LucideAngularModule, Search, Terminal, RefreshCw, FileText, Activity } from 'lucide-angular';
+import { LucideAngularModule, Search, Terminal, RefreshCw, FileText, Activity, Download } from 'lucide-angular';
 import { ActivatedRoute } from '@angular/router';
 import { Live } from '../live/live';
 
@@ -22,12 +22,15 @@ export class Logs implements OnInit, OnDestroy {
   totalCount: number = 0;
   loading: boolean = true;
   activeTab: 'logs' | 'live' = 'logs';
+  timeRange: number = 24;
+  exportFormat: string = 'csv';
 
   TerminalIcon = Terminal;
   SearchIcon = Search;
   RefreshIcon = RefreshCw;
   FileTextIcon = FileText;
   ActivityIcon = Activity;
+  DownloadIcon = Download;
 
   private subs: Subscription[] = [];
 
@@ -88,7 +91,7 @@ export class Logs implements OnInit, OnDestroy {
 
   loadLogs() {
     this.loading = true;
-    this.api.getRecentEvents().subscribe({
+    this.api.getRecentEvents(this.timeRange).subscribe({
       next: (data: any[]) => {
         this.logs = data.map(e => ({
           ts: new Date(e.timestamp * 1000).toLocaleTimeString('en-US', {
@@ -138,6 +141,14 @@ export class Logs implements OnInit, OnDestroy {
   onSearch() {
     this.applyFilter();
     this.cdr.detectChanges();
+  }
+
+  onTimeRangeChange() {
+    this.loadLogs();
+  }
+
+  exportLogs() {
+    this.api.exportNetworkLogs(this.exportFormat, this.timeRange);
   }
 
   ngOnDestroy() {
