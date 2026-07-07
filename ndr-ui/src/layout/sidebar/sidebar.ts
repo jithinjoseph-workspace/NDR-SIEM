@@ -11,7 +11,6 @@ import {
   Search,
   Database,
   Settings,
-  HelpCircle,
   Network,
   Zap,
   Users,
@@ -67,6 +66,7 @@ export class Sidebar implements OnInit, OnDestroy {
         { label: 'Users',         route: '/admin', queryParams: { tab: 'users' },          icon: Users },
         { label: 'Engines',       route: '/admin', queryParams: { tab: 'engines' },        icon: Gauge },
         { label: 'Sensors',       route: '/admin', queryParams: { tab: 'sensors' },        icon: KeyRound },
+        { label: 'Rules',         route: '/rules',                                          icon: ShieldAlert },
         { label: 'Announcements', route: '/admin', queryParams: { tab: 'announcements' },   icon: Megaphone },
         { label: 'Telemetry',     route: '/admin', queryParams: { tab: 'telemetry' },       icon: Activity },
         { label: 'Trusted Cloud', route: '/admin', queryParams: { tab: 'trusted-cloud' },   icon: ShieldCheck },
@@ -100,7 +100,7 @@ export class Sidebar implements OnInit, OnDestroy {
       if (this.auth.hasPermission('evidence')) {
         this.navItems.push({ label: 'Evidence',    route: '/evidence',    icon: FolderSearch, permission: 'evidence' });
       }
-      if (this.auth.hasPermission('ai-activity')) {
+      if (this.auth.hasPermission('ai-activity') && this.auth.isTenantAiEnabled()) {
         this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot,          permission: 'ai-activity' });
       }
     }

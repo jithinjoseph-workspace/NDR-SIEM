@@ -11,6 +11,16 @@
         <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
         Refresh
       </button>
+      <button
+        *ngIf="isAdmin"
+        (click)="syncCommunityRules()"
+        [disabled]="syncing"
+        class="secondary-action"
+        title="Fetch latest SigmaHQ community network rules"
+      >
+        <lucide-icon [name]="DownloadIcon" class="w-4 h-4"></lucide-icon>
+        {{ syncing ? 'Syncing…' : 'Sync Community Rules' }}
+      </button>
       <button (click)="openAddForm()" class="primary-action">
         <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
         New Rule
@@ -237,6 +247,34 @@
             class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white"
           >
             Critical Alert
+          </button>
+          <button
+            type="button"
+            (click)="ruleForm.field='Image'; ruleForm.value='/tmp/'; ruleForm.matcher='startswith'; ruleForm.title='Execution from /tmp'; ruleForm.severity='high'; ruleForm.description='Detects process execution from /tmp (common malware staging directory)'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white"
+          >
+            Exec from /tmp
+          </button>
+          <button
+            type="button"
+            (click)="ruleForm.field='CommandLine'; ruleForm.value='nc -e'; ruleForm.matcher='contains'; ruleForm.title='Netcat Reverse Shell'; ruleForm.severity='critical'; ruleForm.description='Detects netcat used to spawn a reverse shell'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white"
+          >
+            Reverse Shell
+          </button>
+          <button
+            type="button"
+            (click)="ruleForm.field='TargetFilename'; ruleForm.value='/etc/cron'; ruleForm.matcher='startswith'; ruleForm.title='Cron Persistence Attempt'; ruleForm.severity='high'; ruleForm.description='Detects writes to cron directories for persistence'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white"
+          >
+            Cron Persistence
+          </button>
+          <button
+            type="button"
+            (click)="ruleForm.field='User'; ruleForm.value='root'; ruleForm.matcher='equals'; ruleForm.title='Root Process Execution'; ruleForm.severity='medium'; ruleForm.description='Detects any process executed as root'"
+            class="text-[10px] px-3 py-1 bg-surface-container-low border border-outline/10 rounded hover:border-primary/30 text-on-surface-variant hover:text-white"
+          >
+            Root Execution
           </button>
         </div>
       </div>

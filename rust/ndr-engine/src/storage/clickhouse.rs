@@ -631,14 +631,41 @@ pub async fn get_tenants(
     &self
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let result = self.client
-        .query("SELECT id, name, active FROM ndr.tenants FINAL ORDER BY created_at")
-        .fetch_all::<(String,String,u8)>()
+        .query("SELECT id, name, active, ai_enabled FROM ndr.tenants FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,u8,u8)>()
         .await?;
     Ok(result.iter().map(|r| json!({
-        "id": r.0,
-        "name": r.1,
-        "active": r.2 == 1
+        "id":         r.0,
+        "name":       r.1,
+        "active":     r.2 == 1,
+        "ai_enabled": r.3 == 1
     })).collect())
+}
+
+pub async fn get_tenant_ai_enabled(&self, tenant_id: &str) -> bool {
+    let id = sql_escape(tenant_id);
+    self.client
+        .query(&format!(
+            "SELECT ai_enabled FROM ndr.tenants FINAL WHERE id = '{}' LIMIT 1", id
+        ))
+        .fetch_all::<u8>()
+        .await
+        .unwrap_or_default()
+        .first()
+        .map(|v| *v == 1)
+        .unwrap_or(true)
+}
+
+pub async fn set_tenant_ai_enabled(&self, tenant_id: &str, enabled: bool) -> anyhow::Result<()> {
+    let id = sql_escape(tenant_id);
+    self.client.query(&format!(
+        "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
+         SELECT id, name, active, {val}, now(), created_at \
+         FROM ndr.tenants FINAL WHERE id = '{id}'",
+        val = if enabled { 1 } else { 0 },
+        id  = id,
+    )).execute().await?;
+    Ok(())
 }
 
 pub async fn get_all_tenants(
@@ -768,18 +795,14 @@ pub async fn update_tenant(
 ) -> anyhow::Result<()> {
     let esc_id   = sql_escape(id);
     let esc_name = sql_escape(name);
-    // Direct in-place mutation — consistent with set_tenant_active.
-    // No read-then-rewrite; eliminates the ReplacingMergeTree FINAL race.
-    // updated_at is refreshed so the version column stays current.
-    let query = format!(
-        "ALTER TABLE ndr.tenants \
-         UPDATE name = '{}', active = {}, updated_at = now() \
-         WHERE id = '{}'",
-        esc_name,
-        if active { 1 } else { 0 },
-        esc_id
-    );
-    self.client.query(&query).execute().await?;
+    self.client.query(&format!(
+        "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
+         SELECT id, '{name}', {active}, ai_enabled, now(), created_at \
+         FROM ndr.tenants FINAL WHERE id = '{id}'",
+        name   = esc_name,
+        active = if active { 1 } else { 0 },
+        id     = esc_id,
+    )).execute().await?;
     Ok(())
 }
 
@@ -789,16 +812,13 @@ pub async fn set_tenant_active(
     active: bool,
 ) -> anyhow::Result<()> {
     let id = sql_escape(id);
-    // ALTER TABLE UPDATE is an atomic, in-place mutation.
-    // It does NOT require reading the row first, eliminating the
-    // ReplacingMergeTree async-merge race condition entirely.
-    // updated_at is also refreshed so the version column stays current.
-    let query = format!(
-        "ALTER TABLE ndr.tenants UPDATE active = {}, updated_at = now() WHERE id = '{}'",
-        if active { 1 } else { 0 },
-        id
-    );
-    self.client.query(&query).execute().await?;
+    self.client.query(&format!(
+        "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
+         SELECT id, name, {active}, ai_enabled, now(), created_at \
+         FROM ndr.tenants FINAL WHERE id = '{id}'",
+        active = if active { 1 } else { 0 },
+        id     = id,
+    )).execute().await?;
     Ok(())
 }
 
@@ -1137,6 +1157,7 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.soar_config ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.rules_state ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
                 "ALTER TABLE ndr.sigma_rules ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
+                "ALTER TABLE ndr.sigma_rules ADD COLUMN IF NOT EXISTS source String DEFAULT 'custom'",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS permissions String DEFAULT 'dashboard,alerts'",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS active UInt8 DEFAULT 1",
                 "ALTER TABLE ndr.tenants ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
@@ -1432,23 +1453,34 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     pub async fn get_all_enabled_sigma_rules(&self) -> anyhow::Result<Vec<(String, String, String)>> {
         let mut all: Vec<(String, String, String)> = Vec::new();
 
-        // Always include default tenant
-        let tenants_to_query: Vec<String> = {
+        // Community rules (global, tenant_id='*') always come from ndr.sigma_rules
+        let community: Vec<(String, String)> = self.client
+            .query("SELECT id, content FROM ndr.sigma_rules FINAL WHERE tenant_id='*' AND enabled=1")
+            .fetch_all::<(String, String)>()
+            .await
+            .unwrap_or_default();
+        for (id, content) in community {
+            all.push((id, content, "*".to_string()));
+        }
+
+        // Per-tenant custom rules
+        let tenant_ids: Vec<String> = {
             let mut ids: Vec<String> = self.client
                 .query("SELECT id FROM ndr.tenants FINAL WHERE active = 1")
                 .fetch_all::<String>()
                 .await
                 .unwrap_or_default();
-            ids.insert(0, "default".to_string());
-            ids.dedup();
+            ids.push("default".to_string());
+            let mut seen = std::collections::HashSet::new();
+            ids.retain(|id| seen.insert(id.clone()));
             ids
         };
 
-        for tid in &tenants_to_query {
+        for tid in &tenant_ids {
             let db = tenant_db(tid);
             let rows: Vec<(String, String)> = self.client
                 .query(&format!(
-                    "SELECT id, content FROM {}.sigma_rules FINAL WHERE enabled = 1",
+                    "SELECT id, content FROM {}.sigma_rules FINAL WHERE enabled=1 AND tenant_id != '*'",
                     db
                 ))
                 .fetch_all::<(String, String)>()
@@ -1460,6 +1492,20 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         }
 
         Ok(all)
+    }
+
+    /// Insert or update a community rule in the global ndr.sigma_rules table.
+    /// Community rules have tenant_id='*' and source='community'.
+    /// ReplacingMergeTree deduplicates on id — re-inserting updates the content.
+    pub async fn save_community_rule(&self, id: &str, name: &str, content: &str) -> anyhow::Result<()> {
+        self.client
+            .query("INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, source, enabled, created_at, updated_at) VALUES (?, ?, ?, '*', 'community', 1, now(), now())")
+            .bind(id)
+            .bind(name)
+            .bind(content)
+            .execute()
+            .await?;
+        Ok(())
     }
 
     pub async fn save_sigma_rule(&self, id: &str, name: &str, content: &str, tenant_id: &str) -> anyhow::Result<()> {
@@ -1502,12 +1548,32 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(result.first().cloned())
     }
 
-    pub async fn get_all_sigma_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, String, String, String, u8)>> {
-        let db = tenant_db(tenant_id);
-        let result = self.client
-            .query(&format!("SELECT id, name, content, tenant_id, enabled FROM {}.sigma_rules FINAL", db))
+    /// Returns all rules visible to a tenant: community rules (tenant_id='*') + their custom rules.
+    /// Returns (id, name, content, tenant_id, enabled, source).
+    pub async fn get_all_sigma_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, String, String, String, u8, String)>> {
+        let mut result: Vec<(String, String, String, String, u8, String)> = Vec::new();
+
+        // Community rules — always from ndr.sigma_rules where tenant_id='*'
+        let community = self.client
+            .query("SELECT id, name, content, tenant_id, enabled FROM ndr.sigma_rules FINAL WHERE tenant_id='*'")
             .fetch_all::<(String, String, String, String, u8)>()
-            .await?;
+            .await
+            .unwrap_or_default();
+        for (id, name, content, tid, enabled) in community {
+            result.push((id, name, content, tid, enabled, "community".to_string()));
+        }
+
+        // Tenant custom rules
+        let db = tenant_db(tenant_id);
+        let custom = self.client
+            .query(&format!("SELECT id, name, content, tenant_id, enabled FROM {}.sigma_rules FINAL WHERE tenant_id != '*'", db))
+            .fetch_all::<(String, String, String, String, u8)>()
+            .await
+            .unwrap_or_default();
+        for (id, name, content, tid, enabled) in custom {
+            result.push((id, name, content, tid, enabled, "custom".to_string()));
+        }
+
         Ok(result)
     }
 
@@ -2259,7 +2325,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 tags, sigma_hits, threat_intel, src_country, dst_country, \
                 correlation_status, agent_s_rule_id, toUInt32(corroborated_at) AS corroborated_at \
              FROM {}.ndr_hits FINAL \
-             ORDER BY timestamp DESC LIMIT {}", db_name, limit))
+             ORDER BY length(sigma_hits) DESC, score DESC, timestamp DESC LIMIT {}", db_name, limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
 
@@ -2311,6 +2377,25 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 "dst_asset":          dst_asset,
             })
         }).collect())
+    }
+
+    pub async fn get_rule_hit_counts(&self, tenant_id: &str) -> anyhow::Result<std::collections::HashMap<String, u64>> {
+        let db_name = tenant_db(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct RuleCount { rule_name: String, cnt: u64 }
+        let rows = self.client
+            .query(&format!(
+                "SELECT arrayJoin(sigma_hits) AS rule_name, count() AS cnt \
+                 FROM {}.ndr_hits FINAL \
+                 WHERE length(sigma_hits) > 0 \
+                 GROUP BY rule_name \
+                 ORDER BY cnt DESC",
+                db_name
+            ))
+            .fetch_all::<RuleCount>()
+            .await
+            .unwrap_or_default();
+        Ok(rows.into_iter().map(|r| (r.rule_name, r.cnt)).collect())
     }
 
     pub async fn get_events_by_community_id(
@@ -4914,7 +4999,7 @@ pub async fn get_ioc_hits(
         let db = tenant_db(tenant_id);
         let ip_list = ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
         let query = format!(
-            "ALTER TABLE {}.assets UPDATE threat_flagged = 1, threat_flagged_at = now() \
+            "ALTER TABLE {}.assets UPDATE threat_flagged = 1 \
              WHERE tenant_id = '{}' AND ip IN ({}) SETTINGS mutations_sync=0",
             db, sql_escape(tenant_id), ip_list
         );
@@ -5028,7 +5113,7 @@ pub async fn get_ioc_hits(
             if open_ports != "[]" && !open_ports.is_empty() { asset.open_ports = open_ports.to_string(); }
             if !subnet_role.is_empty() { asset.subnet_role = subnet_role.to_string(); }
             if !ja3_os.is_empty()      { asset.ja3_os      = ja3_os.to_string(); }
-            asset.last_seen = chrono::Utc::now().timestamp() as u32;
+            // last_seen intentionally not updated — enrichment is not a network observation
             self.upsert_asset(&asset).await?;
         }
         Ok(())

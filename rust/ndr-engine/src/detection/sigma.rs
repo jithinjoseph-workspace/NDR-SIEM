@@ -1,6 +1,7 @@
 // NDR Engine — SIGMA-compatible Detection Rule Engine
 // Lightweight fresh implementation — NOT based on any existing SIGMA codebase.
-// Supports: equals, contains, startswith, endswith, re, AND/OR logic.
+// Supports: equals, contains, startswith, endswith, re,
+//           named selections, any/all of <pattern>, not, AND/OR expressions.
 // License: Apache-2.0
 
 use crate::normalizer::NormalizedEvent;
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::{info, warn};
 
-// ── Rule types ────────────────────────────────────────────────────────────
+// ── Primitive types ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogSource {
@@ -50,20 +51,87 @@ impl FieldCondition {
     }
 }
 
+// Kept for backward-compat with callers that read rule.logic.
 #[derive(Debug, Clone)]
 pub enum Logic { And, Or }
+
+// ── Named selection group ─────────────────────────────────────────────────
+
+/// One named block from the SIGMA `detection:` section.
+/// Each `alternative` is an AND-group; alternatives are OR'd together.
+#[derive(Debug, Clone)]
+pub struct SelectionGroup {
+    pub alternatives: Vec<Vec<FieldCondition>>,
+}
+
+impl SelectionGroup {
+    pub fn matches(&self, event: &NormalizedEvent) -> bool {
+        self.alternatives.iter().any(|alt| alt.iter().all(|c| c.matches(event)))
+    }
+}
+
+// ── Condition expression AST ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum ConditionExpr {
+    Named(String),             // reference to a named selection group
+    Not(Box<ConditionExpr>),
+    And(Vec<ConditionExpr>),
+    Or(Vec<ConditionExpr>),
+    AnyOf(String),             // any of <prefix>* — OR over matching groups
+    AllOf(String),             // all of <prefix>* — AND over matching groups
+    AnyOfThem,                 // any of them
+    AllOfThem,                 // all of them
+    AlwaysTrue,                // unsupported (count/near/temporal) — match everything
+}
+
+impl ConditionExpr {
+    pub fn eval(&self, selections: &HashMap<String, SelectionGroup>, event: &NormalizedEvent) -> bool {
+        match self {
+            ConditionExpr::Named(name) =>
+                selections.get(name).map(|g| g.matches(event)).unwrap_or(false),
+            ConditionExpr::Not(inner) =>
+                !inner.eval(selections, event),
+            ConditionExpr::And(parts) =>
+                parts.iter().all(|p| p.eval(selections, event)),
+            ConditionExpr::Or(parts) =>
+                parts.iter().any(|p| p.eval(selections, event)),
+            ConditionExpr::AnyOf(prefix) =>
+                selections.iter()
+                    .filter(|(k, _)| k.starts_with(prefix.as_str()))
+                    .any(|(_, g)| g.matches(event)),
+            ConditionExpr::AllOf(prefix) => {
+                let matching: Vec<_> = selections.iter()
+                    .filter(|(k, _)| k.starts_with(prefix.as_str()))
+                    .collect();
+                !matching.is_empty() && matching.iter().all(|(_, g)| g.matches(event))
+            }
+            ConditionExpr::AnyOfThem =>
+                selections.values().any(|g| g.matches(event)),
+            ConditionExpr::AllOfThem =>
+                !selections.is_empty() && selections.values().all(|g| g.matches(event)),
+            ConditionExpr::AlwaysTrue => true,
+        }
+    }
+}
+
+// ── SigmaRule ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct SigmaRule {
-    pub id:          String,
-    pub title:       String,
-    pub severity:    String,
-    pub tags:        Vec<String>,
-    pub logsource:   LogSource,
-    pub conditions:  Vec<FieldCondition>,
-    pub logic:       Logic,
-    pub tenant_id:   String,
+    pub id:             String,
+    pub title:          String,
+    pub severity:       String,
+    pub tags:           Vec<String>,
+    pub logsource:      LogSource,
+    pub selections:     HashMap<String, SelectionGroup>,
+    pub condition_expr: ConditionExpr,
+    /// Backward-compat: flat merge of all FieldConditions across all groups.
+    /// Only used for `.len()` in API display. Eval goes through condition_expr.
+    pub conditions:     Vec<FieldCondition>,
+    pub logic:          Logic, // deprecated — kept so existing callers compile
+    pub tenant_id:      String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +140,157 @@ pub struct DetectionMatch {
     pub title:    String,
     pub severity: String,
     pub tags:     Vec<String>,
+}
+
+// ── Condition expression parser ───────────────────────────────────────────
+
+fn tokenize_condition(s: &str) -> Vec<String> {
+    let mut tokens = Vec::<String>::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        match ch {
+            '(' | ')' => {
+                let t = cur.trim().to_string();
+                if !t.is_empty() { tokens.push(t); }
+                cur.clear();
+                tokens.push(ch.to_string());
+            }
+            ' ' | '\t' => {
+                let t = cur.trim().to_string();
+                if !t.is_empty() { tokens.push(t); }
+                cur.clear();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    let t = cur.trim().to_string();
+    if !t.is_empty() { tokens.push(t); }
+    tokens
+}
+
+pub fn parse_condition_expr(s: &str) -> ConditionExpr {
+    if s.contains("count(") || s.starts_with("near ") {
+        warn!("SIGMA: aggregation/temporal condition not supported: '{}' — rule will always match", s.trim());
+        return ConditionExpr::AlwaysTrue;
+    }
+    let tokens = tokenize_condition(s);
+    if tokens.is_empty() { return ConditionExpr::AlwaysTrue; }
+    let (expr, _) = parse_or(&tokens, 0);
+    expr
+}
+
+fn parse_or(tokens: &[String], pos: usize) -> (ConditionExpr, usize) {
+    let (mut left, mut pos) = parse_and(tokens, pos);
+    while pos < tokens.len() && tokens[pos].to_lowercase() == "or" {
+        pos += 1;
+        let (right, new_pos) = parse_and(tokens, pos);
+        pos = new_pos;
+        left = match left {
+            ConditionExpr::Or(mut parts) => { parts.push(right); ConditionExpr::Or(parts) }
+            _ => ConditionExpr::Or(vec![left, right]),
+        };
+    }
+    (left, pos)
+}
+
+fn parse_and(tokens: &[String], pos: usize) -> (ConditionExpr, usize) {
+    let (mut left, mut pos) = parse_not(tokens, pos);
+    while pos < tokens.len() && tokens[pos].to_lowercase() == "and" {
+        pos += 1;
+        let (right, new_pos) = parse_not(tokens, pos);
+        pos = new_pos;
+        left = match left {
+            ConditionExpr::And(mut parts) => { parts.push(right); ConditionExpr::And(parts) }
+            _ => ConditionExpr::And(vec![left, right]),
+        };
+    }
+    (left, pos)
+}
+
+fn parse_not(tokens: &[String], pos: usize) -> (ConditionExpr, usize) {
+    if pos < tokens.len() && tokens[pos].to_lowercase() == "not" {
+        let (inner, new_pos) = parse_not(tokens, pos + 1);
+        return (ConditionExpr::Not(Box::new(inner)), new_pos);
+    }
+    parse_quantifier(tokens, pos)
+}
+
+fn parse_quantifier(tokens: &[String], pos: usize) -> (ConditionExpr, usize) {
+    if pos + 1 < tokens.len() {
+        let tok  = tokens[pos].to_lowercase();
+        let next = tokens[pos + 1].to_lowercase();
+        if next == "of" && (tok == "any" || tok == "all" || tok == "1") {
+            if pos + 2 < tokens.len() {
+                let pattern = &tokens[pos + 2];
+                let is_all  = tok == "all";
+                let expr = if pattern.to_lowercase() == "them" {
+                    if is_all { ConditionExpr::AllOfThem } else { ConditionExpr::AnyOfThem }
+                } else if pattern.ends_with('*') {
+                    let prefix = pattern.trim_end_matches('*').to_string();
+                    if is_all { ConditionExpr::AllOf(prefix) } else { ConditionExpr::AnyOf(prefix) }
+                } else {
+                    ConditionExpr::Named(pattern.clone())
+                };
+                return (expr, pos + 3);
+            }
+        }
+    }
+    parse_atom(tokens, pos)
+}
+
+fn parse_atom(tokens: &[String], pos: usize) -> (ConditionExpr, usize) {
+    if pos >= tokens.len() {
+        return (ConditionExpr::AlwaysTrue, pos);
+    }
+    if tokens[pos] == "(" {
+        let (inner, new_pos) = parse_or(tokens, pos + 1);
+        let close = if new_pos < tokens.len() && tokens[new_pos] == ")" { new_pos + 1 } else { new_pos };
+        return (inner, close);
+    }
+    (ConditionExpr::Named(tokens[pos].clone()), pos + 1)
+}
+
+// ── Selection group parser ────────────────────────────────────────────────
+
+fn parse_selection_group(val: &serde_yaml::Value) -> SelectionGroup {
+    match val {
+        // List of field-maps → each map is one alternative (OR between maps, AND within map)
+        serde_yaml::Value::Sequence(seq) => {
+            let alternatives = seq.iter()
+                .filter_map(|item| item.as_mapping().map(|map| {
+                    let mut alt = Vec::new();
+                    for (fk, fv) in map {
+                        if let Some(fk_str) = fk.as_str() {
+                            parse_field_condition(fk_str, fv, &mut alt);
+                        }
+                    }
+                    alt
+                }))
+                .collect();
+            SelectionGroup { alternatives }
+        }
+        // Single field-map → one alternative (all fields AND)
+        serde_yaml::Value::Mapping(map) => {
+            let mut alt = Vec::new();
+            for (fk, fv) in map {
+                if let Some(fk_str) = fk.as_str() {
+                    parse_field_condition(fk_str, fv, &mut alt);
+                }
+            }
+            SelectionGroup { alternatives: vec![alt] }
+        }
+        // Scalar keyword — wildcard match
+        serde_yaml::Value::String(s) => {
+            let cond = FieldCondition {
+                field:   "*".to_string(),
+                matcher: Matcher::Contains,
+                values:  vec![s.clone()],
+                negated: false,
+            };
+            SelectionGroup { alternatives: vec![vec![cond]] }
+        }
+        _ => SelectionGroup { alternatives: vec![] },
+    }
 }
 
 // ── Loader ────────────────────────────────────────────────────────────────
@@ -125,39 +344,44 @@ pub fn parse_rule_content(content: &str) -> anyhow::Result<SigmaRule> {
     let detection_val = doc.get("detection")
         .ok_or_else(|| anyhow::anyhow!("Missing 'detection' block"))?;
 
-    let logic = detection_val.as_mapping()
+    let condition_str = detection_val.as_mapping()
         .and_then(|m| m.get("condition"))
         .and_then(|v| v.as_str())
-        .map(|s| if s.contains("all") { Logic::And } else { Logic::Or })
-        .unwrap_or(Logic::And);
+        .unwrap_or("selection");
 
-    let mut conditions = Vec::new();
+    let condition_expr = parse_condition_expr(condition_str);
+
+    // Parse each named detection block (skip "condition" key)
+    let mut selections: HashMap<String, SelectionGroup> = HashMap::new();
     if let Some(mapping) = detection_val.as_mapping() {
         for (key, val) in mapping {
             let key_str = key.as_str().unwrap_or("");
             if key_str == "condition" { continue; }
-            if let Some(field_map) = val.as_mapping() {
-                for (field_key, field_val) in field_map {
-                    if let Some(fk) = field_key.as_str() {
-                        parse_condition(fk, field_val, &mut conditions);
-                    }
-                }
-            }
+            selections.insert(key_str.to_string(), parse_selection_group(val));
         }
     }
 
+    // Backward-compat: flat merge of all conditions for .len() display
+    let conditions: Vec<FieldCondition> = selections.values()
+        .flat_map(|g| g.alternatives.iter().flat_map(|alt| alt.iter().cloned()))
+        .collect();
+
+    let logic = if condition_str.contains("all") { Logic::And } else { Logic::Or };
+
     Ok(SigmaRule {
         id: get_str("id"), title: get_str("title"),
-        severity: get_str("level"), tags, logsource, conditions, logic,
-        tenant_id: "default".to_string(),
+        severity: get_str("level"), tags, logsource,
+        selections, condition_expr,
+        conditions, logic,
+        tenant_id: "*".to_string(), // file-based rules are global across all tenants
     })
 }
 
-fn parse_condition(field_modifier: &str, value: &serde_yaml::Value, out: &mut Vec<FieldCondition>) {
+fn parse_field_condition(field_modifier: &str, value: &serde_yaml::Value, out: &mut Vec<FieldCondition>) {
     let parts: Vec<&str> = field_modifier.splitn(2, '|').collect();
-    let field = parts[0].to_string();
+    let field    = parts[0].to_string();
     let modifier = parts.get(1).copied().unwrap_or("equals");
-    let negated = modifier.ends_with("not");
+    let negated  = modifier.ends_with("not");
 
     let matcher = match modifier.trim_end_matches("|not") {
         "contains"   => Matcher::Contains,
@@ -177,5 +401,443 @@ fn parse_condition(field_modifier: &str, value: &serde_yaml::Value, out: &mut Ve
 
     if !values.is_empty() {
         out.push(FieldCondition { field, matcher, values, negated });
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use crate::normalizer::EventSource;
+
+    /// Build a minimal NormalizedEvent from key-value pairs.
+    /// Canonical fields (proto, dst_port, event_type, src_ip, dst_ip) are wired
+    /// to struct fields so get_field() returns them correctly.
+    /// Any other key falls through to the raw JSON blob.
+    fn make_event(fields: &[(&str, &str)]) -> NormalizedEvent {
+        let mut raw_map = serde_json::Map::new();
+        for (k, v) in fields {
+            raw_map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+        }
+        let raw = serde_json::Value::Object(raw_map);
+
+        let get = |key: &str| -> Option<String> {
+            fields.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string())
+        };
+
+        NormalizedEvent {
+            source_ip:        get("src_ip").or_else(|| get("source_ip")),
+            source_port:      None,
+            dest_ip:          get("dst_ip").or_else(|| get("dest_ip")),
+            dest_port:        get("dst_port").or_else(|| get("dest_port"))
+                                  .and_then(|v| v.parse::<u16>().ok()),
+            proto:            get("proto"),
+            network_protocol: None,
+            community_id:     Some("test-cid".to_string()),
+            event_source:     EventSource::Unknown,
+            log_source:       None,
+            timestamp:        0,
+            uid:              None,
+            conn_state:       None,
+            event_type:       get("event_type"),
+            alert:            None,
+            raw,
+        }
+    }
+
+    // ── Condition expression parser tests ─────────────────────────────────
+
+    #[test]
+    fn test_single_named() {
+        let expr = parse_condition_expr("selection");
+        assert!(matches!(expr, ConditionExpr::Named(n) if n == "selection"));
+    }
+
+    #[test]
+    fn test_and_expr() {
+        let expr = parse_condition_expr("selection and filter");
+        assert!(matches!(expr, ConditionExpr::And(_)));
+        if let ConditionExpr::And(parts) = expr {
+            assert_eq!(parts.len(), 2);
+            assert!(matches!(&parts[0], ConditionExpr::Named(n) if n == "selection"));
+            assert!(matches!(&parts[1], ConditionExpr::Named(n) if n == "filter"));
+        }
+    }
+
+    #[test]
+    fn test_or_expr() {
+        let expr = parse_condition_expr("sel1 or sel2");
+        assert!(matches!(expr, ConditionExpr::Or(_)));
+        if let ConditionExpr::Or(parts) = expr {
+            assert_eq!(parts.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_not_expr() {
+        let expr = parse_condition_expr("selection and not filter");
+        assert!(matches!(expr, ConditionExpr::And(_)));
+        if let ConditionExpr::And(parts) = expr {
+            assert!(matches!(&parts[1], ConditionExpr::Not(_)));
+        }
+    }
+
+    #[test]
+    fn test_any_of_glob() {
+        let expr = parse_condition_expr("any of selection*");
+        assert!(matches!(expr, ConditionExpr::AnyOf(p) if p == "selection"));
+    }
+
+    #[test]
+    fn test_all_of_glob() {
+        let expr = parse_condition_expr("all of selection*");
+        assert!(matches!(expr, ConditionExpr::AllOf(p) if p == "selection"));
+    }
+
+    #[test]
+    fn test_any_of_them() {
+        let expr = parse_condition_expr("any of them");
+        assert!(matches!(expr, ConditionExpr::AnyOfThem));
+    }
+
+    #[test]
+    fn test_all_of_them() {
+        let expr = parse_condition_expr("all of them");
+        assert!(matches!(expr, ConditionExpr::AllOfThem));
+    }
+
+    #[test]
+    fn test_count_unsupported_becomes_always_true() {
+        let expr = parse_condition_expr("selection | count() > 10");
+        assert!(matches!(expr, ConditionExpr::AlwaysTrue));
+    }
+
+    #[test]
+    fn test_near_unsupported() {
+        let expr = parse_condition_expr("near selection");
+        assert!(matches!(expr, ConditionExpr::AlwaysTrue));
+    }
+
+    #[test]
+    fn test_nested_parens() {
+        let expr = parse_condition_expr("(sel_a or sel_b) and not filter");
+        assert!(matches!(expr, ConditionExpr::And(_)));
+        if let ConditionExpr::And(parts) = expr {
+            assert_eq!(parts.len(), 2);
+            assert!(matches!(&parts[0], ConditionExpr::Or(_)));
+            assert!(matches!(&parts[1], ConditionExpr::Not(_)));
+        }
+    }
+
+    #[test]
+    fn test_operator_precedence_and_over_or() {
+        // "A or B and C" must parse as "A or (B and C)" — AND binds tighter
+        let expr = parse_condition_expr("sel_a or sel_b and filter");
+        assert!(matches!(expr, ConditionExpr::Or(_)));
+        if let ConditionExpr::Or(parts) = expr {
+            assert!(matches!(&parts[0], ConditionExpr::Named(n) if n == "sel_a"));
+            assert!(matches!(&parts[1], ConditionExpr::And(_)));
+        }
+    }
+
+    // ── Full parse_rule_content tests ────────────────────────────────────
+
+    #[test]
+    fn test_parse_single_selection_rule() {
+        let yaml = r#"
+title: Test Rule
+id: test-001
+level: high
+logsource:
+  product: network
+detection:
+  selection:
+    proto: tcp
+    dst_port: "443"
+  condition: selection
+"#;
+        let rule = parse_rule_content(yaml).expect("should parse");
+        assert_eq!(rule.title, "Test Rule");
+        assert_eq!(rule.severity, "high");
+        assert_eq!(rule.selections.len(), 1);
+        assert!(rule.selections.contains_key("selection"));
+        // single map → one alternative with 2 field conditions
+        let grp = &rule.selections["selection"];
+        assert_eq!(grp.alternatives.len(), 1);
+        assert_eq!(grp.alternatives[0].len(), 2);
+    }
+
+    #[test]
+    fn test_parse_two_selections_and() {
+        let yaml = r#"
+title: Two Selections AND
+id: test-002
+level: medium
+logsource:
+  product: network
+detection:
+  selection:
+    event_type: alert
+  filter:
+    proto: udp
+  condition: selection and filter
+"#;
+        let rule = parse_rule_content(yaml).expect("should parse");
+        assert_eq!(rule.selections.len(), 2);
+        assert!(matches!(rule.condition_expr, ConditionExpr::And(_)));
+    }
+
+    #[test]
+    fn test_parse_any_of_glob_rule() {
+        let yaml = r#"
+title: Any Of Glob
+id: test-003
+level: low
+logsource:
+  product: network
+detection:
+  selection_a:
+    proto: tcp
+  selection_b:
+    proto: udp
+  condition: any of selection*
+"#;
+        let rule = parse_rule_content(yaml).expect("should parse");
+        assert!(matches!(&rule.condition_expr, ConditionExpr::AnyOf(p) if p == "selection"));
+    }
+
+    #[test]
+    fn test_parse_list_alternatives() {
+        let yaml = r#"
+title: List Alternatives
+id: test-004
+level: medium
+logsource:
+  product: network
+detection:
+  selection:
+    - proto: tcp
+      dst_port: "80"
+    - proto: tcp
+      dst_port: "443"
+  condition: selection
+"#;
+        let rule = parse_rule_content(yaml).expect("should parse");
+        let grp = &rule.selections["selection"];
+        // List → 2 alternatives, each with 2 conditions
+        assert_eq!(grp.alternatives.len(), 2);
+        assert_eq!(grp.alternatives[0].len(), 2);
+        assert_eq!(grp.alternatives[1].len(), 2);
+    }
+
+    #[test]
+    fn test_parse_count_rule_does_not_error() {
+        let yaml = r#"
+title: Count Rule
+id: test-005
+level: medium
+logsource:
+  product: network
+detection:
+  selection:
+    event_type: alert
+  condition: selection | count() > 10
+"#;
+        let rule = parse_rule_content(yaml).expect("count condition should not cause parse error");
+        assert!(matches!(rule.condition_expr, ConditionExpr::AlwaysTrue));
+    }
+
+    #[test]
+    fn test_missing_detection_returns_error() {
+        let yaml = r#"
+title: No Detection
+id: test-006
+level: medium
+logsource:
+  product: network
+"#;
+        assert!(parse_rule_content(yaml).is_err());
+    }
+
+    // ── Eval tests (condition expression evaluation) ──────────────────────
+
+    fn make_selection(field: &str, value: &str) -> SelectionGroup {
+        let cond = FieldCondition {
+            field: field.to_string(),
+            matcher: Matcher::Equals,
+            values: vec![value.to_string()],
+            negated: false,
+        };
+        SelectionGroup { alternatives: vec![vec![cond]] }
+    }
+
+    #[test]
+    fn test_eval_named_match() {
+        let mut sels = HashMap::new();
+        sels.insert("selection".to_string(), make_selection("proto", "tcp"));
+        let event = make_event(&[("proto", "tcp")]);
+        let expr = ConditionExpr::Named("selection".to_string());
+        assert!(expr.eval(&sels, &event));
+    }
+
+    #[test]
+    fn test_eval_named_no_match() {
+        let mut sels = HashMap::new();
+        sels.insert("selection".to_string(), make_selection("proto", "tcp"));
+        let event = make_event(&[("proto", "udp")]);
+        let expr = ConditionExpr::Named("selection".to_string());
+        assert!(!expr.eval(&sels, &event));
+    }
+
+    #[test]
+    fn test_eval_and() {
+        let mut sels = HashMap::new();
+        sels.insert("sel".to_string(),    make_selection("proto", "tcp"));
+        sels.insert("filter".to_string(), make_selection("dst_port", "443"));
+        let event = make_event(&[("proto", "tcp"), ("dst_port", "443")]);
+        let expr = ConditionExpr::And(vec![
+            ConditionExpr::Named("sel".to_string()),
+            ConditionExpr::Named("filter".to_string()),
+        ]);
+        assert!(expr.eval(&sels, &event));
+    }
+
+    #[test]
+    fn test_eval_and_fails_if_one_missing() {
+        let mut sels = HashMap::new();
+        sels.insert("sel".to_string(),    make_selection("proto", "tcp"));
+        sels.insert("filter".to_string(), make_selection("dst_port", "443"));
+        let event = make_event(&[("proto", "tcp"), ("dst_port", "80")]);
+        let expr = ConditionExpr::And(vec![
+            ConditionExpr::Named("sel".to_string()),
+            ConditionExpr::Named("filter".to_string()),
+        ]);
+        assert!(!expr.eval(&sels, &event));
+    }
+
+    #[test]
+    fn test_eval_or() {
+        let mut sels = HashMap::new();
+        sels.insert("sel_a".to_string(), make_selection("proto", "tcp"));
+        sels.insert("sel_b".to_string(), make_selection("proto", "udp"));
+        let event = make_event(&[("proto", "udp")]);
+        let expr = ConditionExpr::Or(vec![
+            ConditionExpr::Named("sel_a".to_string()),
+            ConditionExpr::Named("sel_b".to_string()),
+        ]);
+        assert!(expr.eval(&sels, &event));
+    }
+
+    #[test]
+    fn test_eval_not() {
+        let mut sels = HashMap::new();
+        sels.insert("filter".to_string(), make_selection("proto", "udp"));
+        let event = make_event(&[("proto", "tcp")]);
+        let expr = ConditionExpr::Not(Box::new(ConditionExpr::Named("filter".to_string())));
+        assert!(expr.eval(&sels, &event));  // NOT udp, event is tcp → true
+    }
+
+    #[test]
+    fn test_eval_any_of_glob() {
+        let mut sels = HashMap::new();
+        sels.insert("selection_a".to_string(), make_selection("proto", "tcp"));
+        sels.insert("selection_b".to_string(), make_selection("dst_port", "443"));
+        // Event matches selection_a but not selection_b
+        let event = make_event(&[("proto", "tcp"), ("dst_port", "80")]);
+        let expr = ConditionExpr::AnyOf("selection".to_string());
+        assert!(expr.eval(&sels, &event));  // selection_a matches → any = true
+    }
+
+    #[test]
+    fn test_eval_all_of_glob_fails_if_one_misses() {
+        let mut sels = HashMap::new();
+        sels.insert("selection_a".to_string(), make_selection("proto", "tcp"));
+        sels.insert("selection_b".to_string(), make_selection("dst_port", "443"));
+        let event = make_event(&[("proto", "tcp"), ("dst_port", "80")]);
+        let expr = ConditionExpr::AllOf("selection".to_string());
+        assert!(!expr.eval(&sels, &event));  // selection_b fails → all = false
+    }
+
+    #[test]
+    fn test_eval_any_of_them() {
+        let mut sels = HashMap::new();
+        sels.insert("sel_a".to_string(), make_selection("proto", "tcp"));
+        sels.insert("sel_b".to_string(), make_selection("dst_port", "9999"));
+        let event = make_event(&[("proto", "tcp")]);
+        let expr = ConditionExpr::AnyOfThem;
+        assert!(expr.eval(&sels, &event));
+    }
+
+    #[test]
+    fn test_eval_all_of_them() {
+        let mut sels = HashMap::new();
+        sels.insert("sel_a".to_string(), make_selection("proto", "tcp"));
+        sels.insert("sel_b".to_string(), make_selection("dst_port", "9999"));
+        let event = make_event(&[("proto", "tcp")]);
+        let expr = ConditionExpr::AllOfThem;
+        assert!(!expr.eval(&sels, &event));  // sel_b fails → false
+    }
+
+    #[test]
+    fn test_eval_always_true() {
+        let sels = HashMap::new();
+        let event = make_event(&[]);
+        assert!(ConditionExpr::AlwaysTrue.eval(&sels, &event));
+    }
+
+    #[test]
+    fn test_eval_selection_and_not_filter_full_rule() {
+        let yaml = r#"
+title: Alert Not UDP
+id: eval-001
+level: high
+logsource:
+  product: network
+detection:
+  selection:
+    event_type: alert
+  filter:
+    proto: udp
+  condition: selection and not filter
+"#;
+        let rule = parse_rule_content(yaml).expect("parse");
+        // Event: alert over TCP → should match (is alert, is NOT udp)
+        let ev_tcp = make_event(&[("event_type", "alert"), ("proto", "tcp")]);
+        assert!(rule.condition_expr.eval(&rule.selections, &ev_tcp), "TCP alert should match");
+
+        // Event: alert over UDP → should NOT match (IS udp → filtered out)
+        let ev_udp = make_event(&[("event_type", "alert"), ("proto", "udp")]);
+        assert!(!rule.condition_expr.eval(&rule.selections, &ev_udp), "UDP alert should be filtered");
+
+        // Event: flow over TCP → should NOT match (not an alert)
+        let ev_flow = make_event(&[("event_type", "flow"), ("proto", "tcp")]);
+        assert!(!rule.condition_expr.eval(&rule.selections, &ev_flow), "Flow should not match");
+    }
+
+    #[test]
+    fn test_eval_list_alternatives_rule() {
+        let yaml = r#"
+title: HTTP Ports
+id: eval-002
+level: medium
+logsource:
+  product: network
+detection:
+  selection:
+    - dst_port: "80"
+    - dst_port: "8080"
+    - dst_port: "8443"
+  condition: selection
+"#;
+        let rule = parse_rule_content(yaml).expect("parse");
+        let ev_80   = make_event(&[("dst_port", "80")]);
+        let ev_8080 = make_event(&[("dst_port", "8080")]);
+        let ev_443  = make_event(&[("dst_port", "443")]);
+
+        assert!(rule.condition_expr.eval(&rule.selections, &ev_80),   "port 80 should match");
+        assert!(rule.condition_expr.eval(&rule.selections, &ev_8080), "port 8080 should match");
+        assert!(!rule.condition_expr.eval(&rule.selections, &ev_443), "port 443 should NOT match");
     }
 }

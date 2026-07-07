@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleCheck,
   Copy,
+  Download,
   Edit,
   Gauge,
   KeyRound,
@@ -101,6 +102,30 @@ export class Admin implements OnInit, OnDestroy {
   LayoutDashboardIcon = LayoutDashboard;
   CpuIcon = Cpu;
   MemoryStickIcon = MemoryStick;
+  DownloadIcon = Download;
+
+  // Community rules sync state
+  syncingRules = false;
+  syncMessage = '';
+  syncError = false;
+
+  syncCommunityRules() {
+    this.syncingRules = true;
+    this.syncMessage = '';
+    this.syncError = false;
+    this.api.syncCommunityRules().subscribe({
+      next: (res: any) => {
+        this.syncingRules = false;
+        this.syncMessage = res.message || `${res.new_rules ?? 0} community rules synced from SigmaHQ`;
+        this.syncError = false;
+      },
+      error: (err: any) => {
+        this.syncingRules = false;
+        this.syncMessage = err?.error?.error || 'Sync failed';
+        this.syncError = true;
+      }
+    });
+  }
 
   // AI Providers state
   providers: AiProvider[] = [];
@@ -1039,6 +1064,28 @@ export class Admin implements OnInit, OnDestroy {
         // Network error — revert so the UI stays consistent with server state.
         tenant.active = previous;
         this.showMsg('Failed to update tenant status', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  toggleTenantAI(tenant: any, enabled: boolean) {
+    const previous = tenant.ai_enabled;
+    tenant.ai_enabled = enabled;
+    this.cdr.detectChanges();
+    this.api.setTenantAiEnabled(tenant.id, enabled).subscribe({
+      next: (data: any) => {
+        if (data.status === 'ok') {
+          this.showMsg(`AI features ${enabled ? 'enabled' : 'disabled'} for ${tenant.name}`, 'success');
+        } else {
+          tenant.ai_enabled = previous;
+          this.showMsg(data.message || 'Failed to update AI setting', 'error');
+          this.cdr.detectChanges();
+        }
+      },
+      error: () => {
+        tenant.ai_enabled = previous;
+        this.showMsg('Failed to update AI setting', 'error');
         this.cdr.detectChanges();
       },
     });

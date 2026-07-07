@@ -384,6 +384,14 @@ async fn main() {
         });
     }
 
+    // ── Weekly SigmaHQ community rules auto-updater ────────────────────────
+    detection::spawn_sigma_updater(
+        rules_dir.clone(),
+        redis_url.clone(),
+        state.detection.clone(),
+        state.ch_storage.clone(),
+    );
+
 
 
     let cors = CorsLayer::new()
@@ -415,6 +423,8 @@ async fn main() {
         .route("/api/scale-status", get(api::get_scale_status))
         .route("/api/rules",          get(api::get_rules).post(api::create_rule))
         .route("/api/rules/reload",   post(api::reload_rules_api))     // ← MUST be before /:id
+        .route("/api/rules/sync-community", post(api::sync_community_rules_api))
+        .route("/api/rules/hit-counts", get(api::get_rule_hit_counts))
         .route("/api/rules/:id",      get(api::get_rule_by_id).delete(api::delete_rule))
         .route("/api/threat-intel",     get(api::get_threat_intel))
         .route("/api/threat-intel/:ip", get(api::lookup_ioc))
@@ -461,6 +471,7 @@ async fn main() {
         .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
         .route("/api/auth/tenants/:id", put(api::update_tenant_api))
         .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))
+        .route("/api/auth/tenants/:id/ai-enabled", post(api::set_tenant_ai_enabled_api))
         .route("/api/announcements",
             get(api::get_announcements_api)
             .post(api::create_announcement_api))

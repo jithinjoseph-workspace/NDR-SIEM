@@ -21,6 +21,9 @@ pub fn spawn_predictor(
             };
             let trusted_snap = trusted.read().await;
             for tenant_id in tenants {
+                if !ch.get_tenant_ai_enabled(&tenant_id).await {
+                    continue;
+                }
                 if let Err(e) = run_prediction(&ch, &tenant_id, &trusted_snap).await {
                     warn!("Prediction failed for {}: {}", tenant_id, e);
                 }

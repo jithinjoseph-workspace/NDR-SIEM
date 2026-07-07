@@ -137,6 +137,13 @@ export class AuthService implements OnDestroy {
     return role === 'admin' || role === 'super_admin';
   }
 
+  isTenantAiEnabled(): boolean {
+    const user = this.getUser();
+    if (!user) return false;
+    if (user.role === 'super_admin') return true;
+    return user.ai_enabled !== false;
+  }
+
   hasPermission(permission: string): boolean {
     const user = this.getUser();
     if (!user) return false;

@@ -171,6 +171,14 @@
           <button class="icon-button" type="button" title="Edit tenant" (click)="openEditTenant(tenant)">
             <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
           </button>
+          <button *ngIf="currentUser?.role === 'super_admin'"
+            class="secondary-action compact-action ai-toggle-btn"
+            [class.ai-enabled]="tenant.ai_enabled"
+            type="button"
+            title="{{ tenant.ai_enabled ? 'Disable AI features for this tenant' : 'Enable AI features for this tenant' }}"
+            (click)="toggleTenantAI(tenant, !tenant.ai_enabled)">
+            {{ tenant.ai_enabled ? 'AI On' : 'AI Off' }}
+          </button>
           <button class="secondary-action compact-action" type="button" [disabled]="tenant.id === 'default'"
             (click)="setTenantActive(tenant, !tenant.active)">
             {{ tenant.active ? 'Deactivate' : 'Reactivate' }}
@@ -320,11 +328,20 @@
           <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
           Refresh
         </button>
+        <button class="secondary-action" type="button" [disabled]="syncingRules" (click)="syncCommunityRules()"
+          title="Download latest SigmaHQ network + Linux rules">
+          <lucide-icon [name]="DownloadIcon" class="w-4 h-4"></lucide-icon>
+          {{ syncingRules ? 'Syncing…' : 'Sync SIGMA Rules' }}
+        </button>
         <button class="primary-action" type="button" [disabled]="scaling" (click)="scaleUp()">
           <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
           {{ scaling ? 'Starting...' : 'Add Engine' }}
         </button>
       </div>
+    </div>
+    <div *ngIf="syncMessage"
+      [class]="'mb-3 px-4 py-2 rounded text-xs font-bold ' + (syncError ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-primary/10 text-primary border border-primary/20')">
+      {{ syncMessage }}
     </div>
 
     <div *ngIf="loadingEngines" class="loading-state">Loading engines...</div>

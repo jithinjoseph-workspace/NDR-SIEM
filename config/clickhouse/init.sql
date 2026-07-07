@@ -193,11 +193,14 @@ CREATE TABLE IF NOT EXISTS ndr.tenants ON CLUSTER ndr_cluster
     id         String,
     name       String,
     active     UInt8 DEFAULT 1,
+    ai_enabled UInt8 DEFAULT 1,
     updated_at DateTime DEFAULT now(),
     created_at DateTime DEFAULT now()
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/tenants', '{replica}', updated_at)
 ORDER BY id;
+
+ALTER TABLE ndr.tenants ON CLUSTER ndr_cluster ADD COLUMN IF NOT EXISTS ai_enabled UInt8 DEFAULT 1;
 
 INSERT INTO ndr.tenants (id, name, active)
 SELECT 'default', 'Default Organization', 1

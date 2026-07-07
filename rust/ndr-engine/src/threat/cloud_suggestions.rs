@@ -49,6 +49,7 @@ async fn run_scan(ch: &Arc<ClickhouseStorage>) {
     let tenant_ids = ch.get_all_tenants().await.unwrap_or_else(|_| vec!["default".to_string()]);
     let mut combined: HashMap<String, u64> = HashMap::new();
     for tid in &tenant_ids {
+        if !ch.get_tenant_ai_enabled(tid).await { continue; }
         match ch.get_high_volume_clean_dst_ips(tid, 24, 30).await {
             Ok(v) => {
                 for (ip, cnt) in v {
@@ -58,6 +59,7 @@ async fn run_scan(ch: &Arc<ClickhouseStorage>) {
             Err(e) => warn!("cloud_suggestions: query failed for tenant {} — {}", tid, e),
         }
     }
+    if combined.is_empty() { return; }
     let ip_counts: Vec<(String, u64)> = combined.into_iter().collect();
 
     // ASN lookup — group IPs by org

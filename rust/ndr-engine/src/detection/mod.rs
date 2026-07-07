@@ -2,20 +2,20 @@
 // License: Apache-2.0
 
 mod sigma;
+pub mod updater;
 pub use sigma::{SigmaRule, DetectionMatch, load_rules_from_dir, parse_rule_content};
+pub use updater::{spawn_sigma_updater, sync_now};
 
 use crate::normalizer::NormalizedEvent;
-use sigma::Logic;
 
 pub struct DetectionEngine {
     rules: Vec<SigmaRule>,
 }
 
 impl DetectionEngine {
-    pub fn new(rules_dir: &str) -> Self {
-        let rules = load_rules_from_dir(rules_dir);
-        tracing::info!("Detection engine: {} SIGMA rules loaded", rules.len());
-        Self { rules }
+    pub fn new(_rules_dir: &str) -> Self {
+        tracing::info!("Detection engine: starting empty, rules load from ClickHouse");
+        Self { rules: Vec::new() }
     }
 
     /// Check an event against all loaded rules. Returns all matches.
@@ -25,19 +25,18 @@ impl DetectionEngine {
             .collect()
     }
 
-    /// Check only rules belonging to `tenant_id`.
+    /// Check rules for a specific tenant.
+    /// Includes rules with tenant_id == "*" (global community rules) plus
+    /// tenant-specific custom rules stored in ClickHouse.
     pub fn check_for_tenant(&self, event: &NormalizedEvent, tenant_id: &str) -> Vec<DetectionMatch> {
         self.rules.iter()
-            .filter(|rule| rule.tenant_id == tenant_id)
+            .filter(|rule| rule.tenant_id == "*" || rule.tenant_id == tenant_id)
             .filter_map(|rule| self.eval(rule, event))
             .collect()
     }
 
     fn eval(&self, rule: &SigmaRule, event: &NormalizedEvent) -> Option<DetectionMatch> {
-        let matched = match rule.logic {
-            Logic::And => rule.conditions.iter().all(|c| c.matches(event)),
-            Logic::Or  => rule.conditions.iter().any(|c| c.matches(event)),
-        };
+        let matched = rule.condition_expr.eval(&rule.selections, event);
         matched.then(|| DetectionMatch {
             rule_id:  rule.id.clone(),
             title:    rule.title.clone(),

@@ -626,6 +626,135 @@ pub async fn start_consumer(state: Arc<AppState>) {
 
                 // Broadcast immediately (non-blocking)
                 crate::api::broadcast_raw_event(&state, &event);
+
+                // Inline SIGMA for all Zeek events — Suricata can't always corroborate
+                // (DNS alerts have empty IPs; SMB/Kerberos/SSL often have no ET rule).
+                // Store as zeek_only; corroborated hits will overwrite via ReplacingMergeTree.
+                if event.event_source == EventSource::Zeek {
+                    let detections = {
+                        let engine = state.detection.read().await;
+                        engine.check_for_tenant(&event, &tenant_id)
+                    };
+                    if !detections.is_empty() {
+                        let now_ts = chrono::Utc::now().timestamp() as u32;
+                        let score: f32 = detections.iter().map(|d| match d.severity.to_lowercase().as_str() {
+                            "critical" => 90.0_f32,
+                            "high"     => 70.0,
+                            "medium"   => 50.0,
+                            "low"      => 30.0,
+                            _          => 10.0,
+                        }).fold(0.0_f32, f32::max);
+                        let severity = if score >= 90.0 { "CRITICAL" }
+                            else if score >= 70.0 { "HIGH" }
+                            else if score >= 50.0 { "MEDIUM" }
+                            else if score >= 30.0 { "LOW" }
+                            else { "INFO" };
+                        let sigma_titles: Vec<String> = {
+                            let mut seen = std::collections::HashSet::new();
+                            detections.iter().map(|d| d.title.clone()).filter(|t| seen.insert(t.clone())).collect()
+                        };
+                        let cid = event.community_id.clone().unwrap_or_else(|| format!("zeek-{}-{}", now_ts, event.uid.as_deref().unwrap_or("x")));
+                        let src = event.source_ip.clone().unwrap_or_default();
+                        let dst = event.dest_ip.clone().unwrap_or_default();
+                        let agent_z_details = serde_json::to_string(&event.raw).unwrap_or_else(|_| "{}".into());
+                        let ch_hit = crate::storage::clickhouse::NdrHit {
+                            timestamp:          now_ts,
+                            community_id:       cid,
+                            src_ip:             src,
+                            dst_ip:             dst,
+                            score,
+                            severity:           severity.to_string(),
+                            tags:               vec!["sigma".to_string()],
+                            sigma_hits:         sigma_titles,
+                            threat_intel:       0,
+                            src_country:        String::new(),
+                            dst_country:        String::new(),
+                            tenant_id:          tenant_id.clone(),
+                            correlation_status: "zeek_only".to_string(),
+                            agent_z_details,
+                            agent_s_details:    "{}".to_string(),
+                            corroborated_at:    0,
+                            agent_s_rule_id:    String::new(),
+                            agent_s_category:   String::new(),
+                            updated_at:         now_ts,
+                        };
+                        let ch_clone        = state.ch_storage.clone();
+                        let tid_clone       = tenant_id.clone();
+                        let cid_clone       = ch_hit.community_id.clone();
+                        let src_clone       = ch_hit.src_ip.clone();
+                        let dst_clone       = ch_hit.dst_ip.clone();
+                        let sev_clone       = ch_hit.severity.clone();
+                        let sigma_log       = detections.iter().map(|d| d.title.as_str()).collect::<Vec<_>>().join(",");
+                        let do_evidence     = matches!(severity, "HIGH" | "CRITICAL" | "MEDIUM")
+                                             && cid_clone.starts_with("1:");
+                        tracing::info!(
+                            sigma = %sigma_log,
+                            src   = %event.source_ip.as_deref().unwrap_or("-"),
+                            dst   = %event.dest_ip.as_deref().unwrap_or("-"),
+                            "zeek_only SIGMA hit"
+                        );
+                        tokio::spawn(async move {
+                            if let Err(e) = ch_clone.insert_hit_for_tenant(ch_hit, &tid_clone).await {
+                                tracing::warn!("zeek_only hit insert error: {}", e);
+                                return;
+                            }
+                            if !do_evidence { return; }
+
+                            let opensearch_url = std::env::var("OPENSEARCH_URL")
+                                .unwrap_or_else(|_| "http://localhost:9200".to_string());
+                            let arkime_url  = std::env::var("ARKIME_URL").unwrap_or_default();
+                            let arkime_pass = std::env::var("ARKIME_PASS")
+                                .unwrap_or_else(|_| "admin".to_string());
+                            let now_str  = chrono::Utc::now().to_rfc3339();
+                            let alert_json = serde_json::json!({
+                                "community_id":    cid_clone,
+                                "tenant_id":       tid_clone,
+                                "severity":        sev_clone,
+                                "src_ip":          src_clone,
+                                "dst_ip":          dst_clone,
+                                "rule_name":       sigma_log,
+                                "timestamp":       now_str,
+                                "auto_captured_at": now_str,
+                            });
+                            let ev_sem = crate::api::evidence_semaphore();
+                            let _permit = ev_sem.acquire_owned().await;
+                            match crate::evidence::build_evidence_bundle(
+                                &opensearch_url, &arkime_url, &arkime_pass,
+                                &cid_clone, alert_json, &tid_clone, None,
+                            ).await {
+                                Ok((zip_bytes, sha256, _manifest)) => {
+                                    let date      = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                                    let dir       = format!("/opt/ndr/evidence/{}/{}", tid_clone, date);
+                                    let _         = tokio::fs::create_dir_all(&dir).await;
+                                    let bundle_id = uuid::Uuid::new_v4().to_string();
+                                    let file_path = format!("{}/{}.zip", dir, bundle_id);
+                                    let size      = zip_bytes.len() as u64;
+                                    if tokio::fs::write(&file_path, &zip_bytes).await.is_ok() {
+                                        let _ = ch_clone.save_evidence_bundle(
+                                            &tid_clone, &bundle_id, &cid_clone,
+                                            &file_path, &sha256, size,
+                                            1, 90,
+                                            &src_clone, &dst_clone, &sev_clone, "",
+                                        ).await;
+                                        let _ = ch_clone.log_evidence_action(
+                                            &tid_clone, &cid_clone, &bundle_id,
+                                            "auto_captured", "auto",
+                                            &sev_clone, "", "",
+                                            "Automatically captured on SIGMA zeek_only hit",
+                                            "",
+                                        ).await;
+                                        tracing::info!(
+                                            "Evidence bundle {} captured for zeek_only cid {}",
+                                            bundle_id, cid_clone
+                                        );
+                                    }
+                                }
+                                Err(e) => tracing::warn!("Evidence capture failed for {}: {}", cid_clone, e),
+                            }
+                        });
+                    }
+                }
+
                 // Correlate in a bounded background task — semaphore caps concurrent
                 // ClickHouse+SOAR calls at 16 so a burst of hits can't saturate the
                 // connection pool or starve the tokio runtime

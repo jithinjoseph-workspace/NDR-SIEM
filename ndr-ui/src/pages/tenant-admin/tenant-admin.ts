@@ -50,13 +50,6 @@ interface TenantUser {
   permissions?: string[] | string;
 }
 
-interface TenantUserView extends TenantUser {
-  roleLabel: string;
-  permissionLabels: string[];
-  statusLabel: 'active' | 'disabled';
-  avatarInitial: string;
-}
-
 interface PermissionOption {
   key: string;
   label: string;
@@ -105,7 +98,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   // Bulk Selection
   selectedUserIds: Set<string> = new Set();
-  allSelected = false;
 
   activeTab: 'users' = 'users';
   
@@ -113,11 +105,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
   searchTerm = '';
   sortField: keyof TenantUser | 'status' = 'username';
   sortAscending = true;
-  filteredAndSortedUsers: TenantUserView[] = [];
-
-  activeUsersCount = 0;
-  analystUsersCount = 0;
-  viewerUsersCount = 0;
 
   // Chart Data Configurations
   public roleChartData: any = { labels: [], datasets: [] };
@@ -277,6 +264,18 @@ export class TenantAdmin implements OnInit, OnDestroy {
     if (this.statusInterval) clearInterval(this.statusInterval);
   }
 
+  get activeUsers() {
+    return this.users.filter(user => user.active !== false).length;
+  }
+
+  get analystUsers() {
+    return this.users.filter(user => user.role === 'analyst' || user.role === 'senior_analyst').length;
+  }
+
+  get viewerUsers() {
+    return this.users.filter(user => user.role === 'viewer').length;
+  }
+
   get pageTitle() {
     return 'Tenant Users';
   }
@@ -334,9 +333,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
             active: user.active !== false,
             permissions: this.normalizePermissions(user.permissions, user.role),
           }));
-        this.calculateMetrics();
         this.updateCharts();
-        this.applyFilters();
         this.loading = false;
         this.cdr.detectChanges();
       },
@@ -529,9 +526,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
         ? { ...user, permissions, active }
         : user
     );
-    this.calculateMetrics();
     this.updateCharts();
-    this.applyFilters();
     this.closeForm();
     this.showMessage(
       active ? 'User updated successfully' : 'User disabled successfully',
@@ -545,9 +540,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.api.deleteUser(user.id).subscribe({
       next: () => {
         this.users = this.users.filter(item => item.id !== user.id);
-        this.calculateMetrics();
-        this.applyFilters();
-        this.updateCharts();
         this.showMessage('User deleted', 'success');
         this.cdr.detectChanges();
       },
@@ -714,26 +706,16 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.usernameStatus = 'idle';
   }
 
-  onSearchChange(term: string) {
-    this.searchTerm = term;
-    this.applyFilters();
-  }
-
-  applyFilters() {
-    let result: TenantUserView[] = this.users.map(u => ({
-      ...u,
-      roleLabel: this.getRoleLabel(u.role),
-      permissionLabels: this.getPermissionLabels(u),
-      statusLabel: this.getUserStatus(u),
-      avatarInitial: (u.username || '?').charAt(0).toUpperCase()
-    }));
+  // Enterprise Data Grid Getters
+  get filteredAndSortedUsers() {
+    let result = this.users;
     
     // Filter
     if (this.searchTerm) {
       const term = this.searchTerm.toLowerCase();
       result = result.filter(u => 
         u.username.toLowerCase().includes(term) || 
-        u.roleLabel.toLowerCase().includes(term)
+        this.getRoleLabel(u.role).toLowerCase().includes(term)
       );
     }
     
@@ -755,8 +737,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
       return 0;
     });
     
-    this.filteredAndSortedUsers = result;
-    this.updateSelectionState();
+    return result;
   }
   
   toggleSort(field: keyof TenantUser | 'status') {
@@ -766,13 +747,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
       this.sortField = field;
       this.sortAscending = true;
     }
-    this.applyFilters();
-  }
-
-  private calculateMetrics() {
-    this.activeUsersCount = this.users.filter(user => user.active !== false).length;
-    this.analystUsersCount = this.users.filter(user => user.role === 'analyst' || user.role === 'senior_analyst').length;
-    this.viewerUsersCount = this.users.filter(user => user.role === 'viewer').length;
   }
 
   // Chart Generation Logic
@@ -808,7 +782,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
   }
 
   private generateStatusChart() {
-    const active = this.activeUsersCount;
+    const active = this.activeUsers;
     const disabled = this.users.length - active;
 
     this.statusChartData = {
@@ -831,26 +805,20 @@ export class TenantAdmin implements OnInit, OnDestroy {
     } else {
       this.selectedUserIds.add(userId);
     }
-    this.updateSelectionState();
   }
 
   toggleAll() {
     const visibleUsers = this.filteredAndSortedUsers;
-    if (this.allSelected) {
+    if (this.isAllSelected()) {
       this.selectedUserIds.clear();
     } else {
       visibleUsers.forEach(u => this.selectedUserIds.add(u.id));
     }
-    this.updateSelectionState();
   }
 
-  updateSelectionState() {
+  isAllSelected(): boolean {
     const visibleUsers = this.filteredAndSortedUsers;
-    this.allSelected = visibleUsers.length > 0 && visibleUsers.every(u => this.selectedUserIds.has(u.id));
-  }
-
-  trackUser(index: number, user: TenantUserView): string {
-    return user.id;
+    return visibleUsers.length > 0 && visibleUsers.every(u => this.selectedUserIds.has(u.id));
   }
 
   bulkUpdateStatus(active: boolean) {
@@ -868,7 +836,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
           completed++;
           if (completed === total) {
             this.selectedUserIds.clear();
-            this.updateSelectionState();
             this.saving = false;
             this.showMessage(`Successfully ${action}d ${total} users`, 'success');
             this.loadUsers();
@@ -923,8 +890,8 @@ export class TenantAdmin implements OnInit, OnDestroy {
         );
         const healthyPipeline = tenantSensors.length === 0 || tenantSensors.some(sensor =>
           this.isRecentlySeen(sensor.last_seen) &&
-          (this.isRunning(sensor['agent-z']) ||
-           this.isRunning(sensor['agent-s']) ||
+          (this.isRunning(sensor.zeek) ||
+           this.isRunning(sensor.suricata) ||
            this.isRunning(sensor.vector))
         );
 

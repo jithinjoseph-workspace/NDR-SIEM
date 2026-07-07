@@ -8,7 +8,7 @@ pub mod websocket;
 static EVIDENCE_SEMAPHORE: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
     std::sync::OnceLock::new();
 
-fn evidence_semaphore() -> Arc<tokio::sync::Semaphore> {
+pub fn evidence_semaphore() -> Arc<tokio::sync::Semaphore> {
     EVIDENCE_SEMAPHORE
         .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
         .clone()
@@ -861,6 +861,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                      Provide your comprehensive threat analysis.",
                                 );
 
+                                if !ch.get_tenant_ai_enabled(&tenant).await {
+                                    return;
+                                }
+
                                 match crate::ai::provider::generate_chat(
                                     &ch, system_prompt, &[], &question
                                 ).await {
@@ -893,9 +897,13 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         });
     }
 
-    // SIGMA detection — only rules belonging to this tenant
-    let mut detections = state.detection.read().await.check_for_tenant(&hit.agent_z, &tenant_id);
-    detections.extend(state.detection.read().await.check_for_tenant(&hit.agent_s, &tenant_id));
+    // SIGMA detection — single lock acquisition for both events
+    let detections = {
+        let engine = state.detection.read().await;
+        let mut d = engine.check_for_tenant(&hit.agent_z, &tenant_id);
+        d.extend(engine.check_for_tenant(&hit.agent_s, &tenant_id));
+        d
+    };
 
     let cs      = hit.agent_z.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);
@@ -1114,6 +1122,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                      Is this a false positive?",
                     tls_sni_display = if tls_sni.is_empty() { "none".to_string() } else { tls_sni },
                 );
+
+                if !ch3.get_tenant_ai_enabled(&tid3).await {
+                    return;
+                }
 
                 if let Ok((reply, _)) = crate::ai::provider::generate_chat(
                     &ch3, prompt, &[], &question
@@ -1821,7 +1833,7 @@ pub async fn get_hits(State(state): State<AppState>, headers: axum::http::Header
     let tenant_id = extract_claims(&headers)
         .map(|c| c.tenant_id)
         .unwrap_or_else(|| "default".to_string());
-    match state.ch_storage.get_recent_hits_by_tenant(50, &tenant_id).await {
+    match state.ch_storage.get_recent_hits_by_tenant(200, &tenant_id).await {
         Ok(hits) => Json(json!(hits)),
         Err(e) => {
             tracing::warn!("Hits query error: {}", e);
@@ -1834,24 +1846,23 @@ pub async fn load_rules_from_clickhouse(
     ch: &crate::storage::ClickhouseStorage,
     rules_dir: &str,
 ) -> Vec<crate::detection::SigmaRule> {
+    // Rules are loaded exclusively from ClickHouse (disk files are download cache only)
+    let mut rules: Vec<crate::detection::SigmaRule> = Vec::new();
+
+    // Per-tenant custom rules from ClickHouse (tenant_id set to the owning tenant)
     if let Ok(ch_rules) = ch.get_all_enabled_sigma_rules().await {
-        if !ch_rules.is_empty() {
-            let mut rules = Vec::new();
-            for (id, content, tenant_id) in ch_rules {
-                match crate::detection::parse_rule_content(&content) {
-                    Ok(mut r) => {
-                        r.tenant_id = tenant_id;
-                        rules.push(r);
-                    }
-                    Err(e) => tracing::warn!("Failed to parse rule {} from ClickHouse: {}", id, e),
+        for (id, content, tenant_id) in ch_rules {
+            match crate::detection::parse_rule_content(&content) {
+                Ok(mut r) => {
+                    r.tenant_id = tenant_id;
+                    rules.push(r);
                 }
-            }
-            if !rules.is_empty() {
-                return rules;
+                Err(e) => tracing::warn!("Failed to parse rule {} from ClickHouse: {}", id, e),
             }
         }
     }
-    crate::detection::load_rules_from_dir(rules_dir)
+
+    rules
 }
 
 pub async fn get_rule_by_id(
@@ -1984,66 +1995,46 @@ pub async fn get_rules(
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     
-    // Try ClickHouse first
+    // Load community rules (tenant_id='*') + tenant custom rules from ClickHouse
     let db_rules = state.ch_storage.get_all_sigma_rules(&tenant_id).await.unwrap_or_default();
-    
-    let map_db_rules = |rules: &Vec<(String, String, String, String, u8)>| -> Vec<serde_json::Value> {
-        rules.iter().map(|(id, name, content, _r_tenant_id, enabled)| {
+
+    let result: Vec<serde_json::Value> = db_rules.iter()
+        .map(|(id, name, content, _r_tenant_id, enabled, source)| {
             let parsed = crate::detection::parse_rule_content(content).ok();
             let conditions_len = parsed.as_ref().map(|p| p.conditions.len()).unwrap_or(0);
-            let tags = parsed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
-            let severity = parsed.as_ref().map(|p| p.severity.clone()).unwrap_or_default();
+            let tags      = parsed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
+            let severity  = parsed.as_ref().map(|p| p.severity.clone()).unwrap_or_default();
             let logsource = parsed.as_ref().map(|p| p.logsource.clone());
+            let is_enabled = *enabled == 1;
             json!({
-                "id":          id,
-                "title":       name,
-                "severity":    severity,
-                "tags":        tags,
-                "conditions":  conditions_len,
+                "id":        id,
+                "name":      name,
+                "title":     name,
+                "type":      source,
+                "severity":  severity,
+                "tags":      tags,
+                "conditions": conditions_len,
                 "logsource": {
                     "product":  logsource.as_ref().and_then(|l| l.product.clone()),
                     "category": logsource.as_ref().and_then(|l| l.category.clone()),
                     "service":  logsource.as_ref().and_then(|l| l.service.clone()),
                 },
-                "enabled":     *enabled == 1,
-                "status":      if *enabled == 1 { "active" } else { "disabled" }
-            })
-        }).collect()
-    };
-
-    let result: Vec<serde_json::Value> = if !db_rules.is_empty() {
-        map_db_rules(&db_rules)
-    } else if tenant_id == "default" {
-        // Fallback to filesystem only for default tenant
-        let rules_dir = std::env::var("RULES_DIR")
-            .unwrap_or_else(|_| "rules".to_string());
-        let all_rules = crate::detection::load_rules_from_dir(&rules_dir);
-        let disabled = state.ch_storage
-            .get_disabled_rules(&tenant_id).await
-            .unwrap_or_default();
-        all_rules.iter().map(|r| {
-            let is_enabled = !disabled.contains(&r.id);
-            json!({
-                "id":          r.id,
-                "title":       r.title,
-                "severity":    r.severity,
-                "tags":        r.tags,
-                "conditions":  r.conditions.len(),
-                "logsource": {
-                    "product":  r.logsource.product,
-                    "category": r.logsource.category,
-                    "service":  r.logsource.service,
-                },
                 "enabled": is_enabled,
-                "status":  if is_enabled { "active" } else { "disabled" }
+                "status":  if is_enabled { "ACTIVE" } else { "DISABLED" },
             })
-        }).collect()
-    } else {
-        // Non-default tenants with no rules in DB → empty list
-        vec![]
-    };
+        })
+        .collect();
 
     Json(json!(result))
+}
+
+pub async fn get_rule_hit_counts(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let counts = state.ch_storage.get_rule_hit_counts(&tenant_id).await.unwrap_or_default();
+    Json(serde_json::to_value(counts).unwrap_or(json!({})))
 }
 
 //threat intelegence endpoint
@@ -2178,6 +2169,44 @@ pub async fn reload_rules_api(
         "count":         count,
         "message":       "Rules reloaded successfully"
     }))
+}
+
+/// Admin-only: fetch latest SigmaHQ community network rules right now.
+pub async fn sync_community_rules_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let claims = match require_super_admin(&headers) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+
+    let rules_dir = std::env::var("RULES_DIR").unwrap_or_else(|_| "rules".to_string());
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+
+    match crate::detection::sync_now(
+        &rules_dir,
+        &redis_url,
+        &state.detection,
+        &state.ch_storage,
+    ).await {
+        Ok(count) => {
+            tracing::info!("Admin {} triggered SigmaHQ sync: {} new rules", claims.sub, count);
+            Json(json!({
+                "status":     "ok",
+                "new_rules":  count,
+                "message":    format!("{} community rules synced from SigmaHQ", count),
+            })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("SigmaHQ sync failed: {}", e);
+            (StatusCode::BAD_GATEWAY, Json(json!({
+                "error": format!("Sync failed: {}", e)
+            }))).into_response()
+        }
+    }
 }
 
 pub async fn get_soar_status(
@@ -2329,14 +2358,9 @@ detection:
         value = payload.value,
     );
 
-    // Save to ClickHouse
+    // Save to ClickHouse (single source of truth — no disk write needed)
     match state.ch_storage.save_sigma_rule(&id, &payload.title, &yaml, &tenant_id).await {
         Ok(_) => {
-            // Also write to rules directory as fallback
-            let rules_dir = std::env::var("RULES_DIR")
-                .unwrap_or_else(|_| "rules".to_string());
-            let file_path = format!("{}/{}.yml", rules_dir, id);
-            let _ = std::fs::write(&file_path, &yaml);
 
             let redis = state.redis.clone();
             let tid = tenant_id.clone();
@@ -2354,7 +2378,6 @@ detection:
             Json(json!({
                 "status": "created",
                 "id":     id,
-                "file":   file_path,
                 "rule":   yaml
             }))
         }
@@ -3350,6 +3373,11 @@ pub async fn login(
                 tenant_id,
                 permissions_vec.clone(),
             );
+            let ai_enabled = if role == "super_admin" {
+                true
+            } else {
+                state.ch_storage.get_tenant_ai_enabled(tenant_id).await
+            };
             tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
             (
                 StatusCode::OK,
@@ -3361,7 +3389,8 @@ pub async fn login(
                         "username": username,
                         "role": role,
                         "tenant_id": tenant_id,
-                        "permissions": permissions_vec
+                        "permissions": permissions_vec,
+                        "ai_enabled": ai_enabled
                     }
                 }))
             ).into_response()
@@ -4101,6 +4130,25 @@ pub async fn set_tenant_status_api(
             "status": "error",
             "message": e.to_string()
         }))
+    }
+}
+
+pub async fn set_tenant_ai_enabled_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let enabled = payload["enabled"].as_bool().unwrap_or(true);
+    match state.ch_storage.set_tenant_ai_enabled(&id, enabled).await {
+        Ok(_) => {
+            tracing::info!("AI {} for tenant {} by super_admin", if enabled { "enabled" } else { "disabled" }, id);
+            Json(json!({"status": "ok", "ai_enabled": enabled}))
+        },
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
 }
 
@@ -5235,6 +5283,95 @@ pub async fn sensor_heartbeat(
     Json(json!({"status": "ok"}))
 }
 
+/// Run SIGMA detection on a Linux auditd event and store any hits directly to ClickHouse.
+/// Called inline during ingest — Linux events don't participate in the Zeek+Suricata correlator.
+async fn handle_linux_endpoint_event(state: &AppState, raw: Value, tenant_id: &str) {
+    use crate::normalizer::NormalizedEvent;
+    use crate::storage::clickhouse::NdrHit;
+
+    let event = match NormalizedEvent::from_raw(raw.clone()) {
+        Some(e) => e,
+        None    => return,
+    };
+
+    let detections = {
+        let engine = state.detection.read().await;
+        engine.check_for_tenant(&event, tenant_id)
+    };
+
+    if detections.is_empty() { return; }
+
+    let now = chrono::Utc::now().timestamp() as u32;
+
+    let sigma_hits: Vec<String> = detections.iter().map(|d| d.title.clone()).collect();
+    let tags: Vec<String>       = detections.iter().flat_map(|d| d.tags.clone()).collect();
+
+    // Pick highest severity across all matching rules
+    let severity = detections.iter()
+        .map(|d| d.severity.as_str())
+        .max_by_key(|s| match *s {
+            "critical" => 4u8,
+            "high"     => 3,
+            "medium"   => 2,
+            _          => 1,
+        })
+        .unwrap_or("medium")
+        .to_string();
+
+    let score = match severity.as_str() {
+        "critical" => 10.0f32,
+        "high"     => 7.5,
+        "medium"   => 5.0,
+        _          => 2.5,
+    };
+
+    let community_id = event.community_id.clone().unwrap_or_else(|| format!("linux-{}", now));
+    let dst_ip = event.dest_ip.clone().unwrap_or_default();
+
+    let image   = raw.get("Image").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cmd     = raw.get("CommandLine").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let key     = raw.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let host    = raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let rule_id = detections.first().map(|d| d.rule_id.clone()).unwrap_or_default();
+
+    let agent_s_details = serde_json::json!({
+        "source":       "linux",
+        "host":         host,
+        "Image":        image,
+        "CommandLine":  cmd,
+        "key":          key,
+        "sigma_hits":   sigma_hits.clone(),
+    }).to_string();
+
+    let hit = NdrHit {
+        timestamp:          now,
+        community_id,
+        src_ip:             String::new(),
+        dst_ip,
+        score,
+        severity,
+        tags,
+        sigma_hits,
+        threat_intel:       0,
+        src_country:        String::new(),
+        dst_country:        String::new(),
+        tenant_id:          tenant_id.to_string(),
+        correlation_status: "endpoint".to_string(),
+        agent_z_details:    String::new(),
+        agent_s_details,
+        corroborated_at:    now,
+        agent_s_rule_id:    rule_id,
+        agent_s_category:   "endpoint".to_string(),
+        updated_at:         now,
+    };
+
+    if let Err(e) = state.ch_storage.insert_hit_for_tenant(hit, tenant_id).await {
+        tracing::warn!("Linux endpoint hit storage failed: {}", e);
+    } else {
+        tracing::info!("Linux endpoint SIGMA hit stored — tenant={} host={}", tenant_id, host);
+    }
+}
+
 pub async fn ingest_events(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -5302,6 +5439,13 @@ pub async fn ingest_events(
                 "tenant_id".to_string(),
                 serde_json::Value::String(tenant_id.clone())
             );
+        }
+
+        // Linux auditd endpoint events bypass Kafka — run SIGMA inline and store directly.
+        if evt.get("source").and_then(|v| v.as_str()) == Some("linux") {
+            handle_linux_endpoint_event(&state, evt, &tenant_id).await;
+            published += 1;
+            continue;
         }
 
         // Serialize event to JSON string
@@ -7383,6 +7527,13 @@ pub async fn aria_chat(
         })),
     };
 
+    if claims.role != "super_admin" && !state.ch_storage.get_tenant_ai_enabled(&claims.tenant_id).await {
+        return Json(json!({
+            "reply": "AI features are not enabled for your organization. Contact your administrator.",
+            "emotion": "neutral"
+        }));
+    }
+
     // Keep last 6 messages only — prevents prompt bloat on long conversations
     let history_full = payload["history"].as_array().cloned().unwrap_or_default();
     let history = if history_full.len() > 6 {
@@ -7516,6 +7667,10 @@ pub async fn aria_investigate(
         Some(cid) => cid.to_string(),
         None => return Json(json!({"error": "community_id required"})),
     };
+
+    if claims.role != "super_admin" && !state.ch_storage.get_tenant_ai_enabled(&claims.tenant_id).await {
+        return Json(json!({"error": "AI features are not enabled for your tenant. Contact your administrator."}));
+    }
 
     match crate::ai::investigator::auto_investigate(
         &state.ch_storage,

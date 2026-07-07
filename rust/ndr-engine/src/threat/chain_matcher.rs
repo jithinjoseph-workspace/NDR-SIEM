@@ -19,6 +19,7 @@ pub fn spawn_chain_matcher(
             match ch.get_all_tenants().await {
                 Ok(tenants) => {
                     for tenant_id in &tenants {
+                        if !ch.get_tenant_ai_enabled(tenant_id).await { continue; }
                         run_matching(Arc::clone(&ch), tenant_id, &trusted, &asn).await;
                     }
                 }
