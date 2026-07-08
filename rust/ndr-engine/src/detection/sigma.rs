@@ -1,6 +1,6 @@
 // NDR Engine — SIGMA-compatible Detection Rule Engine
 // Lightweight fresh implementation — NOT based on any existing SIGMA codebase.
-// Supports: equals, contains, startswith, endswith, re,
+// Supports: equals, contains, startswith, endswith, re, cidr,
 //           named selections, any/all of <pattern>, not, AND/OR expressions.
 // License: Apache-2.0
 
@@ -21,7 +21,7 @@ pub struct LogSource {
 }
 
 #[derive(Debug, Clone)]
-pub enum Matcher { Equals, Contains, StartsWith, EndsWith, Regex }
+pub enum Matcher { Equals, Contains, StartsWith, EndsWith, Regex, Cidr }
 
 #[derive(Debug, Clone)]
 pub struct FieldCondition {
@@ -45,6 +45,7 @@ impl FieldCondition {
                 Matcher::StartsWith => field_val.starts_with(&v),
                 Matcher::EndsWith   => field_val.ends_with(&v),
                 Matcher::Regex      => Regex::new(val).map(|r| r.is_match(&field_val)).unwrap_or(false),
+                Matcher::Cidr       => ip_in_cidr(&field_val, val),
             }
         });
         if self.negated { !hit } else { hit }
@@ -82,7 +83,8 @@ pub enum ConditionExpr {
     AllOf(String),             // all of <prefix>* — AND over matching groups
     AnyOfThem,                 // any of them
     AllOfThem,                 // all of them
-    AlwaysTrue,                // unsupported (count/near/temporal) — match everything
+    AlwaysTrue,                // empty condition — match everything
+    AlwaysFalse,               // unsupported (count/near/temporal) — skip safely
 }
 
 impl ConditionExpr {
@@ -110,7 +112,8 @@ impl ConditionExpr {
                 selections.values().any(|g| g.matches(event)),
             ConditionExpr::AllOfThem =>
                 !selections.is_empty() && selections.values().all(|g| g.matches(event)),
-            ConditionExpr::AlwaysTrue => true,
+            ConditionExpr::AlwaysTrue  => true,
+            ConditionExpr::AlwaysFalse => false,
         }
     }
 }
@@ -170,8 +173,8 @@ fn tokenize_condition(s: &str) -> Vec<String> {
 
 pub fn parse_condition_expr(s: &str) -> ConditionExpr {
     if s.contains("count(") || s.starts_with("near ") {
-        warn!("SIGMA: aggregation/temporal condition not supported: '{}' — rule will always match", s.trim());
-        return ConditionExpr::AlwaysTrue;
+        warn!("SIGMA: aggregation/temporal condition not supported: '{}' — rule skipped (will never match)", s.trim());
+        return ConditionExpr::AlwaysFalse;
     }
     let tokens = tokenize_condition(s);
     if tokens.is_empty() { return ConditionExpr::AlwaysTrue; }
@@ -388,6 +391,7 @@ fn parse_field_condition(field_modifier: &str, value: &serde_yaml::Value, out: &
         "startswith" => Matcher::StartsWith,
         "endswith"   => Matcher::EndsWith,
         "re"         => Matcher::Regex,
+        "cidr"       => Matcher::Cidr,
         _            => Matcher::Equals,
     };
 
@@ -401,6 +405,51 @@ fn parse_field_condition(field_modifier: &str, value: &serde_yaml::Value, out: &
 
     if !values.is_empty() {
         out.push(FieldCondition { field, matcher, values, negated });
+    }
+}
+
+// ── CIDR helper (pure std::net, no external crates) ──────────────────────
+//
+// Returns true if `ip_str` falls within the network `cidr_str` (e.g. "10.0.0.0/8").
+// Handles IPv4 and IPv6. Returns false on any parse error so rules degrade
+// gracefully on malformed values rather than panicking.
+fn ip_in_cidr(ip_str: &str, cidr_str: &str) -> bool {
+    use std::net::IpAddr;
+
+    let (network_str, prefix_len_str) = match cidr_str.rsplit_once('/') {
+        Some(pair) => pair,
+        // No slash — treat as a plain IP equality check
+        None => return ip_str == cidr_str,
+    };
+
+    let prefix_len: u32 = match prefix_len_str.parse() {
+        Ok(n)  => n,
+        Err(_) => return false,
+    };
+
+    let network_addr: IpAddr = match network_str.parse() {
+        Ok(a)  => a,
+        Err(_) => return false,
+    };
+
+    let host_addr: IpAddr = match ip_str.parse() {
+        Ok(a)  => a,
+        Err(_) => return false,
+    };
+
+    match (network_addr, host_addr) {
+        (IpAddr::V4(net), IpAddr::V4(host)) => {
+            if prefix_len > 32 { return false; }
+            let shift = 32u32.saturating_sub(prefix_len);
+            (u32::from(net) >> shift) == (u32::from(host) >> shift)
+        }
+        (IpAddr::V6(net), IpAddr::V6(host)) => {
+            if prefix_len > 128 { return false; }
+            let shift = 128u32.saturating_sub(prefix_len);
+            (u128::from(net) >> shift) == (u128::from(host) >> shift)
+        }
+        // IPv4 vs IPv6 mismatch — never a match
+        _ => false,
     }
 }
 

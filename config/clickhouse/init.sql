@@ -57,6 +57,18 @@ ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY SETTING deduplicate_merge
 ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster ADD INDEX IF NOT EXISTS idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1;
 ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp));
 
+CREATE TABLE IF NOT EXISTS ndr.ndr_baselines ON CLUSTER ndr_cluster (
+    tenant_id   String,
+    src_ip      String,
+    metric      String,
+    value_f     Float64  DEFAULT 0,
+    value_s     String   DEFAULT '',
+    window_ts   DateTime,
+    updated_at  DateTime DEFAULT now()
+) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_baselines', '{replica}', updated_at)
+ORDER BY (tenant_id, src_ip, metric, window_ts)
+TTL window_ts + INTERVAL 35 DAY;
+
 CREATE TABLE IF NOT EXISTS ndr.ndr_stats ON CLUSTER ndr_cluster ( 
     timestamp      DateTime,
     events_per_min UInt32,

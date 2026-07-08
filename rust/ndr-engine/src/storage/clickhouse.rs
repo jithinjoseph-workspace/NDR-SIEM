@@ -1177,6 +1177,7 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS announcement_type String DEFAULT 'info'",
                 "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS audience String DEFAULT 'all'",
                 "ALTER TABLE ndr.announcements ADD COLUMN IF NOT EXISTS target_tenants Array(String) DEFAULT []",
+                "CREATE TABLE IF NOT EXISTS ndr.ndr_baselines (tenant_id String, src_ip String, metric String, value_f Float64 DEFAULT 0, value_s String DEFAULT '', window_ts DateTime, updated_at DateTime DEFAULT now()) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (tenant_id, src_ip, metric, window_ts) TTL window_ts + INTERVAL 35 DAY",
                 "ALTER TABLE ndr.ndr_events ADD INDEX IF NOT EXISTS idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1",
                 "ALTER TABLE ndr.ndr_events ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))",
                 "ALTER TABLE ndr.ndr_hits MODIFY SETTING deduplicate_merge_projection_mode = 'rebuild'",

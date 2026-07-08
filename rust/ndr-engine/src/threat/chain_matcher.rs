@@ -445,7 +445,7 @@ async fn run_matching(
             .query(&format!(
                 "SELECT count() FROM {db}.pattern_matches \
                  WHERE chain_id = '{cid}' AND tenant_id = '{tid}' AND status = 'active' \
-                 AND last_updated >= now() - INTERVAL 1 HOUR",
+                 AND last_updated >= now() - INTERVAL 6 HOUR",
                 db  = db,
                 cid = esc(chain_id),
                 tid = esc(tenant_id),

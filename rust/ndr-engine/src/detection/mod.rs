@@ -3,6 +3,7 @@
 
 mod sigma;
 pub mod updater;
+pub mod multiflow;
 pub use sigma::{SigmaRule, DetectionMatch, load_rules_from_dir, parse_rule_content};
 pub use updater::{spawn_sigma_updater, sync_now};
 

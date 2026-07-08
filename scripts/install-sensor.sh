@@ -663,6 +663,32 @@ PYFIX
   fi
 
   log "✅ Suricata configured on $IFACE"
+
+  # Tune AF-PACKET ring buffer for zero-drop capture
+  python3 << 'AFPACKET_TUNE'
+import re
+
+with open('/etc/suricata/suricata.yaml', 'r') as f:
+    content = f.read()
+
+# Zero-copy ring buffer access
+content = re.sub(r'(use-mmap:\s*)\w+',    r'\g<1>yes',   content)
+# Pin ring buffer memory — prevent paging under load
+content = re.sub(r'(mmap-locked:\s*)\w+', r'\g<1>yes',   content)
+# Batched packet delivery (more efficient than tpacket-v2)
+content = re.sub(r'(tpacket-v3:\s*)\w+',  r'\g<1>yes',   content)
+# Larger ring buffer: 2048 packets (default is often 128/256)
+content = re.sub(r'(ring-size:\s*)\d+',   r'\g<1>2048',  content)
+# Block size for tpacket-v3
+content = re.sub(r'(block-size:\s*)\d+',  r'\g<1>32768', content)
+# Use all available CPU cores for capture threads
+content = re.sub(r'(threads:\s*)\w+',     r'\g<1>auto',  content)
+
+with open('/etc/suricata/suricata.yaml', 'w') as f:
+    f.write(content)
+
+print("[NDR] ✅ Suricata AF-PACKET tuned: ring-size=2048, mmap=yes, tpacket-v3=yes, threads=auto")
+AFPACKET_TUNE
 fi
 
 # ── Suppress known false-positive Suricata SIDs ───────
@@ -1203,8 +1229,8 @@ def start_suricata():
              "-l", "/var/log/ndr/suricata",
              "-D",
              "--pidfile", "/tmp/suricata.pid",
-             "--set", "detect.profile=low",
-             "--set", "max-pending-packets=128"],
+             "--set", "detect.profile=medium",
+             "--set", "max-pending-packets=4096"],
             stdout=open("/tmp/suricata.log", "w"),
             stderr=subprocess.STDOUT
         )

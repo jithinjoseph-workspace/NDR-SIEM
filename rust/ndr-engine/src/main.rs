@@ -392,6 +392,11 @@ async fn main() {
         state.ch_storage.clone(),
     );
 
+    // ── Multi-flow correlator (Tier 1/2/3 cross-flow detection) ───────────
+    // Runs only on the elected leader — same election as threat tasks
+    // so all singleton background work stays on one instance.
+    detection::multiflow::spawn(ch_storage_arc.clone(), election.clone());
+
 
 
     let cors = CorsLayer::new()

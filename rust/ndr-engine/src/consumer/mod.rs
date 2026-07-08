@@ -183,6 +183,197 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     .unwrap_or("default")
                     .to_string();
 
+                // ── Hash threat-intel: Zeek `files` log + Suricata `fileinfo` ──────
+                // Extract SHA256 from the appropriate field location for each source,
+                // then check against the MalwareBazaar feed DashSet.
+                let is_file_event = event.log_source.as_deref() == Some("files")
+                    || event.event_type.as_deref() == Some("fileinfo");
+                if is_file_event {
+                    let sha256_opt = raw.get("sha256")
+                        .or_else(|| raw.get("fileinfo").and_then(|f| f.get("sha256")))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| s.len() >= 32)
+                        .map(|s| s.to_lowercase());
+
+                    if let Some(sha256) = sha256_opt {
+                        if state.enrichment.threat_intel.is_malicious_hash(&sha256) {
+                            let now_ts  = chrono::Utc::now().timestamp() as u32;
+                            let src     = event.source_ip.clone().unwrap_or_default();
+                            let dst     = event.dest_ip.clone().unwrap_or_default();
+                            // Use sha256 + 5-min bucket so repeated transfers of the
+                            // same file within one window collapse to a single alert.
+                            let bucket  = now_ts / 300 * 300;
+                            let cid     = event.community_id.clone()
+                                .unwrap_or_else(|| format!("hash-{}-{}", sha256, bucket));
+                            let filename = raw.get("filename")
+                                .or_else(|| raw.get("fileinfo").and_then(|f| f.get("filename")))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let details = serde_json::json!({
+                                "sha256":   sha256,
+                                "filename": filename,
+                                "source":   match event.event_source {
+                                    EventSource::Zeek => "zeek-files",
+                                    _                 => "suricata-fileinfo",
+                                },
+                            });
+                            let (az, as_) = if event.event_source == EventSource::Zeek {
+                                (serde_json::to_string(&details).unwrap_or_else(|_| "{}".into()), "{}".to_string())
+                            } else {
+                                ("{}".to_string(), serde_json::to_string(&details).unwrap_or_else(|_| "{}".into()))
+                            };
+                            let ch_hit = crate::storage::clickhouse::NdrHit {
+                                timestamp:          now_ts,
+                                community_id:       cid,
+                                src_ip:             src,
+                                dst_ip:             dst,
+                                score:              90.0,
+                                severity:           "HIGH".to_string(),
+                                tags:               vec!["malware-hash".to_string(), "threat-intel".to_string()],
+                                sigma_hits:         vec![],
+                                threat_intel:       1,
+                                src_country:        String::new(),
+                                dst_country:        String::new(),
+                                tenant_id:          tenant_id.clone(),
+                                correlation_status: "hash_match".to_string(),
+                                agent_z_details:    az,
+                                agent_s_details:    as_,
+                                corroborated_at:    0,
+                                agent_s_rule_id:    String::new(),
+                                agent_s_category:   "malware".to_string(),
+                                updated_at:         now_ts,
+                                sensor_id:          raw.get("sensor_host")
+                                    .and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            };
+                            let ch_cl  = state.ch_storage.clone();
+                            let tid_cl = tenant_id.clone();
+                            let sha_log = sha256.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
+                                    tracing::warn!("hash-match hit insert error: {}", e);
+                                } else {
+                                    tracing::info!(sha256 = %sha_log, tenant = %tid_cl, "malware hash matched — hit created");
+                                }
+                            });
+                        }
+                    }
+                }
+                // ── JA3 threat-intel: Zeek ssl log ──────────────────────────────
+                if event.log_source.as_deref() == Some("ssl") {
+                    let ja3_opt = raw.get("ja3")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| s.len() == 32)
+                        .map(|s| s.to_lowercase());
+                    if let Some(ja3) = ja3_opt {
+                        if state.enrichment.threat_intel.is_malicious_ja3(&ja3) {
+                            let now_ts = chrono::Utc::now().timestamp() as u32;
+                            let src    = event.source_ip.clone().unwrap_or_default();
+                            let dst    = event.dest_ip.clone().unwrap_or_default();
+                            let cid    = event.community_id.clone()
+                                .unwrap_or_else(|| format!("ja3-{}-{}", ja3, now_ts / 300 * 300));
+                            let sni    = raw.get("server_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let details = serde_json::json!({ "ja3": ja3, "sni": sni });
+                            let ch_hit = crate::storage::clickhouse::NdrHit {
+                                timestamp:          now_ts,
+                                community_id:       cid,
+                                src_ip:             src,
+                                dst_ip:             dst,
+                                score:              80.0,
+                                severity:           "HIGH".to_string(),
+                                tags:               vec!["malicious-ja3".to_string(), "threat-intel".to_string(), "encrypted-traffic".to_string()],
+                                sigma_hits:         vec![],
+                                threat_intel:       1,
+                                src_country:        String::new(),
+                                dst_country:        String::new(),
+                                tenant_id:          tenant_id.clone(),
+                                correlation_status: "ja3_match".to_string(),
+                                agent_z_details:    serde_json::to_string(&details).unwrap_or_else(|_| "{}".into()),
+                                agent_s_details:    "{}".to_string(),
+                                corroborated_at:    0,
+                                agent_s_rule_id:    String::new(),
+                                agent_s_category:   "malware".to_string(),
+                                updated_at:         now_ts,
+                                sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            };
+                            let ch_cl  = state.ch_storage.clone();
+                            let tid_cl = tenant_id.clone();
+                            let ja3_log = ja3.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
+                                    tracing::warn!("ja3-match hit insert error: {}", e);
+                                } else {
+                                    tracing::info!(ja3 = %ja3_log, tenant = %tid_cl, "malicious JA3 matched — hit created");
+                                }
+                            });
+                        }
+                    }
+                }
+
+                // ── DoH evasion: HTTPS traffic to known DNS-over-HTTPS providers ─
+                // A host bypassing the local resolver to use DoH is a policy violation
+                // and common C2 evasion technique.
+                {
+                    const DOH_IPS: &[&str] = &[
+                        "1.1.1.1", "1.0.0.1",                   // Cloudflare
+                        "8.8.8.8", "8.8.4.4",                   // Google
+                        "9.9.9.9", "149.112.112.112",            // Quad9
+                        "208.67.222.222", "208.67.220.220",      // OpenDNS
+                        "94.140.14.14",  "94.140.15.15",         // AdGuard
+                        "185.228.168.168", "185.228.169.168",    // CleanBrowsing
+                        "76.76.2.0", "76.76.10.0",               // Alternate DNS
+                    ];
+                    let dst_port = event.dest_port.unwrap_or(0);
+                    let dst_ip   = event.dest_ip.as_deref().unwrap_or("");
+                    let is_conn_or_ssl = matches!(
+                        event.log_source.as_deref().or(event.event_type.as_deref()),
+                        Some("conn") | Some("ssl") | Some("flow")
+                    );
+                    if is_conn_or_ssl && dst_port == 443 && DOH_IPS.contains(&dst_ip) {
+                        if let Some(src) = event.source_ip.clone() {
+                            if crate::enrichment::is_private_ip(&src) {
+                                let now_ts = chrono::Utc::now().timestamp() as u32;
+                                let bucket = now_ts / 300 * 300;
+                                let cid    = event.community_id.clone()
+                                    .unwrap_or_else(|| format!("doh-{}-{}-{}", src, dst_ip, bucket));
+                                let ch_hit = crate::storage::clickhouse::NdrHit {
+                                    timestamp:          now_ts,
+                                    community_id:       cid,
+                                    src_ip:             src.clone(),
+                                    dst_ip:             dst_ip.to_string(),
+                                    score:              65.0,
+                                    severity:           "MEDIUM".to_string(),
+                                    tags:               vec!["doh-evasion".to_string(), "t:command-and-control".to_string()],
+                                    sigma_hits:         vec![],
+                                    threat_intel:       0,
+                                    src_country:        String::new(),
+                                    dst_country:        String::new(),
+                                    tenant_id:          tenant_id.clone(),
+                                    correlation_status: "doh_evasion".to_string(),
+                                    agent_z_details:    serde_json::json!({ "dst_ip": dst_ip, "dst_port": 443 }).to_string(),
+                                    agent_s_details:    "{}".to_string(),
+                                    corroborated_at:    0,
+                                    agent_s_rule_id:    String::new(),
+                                    agent_s_category:   "policy-violation".to_string(),
+                                    updated_at:         now_ts,
+                                    sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                };
+                                let ch_cl  = state.ch_storage.clone();
+                                let tid_cl = tenant_id.clone();
+                                let src_log = src.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
+                                        tracing::warn!("doh-evasion hit insert error: {}", e);
+                                    } else {
+                                        tracing::info!(src = %src_log, tenant = %tid_cl, "DoH evasion detected — hit created");
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+                // ────────────────────────────────────────────────────────────────
+
                 let source_str = match event.event_source {
                     EventSource::Zeek     => "agent-z",
                     EventSource::Suricata => "agent-s",
@@ -537,6 +728,51 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     }
 
                     if !domain.is_empty() && !domain.ends_with(".local") {
+                        // Real-time domain IOC check against the in-memory threat intel DashSet.
+                        // This fires immediately on the DNS query — no 30-min sweep delay.
+                        if state.enrichment.threat_intel.is_malicious_domain(&domain) {
+                            let now_ts  = chrono::Utc::now().timestamp() as u32;
+                            let src     = event.source_ip.clone().unwrap_or_default();
+                            let dst     = event.dest_ip.clone().unwrap_or_default();
+                            let bucket  = now_ts / 300 * 300;
+                            let cid     = event.community_id.clone()
+                                .unwrap_or_else(|| format!("domain-{}-{}", bucket,
+                                    domain.replace('.', "-")));
+                            let details = serde_json::json!({ "domain": domain, "query": query });
+                            let ch_hit  = crate::storage::clickhouse::NdrHit {
+                                timestamp:          now_ts,
+                                community_id:       cid,
+                                src_ip:             src,
+                                dst_ip:             dst,
+                                score:              85.0,
+                                severity:           "HIGH".to_string(),
+                                tags:               vec!["malicious-domain".to_string(), "threat-intel".to_string()],
+                                sigma_hits:         vec![],
+                                threat_intel:       1,
+                                src_country:        String::new(),
+                                dst_country:        String::new(),
+                                tenant_id:          tenant_id.clone(),
+                                correlation_status: "domain_match".to_string(),
+                                agent_z_details:    serde_json::to_string(&details).unwrap_or_else(|_| "{}".into()),
+                                agent_s_details:    "{}".to_string(),
+                                corroborated_at:    0,
+                                agent_s_rule_id:    String::new(),
+                                agent_s_category:   "c2".to_string(),
+                                updated_at:         now_ts,
+                                sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            };
+                            let ch_cl   = state.ch_storage.clone();
+                            let tid_cl  = tenant_id.clone();
+                            let dom_log = domain.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
+                                    tracing::warn!("domain-match hit insert error: {}", e);
+                                } else {
+                                    tracing::info!(domain = %dom_log, tenant = %tid_cl, "malicious domain in DNS query — hit created");
+                                }
+                            });
+                        }
+
                         resolved_ips.retain(|ans_str| ans_str.parse::<std::net::IpAddr>().is_ok());
                         if !resolved_ips.is_empty() {
                             let ch_clone = state.ch_storage.clone();
@@ -585,13 +821,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     if ip.ends_with(".255") || ip.ends_with(".0")
                         || ip.starts_with("224.") || ip.starts_with("239.")
                         || ip == "255.255.255.255" { return; }
-                    let is_internal = ip.starts_with("10.")
-                        || ip.starts_with("192.168.")
-                        || (ip.starts_with("172.") && {
-                            let parts: Vec<&str> = ip.split('.').collect();
-                            parts.len() >= 2 && parts[1].parse::<u8>().map(|n| n >= 16 && n <= 31).unwrap_or(false)
-                        });
-                    if !is_internal { return; }
+                    if !crate::enrichment::is_private_ip(ip) { return; }
                     let cache_key = format!("{}:{}", tenant, ip);
                     let now = chrono::Utc::now().timestamp() as u32;
                     let mut needs_db_sync = false;

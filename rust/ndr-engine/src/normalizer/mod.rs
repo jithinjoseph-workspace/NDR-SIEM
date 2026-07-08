@@ -122,7 +122,7 @@ impl NormalizedEvent {
                     | "stderr" | "stdout" | "prof"
             )
         } else if let Some(et) = &self.event_type {
-            matches!(et.as_str(), "stats" | "fileinfo")
+            matches!(et.as_str(), "stats")
         } else {
             false
         }
@@ -171,6 +171,15 @@ impl NormalizedEvent {
         "dst_ip"    => self.dest_ip.clone(),
         "src_port"  => self.source_port.map(|p| p.to_string()),
         "dst_port"  => self.dest_port.map(|p| p.to_string()),
+
+        // ── Zeek raw field names (SigmaHQ community rules use these) ─────
+        // Community Zeek rules reference the original TSV column names that
+        // Zeek writes before Vector remaps them. Map them to canonical fields
+        // so rules like `id.orig_h|cidr: 10.0.0.0/8` resolve correctly.
+        "id.orig_h" => self.source_ip.clone(),
+        "id.resp_h" => self.dest_ip.clone(),
+        "id.orig_p" => self.source_port.map(|p| p.to_string()),
+        "id.resp_p" => self.dest_port.map(|p| p.to_string()),
         "source"    => Some(match self.event_source {
                           EventSource::Zeek     => "agent-z".to_string(),
                           EventSource::Suricata => "agent-s".to_string(),

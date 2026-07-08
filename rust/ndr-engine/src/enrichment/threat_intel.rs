@@ -11,6 +11,7 @@ pub struct ThreatIntel {
     pub malicious_hashes:  Arc<DashSet<String>>,
     pub malicious_domains: Arc<DashSet<String>>,
     pub malicious_urls:    Arc<DashSet<String>>,
+    pub malicious_ja3:     Arc<DashSet<String>>,
     // Unix timestamp (seconds) of the last completed refresh
     pub last_refreshed_at: Arc<AtomicU64>,
 }
@@ -22,6 +23,7 @@ impl ThreatIntel {
             malicious_hashes:  Arc::new(DashSet::new()),
             malicious_domains: Arc::new(DashSet::new()),
             malicious_urls:    Arc::new(DashSet::new()),
+            malicious_ja3:     Arc::new(DashSet::new()),
             last_refreshed_at: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -63,9 +65,14 @@ impl ThreatIntel {
         false
     }
 
+    pub fn is_malicious_ja3(&self, hash: &str) -> bool {
+        self.malicious_ja3.contains(&hash.to_lowercase())
+    }
+
     pub fn ip_count(&self)     -> usize { self.malicious_ips.len() }
     pub fn hash_count(&self)   -> usize { self.malicious_hashes.len() }
     pub fn domain_count(&self) -> usize { self.malicious_domains.len() }
+    pub fn ja3_count(&self)    -> usize { self.malicious_ja3.len() }
 
     pub fn add_ioc(&self, ioc_type: &str, value: &str) {
         match ioc_type {
@@ -99,13 +106,14 @@ impl ThreatIntel {
         self.refresh_feodo().await;
         self.refresh_urlhaus().await;
         self.refresh_malware_bazaar().await;
+        self.refresh_ja3_blocklist().await;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         self.last_refreshed_at.store(now, Ordering::Relaxed);
-        info!("Threat intel refresh complete — {} IPs, {} hashes, {} domains",
-            self.ip_count(), self.hash_count(), self.domain_count());
+        info!("Threat intel refresh complete — {} IPs, {} hashes, {} domains, {} JA3",
+            self.ip_count(), self.hash_count(), self.domain_count(), self.ja3_count());
     }
 
     /// Refresh with per-feed toggle support from settings.
@@ -134,6 +142,7 @@ impl ThreatIntel {
         if !custom_feed_url.is_empty() {
             self.refresh_custom_feed(custom_feed_url).await;
         }
+        self.refresh_ja3_blocklist().await;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -246,6 +255,37 @@ impl ThreatIntel {
             }
         }
         info!("MalwareBazaar: {} malicious hashes loaded", loaded);
+    }
+
+    // ── abuse.ch SSLBL — JA3 fingerprints ────
+    async fn refresh_ja3_blocklist(&self) {
+        let url = "https://sslbl.abuse.ch/blacklist/ja3_fingerprints.csv";
+        let text = match reqwest::get(url).await {
+            Ok(r) => match r.text().await {
+                Ok(t) => t,
+                Err(e) => { warn!("JA3 blocklist body: {}", e); return; }
+            },
+            Err(e) => { warn!("JA3 blocklist fetch: {}", e); return; }
+        };
+
+        self.malicious_ja3.clear();
+        let mut loaded = 0usize;
+        let mut header_skipped = false;
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('#') || line.is_empty() { continue; }
+            if !header_skipped { header_skipped = true; continue; }
+            // CSV format: FirstSeen,ja3_md5,Reason
+            if let Some(hash) = line.split(',').next() {
+                let h = hash.trim_matches('"').trim();
+                if h.len() == 32 && h.chars().all(|c| c.is_ascii_hexdigit()) {
+                    self.malicious_ja3.insert(h.to_lowercase());
+                    loaded += 1;
+                }
+            }
+        }
+        info!("JA3 blocklist: {} malicious fingerprints loaded", loaded);
     }
 
     // ── URLhaus — Domains/URLs ─────────────────

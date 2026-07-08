@@ -127,9 +127,11 @@ pub async fn build_exposure(
            toUInt64(sum(JSONExtractUInt(raw,'orig_bytes')))                                                                 as data_exfil_bytes, \
            countIf(lower(JSONExtractString(raw,'notice')) LIKE '%brute%' OR lower(JSONExtractString(raw,'service')) LIKE '%brute%') as brute_force_attempts, \
            uniqExact(src_ip)                                                                                                as unique_src_ips \
-         FROM {}.ndr_events \
-         WHERE timestamp >= now() - INTERVAL 6 HOUR",
-        db
+         FROM {db}.ndr_events \
+         WHERE tenant_id = '{tid}' \
+           AND timestamp >= now() - INTERVAL 6 HOUR",
+        db  = db,
+        tid = tenant_id,
     );
 
     let rows = ch.client.query(&q).fetch_all::<ExposureRow>().await?;
