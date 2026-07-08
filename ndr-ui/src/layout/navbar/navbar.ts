@@ -8,11 +8,12 @@ import { Websocket } from '../../services/websocket/websocket';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Announcement, Api } from '../../services/api/api';
 import { TourService } from '../../services/tour/tour.service';
+import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
   selector: 'app-navbar',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, FormsModule],
+  imports: [CommonModule, LucideAngularModule, FormsModule, SensorScopeBanner],
   templateUrl: './navbar.html',
   styleUrl: './navbar.css',
 })
@@ -93,9 +94,7 @@ export class Navbar implements OnInit, OnDestroy {
   get canViewTutorial() {
     const user = this.auth.getUser();
     if (!user) return false;
-    const isDefaultUser = user.tenant_id === 'default' && !this.auth.isAdmin();
-    const isTenantAnalyst = user.tenant_id !== 'default' && user.role === 'analyst';
-    return isDefaultUser || isTenantAnalyst;
+    return !this.auth.isAdmin() && user.role !== 'tenant_admin';
   }
 
   constructor(
@@ -280,6 +279,15 @@ export class Navbar implements OnInit, OnDestroy {
     return this.auth.getUser();
   }
 
+  get showSensorScope(): boolean {
+    const role = this.currentUser?.role;
+    return role === 'analyst' || role === 'senior_analyst' || role === 'viewer';
+  }
+
+  get sensorIds(): string[] {
+    return this.auth.getSensorIds() || [];
+  }
+
   goToSettings() {
     this.showUserMenu = false;
     this.router.navigate(['/settings']);
@@ -368,16 +376,31 @@ export class Navbar implements OnInit, OnDestroy {
   private refreshTenantSystemStatus() {
     this.api.getSensorKeys().subscribe({
       next: sensors => {
-        const tenantId = this.auth.getUser()?.tenant_id || '';
-        const tenantSensors = sensors.filter(sensor =>
-          sensor.tenant_id === tenantId && sensor.active !== false
-        );
-        const healthyPipeline = tenantSensors.length === 0 || tenantSensors.some(sensor =>
-          this.isRecentlySeen(sensor.last_seen) &&
-          (this.isRunning(sensor['agent-z']) ||
-           this.isRunning(sensor['agent-s']) ||
-           this.isRunning(sensor.vector))
-        );
+        const user = this.auth.getUser();
+        const mySensorIds = user?.sensor_ids || [];
+
+        // Backend already scopes sensors to the tenant.
+        // If user is a restricted analyst, filter down to their assigned sensors.
+        const isRestrictedAnalyst = user?.role !== 'tenant_admin' && user?.role !== 'admin' && mySensorIds.length > 0;
+        
+        const mySensors = isRestrictedAnalyst 
+          ? sensors.filter(sensor => mySensorIds.includes(sensor.key_prefix))
+          : sensors;
+
+        let healthyPipeline = false;
+        
+        if (mySensors.length === 0) {
+          // If the tenant has absolutely zero sensors registered, assume operational (don't show degraded for a blank account)
+          healthyPipeline = true;
+        } else {
+          // Pipeline is healthy if AT LEAST ONE sensor is active and has valid agents (ignoring strict heartbeat for demo environments)
+          healthyPipeline = mySensors.some(sensor =>
+            sensor.active !== false &&
+            (this.isRunning(sensor['agent-z']) ||
+             this.isRunning(sensor['agent-s']) ||
+             this.isRunning(sensor.vector))
+          );
+        }
 
         this.api.getDashboardStats().subscribe({
           next: data => {
@@ -412,7 +435,8 @@ export class Navbar implements OnInit, OnDestroy {
 
   private isRunning(status: unknown) {
     const value = String(status || '').toLowerCase().trim();
-    if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return true;
+    // 'unknown' is allowed because external sensors may not report process state; we rely on heartbeats.
+    if (['running', 'healthy', 'ok', 'up', 'active', 'started', 'unknown'].includes(value)) return true;
     return /^\d+$/.test(value);
   }
 

@@ -408,15 +408,31 @@ fi
 # Remove old container if exists
 docker rm -f opensearch-arkime 2>/dev/null || true
 
-docker run -d \
-  --name opensearch-arkime \
-  -e "discovery.type=single-node" \
-  -e "DISABLE_SECURITY_PLUGIN=true" \
-  -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
-  -p "${OS_PORT}:9200" \
-  --restart unless-stopped \
-  opensearchproject/opensearch:2.5.0 \
-    > /dev/null 2>&1
+PORT_ATTEMPTS=0
+MAX_PORT_RETRIES=5
+while [ $PORT_ATTEMPTS -lt $MAX_PORT_RETRIES ]; do
+  if docker run -d \
+    --name opensearch-arkime \
+    -e "discovery.type=single-node" \
+    -e "DISABLE_SECURITY_PLUGIN=true" \
+    -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
+    -p "${OS_PORT}:9200" \
+    --restart unless-stopped \
+    opensearchproject/opensearch:2.5.0; then
+    log "✅ OpenSearch container started on port ${OS_PORT}"
+    break
+  else
+    warn "Failed to start on port ${OS_PORT}. It may be allocated by Docker."
+    docker rm -f opensearch-arkime 2>/dev/null || true
+    OS_PORT=$((OS_PORT+1))
+    PORT_ATTEMPTS=$((PORT_ATTEMPTS+1))
+    log "Trying next port: ${OS_PORT}..."
+  fi
+done
+
+if [ $PORT_ATTEMPTS -eq $MAX_PORT_RETRIES ]; then
+  error "Could not find a free port for OpenSearch after several attempts."
+fi
 
 # Wait properly — up to 3 minutes
 log "Waiting for OpenSearch on port ${OS_PORT} (up to 3 min)..."
@@ -1147,7 +1163,7 @@ log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
 """NDR Sensor Agent v2 — monitors and restarts all services"""
-import os, time, subprocess, threading, requests, json, hashlib
+import os, time, subprocess, threading, requests, json, hashlib, re
 from datetime import datetime
 
 config = {}
@@ -2398,11 +2414,15 @@ printf "║  Cloud:     %-28s ║\n" "${CLOUD_URL:0:28}"
 printf "║  Kafka:     %-28s ║\n" "${KAFKA_BOOTSTRAP:0:28}"
 echo "╠══════════════════════════════════════════╣"
 
-# Service status check
-Z=$(pgrep -f "zeek" > /dev/null 2>&1 && \
-    echo "✅" || echo "❌")
-S=$(pgrep -f "suricata" > /dev/null 2>&1 && \
-    echo "✅" || echo "❌")
+log "Waiting for capture engines to initialize (up to 30s)..."
+for i in {1..15}; do
+  Z=$(pgrep -f "zeek" > /dev/null 2>&1 && echo "✅" || echo "❌")
+  S=$(pgrep -f "suricata" > /dev/null 2>&1 && echo "✅" || echo "❌")
+  if [ "$Z" == "✅" ] && [ "$S" == "✅" ]; then
+    break
+  fi
+  sleep 2
+done
 V=$(pgrep -f "vector" > /dev/null 2>&1 && \
     echo "✅" || echo "❌")
 AC=$(pgrep -f "arkime/bin/capture" \
@@ -2418,3 +2438,18 @@ log "Config:  /etc/ndr/sensor.conf"
 log "Logs:    journalctl -u ndr-agent -f"
 log "Zeek:    /var/log/ndr/zeek/"
 log "Sur:     /var/log/ndr/suricata/eve.json"
+
+if [ "$Z" != "✅" ] || [ "$S" != "✅" ]; then
+  echo ""
+  echo "--- DEBUG LOGS (PLEASE SHOW ME THIS) ---"
+  journalctl -u ndr-agent -n 50 --no-pager
+  echo "--- ZEEK LOG (/var/log/ndr/zeek/startup.log) ---"
+  cat /var/log/ndr/zeek/startup.log 2>/dev/null || echo "(no zeek log)"
+  echo "--- SURICATA LOG (/var/log/ndr/suricata/startup.log) ---"
+  cat /var/log/ndr/suricata/startup.log 2>/dev/null || echo "(no suricata log)"
+  echo "--- SURICATA INTERNAL LOG ---"
+  tail -n 20 /var/log/ndr/suricata/suricata.log 2>/dev/null || echo "(no internal suricata log)"
+  echo "--- ZEEK INTERNAL LOG ---"
+  tail -n 20 /var/log/ndr/zeek/reporter.log 2>/dev/null || echo "(no reporter log)"
+  echo "----------------------------------------"
+fi

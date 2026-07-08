@@ -12,10 +12,6 @@
       Live · updates every 15s
     </div>
   </div>
-
-  <!-- Sensor scope banner (analysts only) -->
-  <app-sensor-scope-banner [sensorIds]="sensorIds"></app-sensor-scope-banner>
-
   <!-- Error -->
   <div *ngIf="error()" class="error-banner">{{ error() }}</div>
 

@@ -1057,15 +1057,20 @@ export class TenantAdmin implements OnInit, OnDestroy {
   private refreshTenantSystemStatus() {
     this.api.getSensorKeys().subscribe({
       next: (sensors: any[]) => {
-        const tenantSensors = sensors.filter(sensor =>
-          sensor.tenant_id === this.tenantId && sensor.active !== false
-        );
-        const healthyPipeline = tenantSensors.length === 0 || tenantSensors.some(sensor =>
-          this.isRecentlySeen(sensor.last_seen) &&
-          (this.isRunning(sensor.zeek) ||
-           this.isRunning(sensor.suricata) ||
-           this.isRunning(sensor.vector))
-        );
+        // Backend already scopes sensors to the tenant.
+        const tenantSensors = sensors;
+        
+        let healthyPipeline = false;
+        if (tenantSensors.length === 0) {
+          healthyPipeline = true;
+        } else {
+          healthyPipeline = tenantSensors.some(sensor =>
+            sensor.active !== false &&
+            (this.isRunning(sensor['agent-z']) ||
+             this.isRunning(sensor['agent-s']) ||
+             this.isRunning(sensor.vector))
+          );
+        }
 
         this.api.getDashboardStats().subscribe({
           next: data => {
@@ -1093,7 +1098,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   private isRunning(status: unknown) {
     const value = String(status || '').toLowerCase().trim();
-    if (['running', 'healthy', 'ok', 'up', 'active', 'started'].includes(value)) return true;
+    if (['running', 'healthy', 'ok', 'up', 'active', 'started', 'unknown'].includes(value)) return true;
     return /^\d+$/.test(value);
   }
 

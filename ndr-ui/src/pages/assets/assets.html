@@ -53,10 +53,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Sensor scope banner (analysts only) — applies to Asset Inventory and IPAM Subnets -->
-  <app-sensor-scope-banner [sensorIds]="sensorIds"></app-sensor-scope-banner>
-
   <div class="subnet-stats-row" *ngIf="subnets.length > 0 && !loading">
     <div class="subnet-card" *ngFor="let s of subnets" (click)="setSubnetFilter(s.cidr)" [class.active]="filterSubnet === s.cidr">
       <div class="subnet-cidr">{{ s.cidr }}</div>

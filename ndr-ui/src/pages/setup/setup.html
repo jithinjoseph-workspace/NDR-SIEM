@@ -284,7 +284,7 @@
     </div>
 
     <!-- Sensor Cards -->
-    <article class="sensor-card-v2" *ngFor="let sensor of externalSensors; trackBy: trackSensor">
+    <article class="sensor-card-v2" [class.offline-card]="!sensor.online" *ngFor="let sensor of externalSensors; trackBy: trackSensor">
       <div class="sensor-card-header">
         <div class="sensor-id-block">
           <div class="sensor-device-icon">
@@ -295,7 +295,10 @@
               <span class="status-dot" [class.green]="sensor.online"></span>
               <h4>{{ sensor.displayName }}</h4>
             </div>
-            <p>{{ sensor.hostname || 'Unregistered host' }}</p>
+            <p>
+              {{ sensor.hostname || 'Unregistered host' }}
+              <span class="sensor-id-tag">ID: {{ sensor.key_prefix || sensor.id }}</span>
+            </p>
           </div>
         </div>
         <div class="sensor-header-actions">

@@ -10,6 +10,13 @@
   transition: background 300ms ease;
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 1;
+}
+
 .search-wrap {
   position: relative;
   width: min(520px, 100%);

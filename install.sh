@@ -33,23 +33,52 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 err()  { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║        NDR Stack Installer v1.0          ║"
-echo "║  Zeek + Suricata + Kafka + Rust + UI     ║"
-echo "╚══════════════════════════════════════════╝"
-echo ""
+CYAN='\033[0;36m'
+BOLD='\033[1m'
 
-# Add at top of install.sh after functions
-TOTAL_STEPS=12
+clear
+printf "\n"
+printf "  ${CYAN}╔══════════════════════════════════════════╗${NC}\n"
+printf "  ${CYAN}║${NC}${BOLD}   🛡️  Proma Alpha  v1.0                ${NC}${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}   Network Detection & Response Suite   ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}   Sensor · Engine · Analytics · UI     ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}      ⚡ Powered by Proma Secure         ${CYAN}║${NC}\n"
+printf "  ${CYAN}╚══════════════════════════════════════════╝${NC}\n"
+printf "\n"
+printf "  ${BLUE}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}    0%%  Starting...\n"
+printf "  ${CYAN}──────────────────────────────────────────────${NC}\n"
+printf "\n"
+
+# Lock progress bar at row 8 (after clear), scroll region below row 10
+_PBAR_ROW=8
+_TERM_ROWS=$(tput lines 2>/dev/null || echo 40)
+tput csr 10 $((_TERM_ROWS - 1)) 2>/dev/null || true
+tput cup 10 0 2>/dev/null || true
+
+TOTAL_STEPS=13
 CURRENT_STEP=0
 
 step() {
     CURRENT_STEP=$((CURRENT_STEP + 1))
-    echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}  Step $CURRENT_STEP/$TOTAL_STEPS: $1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    local label="$1"
+    local BAR_WIDTH=40
+    local prev=$(( ((CURRENT_STEP - 1) * BAR_WIDTH) / TOTAL_STEPS ))
+    local next=$(( (CURRENT_STEP * BAR_WIDTH) / TOTAL_STEPS ))
+    local pct=$(( (CURRENT_STEP * 100) / TOTAL_STEPS ))
+    pct=$(( pct > 100 ? 100 : pct ))
+    next=$(( next > BAR_WIDTH ? BAR_WIDTH : next ))
+    local f bar empty
+    for ((f = prev; f <= next; f++)); do
+        bar=""
+        for ((i=0; i<f; i++)); do bar+="█"; done
+        empty=$(( BAR_WIDTH - f ))
+        for ((i=0; i<empty; i++)); do bar+="░"; done
+        tput sc 2>/dev/null
+        tput cup $_PBAR_ROW 0 2>/dev/null
+        printf "  ${BLUE}%s${NC}  %3d%%  %-36s" "$bar" "$pct" "$label"
+        tput rc 2>/dev/null
+        sleep 0.04
+    done
 }
 
 # ── Fix APT sources ───────────────────────────
@@ -101,7 +130,7 @@ case "$MODE_CHOICE" in
     2)
         DEPLOY_MODE="hybrid"
         echo ""
-        warn "Hybrid mode — Zeek/Suricata runs locally, Kafka/ClickHouse in cloud"
+        warn "Hybrid mode — Agent-Z/Agent-S runs locally, Event Bus/Analytics DB in cloud"
         echo ""
         read -p "  Kafka broker URL (e.g. broker.aws.com:9092): " CLOUD_KAFKA
         read -p "  ClickHouse URL   (e.g. https://host:8123):   " CLOUD_CLICKHOUSE
@@ -222,7 +251,7 @@ NPM_VER=$(npm --version 2>/dev/null || echo "missing")
 log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
 
 
-step "Installing Angular CLI"
+step "Installing Dashboard UI"
 # ── Install Angular CLI globally ──────────────
 if ! command -v ng &>/dev/null; then
     log "Installing Angular CLI..."
@@ -237,32 +266,32 @@ else
         grep 'Angular CLI' | head -1)"
 fi
 
-step "Installing Suricata"
+step "Installing Agent-S"
 
 # ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
-    log "Installing Suricata..."
+    log "Installing Agent-S..."
     sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
     sudo apt-get update -qq 2>/dev/null || true
 
     if sudo apt-get install -y suricata 2>/dev/null; then
-        log "✅ Suricata installed from default repo"
+        log "✅ Agent-S installed from default repo"
     else
-        warn "⚠️ Suricata install failed — skipping"
+        warn "⚠️ Agent-S install failed — skipping"
     fi
 
     sudo suricata-update 2>/dev/null || true
     sudo systemctl disable suricata 2>/dev/null || true
     sudo systemctl stop suricata 2>/dev/null || true
-    log "✅ Suricata ready"
+    log "✅ Agent-S ready"
 else
-    log "✅ Suricata already installed"
+    log "✅ Agent-S already installed"
     sudo systemctl disable suricata 2>/dev/null || true
     sudo systemctl stop suricata 2>/dev/null || true
 fi
 
 # ── Install Arkime ────────────────────────────────
-log "Installing Arkime (Full Packet Capture)..."
+log "Installing Packet Recorder..."
 
 ARKIME_VERSION="5.1.0"
 UBUNTU_VER=$(lsb_release -rs 2>/dev/null || echo "22.04")
@@ -276,19 +305,19 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
     elif [ "$UBUNTU_MAJOR" -ge "24" ] 2>/dev/null; then
         ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2404_amd64.deb"
     else
-        warn "Unsupported Ubuntu version for Arkime: $UBUNTU_VER"
+        warn "Unsupported OS version for Packet Recorder: $UBUNTU_VER"
         ARKIME_DEB=""
     fi
 
     if [ -n "$ARKIME_DEB" ]; then
-        log "Downloading Arkime ${ARKIME_VERSION} (${ARKIME_DEB})..."
+        log "Downloading Packet Recorder ${ARKIME_VERSION} (${ARKIME_DEB})..."
         if wget --timeout=120 --progress=dot:mega \
             "https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}" \
             -O /tmp/arkime.deb 2>&1; then
             DEB_SIZE=$(du -sh /tmp/arkime.deb 2>/dev/null | cut -f1)
             log "Download complete (${DEB_SIZE})"
         else
-            warn "❌ Arkime download FAILED"
+            warn "❌ Packet Recorder download FAILED"
             warn "  URL: https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}"
             warn "  Check internet/proxy and re-run"
             ARKIME_DEB=""
@@ -297,7 +326,7 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
     fi
 
     if [ -n "$ARKIME_DEB" ] && [ -f /tmp/arkime.deb ]; then
-        log "Installing Arkime dependencies..."
+        log "Installing Packet Recorder dependencies..."
         sudo apt-get install -y -qq \
             libwww-perl libjson-perl \
             libyaml-dev libyara10 \
@@ -331,7 +360,7 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
             fi
         fi
 
-        log "Installing Arkime package..."
+        log "Installing Packet Recorder package..."
         if sudo dpkg -i /tmp/arkime.deb 2>&1; then
             log "dpkg install succeeded"
         else
@@ -342,25 +371,25 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
 
         if [ -f /opt/arkime/bin/capture ]; then
             ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
-            log "✅ Arkime installed: ${ARKIME_VER}"
+            log "✅ Packet Recorder installed: ${ARKIME_VER}"
         else
             warn "❌ Arkime install FAILED — /opt/arkime/bin/capture not found"
-            warn "  Run: dpkg -l arkime  or  sudo apt-get install -f -y  for details"
+            warn "  Run: dpkg -l arkime  or  sudo apt-get install -f -y  to diagnose"
         fi
     else
-        warn "❌ Arkime installation skipped (no .deb available)"
+        warn "❌ Packet Recorder installation skipped (no package available)"
     fi
 else
     ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
-    log "✅ Arkime already installed: ${ARKIME_VER}"
+    log "✅ Packet Recorder already installed: ${ARKIME_VER}"
 fi
 
 
-step "Installing Zeek"
+step "Installing Agent-Z"
 
 # ── Install Zeek ──────────────────────────────
 if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
-    log "Installing Zeek..."
+    log "Installing Agent-Z..."
     # Find the newest Zeek repo that exists for this Ubuntu version
     ZEEK_UBUNTU_VER="$OS_VERSION"
     for TRY_VER in "$OS_VERSION" "24.04" "22.04"; do
@@ -370,7 +399,7 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
             break
         fi
     done
-    log "  → Using Zeek repo for Ubuntu ${ZEEK_UBUNTU_VER}"
+    log "  → Using Agent-Z repo for Ubuntu ${ZEEK_UBUNTU_VER}"
     echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${ZEEK_UBUNTU_VER}/ /" \
         | sudo tee /etc/apt/sources.list.d/security:zeek.list
     curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
@@ -378,12 +407,12 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
         | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
     sudo apt-get update -qq
     sudo apt-get install -y zeek
-    log "✅ Zeek installed"
+    log "✅ Agent-Z installed"
 else
-    log "✅ Zeek already installed"
+    log "✅ Agent-Z already installed"
 fi
 
-step "Configuring ClickHouse"
+step "Configuring Analytics Database"
 
 # ── ClickHouse runs as a Docker container ──────
 # User (ndr/ndr123) is created via CREATE USER in config/clickhouse/init.sql
@@ -466,7 +495,7 @@ else
 fi
 log "✅ ClickHouse configured"
 
-step "Configuring network and services"
+step "Configuring Network & Services"
 
 
 # ── Detect network interface ──────────────────
@@ -483,8 +512,8 @@ echo "$IFACE" > "$IFACE_FILE"
 
 # ── Configure Arkime ──────────────────────────────
 if [ -f /opt/arkime/bin/capture ]; then
-    log "Configuring Arkime..."
-    log "Arkime using interface: $IFACE"
+    log "Configuring Packet Recorder..."
+    log "Packet Recorder using interface: $IFACE"
 
     # Create directories BEFORE config
     sudo mkdir -p /opt/arkime/raw
@@ -565,14 +594,14 @@ EOF
         arkime-viewer 2>/dev/null || true
 
     if [ -f /opt/arkime/bin/capture ]; then
-        log "✅ Arkime configured on interface: ${IFACE}"
+        log "✅ Packet Recorder configured on interface: ${IFACE}"
     else
-        warn "❌ Arkime install FAILED"
+        warn "❌ Packet Recorder install FAILED"
     fi
 fi
 
 # ── Configure Zeek ────────────────────────────
-log "Configuring Zeek..."
+log "Configuring Agent-Z..."
 sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
 # NDR Stack - Zeek Configuration
 @load policy/tuning/json-logs.zeek
@@ -655,8 +684,8 @@ event arp_reply(mac_src: string, mac_dst: string,
 ARPSCRIPT
 
 /opt/zeek/bin/zkg install zeek/corelight/zeek-community-id \
-    --force 2>/dev/null || true
-log "✅ Zeek configured"
+    --force >/dev/null 2>&1 || true
+log "✅ Agent-Z configured"
 
 
 sudo tee /etc/logrotate.d/zeek-ndr > /dev/null << 'EOF'
@@ -673,11 +702,11 @@ sudo tee /etc/logrotate.d/zeek-ndr > /dev/null << 'EOF'
     dateformat -%Y%m%d
 }
 EOF
-log "✅ Zeek log rotation configured"
+log "✅ Agent-Z log rotation configured"
 
 
 # ── Configure Suricata ────────────────────────
-log "Configuring Suricata..."
+log "Configuring Agent-S..."
 sudo cp /etc/suricata/suricata.yaml \
     /etc/suricata/suricata.yaml.bak 2>/dev/null || true
 sudo sed -i \
@@ -689,14 +718,14 @@ sudo sed -i \
 sudo sed -i \
     "s|interface: eth0|interface: $IFACE|g" \
     /etc/suricata/suricata.yaml 2>/dev/null || true
-log "Updating Suricata rules..."
-sudo suricata-update 2>/dev/null || true
-log "✅ Suricata configured on interface: $IFACE"
+log "Updating Agent-S rules..."
+sudo suricata-update >/dev/null 2>&1 || true
+log "✅ Agent-S configured on interface: $IFACE"
 
 # ── Suricata suppression infrastructure ───────
 # Creates empty threshold.conf and wires it into suricata.yaml
 # SIDs are added dynamically by ndr-agent.py when engine sends suppress_sid commands
-log "Setting up Suricata suppression infrastructure..."
+log "Setting up Agent-S suppression infrastructure..."
 THRESHOLD_FILE="/etc/suricata/threshold.conf"
 sudo touch "$THRESHOLD_FILE"
 if sudo grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
@@ -704,12 +733,12 @@ if sudo grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
 else
   echo "threshold-file: $THRESHOLD_FILE" | sudo tee -a /etc/suricata/suricata.yaml > /dev/null
 fi
-log "✅ Suricata threshold.conf ready (SIDs added dynamically by engine)"
+log "✅ Agent-S suppression ready (rules added dynamically by engine)"
 
 # ── Zeek suppression infrastructure ───────────
 # Creates empty ndr-suppress.zeek skeleton loaded by local.zeek
 # Hooks are added dynamically by ndr-agent.py when engine sends suppress_sid commands
-log "Setting up Zeek suppression infrastructure..."
+log "Setting up Agent-Z suppression infrastructure..."
 sudo tee /opt/zeek/share/zeek/site/ndr-suppress.zeek > /dev/null << 'ZEEKSUPPRESS'
 # NDR suppression filters — managed dynamically by NDR engine
 # Hooks are appended here via suppress_sid commands; do not edit manually
@@ -717,7 +746,7 @@ ZEEKSUPPRESS
 if ! sudo grep -q "ndr-suppress" /opt/zeek/share/zeek/site/local.zeek 2>/dev/null; then
   echo "@load ndr-suppress" | sudo tee -a /opt/zeek/share/zeek/site/local.zeek > /dev/null
 fi
-log "✅ Zeek ndr-suppress.zeek ready (hooks added dynamically by engine)"
+log "✅ Agent-Z suppression ready (hooks added dynamically by engine)"
 
 
 # ── Firewall: block internal ports from external access ───────────────────
@@ -758,7 +787,7 @@ fi
 
 
 # ── Suricata log rotation ─────────────────────
-log "Configuring Suricata log rotation..."
+log "Configuring Agent-S log rotation..."
 sudo tee /etc/logrotate.d/suricata-ndr > /dev/null << 'EOF'
 /home/user/logs/suricata/eve.json {
     su root root
@@ -773,7 +802,7 @@ sudo tee /etc/logrotate.d/suricata-ndr > /dev/null << 'EOF'
     dateformat -%Y%m%d
 }
 EOF
-log "✅ Suricata log rotation configured"
+log "✅ Agent-S log rotation configured"
 
 
 # ── Create required directories ───────────────
@@ -898,7 +927,7 @@ log "✅ Vector configured"
 
 
 
-step "Installing Angular dependencies"
+step "Installing Dashboard UI"
 
 
 
@@ -934,7 +963,7 @@ cd $INSTALL_DIR
 
 
 
-step "Installing Docker"
+step "Installing Container Runtime"
 
 # ── Install Docker ────────────────────────────
 log "Installing Docker..."
@@ -1013,7 +1042,7 @@ if ! sudo docker info >/dev/null 2>&1; then
     err "Docker failed to start!"
 fi
 
-step "Building Docker stack"
+step "Building Detection Stack"
 
 
 # ── Build and start Docker stack ──────────────
@@ -1077,7 +1106,7 @@ log "✅ JWT secret already verified and stored in .env"
 
 
 # ── Setup OpenSearch (for Arkime PCAP) ───────────────────────────────────
-step "Setting up OpenSearch"
+step "Setting up Search Index"
 log "Waiting for OpenSearch..."
 cd $INSTALL_DIR
 for i in {1..30}; do
@@ -1092,18 +1121,18 @@ echo ""
 
 # Initialize Arkime DB and create admin user now that OpenSearch is up
 if [ -f /opt/arkime/bin/capture ]; then
-    log "Initializing Arkime database..."
+    log "Initializing Packet Recorder database..."
     echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init --ifneeded 2>&1 || \
         echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init 2>&1 || true
-    log "✅ Arkime database initialized"
-    log "Creating Arkime admin user..."
+    log "✅ Packet Recorder database initialized"
+    log "Creating Packet Recorder admin user..."
     sudo /opt/arkime/bin/arkime_add_user.sh admin "Admin" admin --admin 2>/dev/null \
-        && log "✅ Arkime admin user ready (user: admin / pass: admin)" \
-        || warn "⚠️ Arkime admin user creation failed — run manually after install"
+        && log "✅ Packet Recorder admin ready (user: admin / pass: admin)" \
+        || warn "⚠️ Packet Recorder admin creation failed — run manually after install"
 fi
 
 # ── Native SOAR is built into the NDR engine ─────────────────────────────
-step "Setting up Native SOAR"
+step "Setting up Response Automation"
 log "✅ Native SOAR is built into the NDR engine — no extra services needed"
 log "  Configure playbooks, cases and integrations from the UI → SOAR page"
 
@@ -1175,8 +1204,8 @@ echo ""
 log "Verifying installation..."
 log "  Mode:       $DEPLOY_MODE"
 log "  Interface:  $IFACE ($HOST_IP)"
-log "  Zeek:       $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
-log "  Suricata:   $(suricata --version 2>&1 | head -1)"
+log "  Agent-Z:    $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
+log "  Agent-S:    $(suricata --version 2>&1 | head -1)"
 log "  Docker:     $(sudo docker --version)"
 log "  Node.js:    $(node --version)"
 log "  npm:        $(npm --version)"
@@ -1194,17 +1223,18 @@ log "  Agent:      $(curl -s http://localhost:3001/agent/status \
 echo ""
 echo "╔══════════════════════════════════════════╗"
 echo "║         ✅ Installation Complete!         ║"
+echo "║          Powered by Proma Secure          ║"
 echo "╠══════════════════════════════════════════╣"
 printf "║  Mode:    %-32s║\n" "$DEPLOY_MODE"
 echo "╠══════════════════════════════════════════╣"
-echo "║  UI:      http://localhost:4200           ║"
-echo "║  API:     http://localhost:3000           ║"
-echo "║  Agent:   http://localhost:3001           ║"
-echo "║  Arkime:  http://localhost:8005           ║"
+echo "║  Dashboard:  http://localhost:4200        ║"
+echo "║  API:        http://localhost:3000        ║"
+echo "║  Agent:      http://localhost:3001        ║"
+echo "║  Recorder:   http://localhost:8005        ║"
 echo "╠══════════════════════════════════════════╣"
 echo "║  start:   ./start.sh                     ║"
 echo "║  stop:    ./stop.sh                      ║"
 echo "║  status:  ./status.sh                    ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
-echo "💡 Live reload: Edit Angular on Windows → auto-updates!"
+echo "💡 Proma Secure — Network Detection & Response"

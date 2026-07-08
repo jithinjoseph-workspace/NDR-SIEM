@@ -1,27 +1,31 @@
 <header class="topbar">
-  <div class="search-wrap">
-    <lucide-icon [name]="SearchIcon" class="search-icon w-4 h-4"></lucide-icon>
-    <input type="text" [(ngModel)]="searchText" (input)="onSearchInput()" (keydown)="onSearch($event)"
-      (blur)="closeSearch()" placeholder="Search IPs, alerts, rules, and logs" />
+  <div class="topbar-left">
+    <div class="search-wrap">
+      <lucide-icon [name]="SearchIcon" class="search-icon w-4 h-4"></lucide-icon>
+      <input type="text" [(ngModel)]="searchText" (input)="onSearchInput()" (keydown)="onSearch($event)"
+        (blur)="closeSearch()" placeholder="Search IPs, alerts, rules, and logs" />
 
-    <div *ngIf="showSuggestions" class="suggestions-panel">
-      <button *ngFor="let s of filteredSuggestions" (mousedown)="selectSuggestion(s)" class="suggestion-row">
-        <span class="suggestion-icon">{{ s.label.charAt(0) }}</span>
-        <span>
-          <strong>{{ s.label }}</strong>
-          <small>{{ s.hint }}</small>
-        </span>
-      </button>
+      <div *ngIf="showSuggestions" class="suggestions-panel">
+        <button *ngFor="let s of filteredSuggestions" (mousedown)="selectSuggestion(s)" class="suggestion-row">
+          <span class="suggestion-icon">{{ s.label.charAt(0) }}</span>
+          <span>
+            <strong>{{ s.label }}</strong>
+            <small>{{ s.hint }}</small>
+          </span>
+        </button>
 
-      <div class="quick-links">
-        <span>Quick Navigate</span>
-        <div>
-          <button *ngFor="let s of permittedSuggestions.slice(0, 4)" (mousedown)="selectSuggestion(s)">
-            {{ s.label }}
-          </button>
+        <div class="quick-links">
+          <span>Quick Navigate</span>
+          <div>
+            <button *ngFor="let s of permittedSuggestions.slice(0, 4)" (mousedown)="selectSuggestion(s)">
+              {{ s.label }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
+    
+    <app-sensor-scope-banner *ngIf="showSensorScope" [sensorIds]="sensorIds"></app-sensor-scope-banner>
   </div>
 
   <div class="topbar-actions">
