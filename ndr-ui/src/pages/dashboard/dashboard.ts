@@ -254,6 +254,31 @@ export class Dashboard implements OnInit, OnDestroy {
     });
   }
 
+  private throttle(func: Function, limit: number) {
+    let lastFunc: any;
+    let lastRan: any;
+    return (...args: any[]) => {
+      if (!lastRan) {
+        func.apply(this, args);
+        lastRan = Date.now();
+      } else {
+        clearTimeout(lastFunc);
+        const remaining = limit - (Date.now() - lastRan);
+        lastFunc = setTimeout(() => {
+          if ((Date.now() - lastRan) >= limit) {
+            func.apply(this, args);
+            lastRan = Date.now();
+          }
+        }, remaining > 0 ? remaining : 0);
+      }
+    };
+  }
+
+  drawLiveEventStream = this.throttle(() => this.drawLiveEventStreamRaw(), 300);
+  drawSeverityDonut = this.throttle(() => this.drawSeverityDonutRaw(), 300);
+  drawProtocolPie = this.throttle(() => this.drawProtocolPieRaw(), 300);
+  drawTopDstIpsChart = this.throttle(() => this.drawTopDstIpsChartRaw(), 300);
+
   @HostListener('window:resize')
   onResize() {
     this.drawLiveEventStream();
@@ -262,7 +287,7 @@ export class Dashboard implements OnInit, OnDestroy {
     this.drawProtocolPie();
   }
 
-  private drawLiveEventStream() {
+  private drawLiveEventStreamRaw() {
     const snap = this.chartDataSnapshot();
     const liveStreamEl = this.liveEventStreamRef();
     if (!liveStreamEl || !snap.data.length) return;
@@ -390,7 +415,7 @@ export class Dashboard implements OnInit, OnDestroy {
       });
   }
 
-  private drawSeverityDonut() {
+  private drawSeverityDonutRaw() {
     if (!this.severityDonutChartRef) return;
     const el = this.severityDonutChartRef.nativeElement;
     d3.select(el).selectAll('*').remove();
@@ -511,7 +536,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .text("Alerts");
   }
 
-  private drawProtocolPie() {
+  private drawProtocolPieRaw() {
     const protoData = this.protocols();
     const chartEl = this.protocolPieChartRef();
     if (!chartEl || !protoData.length) return;
@@ -595,7 +620,7 @@ export class Dashboard implements OnInit, OnDestroy {
       });
   }
 
-  private drawTopDstIpsChart() {
+  private drawTopDstIpsChartRaw() {
     const topIps = this.topDstIps();
     if (!this.topDstIpsChartRef || !topIps.length) return;
     const el = this.topDstIpsChartRef.nativeElement;

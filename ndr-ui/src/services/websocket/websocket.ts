@@ -7,6 +7,7 @@ import { Subject, BehaviorSubject, filter } from 'rxjs';
 export class Websocket {
   private socket: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private updateTimeout: any = null;
 
   public messages$ = new Subject<any>();
   public lastAgentStatus$ = new BehaviorSubject<any>(null);
@@ -84,10 +85,17 @@ export class Websocket {
             if (data.type === 'hit') {
               this.hitsHistory.unshift(data);
               if (this.hitsHistory.length > 100) this.hitsHistory.pop();
-              this.continuousHits$.next([...this.hitsHistory]);
-              try {
-                sessionStorage.setItem('ndr_live_hits', JSON.stringify(this.hitsHistory));
-              } catch (e) {}
+              
+              // Throttle updates to BehaviorSubject and sessionStorage to prevent browser freeze
+              if (!this.updateTimeout) {
+                this.updateTimeout = setTimeout(() => {
+                  this.updateTimeout = null;
+                  this.continuousHits$.next([...this.hitsHistory]);
+                  try {
+                    sessionStorage.setItem('ndr_live_hits', JSON.stringify(this.hitsHistory));
+                  } catch (e) {}
+                }, 250);
+              }
             }
           } catch (e) {
             console.warn('Invalid WS message:', event.data);
@@ -121,6 +129,10 @@ export class Websocket {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+    if (this.updateTimeout !== null) {
+      clearTimeout(this.updateTimeout);
+      this.updateTimeout = null;
     }
     if (this.socket) {
       this.socket.onclose = null;
