@@ -67,6 +67,20 @@
     {{ message }}
   </div>
 
+  <!-- ── OUTER TAB NAV ── -->
+  <div class="section-tab-bar" style="margin-bottom:16px;">
+    <button class="section-tab" [class.active]="activeTab === 'users'"
+            (click)="switchTab('users')">
+      <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
+      Users &amp; Sensors
+    </button>
+    <button class="section-tab" [class.active]="activeTab === 'trusted-domains'"
+            (click)="switchTab('trusted-domains')">
+      <lucide-icon [name]="GlobeIcon" class="w-4 h-4"></lucide-icon>
+      Trusted Domains
+    </button>
+  </div>
+
   <ng-container *ngIf="activeTab === 'users'">
 
     <!-- ── SECTION TABS ── -->
@@ -491,6 +505,139 @@
       </div><!-- /sa-table -->
 
     </section><!-- /sensor-assignment-section -->
+
+  </ng-container>
+
+  <!-- ── TRUSTED DOMAINS TAB ── -->
+  <ng-container *ngIf="activeTab === 'trusted-domains'">
+
+    <div class="admin-panel" style="margin-top:0;">
+      <div class="panel-head">
+        <div>
+          <h3>Your Trusted Domains</h3>
+          <p>Domains added here are excluded from DNS beaconing alerts for your organization only. The global shared list (managed by your security team) is shown below for reference.</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="secondary-action" type="button" (click)="runAiSuggest()" [disabled]="tdAiLoading">
+            <lucide-icon name="sparkles" class="w-4 h-4"></lucide-icon>
+            {{ tdAiLoading ? 'Analyzing…' : 'AI Suggest' }}
+          </button>
+          <button class="secondary-action" type="button" (click)="loadTrustedDomains()">
+            <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- AI not configured -->
+      <div *ngIf="tdAiAvailable === false" class="tc-empty-suggestions" style="margin-bottom:16px;">
+        <lucide-icon name="bot" class="w-5 h-5"></lucide-icon>
+        <div>
+          <strong>AI not configured</strong>
+          <span>Ask your super admin to add an AI provider to enable domain suggestions.</span>
+        </div>
+      </div>
+
+      <!-- AI Suggestions -->
+      <div class="tc-card tc-card-ai" *ngIf="tdAiSuggestions.length > 0">
+        <div class="tc-card-head">
+          <div class="tc-card-title">
+            <lucide-icon name="sparkles" class="w-4 h-4"></lucide-icon>
+            AI Suggestions
+          </div>
+          <span class="tc-badge tc-badge-amber">{{ tdAiSuggestions.length }} pending</span>
+        </div>
+        <p class="tc-card-desc">Domains your network queries frequently that look like legitimate services. Add to your allowlist to stop false-positive DNS alerts.</p>
+        <div class="tc-suggestion-list">
+          <div *ngFor="let s of tdAiSuggestions" class="tc-suggestion-card">
+            <div class="tc-suggestion-left">
+              <div class="tc-org-avatar" style="background:#16a34a22;">
+                <lucide-icon [name]="GlobeIcon" class="w-4 h-4" style="color:#16a34a;"></lucide-icon>
+              </div>
+              <div class="tc-suggestion-info">
+                <span class="tc-org-name">{{ s.domain }}</span>
+                <span class="tc-hits">{{ s.cnt | number }} queries — {{ s.reason }}</span>
+              </div>
+            </div>
+            <div class="tc-suggestion-actions">
+              <button class="tc-approve-btn" (click)="approveTdSuggestion(s)">Add to My List</button>
+              <button class="tc-reject-btn" (click)="dismissTdSuggestion(s.domain)">Dismiss</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Add new entry -->
+      <div class="tc-card">
+        <div class="tc-card-head">
+          <div class="tc-card-title">
+            <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+            Add Domain
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 140px 1fr auto;gap:8px;align-items:end;margin-top:12px;">
+          <div>
+            <label class="tc-label">Domain</label>
+            <input [(ngModel)]="tdNewDomain" class="tc-input" placeholder="e.g. ci.mycompany.com"
+                   (keydown.enter)="addTrustedDomain()" />
+          </div>
+          <div>
+            <label class="tc-label">Category</label>
+            <select [(ngModel)]="tdNewCategory" class="tc-input">
+              <option value="dns_beacon">DNS Beacon</option>
+              <option value="threat_intel">Threat Intel</option>
+              <option value="both">Both</option>
+            </select>
+          </div>
+          <div>
+            <label class="tc-label">Note (optional)</label>
+            <input [(ngModel)]="tdNewNote" class="tc-input" placeholder="Why this domain is trusted" />
+          </div>
+          <button class="tc-add-btn" (click)="addTrustedDomain()" [disabled]="tdSaving || !tdNewDomain.trim()">
+            {{ tdSaving ? '…' : 'Add' }}
+          </button>
+        </div>
+      </div>
+
+      <div *ngIf="loadingTrustedDomains" class="loading-state">Loading…</div>
+
+      <!-- Tenant's own domains -->
+      <div class="tc-card" *ngIf="!loadingTrustedDomains">
+        <div class="tc-card-head">
+          <div class="tc-card-title">
+            <lucide-icon [name]="ShieldIcon" class="w-4 h-4 tc-icon-green"></lucide-icon>
+            Your Organization's Allowlist
+          </div>
+          <span class="tc-badge tc-badge-green">{{ tenantOwnDomains.length }}</span>
+        </div>
+        <div class="tc-chips" *ngIf="tenantOwnDomains.length > 0">
+          <span *ngFor="let d of tenantOwnDomains" class="tc-chip" [title]="d.note || d.added_by">
+            {{ d.domain }}
+            <span class="tc-chip-cat">{{ d.category }}</span>
+            <button class="tc-chip-remove" (click)="deleteTenantTrustedDomain(d.domain, d.tenant_id)" title="Remove">×</button>
+          </span>
+        </div>
+        <p *ngIf="tenantOwnDomains.length === 0" class="tc-card-desc">No tenant-specific entries yet. Add domains above to stop false-positive DNS beaconing alerts.</p>
+      </div>
+
+      <!-- Global reference (read-only for tenants) -->
+      <div class="tc-card" *ngIf="!loadingTrustedDomains && globalDomains.length > 0">
+        <div class="tc-card-head">
+          <div class="tc-card-title">
+            <lucide-icon [name]="GlobeIcon" class="w-4 h-4 tc-icon-blue"></lucide-icon>
+            Shared Global List (read-only)
+          </div>
+          <span class="tc-badge tc-badge-blue">{{ globalDomains.length }}</span>
+        </div>
+        <p class="tc-card-desc" style="margin-bottom:8px;">These are managed globally by your security team and apply to all organizations.</p>
+        <div class="tc-chips">
+          <span *ngFor="let d of globalDomains" class="tc-chip tc-chip-muted" [title]="d.note">
+            {{ d.domain }}
+            <span class="tc-chip-cat">{{ d.category }}</span>
+          </span>
+        </div>
+      </div>
+    </div>
 
   </ng-container>
 

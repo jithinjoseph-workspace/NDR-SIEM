@@ -5,6 +5,31 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, warn};
 
+// Legitimate shared-hosting platforms that attackers abuse to stage payloads.
+// Extracting the bare hostname from a URLhaus URL like
+//   https://raw.githubusercontent.com/evil/repo/malware.exe
+// would mark the entire platform as malicious — skip these.
+const SHARED_HOSTING: &[&str] = &[
+    "raw.githubusercontent.com", "githubusercontent.com",
+    "github.com", "github.io",
+    "gitlab.com", "bitbucket.org",
+    "drive.google.com", "docs.google.com",
+    "storage.googleapis.com", "googleapis.com",
+    "blob.core.windows.net", "onedrive.live.com", "sharepoint.com",
+    "pastebin.com", "paste.ee", "hastebin.com",
+    "dropbox.com", "dl.dropboxusercontent.com",
+    "amazonaws.com", "s3.amazonaws.com",
+    "cloudflare.com",
+    "discord.com", "discordapp.com", "cdn.discordapp.com",
+    "t.me", "telegram.org",
+    "mediafire.com", "sendspace.com", "transfer.sh",
+];
+
+fn is_shared_hosting(host: &str) -> bool {
+    let h = host.to_lowercase();
+    SHARED_HOSTING.iter().any(|&s| h == s || h.ends_with(&format!(".{}", s)))
+}
+
 #[derive(Clone)]
 pub struct ThreatIntel {
     pub malicious_ips:     Arc<DashSet<IpAddr>>,
@@ -88,16 +113,15 @@ impl ThreatIntel {
                 self.malicious_domains.insert(value.to_lowercase());
             }
             "url" => {
-    self.malicious_urls.insert(value.to_lowercase());
-    // Also extract host from URL
-    if let Some(host) = extract_host(value) {
-        if let Ok(ip) = IpAddr::from_str(&host) {
-            self.malicious_ips.insert(ip);
-        } else {
-            self.malicious_domains.insert(host);
-        }
-    }
-}
+                self.malicious_urls.insert(value.to_lowercase());
+                if let Some(host) = extract_host(value) {
+                    if let Ok(ip) = IpAddr::from_str(&host) {
+                        self.malicious_ips.insert(ip);
+                    } else if !is_shared_hosting(&host) {
+                        self.malicious_domains.insert(host);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -313,10 +337,9 @@ async fn refresh_urlhaus(&self) {
 
         if let Some(host) = extract_host(line) {
             if let Ok(ip) = IpAddr::from_str(&host) {
-                // ADD to existing IPs — don't clear!
                 self.malicious_ips.insert(ip);
                 loaded_ips += 1;
-            } else {
+            } else if !is_shared_hosting(&host) {
                 self.malicious_domains.insert(host);
                 loaded_domains += 1;
             }

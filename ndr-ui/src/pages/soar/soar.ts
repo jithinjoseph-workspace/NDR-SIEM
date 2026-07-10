@@ -8,7 +8,8 @@ import {
     Zap, Play, Pause, Settings,
     CheckCircle, XCircle, Link,
     RefreshCw, ExternalLink, Plus,
-    Trash2, Bell, Mail, Globe, Shield, Activity, ShieldAlert
+    Trash2, Bell, Mail, Globe, Shield, Activity, ShieldAlert,
+    Ban, ShieldOff
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
 import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
@@ -38,8 +39,10 @@ export class Soar implements OnInit {
     ShieldIcon = Shield;
     ActivityIcon = Activity;
     ShieldAlertIcon = ShieldAlert;
+    BanIcon = Ban;
+    ShieldOffIcon = ShieldOff;
 
-    activeTab: 'cases' | 'playbooks' | 'integrations' | 'activity' = 'cases';
+    activeTab: 'cases' | 'playbooks' | 'integrations' | 'activity' | 'blocks' = 'cases';
     loading = false;
 
     // --- Cases ---
@@ -78,6 +81,26 @@ export class Soar implements OnInit {
 
     // --- Activity Log ---
     runs: any[] = [];
+
+    // --- Active Blocks ---
+    activeBlocks: any[] = [];
+    loadingBlocks = false;
+    showBlockModal = false;
+    blockIp = '';
+    blockPort: number | null = null;
+    blockDuration = 24;
+    blockEnforcement: 'rst' | 'firewall' | 'both' = 'both';
+    blockReason = '';
+    blockSaving = false;
+    blockError = '';
+
+    firewallIntegrationTypes = [
+        { type: 'pfsense',  name: 'pfSense',          fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }] },
+        { type: 'fortinet', name: 'Fortinet FortiOS',  fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }] },
+        { type: 'panos',    name: 'Palo Alto PAN-OS',  fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }] },
+        { type: 'opnsense', name: 'OPNsense',           fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }, { key: 'api_secret', label: 'API Secret', placeholder: '...', type: 'password' }] },
+        { type: 'rest',     name: 'Generic REST Webhook', fields: [{ key: 'url', label: 'Endpoint URL', placeholder: 'https://...' }] },
+    ];
 
     integrationTypes = [
         {
@@ -160,12 +183,73 @@ export class Soar implements OnInit {
     }
 
     // --- Tab Switching ---
-    switchTab(tab: 'cases' | 'playbooks' | 'integrations' | 'activity') {
+    switchTab(tab: 'cases' | 'playbooks' | 'integrations' | 'activity' | 'blocks') {
         this.activeTab = tab;
         if (tab === 'cases') this.loadCases();
         if (tab === 'playbooks') this.loadPlaybooks();
         if (tab === 'integrations') this.loadIntegrations();
         if (tab === 'activity') this.loadRuns();
+        if (tab === 'blocks') this.loadBlocks();
+    }
+
+    // --- Blocks Logic ---
+    loadBlocks() {
+        this.loadingBlocks = true;
+        this.api.listActiveBlocks().subscribe({
+            next: (res: any) => {
+                this.activeBlocks = res.data || [];
+                this.loadingBlocks = false;
+                this.cdr.detectChanges();
+            },
+            error: () => { this.loadingBlocks = false; this.cdr.detectChanges(); }
+        });
+    }
+
+    revokeBlock(b: any) {
+        if (!confirm(`Revoke block on ${b.src_ip}?`)) return;
+        this.api.revokeBlock(b.id, b.sensor_id || undefined).subscribe({
+            next: () => this.loadBlocks(),
+            error: () => alert('Failed to revoke block')
+        });
+    }
+
+    openBlockModal() {
+        this.blockIp = '';
+        this.blockPort = null;
+        this.blockDuration = 24;
+        this.blockEnforcement = 'both';
+        this.blockReason = '';
+        this.blockError = '';
+        this.showBlockModal = true;
+    }
+
+    submitManualBlock() {
+        if (!this.blockIp.trim()) { this.blockError = 'IP address is required'; return; }
+        this.blockSaving = true;
+        this.blockError = '';
+        this.api.manualBlock({
+            src_ip:         this.blockIp.trim(),
+            src_port:       this.blockPort ?? undefined,
+            duration_hours: this.blockDuration,
+            enforcement:    this.blockEnforcement,
+            reason:         this.blockReason || undefined,
+        }).subscribe({
+            next: (res: any) => {
+                this.blockSaving = false;
+                if (res.status === 'success') {
+                    this.showBlockModal = false;
+                    this.loadBlocks();
+                } else {
+                    this.blockError = res.message || 'Block failed';
+                    this.cdr.detectChanges();
+                }
+            },
+            error: (err: any) => {
+                this.blockSaving = false;
+                this.blockError = err.error?.message || 'Request failed';
+                this.cdr.detectChanges();
+            }
+        });
     }
 
     // --- Cases Logic ---

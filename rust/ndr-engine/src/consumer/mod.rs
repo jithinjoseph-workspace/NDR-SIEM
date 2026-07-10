@@ -259,13 +259,32 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         }
                     }
                 }
-                // ── JA3 threat-intel: Zeek ssl log ──────────────────────────────
+                // ── JA3 threat-intel + asset OS fingerprint: Zeek ssl log ───────
                 if event.log_source.as_deref() == Some("ssl") {
                     let ja3_opt = raw.get("ja3")
                         .and_then(|v| v.as_str())
                         .filter(|s| s.len() == 32)
                         .map(|s| s.to_lowercase());
                     if let Some(ja3) = ja3_opt {
+                        // Populate ja3_os on the asset for every ssl event regardless
+                        // of whether the fingerprint is malicious. Only writes once
+                        // (skips if ja3_os already set so we don't overwrite a manual label).
+                        if let Some(os_label) = crate::enrichment::asset_intel::ja3_lookup(&ja3) {
+                            if let Some(src) = event.source_ip.clone() {
+                                let ch_cl  = state.ch_storage.clone();
+                                let tid_cl = tenant_id.clone();
+                                let os_str = os_label.to_string();
+                                tokio::spawn(async move {
+                                    if let Ok(Some(mut asset)) = ch_cl.get_asset_by_ip(&tid_cl, &src).await {
+                                        if asset.ja3_os.is_empty() {
+                                            asset.ja3_os = os_str;
+                                            let _ = ch_cl.upsert_asset(&asset).await;
+                                        }
+                                    }
+                                });
+                            }
+                        }
+
                         if state.enrichment.threat_intel.is_malicious_ja3(&ja3) {
                             let now_ts = chrono::Utc::now().timestamp() as u32;
                             let src    = event.source_ip.clone().unwrap_or_default();

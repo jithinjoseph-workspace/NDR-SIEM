@@ -49,6 +49,16 @@
       Activity Log
     </button>
 
+    <button (click)="switchTab('blocks')"
+      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
+        (activeTab === 'blocks' ? 'border-red-400 text-red-300' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
+      <lucide-icon [name]="BanIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Active Blocks
+      <span *ngIf="activeBlocks.length > 0" class="ml-0.5 text-[10px] font-bold bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded">
+        {{ activeBlocks.length }}
+      </span>
+    </button>
+
   </div>
 
 
@@ -373,6 +383,167 @@
 
 
   <!-- ══════════════════════════════════════════════════════════════════════
+       TAB — ACTIVE BLOCKS
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'blocks'" class="soar-tab-content space-y-4">
+
+    <!-- Header row -->
+    <div class="flex items-center justify-between">
+      <div>
+        <h3 class="text-sm font-bold text-white">Active Blocks</h3>
+        <p class="text-xs text-on-surface-variant/60 mt-0.5">TCP RST injection and firewall rules enforced by NDR sensors</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button (click)="loadBlocks()" [disabled]="loadingBlocks"
+          class="flex items-center gap-1.5 text-xs text-on-surface-variant hover:text-white bg-surface-container border border-outline/15 hover:border-outline/30 rounded-lg px-3 py-2 transition-all">
+          <lucide-icon [name]="RefreshIcon" class="w-3.5 h-3.5" [class.animate-spin]="loadingBlocks"></lucide-icon>
+          Refresh
+        </button>
+        <button (click)="openBlockModal()"
+          class="flex items-center gap-1.5 text-xs font-bold text-black bg-red-500 hover:bg-red-400 rounded-lg px-3 py-2 transition-colors">
+          <lucide-icon [name]="BanIcon" class="w-3.5 h-3.5"></lucide-icon>
+          Block IP
+        </button>
+      </div>
+    </div>
+
+    <!-- Empty state -->
+    <div *ngIf="!loadingBlocks && activeBlocks.length === 0"
+      class="flex flex-col items-center justify-center py-16 border border-outline/10 rounded-xl bg-surface-container/20">
+      <lucide-icon [name]="ShieldOffIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
+      <p class="text-sm font-semibold text-on-surface-variant">No active blocks</p>
+      <p class="text-xs text-on-surface-variant/60 mt-1">Use the Block IP button or configure a playbook with block_ip action.</p>
+    </div>
+
+    <!-- Blocks table -->
+    <div *ngIf="activeBlocks.length > 0" class="overflow-x-auto rounded-xl border border-outline/10">
+      <table class="soar-table w-full text-left text-sm">
+        <thead>
+          <tr class="text-[10px] uppercase text-on-surface-variant/60">
+            <th class="px-4 py-3 font-semibold">Source IP</th>
+            <th class="px-4 py-3 font-semibold">Triggered By</th>
+            <th class="px-4 py-3 font-semibold">Enforcement</th>
+            <th class="px-4 py-3 font-semibold">Expires</th>
+            <th class="px-4 py-3 font-semibold">Status</th>
+            <th class="px-4 py-3 font-semibold">Reason</th>
+            <th class="px-4 py-3 font-semibold text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let b of activeBlocks" class="border-t border-outline/8 hover:bg-surface-container/50 transition-colors">
+            <td class="px-4 py-3 font-mono text-white text-xs">
+              {{ b.src_ip }}
+              <span *ngIf="b.src_port" class="text-on-surface-variant">:{{ b.src_port }}</span>
+            </td>
+            <td class="px-4 py-3 text-xs text-on-surface-variant">
+              <span [class]="b.triggered_by === 'manual' ? 'text-yellow-400' : 'text-primary'">
+                {{ b.triggered_by }}
+              </span>
+            </td>
+            <td class="px-4 py-3 text-xs">
+              <span *ngIf="b.rst_injected" class="inline-block bg-red-500/15 text-red-400 text-[10px] font-bold px-2 py-0.5 rounded mr-1">RST</span>
+              <span *ngIf="b.firewall_type && b.firewall_type !== 'none'" class="inline-block bg-orange-500/15 text-orange-400 text-[10px] font-bold px-2 py-0.5 rounded">{{ b.firewall_type | uppercase }}</span>
+              <span *ngIf="!b.rst_injected && (!b.firewall_type || b.firewall_type === 'none')" class="text-on-surface-variant/40">—</span>
+            </td>
+            <td class="px-4 py-3 text-xs text-on-surface-variant font-mono">{{ formatDate(b.expires_at) }}</td>
+            <td class="px-4 py-3">
+              <span [class]="'text-[10px] font-bold px-2 py-0.5 rounded uppercase ' +
+                (b.status === 'active' ? 'bg-green-500/15 text-green-400' :
+                 b.status === 'revoked' ? 'bg-red-500/15 text-red-400' : 'bg-surface-container text-on-surface-variant')">
+                {{ b.status }}
+              </span>
+            </td>
+            <td class="px-4 py-3 text-xs text-on-surface-variant max-w-xs truncate" [title]="b.reason">{{ b.reason || '—' }}</td>
+            <td class="px-4 py-3 text-right">
+              <button *ngIf="b.status === 'active'" (click)="revokeBlock(b)"
+                class="text-[10px] font-semibold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-400/40 px-2.5 py-1 rounded-lg transition-all">
+                Revoke
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       MODAL — Manual Block
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="showBlockModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-md shadow-2xl">
+
+      <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10">
+        <div>
+          <h2 class="text-sm font-bold text-white flex items-center gap-2">
+            <lucide-icon [name]="BanIcon" class="w-4 h-4 text-red-400"></lucide-icon>
+            Block IP Address
+          </h2>
+          <p class="text-xs text-on-surface-variant mt-0.5">Inject TCP RST and/or push a firewall rule</p>
+        </div>
+        <button (click)="showBlockModal=false" class="text-on-surface-variant hover:text-white p-1">✕</button>
+      </div>
+
+      <div class="px-6 py-4 space-y-4">
+
+        <div>
+          <label class="block text-[10px] text-on-surface-variant/70 mb-1 uppercase tracking-wider">Source IP *</label>
+          <input [(ngModel)]="blockIp" placeholder="203.0.113.42"
+            class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-white text-sm font-mono outline-none focus:border-red-400/50 placeholder:text-on-surface-variant/40 transition-colors"/>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-on-surface-variant/70 mb-1 uppercase tracking-wider">Port (optional)</label>
+            <input type="number" [(ngModel)]="blockPort" placeholder="any" min="0" max="65535"
+              class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-white text-sm font-mono outline-none focus:border-red-400/50 placeholder:text-on-surface-variant/40 transition-colors"/>
+          </div>
+          <div>
+            <label class="block text-[10px] text-on-surface-variant/70 mb-1 uppercase tracking-wider">Duration (hours)</label>
+            <input type="number" [(ngModel)]="blockDuration" min="1" max="720"
+              class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-white text-sm font-mono outline-none focus:border-red-400/50 transition-colors"/>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-[10px] text-on-surface-variant/70 mb-1 uppercase tracking-wider">Enforcement</label>
+          <select [(ngModel)]="blockEnforcement"
+            class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-white text-sm outline-none focus:border-red-400/50 transition-colors">
+            <option value="both">RST Injection + Firewall API</option>
+            <option value="rst">RST Injection Only</option>
+            <option value="firewall">Firewall API Only</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-[10px] text-on-surface-variant/70 mb-1 uppercase tracking-wider">Reason</label>
+          <input [(ngModel)]="blockReason" placeholder="Suspected C2 callback, manual investigation…"
+            class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-white text-sm outline-none focus:border-red-400/50 placeholder:text-on-surface-variant/40 transition-colors"/>
+        </div>
+
+        <div *ngIf="blockError" class="text-xs text-red-400 bg-red-500/8 border border-red-500/15 px-3 py-2 rounded-lg">
+          {{ blockError }}
+        </div>
+
+      </div>
+
+      <div class="flex items-center justify-end gap-2 px-6 py-4 border-t border-outline/10">
+        <button (click)="showBlockModal=false"
+          class="text-xs font-semibold text-on-surface-variant hover:text-white px-4 py-2 rounded-lg border border-outline/10 hover:border-outline/25 transition-all bg-surface-container">
+          Cancel
+        </button>
+        <button (click)="submitManualBlock()" [disabled]="blockSaving"
+          class="text-xs font-bold bg-red-500 hover:bg-red-400 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors">
+          {{ blockSaving ? 'Blocking…' : 'Block Now' }}
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════════════════════════
        MODAL — Case Detail
   ══════════════════════════════════════════════════════════════════════════ -->
 ﻿  <div *ngIf="selectedCase" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -611,6 +782,7 @@
               <option value="discord">Send Discord Notification</option>
               <option value="email">Send Email Alert</option>
               <option value="webhook">Call Custom Webhook</option>
+              <option value="block_ip">Block Source IP (RST + Firewall)</option>
             </select>
           </div>
           <div *ngIf="['slack','teams','discord','webhook'].includes(pbActionType)">
@@ -626,6 +798,23 @@
           <div *ngIf="pbActionType === 'create_case'"
             class="text-xs text-on-surface-variant bg-surface-container border border-outline/8 px-3 py-2 rounded-lg">
             A new case entry will be created automatically in the Cases tab.
+          </div>
+          <div *ngIf="pbActionType === 'block_ip'" class="space-y-2">
+            <div>
+              <label class="block text-[10px] text-on-surface-variant/70 mb-1">Enforcement</label>
+              <select [(ngModel)]="pbActionConfig['enforcement']"
+                class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2.5 text-white text-sm outline-none focus:border-primary/50 transition-colors">
+                <option value="both">RST Injection + Firewall API</option>
+                <option value="rst">RST Injection Only</option>
+                <option value="firewall">Firewall API Only</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[10px] text-on-surface-variant/70 mb-1">Duration (hours)</label>
+              <input type="number" [(ngModel)]="pbActionConfig['duration_hours']" placeholder="24" min="1" max="720"
+                class="w-full bg-surface-container border border-outline/15 rounded-lg px-3 py-2 text-white text-sm font-mono outline-none focus:border-primary/50 transition-colors"/>
+            </div>
+            <p class="text-[10px] text-on-surface-variant/50">Blocks will appear in the Active Blocks tab and can be revoked at any time.</p>
           </div>
         </div>
 

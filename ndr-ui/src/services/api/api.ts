@@ -309,6 +309,32 @@ export class Api {
     return this.http.post(`${this.baseUrl}/settings/trusted-cloud/suggestions/reject`, { org });
   }
 
+  suppressAlert(srcIp: string, dstIp: string, communityId: string, tag: string, durationHours = 24): Observable<any> {
+    return this.http.post(`${this.baseUrl}/ai-suppressions`, {
+      src_ip: srcIp, dst_ip: dstIp, community_id: communityId, tag, duration_hours: durationHours
+    });
+  }
+
+  listTrustedDomains(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/trusted-domains`);
+  }
+
+  addTrustedDomain(domain: string, category: string, tenantId: string, note: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/trusted-domains`, {
+      domain, category, tenant_id: tenantId, note
+    });
+  }
+
+  deleteTrustedDomain(domain: string, tenantId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/trusted-domains/delete`, {
+      domain, tenant_id: tenantId
+    });
+  }
+
+  aiSuggestTrustedDomains(): Observable<any> {
+    return this.http.post(`${this.baseUrl}/trusted-domains/ai-suggest`, {});
+  }
+
   getAssets(): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/assets`);
   }
@@ -608,5 +634,25 @@ export class Api {
 
   unassignSensor(user_id: string, sensor_id: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/sensors/assign`, { body: { user_id, sensor_id } });
+  }
+
+  // ── Active Blocks ─────────────────────────────────────────────────────────
+
+  listActiveBlocks(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/blocks`);
+  }
+
+  manualBlock(data: {
+    src_ip: string;
+    src_port?: number;
+    duration_hours?: number;
+    enforcement?: string;
+    reason?: string;
+  }): Observable<any> {
+    return this.http.post(`${this.baseUrl}/blocks/manual`, data);
+  }
+
+  revokeBlock(id: string, sensor_id?: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/blocks/revoke`, { id, sensor_id });
   }
 }

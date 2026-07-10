@@ -7954,6 +7954,40 @@ pub async fn aria_get_verdict(
     }
 }
 
+/// POST /api/ai-suppressions — analyst manually suppresses an alert pattern
+#[derive(serde::Deserialize)]
+pub struct ManualSuppressionBody {
+    pub src_ip:       String,
+    pub dst_ip:       Option<String>,
+    pub community_id: Option<String>,
+    pub tag:          Option<String>,
+    pub duration_hours: Option<u32>,
+}
+
+pub async fn create_manual_suppression(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ManualSuppressionBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"error": "unauthorized"})),
+    };
+    let tag    = body.tag.as_deref().unwrap_or("manual");
+    let dst_ip = body.dst_ip.as_deref().unwrap_or("");
+    let cid    = body.community_id.as_deref().unwrap_or("");
+    let reason = format!("Manually suppressed by analyst ({}h)", body.duration_hours.unwrap_or(24));
+    match state.ch_storage.save_ai_suppression(
+        &claims.tenant_id,
+        0, tag, "by_src", &body.src_ip,
+        &body.src_ip, dst_ip, cid,
+        &reason, 100, "",
+    ).await {
+        Ok(_)  => Json(json!({"ok": true, "suppressed_src": body.src_ip, "tag": tag})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
 /// GET /api/ai-activity
 /// Returns AI suppression decisions and AI evidence analysis annotations.
 pub async fn get_ai_activity(
@@ -8227,5 +8261,437 @@ pub async fn reject_trusted_cloud_suggestion(
     match crate::threat::cloud_suggestions::reject_suggestion(&state.ch_storage, &body.org).await {
         Ok(_)  => Json(json!({"ok": true, "org": body.org})),
         Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+// ── Trusted Domains — CRUD + AI suggestions ───────────────────────────────────
+// GET  /api/trusted-domains        — list (global + caller's tenant)
+// POST /api/trusted-domains        — add entry
+// POST /api/trusted-domains/delete — remove entry (body: {domain, tenant_id})
+// POST /api/trusted-domains/ai-suggest — classify high-freq domains via AI
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct TrustedDomainRow {
+    domain:    String,
+    category:  String,
+    tenant_id: String,
+    note:      String,
+    added_by:  String,
+    added_at:  String,
+}
+
+pub async fn list_trusted_domains(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"error": "Unauthorized"})),
+    };
+    let ch  = &state.ch_storage;
+    let esc = crate::storage::clickhouse::sql_escape_pub;
+
+    let q = if claims.role == "super_admin" {
+        "SELECT domain, category, tenant_id, note, added_by, toString(added_at) AS added_at \
+         FROM ndr.trusted_domains FINAL ORDER BY tenant_id, category, domain".to_string()
+    } else {
+        format!(
+            "SELECT domain, category, tenant_id, note, added_by, toString(added_at) AS added_at \
+             FROM ndr.trusted_domains FINAL \
+             WHERE tenant_id = '' OR tenant_id = '{}' \
+             ORDER BY tenant_id, category, domain",
+            esc(&claims.tenant_id)
+        )
+    };
+
+    match ch.client.query(&q).fetch_all::<TrustedDomainRow>().await {
+        Ok(rows) => {
+            let data: Vec<Value> = rows.into_iter().map(|r| {
+                let scope = if r.tenant_id.is_empty() { "global" } else { "tenant" };
+                json!({
+                    "domain":    r.domain,
+                    "category":  r.category,
+                    "tenant_id": r.tenant_id,
+                    "note":      r.note,
+                    "added_by":  r.added_by,
+                    "added_at":  r.added_at,
+                    "scope":     scope,
+                })
+            }).collect();
+            Json(json!({"domains": data}))
+        }
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct AddTrustedDomainBody {
+    pub domain:    String,
+    pub category:  Option<String>,
+    pub tenant_id: Option<String>,
+    pub note:      Option<String>,
+}
+
+pub async fn add_trusted_domain(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<AddTrustedDomainBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"error": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" && claims.role != "tenant_admin" {
+        return Json(json!({"error": "Forbidden"}));
+    }
+    let ch  = &state.ch_storage;
+    let esc = crate::storage::clickhouse::sql_escape_pub;
+
+    let domain   = body.domain.trim().to_lowercase();
+    let category = body.category.as_deref().unwrap_or("dns_beacon").to_string();
+    let note     = body.note.as_deref().unwrap_or("").to_string();
+
+    // super_admin can create global (tenant_id='') or any tenant; others are scoped to their tenant
+    let tenant_id = if claims.role == "super_admin" {
+        body.tenant_id.clone().unwrap_or_default()
+    } else {
+        claims.tenant_id.clone()
+    };
+
+    let q = format!(
+        "INSERT INTO ndr.trusted_domains (domain, category, tenant_id, note, added_by, added_at) \
+         VALUES ('{}', '{}', '{}', '{}', '{}', now())",
+        esc(&domain), esc(&category), esc(&tenant_id), esc(&note), esc(&claims.sub)
+    );
+    match ch.client.query(&q).execute().await {
+        Ok(_)  => Json(json!({"ok": true, "domain": domain,
+                              "scope": if tenant_id.is_empty() { "global" } else { "tenant" }})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeleteTrustedDomainBody {
+    pub domain:    String,
+    pub tenant_id: Option<String>,
+}
+
+pub async fn delete_trusted_domain(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<DeleteTrustedDomainBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"error": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" && claims.role != "tenant_admin" {
+        return Json(json!({"error": "Forbidden"}));
+    }
+    let ch  = &state.ch_storage;
+    let esc = crate::storage::clickhouse::sql_escape_pub;
+
+    let domain    = body.domain.trim().to_lowercase();
+    let tenant_id = if claims.role == "super_admin" {
+        body.tenant_id.clone().unwrap_or_default()
+    } else {
+        claims.tenant_id.clone()
+    };
+
+    let q = format!(
+        "ALTER TABLE ndr.trusted_domains ON CLUSTER ndr_cluster \
+         DELETE WHERE domain = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
+        esc(&domain), esc(&tenant_id)
+    );
+    match ch.client.query(&q).execute().await {
+        Ok(_)  => Json(json!({"ok": true})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+pub async fn ai_suggest_trusted_domains(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"error": "Unauthorized"})),
+    };
+    if claims.role != "super_admin" && claims.role != "tenant_admin" {
+        return Json(json!({"error": "Forbidden"}));
+    }
+    let ch  = &state.ch_storage;
+    let esc = crate::storage::clickhouse::sql_escape_pub;
+
+    // Check if AI is available (DB providers with keys OR env-var fallback)
+    let has_db_ai = ch.list_ai_providers().await.unwrap_or_default().iter().any(|p| {
+        p.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false)
+    });
+    let has_env_ai = std::env::var("GROQ_API_KEY").map(|k| !k.is_empty()).unwrap_or(false)
+        || std::env::var("OPENAI_API_KEY").map(|k| !k.is_empty()).unwrap_or(false)
+        || std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false);
+    if !has_db_ai && !has_env_ai {
+        return Json(json!({"ai_available": false}));
+    }
+
+    let tenant_filter = if claims.role == "super_admin" {
+        "1=1".to_string()
+    } else {
+        format!("tenant_id = '{}'", esc(&claims.tenant_id))
+    };
+
+    // Top domains queried in the last 24h
+    let candidates_q = format!(
+        "SELECT JSONExtractString(raw, 'query') AS domain, count() AS cnt \
+         FROM ndr.ndr_events \
+         WHERE timestamp > now() - INTERVAL 24 HOUR \
+           AND {tenant_filter} \
+           AND event_type = 'dns' \
+           AND JSONExtractString(raw, 'query') != '' \
+           AND NOT match(JSONExtractString(raw, 'query'), '\\.(local|internal|lan|corp|home)$') \
+         GROUP BY domain HAVING cnt > 30 ORDER BY cnt DESC LIMIT 40"
+    );
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct DomainCnt { domain: String, cnt: u64 }
+
+    let candidates: Vec<DomainCnt> = ch.client.query(&candidates_q).fetch_all().await.unwrap_or_default();
+    if candidates.is_empty() {
+        return Json(json!({"ai_available": true, "suggestions": []}));
+    }
+
+    // Filter out already-trusted
+    let existing_q = if claims.role == "super_admin" {
+        "SELECT domain FROM ndr.trusted_domains FINAL WHERE tenant_id = ''".to_string()
+    } else {
+        format!(
+            "SELECT domain FROM ndr.trusted_domains FINAL \
+             WHERE tenant_id = '' OR tenant_id = '{}'",
+            esc(&claims.tenant_id)
+        )
+    };
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct DRow { domain: String }
+    let existing: std::collections::HashSet<String> = ch.client.query(&existing_q)
+        .fetch_all::<DRow>().await.unwrap_or_default()
+        .into_iter().map(|r| r.domain).collect();
+
+    let fresh: Vec<&DomainCnt> = candidates.iter()
+        .filter(|c| !existing.iter().any(|e| c.domain == *e || c.domain.ends_with(&format!(".{}", e))))
+        .collect();
+
+    if fresh.is_empty() {
+        return Json(json!({"ai_available": true, "suggestions": []}));
+    }
+
+    let domain_list = fresh.iter()
+        .map(|c| format!("- {} ({} queries/24h)", c.domain, c.cnt))
+        .collect::<Vec<_>>().join("\n");
+
+    let system = "You are a network security analyst. \
+                  Classify domains as TRUSTED (legitimate CDN, cloud, SaaS, update server) or \
+                  SUSPICIOUS (potential C2, malware, or out-of-place traffic). \
+                  Reply ONLY with valid JSON — no other text.";
+    let prompt = format!(
+        "Classify these frequently-queried domains from a corporate network (last 24h):\n\
+         {}\n\n\
+         Return JSON: \
+         {{\"suggestions\":[{{\"domain\":\"...\",\"verdict\":\"TRUSTED\",\"reason\":\"...\",\"cnt\":N}}]}}",
+        domain_list
+    );
+
+    let ai_text = crate::ai::provider::generate(ch, crate::ai::provider::UseCase::ThreatPrediction, system, &prompt).await;
+
+    // Parse JSON out of AI response
+    let parsed: Value = if !ai_text.is_empty() {
+        let trimmed = ai_text.trim();
+        serde_json::from_str(trimmed)
+            .or_else(|_| -> Result<Value, _> {
+                if let (Some(s), Some(e)) = (trimmed.find('{'), trimmed.rfind('}')) {
+                    serde_json::from_str(&trimmed[s..=e])
+                } else {
+                    Ok(json!({"suggestions": []}))
+                }
+            })
+            .unwrap_or_else(|_| json!({"suggestions": []}))
+    } else {
+        json!({"suggestions": []})
+    };
+
+    Json(json!({
+        "ai_available": true,
+        "suggestions":  parsed.get("suggestions").cloned().unwrap_or(json!([])),
+    }))
+}
+
+// ── Active Blocks ─────────────────────────────────────────────────────────
+
+pub async fn list_active_blocks(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let tenant_id = if claims.role == "superadmin" { "superadmin".to_string() } else { claims.tenant_id.clone() };
+    match state.ch_storage.list_active_blocks(&tenant_id).await {
+        Ok(blocks) => Json(json!({"status":"success","data":blocks})),
+        Err(e)     => Json(json!({"status":"error","message":e.to_string()})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct RevokeBlockBody {
+    pub id:        String,
+    pub sensor_id: Option<String>,
+}
+
+pub async fn revoke_active_block(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<RevokeBlockBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let tenant_id = if claims.role == "superadmin" { "superadmin".to_string() } else { claims.tenant_id.clone() };
+
+    match state.ch_storage.revoke_active_block(&body.id, &tenant_id).await {
+        Ok(Some(block)) => {
+            // Call firewall API to remove the rule if one was set
+            if !block.firewall_type.is_empty() && block.firewall_type != "none" {
+                let integrations = state.ch_storage
+                    .get_integrations_by_tenant(&block.tenant_id).await.unwrap_or_default();
+                if let Some(fw) = integrations.iter().find(|i| {
+                    i["type"].as_str() == Some(&block.firewall_type) && i["enabled"] == json!(true)
+                }) {
+                    let _ = crate::soar::firewall::revoke_block(
+                        &block.firewall_type, &fw["config"],
+                        &block.src_ip, &block.firewall_rule_id,
+                    ).await;
+                }
+            }
+            // Call agent unblock (RST cleanup)
+            let agent_url = std::env::var("NDR_AGENT_URL")
+                .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
+            let _ = reqwest::Client::new()
+                .post(format!("{}/agent/unblock", agent_url))
+                .json(&json!({"ip": block.src_ip}))
+                .timeout(std::time::Duration::from_secs(5))
+                .send().await;
+
+            Json(json!({"status":"success","message":format!("Block {} revoked", body.id)}))
+        }
+        Ok(None) => Json(json!({"status":"error","message":"Block not found"})),
+        Err(e)   => Json(json!({"status":"error","message":e.to_string()})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ManualBlockBody {
+    pub src_ip:         String,
+    pub src_port:       Option<u16>,
+    pub duration_hours: Option<u64>,
+    pub enforcement:    Option<String>,   // "rst" | "firewall" | "both"
+    pub reason:         Option<String>,
+}
+
+pub async fn manual_block(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ManualBlockBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let tenant_id = claims.tenant_id.clone();
+    let duration  = body.duration_hours.unwrap_or(24);
+    let enforce   = body.enforcement.as_deref().unwrap_or("both");
+    let reason    = body.reason.clone().unwrap_or_else(|| format!("Manual block by {}", claims.sub));
+
+    // Validate IP is routable
+    let addr: Result<std::net::IpAddr, _> = body.src_ip.parse();
+    let is_private = addr.map(|a| match a {
+        std::net::IpAddr::V4(v) => v.is_private() || v.is_loopback(),
+        std::net::IpAddr::V6(v) => v.is_loopback(),
+    }).unwrap_or(true);
+
+    if is_private {
+        return Json(json!({"status":"error","message":"Cannot block private/internal addresses"}));
+    }
+
+    let agent_url = std::env::var("NDR_AGENT_URL")
+        .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
+
+    let mut rst_ok   = false;
+    let mut expires_at = String::new();
+
+    // RST injection
+    if enforce == "rst" || enforce == "both" {
+        let rst_payload = json!({
+            "src_ip": body.src_ip, "src_port": body.src_port.unwrap_or(0),
+            "dst_ip": "", "dst_port": 0,
+            "community_id": "", "duration_hours": duration,
+        });
+        if let Ok(r) = reqwest::Client::new()
+            .post(format!("{}/agent/block", agent_url))
+            .json(&rst_payload).timeout(std::time::Duration::from_secs(10)).send().await
+        {
+            if r.status().is_success() {
+                let resp = r.json::<serde_json::Value>().await.unwrap_or_default();
+                rst_ok     = resp["rst_injected"].as_bool().unwrap_or(false);
+                expires_at = resp["expires_at"].as_str().unwrap_or("").to_string();
+            }
+        }
+    }
+
+    // Firewall API
+    let (fw_type, fw_rule_id) = if enforce == "firewall" || enforce == "both" {
+        let integrations = state.ch_storage.get_integrations_by_tenant(&tenant_id).await.unwrap_or_default();
+        if let Some(fw) = integrations.iter().find(|i| {
+            matches!(i["type"].as_str(), Some("pfsense"|"fortinet"|"panos"|"opnsense"|"rest"))
+            && i["enabled"] == json!(true)
+        }) {
+            let fw_type = fw["type"].as_str().unwrap_or("none").to_string();
+            let result  = crate::soar::firewall::push_block(&fw_type, &fw["config"], &body.src_ip, duration).await;
+            (fw_type, result.rule_id)
+        } else {
+            ("none".to_string(), String::new())
+        }
+    } else {
+        ("none".to_string(), String::new())
+    };
+
+    // Persist
+    if expires_at.is_empty() {
+        use chrono::{Utc, Duration as CDur};
+        expires_at = (Utc::now() + CDur::hours(duration as i64)).to_rfc3339();
+    }
+    let expires_stored = expires_at.replace('T', " ").trim_end_matches('Z').to_string();
+    let block_id = uuid::Uuid::new_v4().to_string();
+
+    let block = crate::soar::ActiveBlock {
+        id: block_id.clone(),
+        src_ip: body.src_ip.clone(), src_port: body.src_port.unwrap_or(0),
+        dst_ip: String::new(), dst_port: 0,
+        community_id: String::new(),
+        triggered_by: "manual".to_string(),
+        sensor_id: String::new(),
+        firewall_type: fw_type, firewall_rule_id: fw_rule_id,
+        rst_injected: if rst_ok { 1 } else { 0 },
+        duration_hours: duration as u16,
+        expires_at: expires_stored,
+        status: "active".to_string(),
+        reason,
+        tenant_id: tenant_id.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    match state.ch_storage.insert_active_block(&block).await {
+        Ok(_)  => Json(json!({"status":"success","id":block_id,"rst_injected":rst_ok})),
+        Err(e) => Json(json!({"status":"error","message":e.to_string()})),
     }
 }

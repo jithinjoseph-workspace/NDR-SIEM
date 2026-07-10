@@ -2,6 +2,7 @@ use serde::{Serialize, Deserialize};
 
 pub mod actions;
 pub mod conditions;
+pub mod firewall;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SoarNativePlaybook {
@@ -31,6 +32,27 @@ pub struct SoarPlaybookRun {
     pub detail: String,
     pub created_at: String,
     pub tenant_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ActiveBlock {
+    pub id:               String,
+    pub src_ip:           String,
+    pub src_port:         u16,
+    pub dst_ip:           String,
+    pub dst_port:         u16,
+    pub community_id:     String,
+    pub triggered_by:     String,
+    pub sensor_id:        String,
+    pub firewall_type:    String,
+    pub firewall_rule_id: String,
+    pub rst_injected:     u8,
+    pub duration_hours:   u16,
+    pub expires_at:       String,
+    pub status:           String,
+    pub reason:           String,
+    pub tenant_id:        String,
+    pub created_at:       String,
 }
 
 use crate::api::AppState;

@@ -1201,6 +1201,8 @@ code,
   font-size: 0.73rem; font-weight: 600; color: var(--color-primary);
 }
 .tc-chip-domain { background: rgba(99,102,241,0.1); border-color: rgba(99,102,241,0.25); color: #818cf8; }
+.tc-chip-muted { background: rgba(110,117,136,0.08); border-color: var(--color-border); color: var(--color-muted); }
+.tc-chip-cat { font-weight: 400; font-size: 0.65rem; opacity: 0.6; }
 .tc-chip-remove {
   background: none; border: none; cursor: pointer;
   color: var(--color-muted); font-size: 0.82rem; line-height: 1; padding: 0;

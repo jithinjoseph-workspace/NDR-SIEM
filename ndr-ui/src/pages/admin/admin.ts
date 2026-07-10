@@ -32,7 +32,8 @@ import {
   Save,
   LayoutDashboard,
   Cpu,
-  MemoryStick
+  MemoryStick,
+  Globe
 } from 'lucide-angular';
 import * as d3 from 'd3';
 import { Announcement, Api, SensorKey } from '../../services/api/api';
@@ -103,6 +104,7 @@ export class Admin implements OnInit, OnDestroy {
   CpuIcon = Cpu;
   MemoryStickIcon = MemoryStick;
   DownloadIcon = Download;
+  GlobeIcon = Globe;
 
   // Community rules sync state
   syncingRules = false;
@@ -169,6 +171,18 @@ export class Admin implements OnInit, OnDestroy {
   trustedCloudSaving = false;
   trustedCloudSaved = false;
   loadingTrustedCloud = false;
+
+  // Trusted domains (DNS beacon + threat intel allowlist)
+  trustedDomains: any[] = [];
+  loadingTrustedDomains = false;
+  tdNewDomain = '';
+  tdNewCategory = 'dns_beacon';
+  tdNewScope = '';     // '' = global, or a tenant_id
+  tdNewNote = '';
+  tdSaving = false;
+  tdAiLoading = false;
+  tdAiAvailable: boolean | null = null;
+  tdAiSuggestions: any[] = [];
 
   users: any[] = [];
   loadingUsers = false;
@@ -442,6 +456,9 @@ export class Admin implements OnInit, OnDestroy {
     if (tab === 'trusted-cloud') {
       this.loadTrustedCloud();
     }
+    if (tab === 'trusted-domains') {
+      this.loadTrustedDomains();
+    }
     if (tab === 'ai-providers') {
       this.loadProviders();
     }
@@ -555,6 +572,75 @@ export class Admin implements OnInit, OnDestroy {
       error: () => { },
     });
   }
+
+  // ── Trusted Domains ────────────────────────────────────────────────────────
+
+  loadTrustedDomains() {
+    this.loadingTrustedDomains = true;
+    this.api.listTrustedDomains().subscribe({
+      next: (data: any) => {
+        this.trustedDomains = data.domains || [];
+        this.loadingTrustedDomains = false;
+      },
+      error: () => { this.loadingTrustedDomains = false; },
+    });
+  }
+
+  addTrustedDomain() {
+    const d = this.tdNewDomain.trim().toLowerCase();
+    if (!d) return;
+    this.tdSaving = true;
+    this.api.addTrustedDomain(d, this.tdNewCategory, this.tdNewScope, this.tdNewNote).subscribe({
+      next: () => {
+        this.tdNewDomain = '';
+        this.tdNewNote = '';
+        this.tdSaving = false;
+        this.loadTrustedDomains();
+      },
+      error: () => { this.tdSaving = false; },
+    });
+  }
+
+  deleteTrustedDomain(domain: string, tenantId: string) {
+    this.api.deleteTrustedDomain(domain, tenantId).subscribe({
+      next: () => {
+        this.trustedDomains = this.trustedDomains.filter(
+          d => !(d.domain === domain && d.tenant_id === tenantId)
+        );
+      },
+      error: () => {},
+    });
+  }
+
+  runAiSuggest() {
+    this.tdAiLoading = true;
+    this.tdAiSuggestions = [];
+    this.api.aiSuggestTrustedDomains().subscribe({
+      next: (data: any) => {
+        this.tdAiAvailable = data.ai_available !== false;
+        this.tdAiSuggestions = data.suggestions || [];
+        this.tdAiLoading = false;
+      },
+      error: () => { this.tdAiLoading = false; },
+    });
+  }
+
+  approveTdSuggestion(s: any) {
+    this.api.addTrustedDomain(s.domain, 'dns_beacon', '', s.reason || '').subscribe({
+      next: () => {
+        this.tdAiSuggestions = this.tdAiSuggestions.filter(x => x.domain !== s.domain);
+        this.loadTrustedDomains();
+      },
+      error: () => {},
+    });
+  }
+
+  dismissTdSuggestion(domain: string) {
+    this.tdAiSuggestions = this.tdAiSuggestions.filter(s => s.domain !== domain);
+  }
+
+  get globalDomains() { return this.trustedDomains.filter(d => d.scope === 'global'); }
+  get tenantDomains() { return this.trustedDomains.filter(d => d.scope === 'tenant'); }
 
   loadKafkaStatus() {
     this.kafkaLoading = !this.kafkaData;

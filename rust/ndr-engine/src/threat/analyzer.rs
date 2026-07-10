@@ -4,7 +4,8 @@ use crate::storage::clickhouse::tenant_db_pub;
 
 #[derive(Debug, Clone)]
 pub struct IocMatch {
-    pub ip:          String,
+    pub ip:          String, // IP address, domain, or hash depending on ioc_type
+    pub ioc_type:    String, // "ip" | "domain" | "hash"
     pub source:      String,
     pub attack_type: String,
     pub severity:    String,
@@ -66,19 +67,18 @@ pub async fn match_iocs(
     let intel_rows = ch.client.query(&intel_q)
         .fetch_all::<IntelIp>().await.unwrap_or_default();
 
-    if intel_rows.is_empty() { return vec![]; }
-
     // 4. Build a lookup: ip → direction from traffic
     let direction_map: std::collections::HashMap<String, String> =
         traffic_ips.into_iter().map(|r| (r.ip, r.direction)).collect();
 
-    // 5. Merge matches — skip IPs in trusted cloud
-    let matches: Vec<IocMatch> = intel_rows.into_iter()
+    // 5. Merge IP matches — skip IPs in trusted cloud
+    let mut matches: Vec<IocMatch> = intel_rows.into_iter()
         .filter(|r| !trusted.is_trusted_ip(&r.ioc_value))
         .map(|r| {
             let dir = direction_map.get(&r.ioc_value).cloned().unwrap_or_else(|| "dst".into());
             IocMatch {
                 ip:          r.ioc_value,
+                ioc_type:    "ip".into(),
                 source:      r.source,
                 attack_type: r.attack_type,
                 severity:    r.severity,
@@ -88,6 +88,125 @@ pub async fn match_iocs(
         }).collect();
 
     info!("IOC match: {} malicious IPs found in tenant {} traffic", matches.len(), tenant_id);
+
+    // 6. Domain matching — DNS query names and TLS SNI vs threat_intel
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct DomainRow { domain: String }
+
+    let dns_domains: Vec<DomainRow> = ch.client
+        .query(&format!(
+            "SELECT DISTINCT lower(JSONExtractString(raw, 'query')) AS domain \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 6 HOUR \
+               AND event_type = 'dns' AND domain != '' AND domain != '-'"
+        ))
+        .fetch_all().await.unwrap_or_default();
+
+    let sni_domains: Vec<DomainRow> = ch.client
+        .query(&format!(
+            "SELECT DISTINCT lower(JSONExtractString(raw, 'server_name')) AS domain \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 6 HOUR \
+               AND log_source = 'ssl' AND domain != '' AND domain != '-'"
+        ))
+        .fetch_all().await.unwrap_or_default();
+
+    let unique_domains: std::collections::HashSet<String> = dns_domains.into_iter()
+        .chain(sni_domains)
+        .map(|r| r.domain)
+        .filter(|d| !d.is_empty())
+        .collect();
+
+    if !unique_domains.is_empty() {
+        let domain_list = unique_domains.iter()
+            .map(|d| format!("'{}'", d.replace('\'', "''")))
+            .collect::<Vec<_>>().join(",");
+        let domain_intel: Vec<IntelIp> = ch.client
+            .query(&format!(
+                "SELECT ioc_value, source, attack_type, severity, description \
+                 FROM ndr.threat_intel \
+                 WHERE ioc_type IN ('domain','hostname') \
+                   AND ioc_value IN ({domain_list}) \
+                   AND collected_at >= now() - INTERVAL 7 DAY \
+                 GROUP BY ioc_value, source, attack_type, severity, description"
+            ))
+            .fetch_all().await.unwrap_or_default();
+        let domain_hit_count = domain_intel.len();
+        for r in domain_intel {
+            matches.push(IocMatch {
+                ip:          r.ioc_value,
+                ioc_type:    "domain".into(),
+                source:      r.source,
+                attack_type: r.attack_type,
+                severity:    r.severity,
+                description: r.description,
+                direction:   "dst".into(),
+            });
+        }
+        if domain_hit_count > 0 {
+            info!("IOC match: {} domain IOCs matched for tenant {}", domain_hit_count, tenant_id);
+        }
+    }
+
+    // 7. Hash matching — file SHA256/MD5 vs threat_intel
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct HashRow { hash: String }
+
+    let sha256_hashes: Vec<HashRow> = ch.client
+        .query(&format!(
+            "SELECT DISTINCT lower(JSONExtractString(raw, 'sha256')) AS hash \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 6 HOUR \
+               AND length(JSONExtractString(raw, 'sha256')) = 64 AND hash != ''"
+        ))
+        .fetch_all().await.unwrap_or_default();
+
+    let md5_hashes: Vec<HashRow> = ch.client
+        .query(&format!(
+            "SELECT DISTINCT lower(JSONExtractString(raw, 'md5')) AS hash \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 6 HOUR \
+               AND length(JSONExtractString(raw, 'md5')) = 32 AND hash != ''"
+        ))
+        .fetch_all().await.unwrap_or_default();
+
+    let unique_hashes: std::collections::HashSet<String> = sha256_hashes.into_iter()
+        .chain(md5_hashes)
+        .map(|r| r.hash)
+        .filter(|h| !h.is_empty())
+        .collect();
+
+    if !unique_hashes.is_empty() {
+        let hash_list = unique_hashes.iter()
+            .map(|h| format!("'{}'", h.replace('\'', "''")))
+            .collect::<Vec<_>>().join(",");
+        let hash_intel: Vec<IntelIp> = ch.client
+            .query(&format!(
+                "SELECT ioc_value, source, attack_type, severity, description \
+                 FROM ndr.threat_intel \
+                 WHERE ioc_type IN ('hash','md5','sha256','sha1') \
+                   AND ioc_value IN ({hash_list}) \
+                   AND collected_at >= now() - INTERVAL 7 DAY \
+                 GROUP BY ioc_value, source, attack_type, severity, description"
+            ))
+            .fetch_all().await.unwrap_or_default();
+        let hash_hit_count = hash_intel.len();
+        for r in hash_intel {
+            matches.push(IocMatch {
+                ip:          r.ioc_value,
+                ioc_type:    "hash".into(),
+                source:      r.source,
+                attack_type: r.attack_type,
+                severity:    r.severity,
+                description: r.description,
+                direction:   "dst".into(),
+            });
+        }
+        if hash_hit_count > 0 {
+            info!("IOC match: {} hash IOCs matched for tenant {}", hash_hit_count, tenant_id);
+        }
+    }
+
     matches
 }
 

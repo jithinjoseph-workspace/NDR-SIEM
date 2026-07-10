@@ -95,6 +95,91 @@ CREATE TABLE IF NOT EXISTS ndr.settings ON CLUSTER ndr_cluster
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/settings', '{replica}', updated_at)
 ORDER BY key;
 
+-- Active IP blocks — created by SOAR playbooks or manual action; revoked from UI
+CREATE TABLE IF NOT EXISTS ndr.active_blocks ON CLUSTER ndr_cluster
+(
+    id               String,
+    src_ip           String,
+    src_port         UInt16   DEFAULT 0,
+    dst_ip           String   DEFAULT '',
+    dst_port         UInt16   DEFAULT 0,
+    community_id     String   DEFAULT '',
+    triggered_by     String   DEFAULT 'manual',   -- playbook name or 'manual'
+    sensor_id        String   DEFAULT '',
+    firewall_type    String   DEFAULT '',          -- pfsense/fortinet/panos/cisco/opnsense/none
+    firewall_rule_id String   DEFAULT '',          -- rule ID returned by firewall API for cleanup
+    rst_injected     UInt8    DEFAULT 0,
+    duration_hours   UInt16   DEFAULT 24,
+    expires_at       DateTime,
+    status           String   DEFAULT 'active',   -- active / revoked / expired
+    reason           String   DEFAULT '',
+    tenant_id        String   DEFAULT 'default',
+    created_at       DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/active_blocks', '{replica}', created_at)
+ORDER BY (id, tenant_id);
+
+-- Trusted domains — shared (tenant_id='') and per-tenant allowlists for DNS beaconing / threat intel
+CREATE TABLE IF NOT EXISTS ndr.trusted_domains ON CLUSTER ndr_cluster
+(
+    domain      String,
+    category    String,   -- 'dns_beacon', 'threat_intel', or 'both'
+    tenant_id   String,   -- '' = global/shared; specific value = that tenant only
+    note        String,
+    added_by    String,
+    added_at    DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/trusted_domains', '{replica}', added_at)
+ORDER BY (domain, tenant_id, category);
+
+-- Global seed: high-volume legitimate domains that would otherwise trigger DNS beaconing alerts.
+-- Only inserted once (guard: no global rows exist yet).
+INSERT INTO ndr.trusted_domains (domain, category, tenant_id, note, added_by)
+SELECT tupleElement(d, 1), tupleElement(d, 2), '', tupleElement(d, 3), 'system'
+FROM (
+    SELECT arrayJoin([
+        ('googleapis.com',         'dns_beacon', 'Google APIs'),
+        ('google.com',             'dns_beacon', 'Google'),
+        ('gstatic.com',            'dns_beacon', 'Google Static CDN'),
+        ('googleusercontent.com',  'dns_beacon', 'Google User Content'),
+        ('googlevideo.com',        'dns_beacon', 'Google Video'),
+        ('microsoft.com',          'dns_beacon', 'Microsoft'),
+        ('windows.net',            'dns_beacon', 'Azure'),
+        ('microsoftonline.com',    'dns_beacon', 'Microsoft Online'),
+        ('windowsupdate.com',      'dns_beacon', 'Windows Update'),
+        ('update.microsoft.com',   'dns_beacon', 'Windows Update'),
+        ('office.com',             'dns_beacon', 'Microsoft Office'),
+        ('office365.com',          'dns_beacon', 'Microsoft 365'),
+        ('azure.com',              'dns_beacon', 'Azure'),
+        ('live.com',               'dns_beacon', 'Microsoft Live'),
+        ('amazonaws.com',          'dns_beacon', 'AWS'),
+        ('cloudfront.net',         'dns_beacon', 'AWS CloudFront'),
+        ('apple.com',              'dns_beacon', 'Apple'),
+        ('icloud.com',             'dns_beacon', 'iCloud'),
+        ('mzstatic.com',           'dns_beacon', 'Apple CDN'),
+        ('cloudflare.com',         'dns_beacon', 'Cloudflare'),
+        ('cloudflare-dns.com',     'dns_beacon', 'Cloudflare DNS'),
+        ('akamai.net',             'dns_beacon', 'Akamai'),
+        ('akamaiedge.net',         'dns_beacon', 'Akamai Edge'),
+        ('akamaitechnologies.com', 'dns_beacon', 'Akamai Technologies'),
+        ('fastly.net',             'dns_beacon', 'Fastly CDN'),
+        ('facebook.com',           'dns_beacon', 'Meta/Facebook'),
+        ('fbcdn.net',              'dns_beacon', 'Facebook CDN'),
+        ('whatsapp.net',           'dns_beacon', 'WhatsApp'),
+        ('ocsp.digicert.com',      'dns_beacon', 'DigiCert OCSP'),
+        ('ocsp.pki.goog',          'dns_beacon', 'Google OCSP'),
+        ('crl.microsoft.com',      'dns_beacon', 'Microsoft CRL'),
+        ('ctldl.windowsupdate.com','dns_beacon', 'Windows CTL Download'),
+        ('time.windows.com',       'dns_beacon', 'Windows NTP'),
+        ('pool.ntp.org',           'dns_beacon', 'NTP Pool'),
+        ('time.google.com',        'dns_beacon', 'Google NTP'),
+        ('safebrowsing.googleapis.com', 'dns_beacon', 'Google Safe Browsing')
+    ]) AS d
+)
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.trusted_domains FINAL WHERE tenant_id = '' LIMIT 1
+);
+
 -- Default thresholds
 INSERT INTO ndr.settings (key, value)
 SELECT 'store_threshold', '10'

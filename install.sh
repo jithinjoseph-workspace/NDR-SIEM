@@ -14,7 +14,6 @@ fi
 set -e
 
 # ── Fix DNS early — before any curl/apt/wget ──
-# systemd-resolved (127.0.0.53) is unreliable on some systems; bypass it.
 if ! curl -s --max-time 3 https://archive.ubuntu.com > /dev/null 2>&1; then
     echo "[NDR] Fixing DNS (switching to 8.8.8.8)..."
     sudo systemctl stop systemd-resolved 2>/dev/null || true
@@ -22,79 +21,71 @@ if ! curl -s --max-time 3 https://archive.ubuntu.com > /dev/null 2>&1; then
     printf "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" | sudo tee /etc/resolv.conf > /dev/null
 fi
 
+# ── Colors ────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'
-
-log()  { echo -e "${GREEN}[NDR]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-err()  { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
-info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
 
+# ── Log helpers ───────────────────────────────
+log()  { echo -e "  ${GREEN}[+]${NC} $1"; }
+warn() { echo -e "  ${YELLOW}[!]${NC} $1"; }
+err()  { echo -e "  ${RED}[x]${NC} $1"; exit 1; }
+info() { echo -e "  ${BLUE}[>]${NC} $1"; }
+hdr()  {
+    echo -e ""
+    echo -e "  ${CYAN}${BOLD}┌─────────────────────────────────────────────┐${NC}"
+    printf  "  ${CYAN}${BOLD}│${NC}  %-43s${CYAN}${BOLD}│${NC}\n" "$1"
+    echo -e "  ${CYAN}${BOLD}└─────────────────────────────────────────────┘${NC}"
+}
+
+# ── Banner ────────────────────────────────────
 clear
 printf "\n"
-printf "  ${CYAN}╔══════════════════════════════════════════╗${NC}\n"
-printf "  ${CYAN}║${NC}${BOLD}   🛡️  Proma Alpha  v1.0                ${NC}${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}   Network Detection & Response Suite   ${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}   Sensor · Engine · Analytics · UI     ${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}      ⚡ Powered by Proma Secure         ${CYAN}║${NC}\n"
-printf "  ${CYAN}╚══════════════════════════════════════════╝${NC}\n"
-printf "\n"
-printf "  ${BLUE}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}    0%%  Starting...\n"
-printf "  ${CYAN}──────────────────────────────────────────────${NC}\n"
+printf "  ${CYAN}╔══════════════════════════════════════════════╗${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${BOLD}P R O M A   A L P H A   v 1 . 0${NC}          ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    Network Detection & Response Platform      ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    Sensor  ·  Engine  ·  Analytics  ·  UI    ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${DIM}◆  Powered by Proma Secure  ◆${NC}              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}╚══════════════════════════════════════════════╝${NC}\n"
 printf "\n"
 
-# Lock progress bar at row 8 (after clear), scroll region below row 10
-_PBAR_ROW=8
-_TERM_ROWS=$(tput lines 2>/dev/null || echo 40)
-tput csr 10 $((_TERM_ROWS - 1)) 2>/dev/null || true
-tput cup 10 0 2>/dev/null || true
-
-TOTAL_STEPS=13
+# ── Progress bar (inline, no cursor gymnastics) ─
+TOTAL_STEPS=12
 CURRENT_STEP=0
 
 step() {
     CURRENT_STEP=$((CURRENT_STEP + 1))
-    local label="$1"
-    local BAR_WIDTH=40
-    local prev=$(( ((CURRENT_STEP - 1) * BAR_WIDTH) / TOTAL_STEPS ))
-    local next=$(( (CURRENT_STEP * BAR_WIDTH) / TOTAL_STEPS ))
+    local label="$1" BAR_WIDTH=36
+    local filled=$(( (CURRENT_STEP * BAR_WIDTH) / TOTAL_STEPS ))
     local pct=$(( (CURRENT_STEP * 100) / TOTAL_STEPS ))
-    pct=$(( pct > 100 ? 100 : pct ))
-    next=$(( next > BAR_WIDTH ? BAR_WIDTH : next ))
-    local f bar empty
-    for ((f = prev; f <= next; f++)); do
-        bar=""
-        for ((i=0; i<f; i++)); do bar+="█"; done
-        empty=$(( BAR_WIDTH - f ))
-        for ((i=0; i<empty; i++)); do bar+="░"; done
-        tput sc 2>/dev/null
-        tput cup $_PBAR_ROW 0 2>/dev/null
-        printf "  ${BLUE}%s${NC}  %3d%%  %-36s" "$bar" "$pct" "$label"
-        tput rc 2>/dev/null
-        sleep 0.04
-    done
+    local bar="" i
+    for ((i=0; i<filled; i++));          do bar+="▓"; done
+    for ((i=filled; i<BAR_WIDTH; i++));  do bar+="░"; done
+    printf "\n  ${CYAN}[%s]${NC}  ${BOLD}%3d%%${NC}  ${DIM}%d/%d${NC}\n" \
+        "$bar" "$pct" "$CURRENT_STEP" "$TOTAL_STEPS"
+    hdr "$label"
 }
 
 # ── Fix APT sources ───────────────────────────
-# Detect Ubuntu codename early so sources.list uses the correct suite
 UBUNTU_CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-$(lsb_release -cs 2>/dev/null)}")
 UBUNTU_CODENAME=${UBUNTU_CODENAME:-noble}
 UBUNTU_MAJOR_VER=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID}" | cut -d. -f1)
-log "  → Ubuntu ${UBUNTU_CODENAME} (${UBUNTU_MAJOR_VER}.x) detected"
+log "Ubuntu ${UBUNTU_CODENAME} (${UBUNTU_MAJOR_VER}.x) detected"
 
-# Ubuntu 24+ uses DEB822 format in ubuntu.sources — writing to sources.list causes duplicates.
-# Only write sources.list on older Ubuntu where ubuntu.sources doesn't exist.
 if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-    log "  → ubuntu.sources found — clearing sources.list to avoid duplicates"
+    log "ubuntu.sources found — clearing sources.list to avoid duplicates"
     sudo truncate -s 0 /etc/apt/sources.list
 else
-    log "  → Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
+    log "Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
     sudo tee /etc/apt/sources.list > /dev/null << EOF
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME} main restricted universe multiverse
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-updates main restricted universe multiverse
@@ -103,7 +94,6 @@ deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restrict
 EOF
 fi
 
-# Set apt timeout
 sudo tee /etc/apt/apt.conf.d/99timeout > /dev/null << 'EOF'
 Acquire::http::Timeout "15";
 Acquire::https::Timeout "15";
@@ -111,34 +101,38 @@ Acquire::Retries "2";
 EOF
 
 sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-log "  → APT cache cleared"
-
-log "  → Updating package lists..."
-sudo apt-get update 2>&1 | \
-    grep -E "^Get|^Hit|^Err" | head -15 || true
-log "✅ Network ready"
+log "APT cache cleared"
+log "Updating package lists..."
+sudo apt-get update 2>&1 | grep -E "^Get|^Hit|^Err" | head -15 || true
+log "Network ready"
 
 # ── Deployment Mode ───────────────────────────
-echo "Select deployment mode:"
-echo ""
-echo "  1) Local  — everything on this machine (recommended for single site)"
-echo "  2) Hybrid — capture local, processing in cloud (for multiple offices)"
-echo ""
-read -p "Enter choice (1/2) [default: 1]: " MODE_CHOICE
+printf "\n"
+printf "  ${CYAN}┌──────────────────────────────────────────────┐${NC}\n"
+printf "  ${CYAN}│${NC}  ${BOLD}Select Deployment Mode${NC}                        ${CYAN}│${NC}\n"
+printf "  ${CYAN}├──────────────────────────────────────────────┤${NC}\n"
+printf "  ${CYAN}│${NC}  ${GREEN}[1]${NC} Local  — all services on this machine      ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}       Recommended for single-site deployment  ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}                                              ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}  ${BLUE}[2]${NC} Hybrid — capture local, cloud processing   ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}       For multi-office or cloud-connected use ${CYAN}│${NC}\n"
+printf "  ${CYAN}└──────────────────────────────────────────────┘${NC}\n"
+printf "\n"
+read -p "  Enter choice (1/2) [default: 1]: " MODE_CHOICE
 
 case "$MODE_CHOICE" in
     2)
         DEPLOY_MODE="hybrid"
+        printf "\n"
+        warn "Hybrid mode — Agent-Z/Agent-S local, Event Bus/DB in cloud"
+        printf "\n"
+        read -p "  Kafka broker URL  (e.g. broker.aws.com:9092):   " CLOUD_KAFKA
+        read -p "  ClickHouse URL    (e.g. https://host:8123):     " CLOUD_CLICKHOUSE
+        read -p "  ClickHouse user:                                 " CLOUD_CH_USER
+        read -sp "  ClickHouse password:                            " CLOUD_CH_PASS
         echo ""
-        warn "Hybrid mode — Agent-Z/Agent-S runs locally, Event Bus/Analytics DB in cloud"
-        echo ""
-        read -p "  Kafka broker URL (e.g. broker.aws.com:9092): " CLOUD_KAFKA
-        read -p "  ClickHouse URL   (e.g. https://host:8123):   " CLOUD_CLICKHOUSE
-        read -p "  ClickHouse user:                              " CLOUD_CH_USER
-        read -sp "  ClickHouse password:                         " CLOUD_CH_PASS
-        echo ""
-        echo ""
-        log "Hybrid config saved"
+        printf "\n"
+        log "Hybrid configuration saved"
         ;;
     *)
         DEPLOY_MODE="local"
@@ -146,7 +140,7 @@ case "$MODE_CHOICE" in
         ;;
 esac
 
-echo ""
+printf "\n"
 
 # ── Check OS ──────────────────────────────────
 . /etc/os-release
@@ -160,45 +154,70 @@ RUNTIME_DIR="$INSTALL_DIR/.runtime"
 IFACE_FILE="$RUNTIME_DIR/ndr_interface"
 OS_VERSION=$(echo $VERSION_ID | cut -d'.' -f1,2)
 
-log "Installing to: $INSTALL_DIR"
-log "Running as:    $USERNAME"
-log "Deploy mode:   $DEPLOY_MODE"
+log "Installing to:  $INSTALL_DIR"
+log "Running as:     $USERNAME"
+log "Deploy mode:    $DEPLOY_MODE"
 
-# ── Spinner function ──────────────────────────
+# Write a minimal .env immediately so docker compose never sees blank variables.
+# The network step overwrites this with full values once HOST_IP/JWT_SECRET are known.
+IFACE_EARLY=$(ip -o -4 addr show 2>/dev/null | grep -v "127.0.0.1\|docker\|br-\|veth" | awk '{print $2}' | head -1)
+IFACE_EARLY=${IFACE_EARLY:-eth0}
+HOST_IP_EARLY=$(ip -o -4 addr show "$IFACE_EARLY" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+HOST_IP_EARLY=${HOST_IP_EARLY:-$(hostname -I | awk '{print $1}')}
+JWT_SECRET_EARLY=$(openssl rand -hex 32 2>/dev/null || echo "changeme-$(date +%s)")
+
+cat > "$INSTALL_DIR/.env" << _EARLY_ENV
+HOST_IP=${HOST_IP_EARLY}
+HOME_DIR=${HOME_DIR}
+INSTALL_DIR=${INSTALL_DIR}
+IFACE=${IFACE_EARLY}
+DEPLOY_MODE=${DEPLOY_MODE}
+CLICKHOUSE_URL=http://clickhouse1:8123
+CLICKHOUSE_URL_SECONDARY=http://clickhouse1:8123
+CLICKHOUSE_USER=ndr
+CLICKHOUSE_PASSWORD=ndr123
+KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
+JWT_SECRET=${JWT_SECRET_EARLY}
+ARKIME_URL=http://${HOST_IP_EARLY}:8005
+ARKIME_PASS=admin
+OPENSEARCH_URL=http://${HOST_IP_EARLY}:9200
+OPENAI_API_KEY=
+GROQ_API_KEY=
+_EARLY_ENV
+log ".env written early (will be updated with final values in network step)"
+
+# ── Spinner ───────────────────────────────────
 spinner() {
-    local pid=$1
-    local msg=$2
+    local pid=$1 msg=$2
     local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     local i=0
     while kill -0 $pid 2>/dev/null; do
-        printf "\r${GREEN}[NDR]${NC} ${frames[$i]} %s..." "$msg"
+        printf "\r  ${CYAN}${frames[$i]}${NC}  %s..." "$msg"
         i=$(( (i+1) % 10 ))
         sleep 0.1
     done
-    printf "\r${GREEN}[NDR]${NC} ✅ %s done!        \n" "$msg"
+    printf "\r  ${GREEN}[+]${NC}  %s — done       \n" "$msg"
 }
 
 progress() {
-    local msg=$1
-    shift
+    local msg=$1; shift
     "$@" &>/dev/null &
     spinner $! "$msg"
 }
 
-step "Installing system dependencies"
+# ══════════════════════════════════════════════
+step "System Dependencies"
 
-# ── System dependencies ───────────────────────
-log "Installing system dependencies..."
-log "  → Updating package lists..."
+log "Updating package lists..."
 sudo apt-get update 2>&1 | grep -E "^Get|^Hit|^Err|^W:" || true
-log "  → Installing packages..."
+log "Installing packages..."
 sudo apt-get install -y \
     curl wget git jq python3 \
     net-tools iproute2 \
     netcat-traditional \
     arp-scan iputils-arping snmp \
     libpcre3 2>/dev/null || true
-# libpcre3 may not be in repos on Ubuntu 24+ — fallback to direct download
+
 if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
     for PCRE3_URL in \
         "http://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.45-4_amd64.deb" \
@@ -212,35 +231,29 @@ if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
         rm -f /tmp/libpcre3.deb
     done
 fi
-# Ensure libpcre.so.3 symlink exists (missing on some Ubuntu installs)
+
 if [ ! -e /usr/lib/x86_64-linux-gnu/libpcre.so.3 ]; then
     PCRE_SO=$(find /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu \
         -name "libpcre.so.3.*" 2>/dev/null | head -1)
     [ -n "$PCRE_SO" ] && sudo ln -sf "$PCRE_SO" /usr/lib/x86_64-linux-gnu/libpcre.so.3 \
         && sudo ldconfig
 fi
-log "✅ System dependencies installed"
+log "System dependencies installed"
 
-step "Installing Node.js 20"
+# ══════════════════════════════════════════════
+step "Node.js 20"
 
-# ── Install Node.js 20 ────────────────────────
-log "Installing Node.js 20..."
-
-# Check if Node.js 20 already installed
 NODE_VER=$(node --version 2>/dev/null || echo "none")
 NODE_MAJOR=$(echo $NODE_VER | cut -d. -f1 | tr -d 'v')
 
 if [ "${NODE_MAJOR:-0}" -ge 18 ] 2>/dev/null; then
-    log "✅ Node.js already OK: $NODE_VER"
+    log "Node.js already installed: $NODE_VER"
 else
-    # Only remove if old version
     if [ "${NODE_MAJOR:-0}" -lt 18 ] && [ "$NODE_VER" != "none" ]; then
         log "Removing old Node.js $NODE_VER..."
         sudo apt-get remove -y nodejs npm 2>/dev/null || true
         sudo apt-get autoremove -y 2>/dev/null || true
     fi
-
-    # Add NodeSource repo and install
     curl -fsSL https://deb.nodesource.com/setup_20.x \
         | sudo -E bash - 2>/dev/null || true
     sudo apt-get install -y nodejs 2>/dev/null || true
@@ -248,49 +261,41 @@ fi
 
 NODE_VER=$(node --version 2>/dev/null || echo "missing")
 NPM_VER=$(npm --version 2>/dev/null || echo "missing")
-log "✅ Node.js: $NODE_VER | npm: $NPM_VER"
+log "Node.js: $NODE_VER  |  npm: $NPM_VER"
 
-
-step "Installing Dashboard UI"
-# ── Install Angular CLI globally ──────────────
 if ! command -v ng &>/dev/null; then
     log "Installing Angular CLI..."
     sudo npm install -g @angular/cli 2>/dev/null || \
         npm install -g @angular/cli 2>/dev/null || \
-        warn "⚠️ Angular CLI install failed"
-    log "✅ Angular CLI: $(ng version --skip-confirmation \
-        2>/dev/null | grep 'Angular CLI' | head -1)"
+        warn "Angular CLI install failed"
+    log "Angular CLI: $(ng version --skip-confirmation 2>/dev/null | grep 'Angular CLI' | head -1)"
 else
-    log "✅ Angular CLI already installed: $(ng version \
-        --skip-confirmation 2>/dev/null | \
-        grep 'Angular CLI' | head -1)"
+    log "Angular CLI already installed: $(ng version --skip-confirmation 2>/dev/null | grep 'Angular CLI' | head -1)"
 fi
 
-step "Installing Agent-S"
+# ══════════════════════════════════════════════
+step "Agent-S  (Suricata)"
 
-# ── Install Suricata ──────────────────────────
 if ! command -v suricata &>/dev/null; then
     log "Installing Agent-S..."
     sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
     sudo apt-get update -qq 2>/dev/null || true
-
     if sudo apt-get install -y suricata 2>/dev/null; then
-        log "✅ Agent-S installed from default repo"
+        log "Agent-S installed from repository"
     else
-        warn "⚠️ Agent-S install failed — skipping"
+        warn "Agent-S install failed — skipping"
     fi
-
     sudo suricata-update 2>/dev/null || true
     sudo systemctl disable suricata 2>/dev/null || true
     sudo systemctl stop suricata 2>/dev/null || true
-    log "✅ Agent-S ready"
+    log "Agent-S ready"
 else
-    log "✅ Agent-S already installed"
+    log "Agent-S already installed"
     sudo systemctl disable suricata 2>/dev/null || true
     sudo systemctl stop suricata 2>/dev/null || true
 fi
 
-# ── Install Arkime ────────────────────────────────
+# ── Packet Recorder (Arkime) ──────────────────
 log "Installing Packet Recorder..."
 
 ARKIME_VERSION="5.1.0"
@@ -305,21 +310,19 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
     elif [ "$UBUNTU_MAJOR" -ge "24" ] 2>/dev/null; then
         ARKIME_DEB="arkime_${ARKIME_VERSION}-1.ubuntu2404_amd64.deb"
     else
-        warn "Unsupported OS version for Packet Recorder: $UBUNTU_VER"
+        warn "Unsupported OS for Packet Recorder: $UBUNTU_VER"
         ARKIME_DEB=""
     fi
 
     if [ -n "$ARKIME_DEB" ]; then
-        log "Downloading Packet Recorder ${ARKIME_VERSION} (${ARKIME_DEB})..."
+        log "Downloading Packet Recorder ${ARKIME_VERSION}..."
         if wget --timeout=120 --progress=dot:mega \
             "https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}" \
             -O /tmp/arkime.deb 2>&1; then
             DEB_SIZE=$(du -sh /tmp/arkime.deb 2>/dev/null | cut -f1)
             log "Download complete (${DEB_SIZE})"
         else
-            warn "❌ Packet Recorder download FAILED"
-            warn "  URL: https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${ARKIME_DEB}"
-            warn "  Check internet/proxy and re-run"
+            warn "Packet Recorder download failed — check internet and re-run"
             ARKIME_DEB=""
             rm -f /tmp/arkime.deb
         fi
@@ -336,10 +339,9 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
             libpcre2-8-0 \
             libyaml-0-2 > /dev/null 2>&1 || true
 
-        # Install real libpcre3 (Arkime capture needs pcre_version symbol; PCRE2 is not compatible)
         if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
             if sudo apt-get install -y -qq libpcre3 > /dev/null 2>&1; then
-                log "✅ libpcre3 installed from apt"
+                log "libpcre3 installed from apt"
             else
                 log "libpcre3 not in repos — downloading from Ubuntu archive..."
                 PCRE3_INSTALLED=false
@@ -350,13 +352,13 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
                     if wget -q --timeout=60 "$PCRE3_URL" -O /tmp/libpcre3.deb 2>/dev/null \
                         && sudo dpkg -i /tmp/libpcre3.deb > /dev/null 2>&1; then
                         rm -f /tmp/libpcre3.deb
-                        log "✅ libpcre3 installed"
+                        log "libpcre3 installed"
                         PCRE3_INSTALLED=true
                         break
                     fi
                     rm -f /tmp/libpcre3.deb
                 done
-                $PCRE3_INSTALLED || warn "⚠️ libpcre3 install failed — capture may crash"
+                $PCRE3_INSTALLED || warn "libpcre3 install failed — capture may crash"
             fi
         fi
 
@@ -364,33 +366,30 @@ if ! command -v /opt/arkime/bin/capture &>/dev/null; then
         if sudo dpkg -i /tmp/arkime.deb 2>&1; then
             log "dpkg install succeeded"
         else
-            warn "dpkg reported errors — running apt-get install -f to fix..."
+            warn "dpkg reported errors — running apt-get install -f..."
             sudo apt-get install -f -y 2>&1 || true
         fi
         rm -f /tmp/arkime.deb
 
         if [ -f /opt/arkime/bin/capture ]; then
             ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
-            log "✅ Packet Recorder installed: ${ARKIME_VER}"
+            log "Packet Recorder installed: ${ARKIME_VER}"
         else
-            warn "❌ Arkime install FAILED — /opt/arkime/bin/capture not found"
-            warn "  Run: dpkg -l arkime  or  sudo apt-get install -f -y  to diagnose"
+            warn "Arkime install failed — /opt/arkime/bin/capture not found"
         fi
     else
-        warn "❌ Packet Recorder installation skipped (no package available)"
+        warn "Packet Recorder skipped (no package available)"
     fi
 else
     ARKIME_VER=$(/opt/arkime/bin/capture --version 2>/dev/null | head -1 || echo "unknown")
-    log "✅ Packet Recorder already installed: ${ARKIME_VER}"
+    log "Packet Recorder already installed: ${ARKIME_VER}"
 fi
 
+# ══════════════════════════════════════════════
+step "Agent-Z  (Zeek)"
 
-step "Installing Agent-Z"
-
-# ── Install Zeek ──────────────────────────────
 if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     log "Installing Agent-Z..."
-    # Find the newest Zeek repo that exists for this Ubuntu version
     ZEEK_UBUNTU_VER="$OS_VERSION"
     for TRY_VER in "$OS_VERSION" "24.04" "22.04"; do
         ZEEK_KEY_URL="https://download.opensuse.org/repositories/security:zeek/xUbuntu_${TRY_VER}/Release.key"
@@ -399,7 +398,7 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
             break
         fi
     done
-    log "  → Using Agent-Z repo for Ubuntu ${ZEEK_UBUNTU_VER}"
+    log "Using Agent-Z repo for Ubuntu ${ZEEK_UBUNTU_VER}"
     echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${ZEEK_UBUNTU_VER}/ /" \
         | sudo tee /etc/apt/sources.list.d/security:zeek.list
     curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
@@ -407,51 +406,49 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
         | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
     sudo apt-get update -qq
     sudo apt-get install -y zeek
-    log "✅ Agent-Z installed"
+    log "Agent-Z installed"
 else
-    log "✅ Agent-Z already installed"
+    log "Agent-Z already installed"
 fi
 
-step "Configuring Analytics Database"
+# ══════════════════════════════════════════════
+step "Analytics Database  (ClickHouse)"
 
-# ── ClickHouse runs as a Docker container ──────
-# User (ndr/ndr123) is created via CREATE USER in config/clickhouse/init.sql
-# Schema (ndr database + all tables) is created by config/clickhouse/init.sql
-# on the first container start via /docker-entrypoint-initdb.d/
 if [ "$DEPLOY_MODE" = "local" ]; then
-    log "ClickHouse will start as a Docker container with the stack"
-    log "  User:   ndr / ndr123"
-    log "  Ports:  8123/8124 (HTTP), 9000/9001 (native) — 2-node cluster"
+    log "ClickHouse — Docker container cluster (2 nodes, bridge network)"
+    log "  Credentials:  ndr / ndr123"
+    log "  Endpoint:     http://localhost:8123  (node 1, localhost-only)"
 
-    # ── Migrate bare-metal ClickHouse → Docker container ─────────────────
     CH_NEEDS_IMPORT=false
     if systemctl is-active --quiet clickhouse-server 2>/dev/null; then
-        warn "Detected an existing ClickHouse installation running on this host."
-        echo ""
-        echo "  Choose how to proceed:"
-        echo "  [1] Migrate existing data  — export from host, import into Docker container"
-        echo "  [2] Fresh start            — wipe existing data, start with an empty database"
-        echo ""
+        warn "Existing ClickHouse installation detected on this host."
+        printf "\n"
+        printf "  ${CYAN}┌─────────────────────────────────────────┐${NC}\n"
+        printf "  ${CYAN}│${NC}  ${BOLD}Migration Options${NC}                        ${CYAN}│${NC}\n"
+        printf "  ${CYAN}├─────────────────────────────────────────┤${NC}\n"
+        printf "  ${CYAN}│${NC}  [1] Migrate existing data into Docker   ${CYAN}│${NC}\n"
+        printf "  ${CYAN}│${NC}  [2] Fresh start — wipe existing data    ${CYAN}│${NC}\n"
+        printf "  ${CYAN}└─────────────────────────────────────────┘${NC}\n"
+        printf "\n"
         read -p "  Enter choice [1/2]: " CH_MIGRATE_CHOICE
-        echo ""
+        printf "\n"
 
         if [ "$CH_MIGRATE_CHOICE" = "1" ]; then
-            log "Exporting existing ClickHouse data before stopping host service..."
+            log "Exporting existing ClickHouse data..."
             bash "$INSTALL_DIR/scripts/ch-export.sh"
             CH_NEEDS_IMPORT=true
-            log "✅ Data exported to /home/user/ch-export/"
+            log "Data exported to /home/user/ch-export/"
         else
-            log "Fresh start selected — existing host ClickHouse data will not be migrated"
+            log "Fresh start — existing data will not be migrated"
         fi
 
-        log "Stopping host ClickHouse so Docker containers can bind to ports 8123/8124/9000/9001..."
+        log "Stopping host ClickHouse (Docker takes over)..."
         sudo systemctl stop clickhouse-server
         sudo systemctl disable clickhouse-server
-        log "✅ Host ClickHouse stopped and disabled"
+        log "Host ClickHouse stopped and disabled"
 
-        # ── Optionally remove host ClickHouse packages ────────────────────
-        echo ""
-        read -p "  Uninstall ClickHouse from this system? (Docker container will be used instead) [y/N]: " CH_PURGE
+        printf "\n"
+        read -p "  Uninstall ClickHouse packages from host? [y/N]: " CH_PURGE
         if [[ "$CH_PURGE" =~ ^[Yy]$ ]]; then
             log "Removing ClickHouse packages..."
             if command -v apt-get &>/dev/null; then
@@ -460,13 +457,13 @@ if [ "$DEPLOY_MODE" = "local" ]; then
             elif command -v yum &>/dev/null; then
                 sudo yum remove -y clickhouse-server clickhouse-client 2>/dev/null || true
             fi
-            log "✅ ClickHouse packages removed — Docker container takes over"
+            log "ClickHouse packages removed — Docker container takes over"
         else
-            log "Keeping ClickHouse packages installed (service remains disabled)"
+            log "Keeping packages (service remains disabled)"
         fi
-    elif ss -tlnp 2>/dev/null | grep -qE ':8123|:8124|:9000|:9001'; then
-        warn "Ports 8123/8124/9000/9001 are in use — killing conflicting processes..."
-        PIDS=$(ss -tlnp 2>/dev/null | grep -E ':8123|:8124|:9000|:9001' \
+    elif ss -tlnp 2>/dev/null | grep -qE ':8123|:9000'; then
+        warn "Ports 8123/9000 in use — killing conflicting processes..."
+        PIDS=$(ss -tlnp 2>/dev/null | grep -E ':8123|:9000' \
             | grep -oP 'pid=\K[0-9]+' | sort -u)
         if [ -n "$PIDS" ]; then
             for PID in $PIDS; do
@@ -475,50 +472,42 @@ if [ "$DEPLOY_MODE" = "local" ]; then
                 sudo kill -9 "$PID" 2>/dev/null || true
             done
             sleep 2
-            if ss -tlnp 2>/dev/null | grep -qE ':8123|:8124|:9000|:9001'; then
-                warn "Some ports still in use after kill — containers may still conflict"
+            if ss -tlnp 2>/dev/null | grep -qE ':8123|:9000'; then
+                warn "Some ports still in use — containers may conflict"
             else
-                log "✅ Ports 8123/8124/9000/9001 are now free"
+                log "Ports 8123/9000 are now free"
             fi
         fi
     fi
 
     CLICKHOUSE_URL="http://localhost:8123"
-    CLICKHOUSE_URL_SECONDARY="http://localhost:8124"
+    CLICKHOUSE_URL_SECONDARY="http://localhost:8123"
     CLOUD_CH_USER="ndr"
     CLOUD_CH_PASS="ndr123"
     CLOUD_KAFKA="kafka1:9092,kafka2:9092,kafka3:9092"
 else
-    log "☁️  Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
+    log "Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
     CLICKHOUSE_URL="$CLOUD_CLICKHOUSE"
     info "Skipping local ClickHouse setup"
 fi
-log "✅ ClickHouse configured"
+log "ClickHouse configured"
 
-step "Configuring Network & Services"
+# ══════════════════════════════════════════════
+step "Network & Sensor Configuration"
 
-
-# ── Detect network interface ──────────────────
 log "Detecting network interface..."
 IFACE=$(ip -o -4 addr show 2>/dev/null | \
     grep -v "127.0.0.1\|docker\|br-\|veth" | \
     awk '{print $2}' | head -1)
-if [ -z "$IFACE" ]; then
-    IFACE="eth0"
-fi
+[ -z "$IFACE" ] && IFACE="eth0"
 log "Using interface: $IFACE"
 mkdir -p "$RUNTIME_DIR"
 echo "$IFACE" > "$IFACE_FILE"
 
-# ── Configure Arkime ──────────────────────────────
+# ── Configure Arkime ──────────────────────────
 if [ -f /opt/arkime/bin/capture ]; then
     log "Configuring Packet Recorder..."
-    log "Packet Recorder using interface: $IFACE"
-
-    # Create directories BEFORE config
-    sudo mkdir -p /opt/arkime/raw
-    sudo mkdir -p /opt/arkime/logs
-    sudo mkdir -p /opt/arkime/etc
+    sudo mkdir -p /opt/arkime/raw /opt/arkime/logs /opt/arkime/etc
     sudo chmod 755 /opt/arkime/raw
 
     sudo tee /opt/arkime/etc/config.ini > /dev/null << ARKIME_EOF
@@ -548,7 +537,6 @@ communityId=true
 cronQueries=true
 ARKIME_EOF
 
-    # Create Arkime capture service
     sudo tee /etc/systemd/system/arkime-capture.service > /dev/null << EOF
 [Unit]
 Description=Arkime Packet Capture
@@ -556,9 +544,9 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/arkime/bin/capture \
-    -c /opt/arkime/etc/config.ini \
-    -o pcapDir=/opt/arkime/raw \
+ExecStart=/opt/arkime/bin/capture \\
+    -c /opt/arkime/etc/config.ini \\
+    -o pcapDir=/opt/arkime/raw \\
     --insecure
 Restart=always
 RestartSec=10
@@ -569,7 +557,6 @@ LimitMEMLOCK=infinity
 WantedBy=multi-user.target
 EOF
 
-    # Create Arkime viewer service
     sudo tee /etc/systemd/system/arkime-viewer.service > /dev/null << EOF
 [Unit]
 Description=Arkime Packet Viewer
@@ -578,8 +565,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/arkime/viewer
-ExecStart=/opt/arkime/bin/node \
-    viewer.js \
+ExecStart=/opt/arkime/bin/node \\
+    viewer.js \\
     -c /opt/arkime/etc/config.ini
 Restart=always
 RestartSec=10
@@ -589,21 +576,14 @@ WantedBy=multi-user.target
 EOF
 
     sudo systemctl daemon-reload
-    sudo systemctl disable \
-        arkime-capture \
-        arkime-viewer 2>/dev/null || true
-
-    if [ -f /opt/arkime/bin/capture ]; then
-        log "✅ Packet Recorder configured on interface: ${IFACE}"
-    else
-        warn "❌ Packet Recorder install FAILED"
-    fi
+    sudo systemctl disable arkime-capture arkime-viewer 2>/dev/null || true
+    log "Packet Recorder configured on interface: ${IFACE}"
 fi
 
 # ── Configure Zeek ────────────────────────────
 log "Configuring Agent-Z..."
 sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
-# NDR Stack - Zeek Configuration
+# NDR Stack — Zeek Configuration
 @load policy/tuning/json-logs.zeek
 @load policy/protocols/conn/community-id-logging
 @load protocols/ssh/detect-bruteforcing
@@ -624,15 +604,11 @@ sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
 @load policy/protocols/ssh/software.zeek
 @load ndr-arp
 
-# Reduce inactivity timeouts so idle connections are logged quickly
-redef tcp_inactivity_timeout = 15 secs;
-redef udp_inactivity_timeout = 15 secs;
+redef tcp_inactivity_timeout  = 15 secs;
+redef udp_inactivity_timeout  = 15 secs;
 redef icmp_inactivity_timeout = 10 secs;
 ZEEKCONF
 
-# Write custom ARP logger — uses Zeek's built-in arp_request/arp_reply events.
-# The zkg ARP package requires internet access and fails silently; this inline
-# script has zero external dependencies.
 sudo tee /opt/zeek/share/zeek/site/ndr-arp.zeek > /dev/null << 'ARPSCRIPT'
 module ARP;
 
@@ -685,8 +661,7 @@ ARPSCRIPT
 
 /opt/zeek/bin/zkg install zeek/corelight/zeek-community-id \
     --force >/dev/null 2>&1 || true
-log "✅ Agent-Z configured"
-
+log "Agent-Z configured"
 
 sudo tee /etc/logrotate.d/zeek-ndr > /dev/null << 'EOF'
 /home/user/logs/zeek/*.log {
@@ -702,92 +677,67 @@ sudo tee /etc/logrotate.d/zeek-ndr > /dev/null << 'EOF'
     dateformat -%Y%m%d
 }
 EOF
-log "✅ Agent-Z log rotation configured"
-
+log "Agent-Z log rotation configured"
 
 # ── Configure Suricata ────────────────────────
 log "Configuring Agent-S..."
 sudo cp /etc/suricata/suricata.yaml \
     /etc/suricata/suricata.yaml.bak 2>/dev/null || true
-sudo sed -i \
-    's/community-id: false/community-id: true/g' \
+sudo sed -i 's/community-id: false/community-id: true/g' \
     /etc/suricata/suricata.yaml 2>/dev/null || true
-sudo sed -i \
-    "s|default-log-dir: /var/log/suricata|default-log-dir: $HOME_DIR/logs/suricata|g" \
+sudo sed -i "s|default-log-dir: /var/log/suricata|default-log-dir: $HOME_DIR/logs/suricata|g" \
     /etc/suricata/suricata.yaml 2>/dev/null || true
-sudo sed -i \
-    "s|interface: eth0|interface: $IFACE|g" \
+sudo sed -i "s|interface: eth0|interface: $IFACE|g" \
     /etc/suricata/suricata.yaml 2>/dev/null || true
 log "Updating Agent-S rules..."
 sudo suricata-update >/dev/null 2>&1 || true
-log "✅ Agent-S configured on interface: $IFACE"
+log "Agent-S configured on interface: $IFACE"
 
-# ── Suricata suppression infrastructure ───────
-# Creates empty threshold.conf and wires it into suricata.yaml
-# SIDs are added dynamically by ndr-agent.py when engine sends suppress_sid commands
-log "Setting up Agent-S suppression infrastructure..."
+log "Configuring Agent-S suppression..."
 THRESHOLD_FILE="/etc/suricata/threshold.conf"
 sudo touch "$THRESHOLD_FILE"
 if sudo grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
-  sudo sed -i "s|threshold-file:.*|threshold-file: $THRESHOLD_FILE|g" /etc/suricata/suricata.yaml
+    sudo sed -i "s|threshold-file:.*|threshold-file: $THRESHOLD_FILE|g" /etc/suricata/suricata.yaml
 else
-  echo "threshold-file: $THRESHOLD_FILE" | sudo tee -a /etc/suricata/suricata.yaml > /dev/null
+    echo "threshold-file: $THRESHOLD_FILE" | sudo tee -a /etc/suricata/suricata.yaml > /dev/null
 fi
-log "✅ Agent-S suppression ready (rules added dynamically by engine)"
+log "Agent-S suppression ready"
 
-# ── Zeek suppression infrastructure ───────────
-# Creates empty ndr-suppress.zeek skeleton loaded by local.zeek
-# Hooks are added dynamically by ndr-agent.py when engine sends suppress_sid commands
-log "Setting up Agent-Z suppression infrastructure..."
+log "Configuring Agent-Z suppression..."
 sudo tee /opt/zeek/share/zeek/site/ndr-suppress.zeek > /dev/null << 'ZEEKSUPPRESS'
 # NDR suppression filters — managed dynamically by NDR engine
 # Hooks are appended here via suppress_sid commands; do not edit manually
 ZEEKSUPPRESS
 if ! sudo grep -q "ndr-suppress" /opt/zeek/share/zeek/site/local.zeek 2>/dev/null; then
-  echo "@load ndr-suppress" | sudo tee -a /opt/zeek/share/zeek/site/local.zeek > /dev/null
+    echo "@load ndr-suppress" | sudo tee -a /opt/zeek/share/zeek/site/local.zeek > /dev/null
 fi
-log "✅ Agent-Z suppression ready (hooks added dynamically by engine)"
+log "Agent-Z suppression ready"
 
-
-# ── Firewall: block internal ports from external access ───────────────────
-# ClickHouse HTTP/TCP and ZooKeeper/Keeper ports must never be reachable
-# from outside. ndr-engine containers connect via HOST_IP through Docker
-# bridge interfaces — Docker default network uses docker0 (matched by docker+)
-# but Docker user-defined networks create br-XXXX bridges (matched by br+).
-# Both must be allowed. ndr-agent.py connects via loopback (lo).
-log "Configuring firewall to protect internal ports..."
-INTERNAL_PORTS="8123 8124 9000 9001 9181 2181"
+# ── Firewall ──────────────────────────────────
+log "Configuring firewall rules for internal ports..."
+INTERNAL_PORTS="8123 9000 2181 3001"
 if command -v iptables &>/dev/null; then
-  for PORT in $INTERNAL_PORTS; do
-    # Remove any stale rules for this port first (avoid duplicates on re-run)
-    while sudo iptables -D INPUT -p tcp --dport $PORT -i lo      -j ACCEPT 2>/dev/null; do :; done
-    while sudo iptables -D INPUT -p tcp --dport $PORT -i docker+ -j ACCEPT 2>/dev/null; do :; done
-    while sudo iptables -D INPUT -p tcp --dport $PORT -i br+     -j ACCEPT 2>/dev/null; do :; done
-    while sudo iptables -D INPUT -p tcp --dport $PORT            -j DROP   2>/dev/null; do :; done
-    # Allow loopback (ndr-agent.py, local tools)
-    sudo iptables -I INPUT -p tcp --dport $PORT -i lo      -j ACCEPT 2>/dev/null || true
-    # Allow Docker default bridge (docker0) — docker+ matches docker-named interfaces
-    sudo iptables -I INPUT -p tcp --dport $PORT -i docker+ -j ACCEPT 2>/dev/null || true
-    # Allow Docker user-defined bridges (br-XXXX) — br+ matches br-named interfaces
-    sudo iptables -I INPUT -p tcp --dport $PORT -i br+     -j ACCEPT 2>/dev/null || true
-    # Drop everything else (external network, cloud public IP, LAN)
-    sudo iptables -A INPUT -p tcp --dport $PORT            -j DROP   2>/dev/null || true
-  done
-  # Persist rules across reboots if iptables-persistent is available
-  if command -v netfilter-persistent &>/dev/null; then
-    sudo netfilter-persistent save 2>/dev/null || true
-  elif command -v iptables-save &>/dev/null; then
-    sudo mkdir -p /etc/iptables
-    sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null 2>&1 || true
-  fi
-  log "✅ iptables: ClickHouse/Keeper blocked externally, Docker+loopback allowed"
+    for PORT in $INTERNAL_PORTS; do
+        while sudo iptables -D INPUT -p tcp --dport $PORT -i lo      -j ACCEPT 2>/dev/null; do :; done
+        while sudo iptables -D INPUT -p tcp --dport $PORT -i docker+ -j ACCEPT 2>/dev/null; do :; done
+        while sudo iptables -D INPUT -p tcp --dport $PORT -i br+     -j ACCEPT 2>/dev/null; do :; done
+        while sudo iptables -D INPUT -p tcp --dport $PORT            -j DROP   2>/dev/null; do :; done
+        sudo iptables -I INPUT -p tcp --dport $PORT -i lo      -j ACCEPT 2>/dev/null || true
+        sudo iptables -I INPUT -p tcp --dport $PORT -i docker+ -j ACCEPT 2>/dev/null || true
+        sudo iptables -I INPUT -p tcp --dport $PORT -i br+     -j ACCEPT 2>/dev/null || true
+        sudo iptables -A INPUT -p tcp --dport $PORT            -j DROP   2>/dev/null || true
+    done
+    if command -v netfilter-persistent &>/dev/null; then
+        sudo netfilter-persistent save 2>/dev/null || true
+    elif command -v iptables-save &>/dev/null; then
+        sudo mkdir -p /etc/iptables
+        sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null 2>&1 || true
+    fi
+    log "Firewall: ClickHouse/Keeper blocked externally, Docker+loopback allowed"
 else
-  log "⚠️  iptables not found — manually block ports $INTERNAL_PORTS from external access"
+    warn "iptables not found — manually block ports $INTERNAL_PORTS from external access"
 fi
 
-
-# ── Suricata log rotation ─────────────────────
-log "Configuring Agent-S log rotation..."
 sudo tee /etc/logrotate.d/suricata-ndr > /dev/null << 'EOF'
 /home/user/logs/suricata/eve.json {
     su root root
@@ -802,50 +752,39 @@ sudo tee /etc/logrotate.d/suricata-ndr > /dev/null << 'EOF'
     dateformat -%Y%m%d
 }
 EOF
-log "✅ Agent-S log rotation configured"
+log "Agent-S log rotation configured"
 
-
-# ── Create required directories ───────────────
-log "Creating directories..."
-mkdir -p $HOME_DIR/logs/suricata
-mkdir -p $HOME_DIR/logs/zeek
-mkdir -p $HOME_DIR/.vector/data/suricata \
-         $HOME_DIR/.vector/data/zeek
-mkdir -p $HOME_DIR/ndr-config
-
-# NDR data directories (PCAP uploads + evidence bundles)
-sudo mkdir -p /opt/ndr/pcap
-sudo mkdir -p /opt/ndr/evidence
+# ── Directories ───────────────────────────────
+log "Creating runtime directories..."
+mkdir -p "$HOME_DIR/logs/suricata" "$HOME_DIR/logs/zeek"
+mkdir -p "$HOME_DIR/.vector/data/suricata" "$HOME_DIR/.vector/data/zeek"
+mkdir -p "$HOME_DIR/ndr-config"
+sudo mkdir -p /opt/ndr/pcap /opt/ndr/evidence
 sudo chmod -R 755 /opt/ndr
-sudo chown -R $USER:$USER /opt/ndr
-echo "✅ Created /opt/ndr/pcap and /opt/ndr/evidence"
+sudo chown -R "$USER:$USER" /opt/ndr
+log "Runtime directories created"
 
 # ── Detect host IP ────────────────────────────
-HOST_IP=$(ip -o -4 addr show $IFACE 2>/dev/null | \
-    awk '{print $4}' | cut -d/ -f1)
-if [ -z "$HOST_IP" ]; then
-    HOST_IP=$(hostname -I | awk '{print $1}')
-fi
-log "Host IP detected: $HOST_IP"
+HOST_IP=$(ip -o -4 addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+[ -z "$HOST_IP" ] && HOST_IP=$(hostname -I | awk '{print $1}')
+log "Host IP: $HOST_IP"
 
-# Preserve or generate JWT_SECRET before creating .env
+# ── JWT & API keys ────────────────────────────
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "JWT_SECRET" "$INSTALL_DIR/.env"; then
     JWT_SECRET=$(grep "JWT_SECRET" "$INSTALL_DIR/.env" | cut -d= -f2-)
 else
     JWT_SECRET=$(openssl rand -hex 32)
 fi
 
-# Preserve OPENAI_API_KEY if already set (re-install should not wipe existing key)
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "OPENAI_API_KEY" "$INSTALL_DIR/.env"; then
     OPENAI_API_KEY=$(grep "OPENAI_API_KEY" "$INSTALL_DIR/.env" | cut -d= -f2-)
 fi
 if [ -z "$OPENAI_API_KEY" ]; then
-    echo ""
-    echo -n "  Enter OpenAI API key (for ARIA bot — press Enter to skip): "
-    read -r OPENAI_API_KEY
+    printf "\n"
+    read -p "  OpenAI API key for ARIA (press Enter to skip): " -r OPENAI_API_KEY
 fi
 
-cat > $INSTALL_DIR/.env << ENVEOF
+cat > "$INSTALL_DIR/.env" << ENVEOF
 HOST_IP=$HOST_IP
 HOME_DIR=$HOME_DIR
 INSTALL_DIR=$INSTALL_DIR
@@ -861,10 +800,11 @@ ARKIME_URL=http://${HOST_IP}:8005
 ARKIME_PASS=admin
 OPENSEARCH_URL=http://${HOST_IP}:9200
 OPENAI_API_KEY=$OPENAI_API_KEY
+GROQ_API_KEY=
 ENVEOF
-log "✅ .env generated with JWT_SECRET, OPENSEARCH_URL, OPENAI_API_KEY"
+log ".env generated"
 
-# ── Set up sudoers ────────────────────────────
+# ── Sudoers ───────────────────────────────────
 log "Configuring sudo permissions..."
 cat << SUDOERS | sudo tee /etc/sudoers.d/ndr-stack > /dev/null
 $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/suricata
@@ -879,14 +819,13 @@ $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tee
 $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/suricatasc
 SUDOERS
 sudo chmod 440 /etc/sudoers.d/ndr-stack
-log "✅ Sudo configured"
+log "Sudo configured"
 
-# ── Set up scripts ────────────────────────────
+# ── NDR Agent service ─────────────────────────
 log "Setting up scripts..."
-chmod +x $INSTALL_DIR/scripts/*.py \
-    $INSTALL_DIR/scripts/*.sh 2>/dev/null || true
+chmod +x "$INSTALL_DIR/scripts/"*.py \
+         "$INSTALL_DIR/scripts/"*.sh 2>/dev/null || true
 
-# ── Install ndr-agent as systemd service ──────
 log "Installing NDR Agent as system service..."
 sudo tee /etc/systemd/system/ndr-agent.service > /dev/null << SERVICE
 [Unit]
@@ -909,80 +848,57 @@ sudo systemctl daemon-reload
 sudo systemctl enable ndr-agent
 sudo systemctl restart ndr-agent
 sleep 2
-log "✅ NDR Agent service started"
+log "NDR Agent service started"
 
-# ── Configure Vector ──────────────────────────
+# ── Vector ────────────────────────────────────
 log "Configuring Vector..."
-cp $INSTALL_DIR/config/vector.toml \
-    $HOME_DIR/.vector/vector.toml
-sed -i "s|/home/[^/]*/logs|$HOME_DIR/logs|g" \
-    $HOME_DIR/.vector/vector.toml
-
+cp "$INSTALL_DIR/config/vector.toml" "$HOME_DIR/.vector/vector.toml"
+sed -i "s|/home/[^/]*/logs|$HOME_DIR/logs|g" "$HOME_DIR/.vector/vector.toml"
 if [ "$DEPLOY_MODE" = "hybrid" ]; then
-    sed -i \
-        "s|bootstrap_servers = \"kafka:9092\"|bootstrap_servers = \"$CLOUD_KAFKA\"|g" \
-        $HOME_DIR/.vector/vector.toml
+    sed -i "s|bootstrap_servers = \"kafka:9092\"|bootstrap_servers = \"$CLOUD_KAFKA\"|g" \
+        "$HOME_DIR/.vector/vector.toml"
 fi
-log "✅ Vector configured"
+log "Vector configured"
 
+# ══════════════════════════════════════════════
+step "Dashboard UI  (Angular)"
 
-
-step "Installing Dashboard UI"
-
-
-
-# ── Install Angular dependencies ──────────────
 log "Installing Angular UI dependencies..."
-cd $INSTALL_DIR/ndr-ui
+cd "$INSTALL_DIR/ndr-ui"
 
-# Skip if already installed
 if [ -d "node_modules/@angular/build" ]; then
-    log "✅ Angular dependencies already installed — skipping"
+    log "Angular dependencies already installed — skipping"
 else
-    log "  → First time install..."
-    sudo chmod -R 777 $INSTALL_DIR/ndr-ui 2>/dev/null || true
-
-    # Disable symlinks for VirtualBox shared folders
+    log "First-time install..."
+    sudo chmod -R 777 "$INSTALL_DIR/ndr-ui" 2>/dev/null || true
     npm config set bin-links false
-
-    log "  → Running npm install..."
+    log "Running npm install..."
     rm -rf node_modules 2>/dev/null || true
     npm install 2>&1
-
-    # Re-enable
     npm config set bin-links true
-
     if [ -d "node_modules/@angular/build" ]; then
-        log "✅ Angular dependencies installed"
+        log "Angular dependencies installed"
     else
-        warn "⚠️ npm install had issues"
+        warn "npm install had issues — check output above"
     fi
 fi
 
-cd $INSTALL_DIR
+cd "$INSTALL_DIR"
 
+# ══════════════════════════════════════════════
+step "Container Runtime  (Docker)"
 
-
-step "Installing Container Runtime"
-
-# ── Install Docker ────────────────────────────
 log "Installing Docker..."
-sudo apt-get remove -y docker docker-engine \
-    docker.io containerd runc 2>/dev/null || true
+sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
 sudo apt-get update -qq
-sudo apt-get install -y \
-    ca-certificates curl gnupg lsb-release
+sudo apt-get install -y ca-certificates curl gnupg lsb-release
 
-# Re-download GPG key cleanly (previous attempts may have left an empty file)
 sudo mkdir -p /etc/apt/keyrings
 sudo rm -f /etc/apt/keyrings/docker.gpg
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    | sudo gpg --dearmor \
-    -o /etc/apt/keyrings/docker.gpg
+    | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-# Ubuntu 26.04 (resolute) — Docker hasn't published packages for it yet;
-# noble (24.04) packages are fully compatible.
 DOCKER_CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
 case "$DOCKER_CODENAME" in
     resolute|oracular|*)
@@ -1003,7 +919,7 @@ echo \
 sudo apt-get update -qq
 sudo apt-get install -y docker-ce docker-ce-cli \
     containerd.io docker-buildx-plugin docker-compose-plugin
-log "✅ Docker installed"
+log "Docker installed"
 
 sudo mkdir -p /etc/docker
 sudo tee /etc/docker/daemon.json > /dev/null << 'DOCKEREOF'
@@ -1014,40 +930,32 @@ DOCKEREOF
 
 sudo modprobe overlay 2>/dev/null || true
 sudo modprobe br_netfilter 2>/dev/null || true
-echo -e "overlay\nbr_netfilter" | \
-    sudo tee /etc/modules-load.d/docker.conf > /dev/null
+echo -e "overlay\nbr_netfilter" | sudo tee /etc/modules-load.d/docker.conf > /dev/null
 
 log "Starting Docker service..."
 sudo systemctl enable docker
 sudo systemctl start docker || true
-sudo usermod -aG docker $USERNAME
+sudo usermod -aG docker "$USERNAME"
 sudo chmod 666 /var/run/docker.sock
 
 log "Waiting for Docker to initialize..."
 for i in {1..20}; do
     if sudo docker info >/dev/null 2>&1; then
-        log "✅ Docker is running"
+        log "Docker is running"
         break
     fi
-    if [ $i -eq 10 ]; then
-        warn "Docker slow to start, retrying..."
-        sudo systemctl restart docker || true
-    fi
+    [ $i -eq 10 ] && sudo systemctl restart docker || true
     echo -n "."
     sleep 3
 done
 echo ""
+sudo docker info >/dev/null 2>&1 || err "Docker failed to start"
 
-if ! sudo docker info >/dev/null 2>&1; then
-    err "Docker failed to start!"
-fi
+# ══════════════════════════════════════════════
+step "Detection Stack  (Building)"
 
-step "Building Detection Stack"
-
-
-# ── Build and start Docker stack ──────────────
-log "Building Docker stack (this takes a few minutes)..."
-cd $INSTALL_DIR
+log "Building Docker stack (this may take a few minutes)..."
+cd "$INSTALL_DIR"
 
 sudo docker compose --profile onpremise down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
@@ -1058,16 +966,13 @@ if [ "$DEPLOY_MODE" = "hybrid" ]; then
 else
     sudo docker compose --profile onpremise up -d --build
 fi
+log "Docker stack started"
 
-log "✅ Docker stack started"
-
-# ── Wait for ClickHouse container to be healthy ───────────────────────
 if [ "$DEPLOY_MODE" = "local" ]; then
-    log "Waiting for ClickHouse cluster (ch1 + ch2)..."
+    log "Waiting for ClickHouse node 1..."
     for i in {1..40}; do
-        if curl -s http://localhost:8123/ping > /dev/null 2>&1 && \
-           curl -s http://localhost:8124/ping > /dev/null 2>&1; then
-            log "✅ ClickHouse cluster ready (both nodes up)"
+        if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
+            log "ClickHouse node 1 ready"
             break
         fi
         echo -n "."
@@ -1075,16 +980,14 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     done
     echo ""
 
-    # ── Auto-import exported data if we migrated from bare-metal ─────────
     if [ "${CH_NEEDS_IMPORT:-false}" = "true" ] && [ -d "/home/user/ch-export" ]; then
         log "Importing exported ClickHouse data into Docker container..."
         bash "$INSTALL_DIR/scripts/ch-import.sh"
-        log "✅ Data migration complete"
+        log "Data migration complete"
     fi
 fi
 
-# ── Set Kafka retention ───────────────────────
-log "Setting Kafka retention policy..."
+log "Configuring Kafka retention..."
 sleep 15
 sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-configs.sh \
@@ -1093,25 +996,26 @@ sudo docker exec kafka1 \
     --entity-name ndr-events \
     --add-config retention.ms=86400000 \
     2>/dev/null || true
-log "✅ Kafka retention set to 24 hours"
+log "Kafka retention set to 24 hours"
 
-# ── Create Kafka topic with 3 partitions ──────
 log "Creating Kafka topic with 3 partitions..."
-sudo docker exec kafka1     /opt/kafka/bin/kafka-topics.sh     --bootstrap-server localhost:9092     --create --if-not-exists     --topic ndr-events     --partitions 3     --replication-factor 3     2>/dev/null || true
+sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server localhost:9092 \
+    --create --if-not-exists \
+    --topic ndr-events \
+    --partitions 3 \
+    --replication-factor 3 \
+    2>/dev/null || true
+log "Kafka topic ready"
 
-log "✅ Kafka topic ready"
+# ══════════════════════════════════════════════
+step "Search Index  (OpenSearch)"
 
-# ── JWT Secret Status ─────────────────────────
-log "✅ JWT secret already verified and stored in .env"
-
-
-# ── Setup OpenSearch (for Arkime PCAP) ───────────────────────────────────
-step "Setting up Search Index"
 log "Waiting for OpenSearch..."
-cd $INSTALL_DIR
+cd "$INSTALL_DIR"
 for i in {1..30}; do
     if curl -s http://localhost:9200 > /dev/null 2>&1; then
-        log "✅ OpenSearch ready"
+        log "OpenSearch ready"
         break
     fi
     echo -n "."
@@ -1119,25 +1023,24 @@ for i in {1..30}; do
 done
 echo ""
 
-# Initialize Arkime DB and create admin user now that OpenSearch is up
 if [ -f /opt/arkime/bin/capture ]; then
     log "Initializing Packet Recorder database..."
     echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init --ifneeded 2>&1 || \
         echo "yes" | sudo timeout 60 /opt/arkime/db/db.pl http://localhost:9200 init 2>&1 || true
-    log "✅ Packet Recorder database initialized"
+    log "Packet Recorder database initialized"
     log "Creating Packet Recorder admin user..."
     sudo /opt/arkime/bin/arkime_add_user.sh admin "Admin" admin --admin 2>/dev/null \
-        && log "✅ Packet Recorder admin ready (user: admin / pass: admin)" \
-        || warn "⚠️ Packet Recorder admin creation failed — run manually after install"
+        && log "Packet Recorder admin ready (user: admin / pass: admin)" \
+        || warn "Packet Recorder admin creation failed — run manually after install"
 fi
 
-# ── Native SOAR is built into the NDR engine ─────────────────────────────
-step "Setting up Response Automation"
-log "✅ Native SOAR is built into the NDR engine — no extra services needed"
-log "  Configure playbooks, cases and integrations from the UI → SOAR page"
+# ══════════════════════════════════════════════
+step "Response Automation  (SOAR)"
 
-# ── Create proxy config ─────────────────────────
-cat > $INSTALL_DIR/ndr-ui/proxy.conf.json << 'PROXYEOF'
+log "Native SOAR is built into the NDR engine — no extra services needed"
+info "Configure playbooks, cases and integrations from the UI → SOAR page"
+
+cat > "$INSTALL_DIR/ndr-ui/proxy.conf.json" << 'PROXYEOF'
 {
   "/api": {
     "target": "http://localhost:3000",
@@ -1151,34 +1054,30 @@ cat > $INSTALL_DIR/ndr-ui/proxy.conf.json << 'PROXYEOF'
   }
 }
 PROXYEOF
-log "✅ Proxy config created"
+log "Proxy config created"
 
-# ── Start Angular UI ──────────────────────────
 log "Starting Angular UI..."
-
-# Run from shared folder for live reload!
-cd $INSTALL_DIR/ndr-ui
+cd "$INSTALL_DIR/ndr-ui"
 if curl -s http://localhost:4200 > /dev/null 2>&1; then
     log "Angular UI already running at http://localhost:4200"
 else
     if [ -f /tmp/ndr-ui.pid ]; then
         OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
         if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
-            warn "Existing Angular UI process found - restarting it"
+            warn "Existing Angular UI process found — restarting"
             kill "$OLD_UI_PID" 2>/dev/null || true
             sleep 2
         fi
         rm -f /tmp/ndr-ui.pid
     fi
-
     nohup npm start > /tmp/ndr-ui.log 2>&1 &
     echo $! > /tmp/ndr-ui.pid
 fi
 
-log "Waiting for Angular UI to be ready..."
+log "Waiting for Angular UI..."
 for i in {1..60}; do
     if curl -s http://localhost:4200 > /dev/null 2>&1; then
-        log "✅ Angular UI ready at http://localhost:4200"
+        log "Angular UI ready"
         break
     fi
     echo -n "."
@@ -1186,55 +1085,56 @@ for i in {1..60}; do
 done
 echo ""
 
-
-# ── WSL2 reminder ─────────────────────────────
 if grep -qi microsoft /proc/version 2>/dev/null; then
     warn "WSL2 detected — run in Windows PowerShell as Admin:"
-    echo ""
+    printf "\n"
     echo "  netsh interface portproxy add v4tov4 listenport=4200 listenaddress=0.0.0.0 connectport=4200 connectaddress=$HOST_IP"
     echo "  netsh interface portproxy add v4tov4 listenport=3000 listenaddress=0.0.0.0 connectport=3000 connectaddress=$HOST_IP"
     echo "  netsh interface portproxy add v4tov4 listenport=9092 listenaddress=0.0.0.0 connectport=9092 connectaddress=$HOST_IP"
-    echo ""
+    printf "\n"
 fi
 
-step "Starting all services"
+# ══════════════════════════════════════════════
+step "Verification"
 
-# ── Verify installation ───────────────────────
-echo ""
 log "Verifying installation..."
-log "  Mode:       $DEPLOY_MODE"
-log "  Interface:  $IFACE ($HOST_IP)"
-log "  Agent-Z:    $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
-log "  Agent-S:    $(suricata --version 2>&1 | head -1)"
-log "  Docker:     $(sudo docker --version)"
-log "  Node.js:    $(node --version)"
-log "  npm:        $(npm --version)"
+info "Mode:       $DEPLOY_MODE"
+info "Interface:  $IFACE  ($HOST_IP)"
+info "Agent-Z:    $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
+info "Agent-S:    $(suricata --version 2>&1 | head -1)"
+info "Docker:     $(sudo docker --version)"
+info "Node.js:    $(node --version)  |  npm: $(npm --version)"
 if [ "$DEPLOY_MODE" = "local" ]; then
-    log "  ClickHouse ch1: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
-    log "  ClickHouse ch2: $(curl -s http://localhost:8124/ping 2>/dev/null || echo 'starting...')"
+    info "ClickHouse: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
 else
-    log "  ClickHouse: $CLOUD_CLICKHOUSE (cloud)"
-    log "  Kafka:      $CLOUD_KAFKA (cloud)"
+    info "ClickHouse: $CLOUD_CLICKHOUSE  (cloud)"
+    info "Kafka:      $CLOUD_KAFKA  (cloud)"
 fi
-log "  Agent:      $(curl -s http://localhost:3001/agent/status \
-    2>/dev/null || echo 'starting...')"
+info "NDR Agent:  $(curl -s http://localhost:3001/agent/status 2>/dev/null || echo 'starting...')"
 
-# ── Done ──────────────────────────────────────
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║         ✅ Installation Complete!         ║"
-echo "║          Powered by Proma Secure          ║"
-echo "╠══════════════════════════════════════════╣"
-printf "║  Mode:    %-32s║\n" "$DEPLOY_MODE"
-echo "╠══════════════════════════════════════════╣"
-echo "║  Dashboard:  http://localhost:4200        ║"
-echo "║  API:        http://localhost:3000        ║"
-echo "║  Agent:      http://localhost:3001        ║"
-echo "║  Recorder:   http://localhost:8005        ║"
-echo "╠══════════════════════════════════════════╣"
-echo "║  start:   ./start.sh                     ║"
-echo "║  stop:    ./stop.sh                      ║"
-echo "║  status:  ./status.sh                    ║"
-echo "╚══════════════════════════════════════════╝"
-echo ""
-echo "💡 Proma Secure — Network Detection & Response"
+# ── Completion banner ─────────────────────────
+_pad() { printf '%-44s' "$1"; }
+
+printf "\n\n"
+printf "  ${CYAN}╔══════════════════════════════════════════════╗${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  ${GREEN}${BOLD}      INSTALLATION COMPLETE               ${NC}  ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  ${DIM}         Proma Alpha v1.0  —  Proma Secure  ${NC}  ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Mode:       ${DEPLOY_MODE}")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Interface:  ${IFACE}  (${HOST_IP})")${CYAN}║${NC}\n"
+printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
+printf "  ${CYAN}║${NC}  ${BOLD}$(_pad "Service         Access Point")${NC}  ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  ${DIM}$(_pad "─────────────── ────────────────────────")${NC}  ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Dashboard       http://${HOST_IP}:4200")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "API Gateway     http://${HOST_IP}:3000")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "NDR Agent       http://localhost:3001")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Packet Recorder http://localhost:8005")${CYAN}║${NC}\n"
+printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "start:    ./start.sh")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "stop:     ./stop.sh")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "status:   ./status.sh")${CYAN}║${NC}\n"
+printf "  ${CYAN}╚══════════════════════════════════════════════╝${NC}\n"
+printf "\n"
+printf "  ${DIM}Proma Secure — Network Detection & Response Platform${NC}\n\n"

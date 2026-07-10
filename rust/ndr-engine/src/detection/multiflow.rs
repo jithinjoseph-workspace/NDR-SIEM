@@ -34,6 +34,11 @@ const SUP_VOL_ANOMALY:    Duration = Duration::from_secs(3600);
 const SUP_NEW_CONTACT:    Duration = Duration::from_secs(86400); // 24 h — new contact once per day per pair
 const SUP_ICMP_FLOOD:     Duration = Duration::from_secs(1800);
 const SUP_ABNORMAL_HOURS: Duration = Duration::from_secs(3600);
+const SUP_NXDOMAIN:       Duration = Duration::from_secs(1800);
+const SUP_DNS_TUNNEL:     Duration = Duration::from_secs(3600);
+const SUP_TLS_CERT:       Duration = Duration::from_secs(3600);
+const SUP_PROTO_MISUSE:   Duration = Duration::from_secs(1800);
+const SUP_LARGE_EXFIL:    Duration = Duration::from_secs(3600);
 
 // In-memory suppression cache: key = (pattern, tenant, identifier), value = Instant of last emit.
 // Shared across all Tier 1/2 and Tier 3 runs inside the same tokio task via passed &mut.
@@ -76,6 +81,19 @@ struct PairCount {
     dst_ip: String,
     cnt:    u64,
     span:   i64,
+}
+
+#[derive(Row, Serialize, Deserialize)]
+struct DnsBeaconRow {
+    src_ip: String,
+    domain: String,
+    cnt:    u64,
+    span:   i64,
+}
+
+#[derive(Row, Deserialize)]
+struct DomainRow {
+    domain: String,
 }
 
 #[derive(Row, Serialize, Deserialize)]
@@ -266,6 +284,11 @@ async fn run_tier12(ch: &ClickhouseStorage, sup: &mut SuppressMap) {
         detect_internal_recon(ch, tenant, sup).await;
         detect_data_staging(ch, tenant, sup).await;
         detect_icmp_flood(ch, tenant, sup).await;
+        detect_nxdomain_flood(ch, tenant, sup).await;
+        detect_dns_tunneling(ch, tenant, sup).await;
+        detect_tls_cert_anomaly(ch, tenant, sup).await;
+        detect_protocol_misuse(ch, tenant, sup).await;
+        detect_large_volume_exfil(ch, tenant, sup).await;
     }
 }
 
@@ -295,9 +318,15 @@ async fn detect_port_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppre
     }
 }
 
-// Credential stuffing: >20 auth-failure events from one src in 10 min.
-// Source-agnostic: catches Suricata alerts, Zeek HTTP 401/403/429,
-// Zeek SSH auth_success=false, and Zeek FTP 530/430 reply codes.
+// Credential stuffing / password spray: >20 auth-related events from one src in 10 min.
+// Four signal layers (any one is sufficient):
+//   1. Suricata alert events (when Suricata is deployed)
+//   2. Zeek HTTP 401/403/407/429 response codes
+//   3. Zeek SSH auth_success = false
+//   4. Zeek FTP 530/430/332 reply codes
+//   5. Zeek conn.log connections to auth ports (22, 389, 445, 636, 3389, 5985, 5986)
+//      — covers RDP, LDAP, SMB, WinRM and SSH on non-standard ports where
+//        Zeek doesn't decode auth results but high connection rate is the signal
 async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
@@ -311,6 +340,8 @@ async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &
              OR JSONExtractUInt(raw, 'status_code') IN (401, 403, 407, 429) \
              OR (event_type = 'ssh'  AND JSONExtractString(raw, 'auth_success') = 'false') \
              OR JSONExtractUInt(raw, 'reply_code') IN (530, 430, 332) \
+             OR (event_type IN ('conn', 'flow') \
+                 AND dst_port IN (22, 389, 445, 636, 3389, 5985, 5986)) \
            ) \
          GROUP BY src_ip \
          HAVING cnt > 20"
@@ -355,31 +386,52 @@ async fn detect_lateral_movement(ch: &ClickhouseStorage, tenant: &str, sup: &mut
     }
 }
 
-// DNS beaconing: >100 DNS queries to the same destination in 30 min
+// DNS beaconing: >150 DNS queries for the same domain in 30 min, grouped by queried domain.
+// Trusted domains are loaded per-run from ndr.trusted_domains (global shared + tenant-specific).
 async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
+
+    // Load trusted domains: global (tenant_id='') + this tenant's own additions
+    let trusted_q = format!(
+        "SELECT domain FROM ndr.trusted_domains FINAL \
+         WHERE category IN ('dns_beacon', 'both') \
+           AND (tenant_id = '' OR tenant_id = '{t}')"
+    );
+    let trusted: std::collections::HashSet<String> = ch.client.query(&trusted_q)
+        .fetch_all::<DomainRow>().await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| r.domain.to_lowercase())
+        .collect();
+
     let q = format!(
-        "SELECT src_ip, dst_ip, \
+        "SELECT src_ip, \
+                JSONExtractString(raw, 'query') AS domain, \
                 count() AS cnt, \
                 dateDiff('second', min(timestamp), max(timestamp)) AS span \
          FROM {db}.ndr_events \
          WHERE timestamp > now() - INTERVAL 30 MINUTE \
            AND tenant_id = '{t}' \
            AND event_type = 'dns' \
-           AND src_ip != '' AND dst_ip != '' \
-         GROUP BY src_ip, dst_ip \
-         HAVING cnt > 100 AND span > 60"
+           AND src_ip != '' \
+           AND JSONExtractString(raw, 'query') != '' \
+         GROUP BY src_ip, domain \
+         HAVING cnt > 150 AND span > 60"
     );
-    let rows: Vec<PairCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
+    let rows: Vec<DnsBeaconRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        let key = format!("{}_{}", r.src_ip, r.dst_ip);
+        // Skip globally shared and tenant-specific trusted domains (exact or subdomain match)
+        let d = r.domain.to_lowercase();
+        if trusted.iter().any(|t| d == *t || d.ends_with(&format!(".{}", t))) { continue; }
+
+        let key = format!("{}_{}", r.src_ip, r.domain);
         if is_suppressed(sup, "dnsbeacon", tenant, &key, SUP_DNS_BEACON) { continue; }
-        tracing::info!("multiflow[dns-beacon] {}/{}: {} queries/{}s → {}",
-            tenant, r.src_ip, r.cnt, r.span, r.dst_ip);
+        tracing::info!("multiflow[dns-beacon] {}/{}: {} queries/{}s for {}",
+            tenant, r.src_ip, r.cnt, r.span, r.domain);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
         emit(ch, tenant, &make_cid("dnsbeacon", tenant, &key),
-            &r.src_ip, &r.dst_ip, 65.0,
+            &r.src_ip, &r.domain, 65.0,
             vec!["dns-beaconing".into(), "t:command-and-control".into()], &sid).await;
     }
 }
@@ -566,6 +618,73 @@ async fn refresh_baselines(ch: &ClickhouseStorage, tenant: &str) {
     tracing::info!("multiflow: baseline refresh done for {}", tenant);
 }
 
+// Bootstrap baselines for a brand-new tenant using the last 24h of available
+// data. Called once (in a spawned task) when run_tier3 finds zero baseline rows
+// but events already exist — prevents the first-24h blind spot.
+async fn bootstrap_baselines(ch: ClickhouseStorage, tenant: String) {
+    tracing::info!("multiflow: bootstrapping baselines for {} (rolling 24h)", tenant);
+    let db     = db_for(&tenant);
+    let t      = esc(&tenant);
+    let window = now_ts();
+
+    baseline_compute(&ch, &tenant, &db, &t, "dns_count", window,
+        &format!(
+            "SELECT src_ip, toFloat64(count()) AS value_f, '' AS value_s \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 24 HOUR \
+               AND tenant_id = '{t}' AND event_type = 'dns' AND src_ip != '' \
+             GROUP BY src_ip"
+        )
+    ).await;
+
+    let prv = is_private("dst_ip");
+    baseline_compute(&ch, &tenant, &db, &t, "ext_dst_count", window,
+        &format!(
+            "SELECT src_ip, toFloat64(count(DISTINCT dst_ip)) AS value_f, '' AS value_s \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 24 HOUR \
+               AND tenant_id = '{t}' \
+               AND NOT {prv} AND dst_ip != '' AND src_ip != '' \
+             GROUP BY src_ip"
+        )
+    ).await;
+
+    baseline_compute(&ch, &tenant, &db, &t, "event_count", window,
+        &format!(
+            "SELECT src_ip, toFloat64(count()) AS value_f, '' AS value_s \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 24 HOUR \
+               AND tenant_id = '{t}' AND src_ip != '' \
+             GROUP BY src_ip"
+        )
+    ).await;
+
+    let prv2 = is_private("dst_ip");
+    baseline_compute(&ch, &tenant, &db, &t, "ext_contact", window,
+        &format!(
+            "SELECT src_ip, toFloat64(1) AS value_f, dst_ip AS value_s \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 24 HOUR \
+               AND tenant_id = '{t}' \
+               AND NOT {prv2} AND dst_ip != '' AND src_ip != '' \
+             GROUP BY src_ip, dst_ip"
+        )
+    ).await;
+
+    baseline_compute(&ch, &tenant, &db, &t, "off_hours_count", window,
+        &format!(
+            "SELECT src_ip, toFloat64(count()) AS value_f, '' AS value_s \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL 24 HOUR \
+               AND tenant_id = '{t}' AND src_ip != '' \
+               AND (toHour(timestamp) >= 23 OR toHour(timestamp) < 5) \
+             GROUP BY src_ip"
+        )
+    ).await;
+
+    tracing::info!("multiflow: baseline bootstrap done for {}", tenant);
+}
+
 async fn baseline_compute(
     ch:      &ClickhouseStorage,
     tenant:  &str,
@@ -627,7 +746,20 @@ async fn run_tier3(ch: &ClickhouseStorage, sup: &mut SuppressMap) {
             ))
             .fetch_one::<u64>().await.unwrap_or(0);
         if baseline_rows == 0 {
-            tracing::debug!("multiflow tier3: skipping {} — no baselines yet", tenant);
+            let has_events: u64 = ch.client
+                .query(&format!(
+                    "SELECT count() FROM {db}.ndr_events \
+                     WHERE tenant_id = '{t}' AND timestamp >= now() - INTERVAL 24 HOUR"
+                ))
+                .fetch_one::<u64>().await.unwrap_or(0);
+            if has_events > 0 {
+                tracing::info!("multiflow tier3: no baselines for {} — triggering bootstrap", tenant);
+                let ch_cl = ch.clone();
+                let t_cl  = tenant.clone();
+                tokio::spawn(async move { bootstrap_baselines(ch_cl, t_cl).await; });
+            } else {
+                tracing::debug!("multiflow tier3: skipping {} — no events yet", tenant);
+            }
             continue;
         }
         detect_volume_anomaly(ch, tenant, sup).await;
@@ -730,6 +862,121 @@ async fn detect_icmp_flood(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppr
     }
 }
 
+// ETA: TLS certificate anomaly — self-signed, expired, or untrusted chain
+#[derive(Row, Serialize, Deserialize)]
+struct TlsCertRow {
+    src_ip:            String,
+    dst_ip:            String,
+    cnt:               u64,
+    validation_status: String,
+}
+
+async fn detect_tls_cert_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+    let db = db_for(tenant);
+    let t  = esc(tenant);
+    let q = format!(
+        "SELECT src_ip, dst_ip, count() AS cnt, \
+                any(JSONExtractString(raw, 'validation_status')) AS validation_status \
+         FROM {db}.ndr_events \
+         WHERE timestamp > now() - INTERVAL 10 MINUTE \
+           AND tenant_id = '{t}' \
+           AND log_source = 'ssl' \
+           AND JSONExtractString(raw, 'validation_status') IN (\
+               'self signed certificate', \
+               'certificate expired', \
+               'self signed certificate in certificate chain', \
+               'unable to get local issuer certificate') \
+           AND src_ip != '' AND dst_ip != '' \
+         GROUP BY src_ip, dst_ip"
+    );
+    let rows: Vec<TlsCertRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
+    for r in rows {
+        let key = format!("{}-{}", r.src_ip, r.dst_ip);
+        if is_suppressed(sup, "tlscert", tenant, &key, SUP_TLS_CERT) { continue; }
+        tracing::info!("multiflow[tls-cert] {}/{}->{}: {} ({} events/10min)",
+            tenant, r.src_ip, r.dst_ip, r.validation_status, r.cnt);
+        let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
+        emit(ch, tenant, &make_cid("tlscert", tenant, &key),
+            &r.src_ip, &r.dst_ip, 70.0,
+            vec!["tls-cert-anomaly".into(), "encrypted-traffic-analysis".into(),
+                 "t:command-and-control".into()], &sid).await;
+    }
+}
+
+// ETA: Protocol misuse — TLS on port 80 or plain HTTP on port 443
+#[derive(Row, Serialize, Deserialize)]
+struct ProtoMisuseRow {
+    src_ip:   String,
+    dst_ip:   String,
+    dst_port: u16,
+    cnt:      u64,
+}
+
+async fn detect_protocol_misuse(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+    let db = db_for(tenant);
+    let t  = esc(tenant);
+    let q = format!(
+        "SELECT src_ip, dst_ip, dst_port, count() AS cnt \
+         FROM {db}.ndr_events \
+         WHERE timestamp > now() - INTERVAL 10 MINUTE \
+           AND tenant_id = '{t}' \
+           AND src_ip != '' AND dst_ip != '' \
+           AND (\
+               (log_source = 'ssl' AND dst_port = 80) \
+               OR (log_source = 'http' AND dst_port = 443)\
+           ) \
+         GROUP BY src_ip, dst_ip, dst_port \
+         HAVING cnt > 3"
+    );
+    let rows: Vec<ProtoMisuseRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
+    for r in rows {
+        let key = format!("{}-{}", r.src_ip, r.dst_port);
+        if is_suppressed(sup, "protomisuse", tenant, &key, SUP_PROTO_MISUSE) { continue; }
+        let desc = if r.dst_port == 80 { "TLS-on-port-80" } else { "HTTP-on-port-443" };
+        tracing::info!("multiflow[proto-misuse] {}/{}->{}: {} ({} events/10min)",
+            tenant, r.src_ip, r.dst_ip, desc, r.cnt);
+        let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
+        emit(ch, tenant, &make_cid("protomisuse", tenant, &key),
+            &r.src_ip, &r.dst_ip, 65.0,
+            vec!["protocol-misuse".into(), "encrypted-traffic-analysis".into(),
+                 "t:defense-evasion".into()], &sid).await;
+    }
+}
+
+// Large-volume direct exfil: >1 GB sent to external destinations in 30 min,
+// no internal staging precondition — catches bulk DB dumps over HTTPS etc.
+#[derive(Row, Serialize, Deserialize)]
+struct LargeExfilRow {
+    src_ip: String,
+    bytes:  u64,
+}
+
+async fn detect_large_volume_exfil(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+    let db      = db_for(tenant);
+    let t       = esc(tenant);
+    let prv_dst = is_private("dst_ip");
+    let q = format!(
+        "SELECT src_ip, toUInt64(sum(JSONExtractUInt(raw, 'orig_bytes'))) AS bytes \
+         FROM {db}.ndr_events \
+         WHERE timestamp > now() - INTERVAL 30 MINUTE \
+           AND tenant_id = '{t}' \
+           AND NOT {prv_dst} \
+           AND src_ip != '' AND dst_ip != '' \
+         GROUP BY src_ip \
+         HAVING bytes > 1073741824"
+    );
+    let rows: Vec<LargeExfilRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
+    for r in rows {
+        if is_suppressed(sup, "largeexfil", tenant, &r.src_ip, SUP_LARGE_EXFIL) { continue; }
+        tracing::info!("multiflow[large-exfil] {}/{}: {:.1} GB to external in 30min",
+            tenant, r.src_ip, r.bytes as f64 / 1_073_741_824.0);
+        let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
+        emit(ch, tenant, &make_cid("largeexfil", tenant, &r.src_ip),
+            &r.src_ip, "", 85.0,
+            vec!["large-volume-exfil".into(), "t:exfiltration".into()], &sid).await;
+    }
+}
+
 // Abnormal hours: internal IP active during 23:00–05:00 UTC with events
 // exceeding 3× its 7-day off-hours baseline. Only runs during off-hours.
 #[derive(Row, Serialize, Deserialize)]
@@ -775,5 +1022,69 @@ async fn detect_abnormal_hours(ch: &ClickhouseStorage, tenant: &str, sup: &mut S
         emit(ch, tenant, &make_cid("abnormalhours", tenant, &r.src_ip),
             &r.src_ip, "", 72.0,
             vec!["abnormal-hours".into(), "insider-threat".into(), "t:initial-access".into()], &sid).await;
+    }
+}
+
+// NXDOMAIN flood: >50 NXDOMAIN responses to one src in 5 min.
+// Indicates automated C2 domain generation (DGA) or failed fast-flux resolution.
+async fn detect_nxdomain_flood(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+    let db = db_for(tenant);
+    let t  = esc(tenant);
+    let q = format!(
+        "SELECT src_ip, count() AS cnt \
+         FROM {db}.ndr_events \
+         WHERE timestamp > now() - INTERVAL 5 MINUTE \
+           AND tenant_id = '{t}' \
+           AND event_type = 'dns' AND src_ip != '' \
+           AND JSONExtractString(raw, 'rcode_name') = 'NXDOMAIN' \
+         GROUP BY src_ip \
+         HAVING cnt > 50"
+    );
+    let rows: Vec<OneCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
+    for r in rows {
+        if is_suppressed(sup, "nxdomain", tenant, &r.src_ip, SUP_NXDOMAIN) { continue; }
+        tracing::info!("multiflow[nxdomain-flood] {}/{}: {} NXDOMAIN/5min",
+            tenant, r.src_ip, r.cnt);
+        let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
+        emit(ch, tenant, &make_cid("nxdomain", tenant, &r.src_ip),
+            &r.src_ip, "", 72.0,
+            vec!["nxdomain-flood".into(), "dga".into(), "t:command-and-control".into()], &sid).await;
+    }
+}
+
+// DNS tunneling: >20 DNS queries with average query length >50 chars in 10 min.
+// Long encoded subdomain labels (base64/hex) are the hallmark of DNS tunnel clients
+// (iodine, dnscat2, etc.). Combined threshold avoids false-positives from CDN names.
+#[derive(Row, Serialize, Deserialize)]
+struct DnsTunnelRow {
+    src_ip:   String,
+    cnt:      u64,
+    avg_qlen: f64,
+}
+
+async fn detect_dns_tunneling(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+    let db = db_for(tenant);
+    let t  = esc(tenant);
+    let q = format!(
+        "SELECT src_ip, \
+                count() AS cnt, \
+                avg(length(JSONExtractString(raw, 'query'))) AS avg_qlen \
+         FROM {db}.ndr_events \
+         WHERE timestamp > now() - INTERVAL 10 MINUTE \
+           AND tenant_id = '{t}' \
+           AND event_type = 'dns' AND src_ip != '' \
+           AND length(JSONExtractString(raw, 'query')) > 40 \
+         GROUP BY src_ip \
+         HAVING cnt > 20 AND avg_qlen > 50"
+    );
+    let rows: Vec<DnsTunnelRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
+    for r in rows {
+        if is_suppressed(sup, "dnstunnel", tenant, &r.src_ip, SUP_DNS_TUNNEL) { continue; }
+        tracing::info!("multiflow[dns-tunnel] {}/{}: {} queries avg {:.0} chars/10min",
+            tenant, r.src_ip, r.cnt, r.avg_qlen);
+        let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
+        emit(ch, tenant, &make_cid("dnstunnel", tenant, &r.src_ip),
+            &r.src_ip, "", 80.0,
+            vec!["dns-tunneling".into(), "t:exfiltration".into(), "t:command-and-control".into()], &sid).await;
     }
 }

@@ -124,7 +124,18 @@ export class TenantAdmin implements OnInit, OnDestroy {
   // Bulk Selection
   selectedUserIds: Set<string> = new Set();
 
-  activeTab: 'users' = 'users';
+  activeTab: 'users' | 'trusted-domains' = 'users';
+
+  // Trusted Domains (tenant-specific)
+  trustedDomains: any[] = [];
+  loadingTrustedDomains = false;
+  tdNewDomain = '';
+  tdNewCategory = 'dns_beacon';
+  tdNewNote = '';
+  tdSaving = false;
+  tdAiLoading = false;
+  tdAiAvailable: boolean | null = null;
+  tdAiSuggestions: any[] = [];
   
   // Data Grid specific
   searchTerm = '';
@@ -1111,4 +1122,79 @@ export class TenantAdmin implements OnInit, OnDestroy {
     const timestamp = new Date(withTimezone).getTime();
     return !Number.isNaN(timestamp) && Date.now() - timestamp <= 2 * 60 * 1000;
   }
+
+  // ── Trusted Domains ────────────────────────────────────────────────────────
+
+  loadTrustedDomains() {
+    this.loadingTrustedDomains = true;
+    this.api.listTrustedDomains().subscribe({
+      next: (data: any) => {
+        this.trustedDomains = data.domains || [];
+        this.loadingTrustedDomains = false;
+      },
+      error: () => { this.loadingTrustedDomains = false; },
+    });
+  }
+
+  addTrustedDomain() {
+    const d = this.tdNewDomain.trim().toLowerCase();
+    if (!d) return;
+    this.tdSaving = true;
+    // tenant_admin: tenant_id is set server-side from JWT, pass '' to use own tenant
+    this.api.addTrustedDomain(d, this.tdNewCategory, 'own', this.tdNewNote).subscribe({
+      next: () => {
+        this.tdNewDomain = '';
+        this.tdNewNote = '';
+        this.tdSaving = false;
+        this.loadTrustedDomains();
+      },
+      error: () => { this.tdSaving = false; },
+    });
+  }
+
+  deleteTenantTrustedDomain(domain: string, tenantId: string) {
+    this.api.deleteTrustedDomain(domain, tenantId).subscribe({
+      next: () => {
+        this.trustedDomains = this.trustedDomains.filter(
+          d => !(d.domain === domain && d.tenant_id === tenantId)
+        );
+      },
+      error: () => {},
+    });
+  }
+
+  runAiSuggest() {
+    this.tdAiLoading = true;
+    this.tdAiSuggestions = [];
+    this.api.aiSuggestTrustedDomains().subscribe({
+      next: (data: any) => {
+        this.tdAiAvailable = data.ai_available !== false;
+        this.tdAiSuggestions = (data.suggestions || []).filter((s: any) => s.verdict === 'TRUSTED');
+        this.tdAiLoading = false;
+      },
+      error: () => { this.tdAiLoading = false; },
+    });
+  }
+
+  approveTdSuggestion(s: any) {
+    this.api.addTrustedDomain(s.domain, 'dns_beacon', 'own', s.reason || '').subscribe({
+      next: () => {
+        this.tdAiSuggestions = this.tdAiSuggestions.filter(x => x.domain !== s.domain);
+        this.loadTrustedDomains();
+      },
+      error: () => {},
+    });
+  }
+
+  dismissTdSuggestion(domain: string) {
+    this.tdAiSuggestions = this.tdAiSuggestions.filter(s => s.domain !== domain);
+  }
+
+  switchTab(tab: 'users' | 'trusted-domains') {
+    this.activeTab = tab;
+    if (tab === 'trusted-domains') this.loadTrustedDomains();
+  }
+
+  get tenantOwnDomains() { return this.trustedDomains.filter(d => d.scope === 'tenant'); }
+  get globalDomains() { return this.trustedDomains.filter(d => d.scope === 'global'); }
 }

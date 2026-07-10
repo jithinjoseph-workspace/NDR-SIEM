@@ -170,29 +170,34 @@ impl RiskScorer {
         if let Some(cs) = &zeek.conn_state {
             match cs.as_str() {
                 "REJ" => {
-                    score += 20.0;
+                    // Single rejection is normal (closed port). Needs correlation to alert.
+                    score += 8.0;
                     reasons.push("Connection rejected — possible port scan".into());
                     tags.push("port-scan".into());
                 }
                 "RSTO" | "RSTR" => {
-                    score += 15.0;
-                    reasons.push("Connection reset — possible evasion".into());
+                    // Resets are constant in normal traffic — don't alert in isolation.
+                    score += 5.0;
+                    reasons.push("Connection reset".into());
                     tags.push("connection-reset".into());
                 }
                 "RSTOS0" | "RSTRH" => {
-                    score += 18.0;
+                    // Abnormal RST sequence — genuinely suspicious, keep higher.
+                    score += 12.0;
                     reasons.push("Abnormal RST — likely scan or spoofing".into());
                     tags.push("abnormal-rst".into());
                 }
                 "S0" => {
-                    score += 10.0;
-                    reasons.push("SYN with no reply — stealth scan".into());
+                    // SYN no reply — common for any offline host or UDP port.
+                    score += 4.0;
+                    reasons.push("SYN with no reply".into());
                     tags.push("no-response".into());
                 }
                 "SH" | "SHR" => {
-                    score += 12.0;
-                    reasons.push("Half-open connection — SYN scan".into());
-                    tags.push("half-open-scan".into());
+                    // Half-open — normal for DNS/NTP/UDP protocols.
+                    score += 5.0;
+                    reasons.push("Half-open connection".into());
+                    tags.push("half-open".into());
                 }
                 "SF" | "S1" => { tags.push("normal-flow".into()); }
                 "OTH"       => { score += 5.0; tags.push("mid-stream".into()); }

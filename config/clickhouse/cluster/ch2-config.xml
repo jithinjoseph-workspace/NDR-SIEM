@@ -1,10 +1,9 @@
 <clickhouse>
-    <!-- Node 2: shifted ports — can't share 8123/9000 on host network -->
-    <http_port>8124</http_port>
-    <tcp_port>9001</tcp_port>
-    <interserver_http_port>9010</interserver_http_port>
+    <!-- Node 2: standard ports — bridge mode gives each container its own IP -->
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <interserver_http_port>9009</interserver_http_port>
     <listen_host>0.0.0.0</listen_host>
-    <!-- Disable unused ports to avoid conflicts with ch1 on shared host network -->
     <https_port remove="1"/>
     <tcp_port_secure remove="1"/>
     <interserver_https_port remove="1"/>
@@ -16,12 +15,12 @@
         <ndr_cluster>
             <shard>
                 <replica>
-                    <host>127.0.0.1</host>
+                    <host>clickhouse1</host>
                     <port>9000</port>
                 </replica>
                 <replica>
-                    <host>127.0.0.1</host>
-                    <port>9001</port>
+                    <host>clickhouse2</host>
+                    <port>9000</port>
                 </replica>
             </shard>
         </ndr_cluster>
@@ -29,7 +28,7 @@
 
     <zookeeper>
         <node>
-            <host>127.0.0.1</host>
+            <host>clickhouse-keeper</host>
             <port>2181</port>
         </node>
     </zookeeper>

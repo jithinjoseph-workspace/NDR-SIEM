@@ -7,25 +7,31 @@
     </div>
 
     <div class="alerts-actions">
+      <button *ngIf="suppressedCount > 0" (click)="clearDismissed()" class="alerts-action secondary" type="button">
+        Show {{ suppressedCount }} dismissed
+      </button>
       <button (click)="loadAlerts()" class="alerts-action secondary" type="button">
         <lucide-icon [name]="RefreshIcon" class="w-3.5 h-3.5"></lucide-icon>
         Refresh
       </button>
-      <button class="alerts-action primary is-muted" type="button" aria-disabled="true">
-        Acknowledge All
-      </button>
     </div>
   </div>
+
+  <!-- Summary tiles -->
   <section *ngIf="!loading" class="alerts-summary" aria-label="Alert summary">
-    <div class="summary-tile">
+    <div class="summary-tile" [class.active]="filterSeverity === ''" (click)="setFilterSeverity('')">
       <span>Total</span>
       <strong>{{ totalAlerts }}</strong>
     </div>
-    <div class="summary-tile priority">
-      <span>Critical / High</span>
+    <div class="summary-tile priority" [class.active]="filterSeverity === 'CRITICAL'" (click)="setFilterSeverity('CRITICAL')">
+      <span>Critical</span>
+      <strong>{{ criticalAlerts }}</strong>
+    </div>
+    <div class="summary-tile priority" [class.active]="filterSeverity === 'HIGH'" (click)="setFilterSeverity('HIGH')">
+      <span>High</span>
       <strong>{{ priorityAlerts }}</strong>
     </div>
-    <div class="summary-tile medium">
+    <div class="summary-tile medium" [class.active]="filterSeverity === 'MEDIUM'" (click)="setFilterSeverity('MEDIUM')">
       <span>Medium</span>
       <strong>{{ mediumAlerts }}</strong>
     </div>
@@ -35,6 +41,45 @@
     </div>
   </section>
 
+  <!-- ── Filter bar ── -->
+  <section *ngIf="!loading" class="filter-bar" aria-label="Filters">
+    <div class="filter-search-wrap">
+      <input
+        class="filter-search"
+        type="text"
+        placeholder="Search IP or description…"
+        [(ngModel)]="filterSearch"
+        (ngModelChange)="onFilterChange()"
+      />
+    </div>
+
+    <div class="filter-sev-group">
+      <button class="sev-btn" [class.active]="filterSeverity === ''" (click)="setFilterSeverity('')" type="button">ALL</button>
+      <button class="sev-btn critical" [class.active]="filterSeverity === 'CRITICAL'" (click)="setFilterSeverity('CRITICAL')" type="button">CRITICAL</button>
+      <button class="sev-btn high"     [class.active]="filterSeverity === 'HIGH'"     (click)="setFilterSeverity('HIGH')"     type="button">HIGH</button>
+      <button class="sev-btn medium"   [class.active]="filterSeverity === 'MEDIUM'"   (click)="setFilterSeverity('MEDIUM')"   type="button">MEDIUM</button>
+      <button class="sev-btn low"      [class.active]="filterSeverity === 'LOW'"      (click)="setFilterSeverity('LOW')"      type="button">LOW</button>
+    </div>
+
+    <div class="filter-tag-wrap">
+      <select class="filter-tag" [(ngModel)]="filterTag" (ngModelChange)="onFilterChange()">
+        <option value="">All types</option>
+        <option *ngFor="let t of availableTags" [value]="t">{{ tagLabel(t) }}</option>
+      </select>
+    </div>
+
+    <div class="filter-score-wrap">
+      <label class="filter-score-label">Score ≥ {{ filterMinScore }}</label>
+      <input
+        type="range" min="0" max="100" step="5"
+        class="filter-score-range"
+        [(ngModel)]="filterMinScore"
+        (ngModelChange)="onFilterChange()"
+      />
+    </div>
+  </section>
+
+  <!-- Loading -->
   <div *ngIf="loading" class="alerts-state">
     <div class="state-icon pulse-ring">
       <lucide-icon [name]="ShieldAlertIcon" class="w-6 h-6"></lucide-icon>
@@ -42,84 +87,138 @@
     <p>Loading alerts...</p>
   </div>
 
+  <!-- ── Grouped alert panel ── -->
   <section *ngIf="!loading" class="alerts-panel">
     <div class="alerts-table-wrap">
-      <table class="alerts-table">
+
+      <!-- Empty state -->
+      <div *ngIf="groups.length === 0" class="alerts-state empty-state">
+        <div class="state-icon">
+          <lucide-icon [name]="ShieldAlertIcon" class="w-7 h-7"></lucide-icon>
+        </div>
+        <p>No active threats detected in this cycle.</p>
+        <span>New detections will appear here as they arrive.</span>
+      </div>
+
+      <table *ngIf="groups.length > 0" class="alerts-table">
         <thead>
           <tr>
+            <th></th>
             <th>Severity</th>
-            <th>Flow</th>
-            <th>Description</th>
+            <th>Type</th>
+            <th>Source</th>
             <th>Score</th>
-            <th>Timestamp</th>
+            <th>Count</th>
+            <th>Latest</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let alert of alerts" class="alert-row group">
-            <td>
-              <span [class]="'severity-pill ' + getSeverityClass(alert.severity)">
-                {{ alert.severity || 'LOW' }}
-              </span>
-            </td>
-            <td>
-              <div class="flow-cell">
-                <span class="flow-ips">
-                  <span class="flow-endpoint">
-                    {{ alert.src_asset?.hostname || alert.src_ip || '-' }}
-                    <span *ngIf="alert.src_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
-                    <span *ngIf="alert.src_asset?.threat_flagged && !alert.src_asset?.trusted" class="asset-threat-badge" title="AI flagged">!</span>
-                  </span>
-                  <span class="flow-arrow">→</span>
-                  <span class="flow-endpoint">
-                    {{ alert.dst_asset?.hostname || alert.dst_ip || '-' }}
-                    <span *ngIf="alert.dst_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
-                  </span>
+          <ng-container *ngFor="let g of groups">
+            <!-- Group row -->
+            <tr class="group-row" [class]="getSeverityClass(g.severity)" (click)="toggleGroup(g)">
+              <td class="expand-cell">
+                <lucide-icon [name]="g.expanded ? ChevronDownIcon : ChevronRightIcon" class="w-4 h-4 expand-icon"></lucide-icon>
+              </td>
+              <td>
+                <span [class]="'severity-pill ' + getSeverityClass(g.severity)">
+                  {{ g.severity }}
                 </span>
-                <small class="flow-meta">
-                  {{ alert.src_ip }}
-                  <span *ngIf="alert.src_asset?.vendor" class="flow-vendor">· {{ alert.src_asset.vendor }}</span>
-                  <span *ngIf="alert.tags?.includes('trusted-asset')" class="trusted-score-note">· score halved (trusted)</span>
-                </small>
-                <small>
-                  {{ alert.src_country || 'Origin unavailable' }}
-                  <span *ngIf="alert.threat_intel" class="intel-flag">
-                    <lucide-icon [name]="AlertTriangleIcon" class="w-3 h-3"></lucide-icon>
-                    Threat Intel
+              </td>
+              <td>
+                <span class="tag-chip">{{ tagLabel(g.tag) }}</span>
+              </td>
+              <td class="src-cell">
+                <span class="src-ip">{{ g.src_ip || '—' }}</span>
+              </td>
+              <td>
+                <span [class]="'score-pill ' + getScoreClass(g.maxScore)">
+                  {{ g.maxScore?.toFixed(0) || '0' }}
+                </span>
+              </td>
+              <td>
+                <span class="count-badge">×{{ g.count }}</span>
+              </td>
+              <td class="timestamp-cell">{{ g.latest }}</td>
+              <td class="group-actions" (click)="$event.stopPropagation()">
+                <button class="row-action suppress-btn" title="Suppress group for 24h" type="button" (click)="suppressGroup(g)">
+                  <lucide-icon [name]="BellOffIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  Suppress
+                </button>
+              </td>
+            </tr>
+
+            <!-- Expanded child rows -->
+            <ng-container *ngIf="g.expanded">
+              <tr *ngFor="let alert of g.alerts" class="child-row">
+                <td class="expand-cell"></td>
+                <td>
+                  <span [class]="'severity-pill ' + getSeverityClass(alert.severity)">
+                    {{ alert.severity || 'LOW' }}
                   </span>
-                </small>
-              </div>
-            </td>
-            <td>
-              <p class="description-cell">
-                {{ alert.description }}
-              </p>
-            </td>
-            <td>
-              <span [class]="'score-pill ' + getScoreClass(alert.score)">
-                {{ alert.score?.toFixed(0) || '0' }}
-              </span>
-            </td>
-            <td class="timestamp-cell">
-              {{ alert.time }}
-            </td>
-          </tr>
+                </td>
+                <td colspan="2">
+                  <div class="flow-cell">
+                    <span class="flow-ips">
+                      <span class="flow-endpoint">
+                        {{ alert.src_asset?.hostname || alert.src_ip || '-' }}
+                        <span *ngIf="alert.src_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
+                        <span *ngIf="alert.src_asset?.threat_flagged && !alert.src_asset?.trusted" class="asset-threat-badge" title="AI flagged">!</span>
+                      </span>
+                      <span class="flow-arrow">→</span>
+                      <span class="flow-endpoint">
+                        {{ alert.dst_asset?.hostname || alert.dst_ip || '-' }}
+                        <span *ngIf="alert.dst_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
+                      </span>
+                    </span>
+                    <small class="flow-meta">
+                      {{ alert.src_country || 'Origin unavailable' }}
+                      <span *ngIf="alert.threat_intel" class="intel-flag">
+                        <lucide-icon [name]="TriangleAlertIcon" class="w-3 h-3"></lucide-icon>
+                        Threat Intel
+                      </span>
+                    </small>
+                    <small class="description-cell">{{ alert.description }}</small>
+                  </div>
+                </td>
+                <td>
+                  <span [class]="'score-pill ' + getScoreClass(alert.score)">
+                    {{ alert.score?.toFixed(0) || '0' }}
+                  </span>
+                </td>
+                <td></td>
+                <td class="timestamp-cell">{{ alert.time }}</td>
+                <td class="child-actions">
+                  <button class="row-action suppress-btn" title="Suppress 24h" type="button" (click)="suppress(alert)">
+                    <lucide-icon [name]="BellOffIcon" class="w-3 h-3"></lucide-icon>
+                    Suppress
+                  </button>
+                  <button *ngIf="isDnsBeaconing(alert)" class="row-action trust-btn" title="Trust this domain" type="button" (click)="trustDomain(alert)">
+                    <lucide-icon [name]="GlobeIcon" class="w-3 h-3"></lucide-icon>
+                    Trust
+                  </button>
+                  <button *ngIf="alert.community_id" class="icon-action" title="PCAP sessions" type="button" (click)="viewPcap(alert.community_id)">
+                    <lucide-icon [name]="PackageIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  </button>
+                  <button *ngIf="alert.community_id" class="icon-action" title="Download evidence" type="button" (click)="downloadEvidence(alert.community_id)">
+                    <lucide-icon [name]="DownloadIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  </button>
+                </td>
+              </tr>
+            </ng-container>
+          </ng-container>
         </tbody>
       </table>
     </div>
-
-    <div *ngIf="alerts.length === 0" class="alerts-state empty-state">
-      <div class="state-icon">
-        <lucide-icon [name]="ShieldAlertIcon" class="w-7 h-7"></lucide-icon>
-      </div>
-      <p>No active threats detected in this cycle.</p>
-      <span>New detections will appear here as they arrive.</span>
-    </div>
   </section>
 
-  <div *ngIf="alerts.length > 0" class="alerts-footnote">
-    Showing {{ alerts.length }} alerts - updates in real-time via WebSocket
+  <div *ngIf="groups.length > 0" class="alerts-footnote">
+    {{ groups.length }} groups · {{ totalAlerts }} total alerts — real-time via WebSocket
   </div>
 </div>
+
+<!-- Toast -->
+<div *ngIf="toast" class="alert-toast">{{ toast }}</div>
 
 <!-- PCAP Sessions Modal -->
 <div class="pcap-overlay" *ngIf="showPcapModal" (click)="showPcapModal=false">
@@ -165,12 +264,10 @@
               <td>{{ s.packets }}</td>
               <td>
                 <div class="pcap-row-actions">
-                  <button class="icon-action" title="Download PCAP"
-                    type="button" (click)="downloadPcap(s.session_id)">
+                  <button class="icon-action" title="Download PCAP" type="button" (click)="downloadPcap(s.session_id)">
                     <lucide-icon [name]="DownloadIcon" class="w-3.5 h-3.5"></lucide-icon>
                   </button>
-                  <button class="icon-action arkime-btn" title="Open in Arkime"
-                    type="button" (click)="openArkime(s.community_id)">
+                  <button class="icon-action arkime-btn" title="Open in Arkime" type="button" (click)="openArkime(s.community_id)">
                     <lucide-icon [name]="ExternalLinkIcon" class="w-3.5 h-3.5"></lucide-icon>
                   </button>
                 </div>

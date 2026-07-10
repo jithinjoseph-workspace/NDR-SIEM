@@ -84,7 +84,8 @@ pub enum ConditionExpr {
     AnyOfThem,                 // any of them
     AllOfThem,                 // all of them
     AlwaysTrue,                // empty condition — match everything
-    AlwaysFalse,               // unsupported (count/near/temporal) — skip safely
+    AlwaysFalse,               // reserved — never emitted by parser
+    Unsupported(String),       // count/near/within — rule rejected at load time
 }
 
 impl ConditionExpr {
@@ -112,8 +113,9 @@ impl ConditionExpr {
                 selections.values().any(|g| g.matches(event)),
             ConditionExpr::AllOfThem =>
                 !selections.is_empty() && selections.values().all(|g| g.matches(event)),
-            ConditionExpr::AlwaysTrue  => true,
-            ConditionExpr::AlwaysFalse => false,
+            ConditionExpr::AlwaysTrue      => true,
+            ConditionExpr::AlwaysFalse     => false,
+            ConditionExpr::Unsupported(_)  => false,
         }
     }
 }
@@ -172,9 +174,8 @@ fn tokenize_condition(s: &str) -> Vec<String> {
 }
 
 pub fn parse_condition_expr(s: &str) -> ConditionExpr {
-    if s.contains("count(") || s.starts_with("near ") {
-        warn!("SIGMA: aggregation/temporal condition not supported: '{}' — rule skipped (will never match)", s.trim());
-        return ConditionExpr::AlwaysFalse;
+    if s.contains("count(") || s.starts_with("near ") || s.contains("| within") {
+        return ConditionExpr::Unsupported(s.trim().to_string());
     }
     let tokens = tokenize_condition(s);
     if tokens.is_empty() { return ConditionExpr::AlwaysTrue; }
@@ -353,6 +354,15 @@ pub fn parse_rule_content(content: &str) -> anyhow::Result<SigmaRule> {
         .unwrap_or("selection");
 
     let condition_expr = parse_condition_expr(condition_str);
+
+    if let ConditionExpr::Unsupported(ref cond) = condition_expr {
+        let title = doc.get("title").and_then(|v| v.as_str()).unwrap_or("unknown");
+        return Err(anyhow::anyhow!(
+            "[SIGMA SKIP] rule \"{}\" uses unsupported aggregation/temporal condition: '{}' \
+             — rewrite as a ClickHouse multiflow query or remove the rule",
+            title, cond
+        ));
+    }
 
     // Parse each named detection block (skip "condition" key)
     let mut selections: HashMap<String, SelectionGroup> = HashMap::new();
@@ -558,15 +568,21 @@ mod tests {
     }
 
     #[test]
-    fn test_count_unsupported_becomes_always_true() {
+    fn test_count_unsupported_becomes_unsupported() {
         let expr = parse_condition_expr("selection | count() > 10");
-        assert!(matches!(expr, ConditionExpr::AlwaysTrue));
+        assert!(matches!(expr, ConditionExpr::Unsupported(_)));
     }
 
     #[test]
     fn test_near_unsupported() {
         let expr = parse_condition_expr("near selection");
-        assert!(matches!(expr, ConditionExpr::AlwaysTrue));
+        assert!(matches!(expr, ConditionExpr::Unsupported(_)));
+    }
+
+    #[test]
+    fn test_within_unsupported() {
+        let expr = parse_condition_expr("selection | within 5m");
+        assert!(matches!(expr, ConditionExpr::Unsupported(_)));
     }
 
     #[test]
@@ -682,7 +698,7 @@ detection:
     }
 
     #[test]
-    fn test_parse_count_rule_does_not_error() {
+    fn test_parse_count_rule_is_rejected() {
         let yaml = r#"
 title: Count Rule
 id: test-005
@@ -694,8 +710,8 @@ detection:
     event_type: alert
   condition: selection | count() > 10
 "#;
-        let rule = parse_rule_content(yaml).expect("count condition should not cause parse error");
-        assert!(matches!(rule.condition_expr, ConditionExpr::AlwaysTrue));
+        let err = parse_rule_content(yaml).expect_err("count condition must be rejected");
+        assert!(err.to_string().contains("SIGMA SKIP"), "error should mention SIGMA SKIP: {}", err);
     }
 
     #[test]

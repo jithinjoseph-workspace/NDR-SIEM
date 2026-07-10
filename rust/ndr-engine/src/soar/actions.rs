@@ -4,6 +4,7 @@ use crate::scoring::RiskResult;
 use crate::enrichment::EnrichmentData;
 use crate::soar::{SoarNativePlaybook, SoarPlaybookRun};
 use serde_json::{json, Value};
+use std::net::IpAddr;
 use std::time::Duration;
 use tracing::info;
 use uuid::Uuid;
@@ -11,6 +12,17 @@ use chrono::Utc;
 use lettre::{Message, SmtpTransport, Transport};
 use lettre::transport::smtp::authentication::Credentials;
 use reqwest::Client;
+
+fn is_routable(ip: &str) -> bool {
+    match ip.parse::<IpAddr>() {
+        Ok(addr) => !addr.is_loopback() && match addr {
+            IpAddr::V4(v4) => !v4.is_private() && !v4.is_link_local() &&
+                              !v4.is_broadcast() && !v4.is_multicast() && !v4.is_unspecified(),
+            IpAddr::V6(v6) => !v6.is_loopback() && !v6.is_multicast() && !v6.is_unspecified(),
+        },
+        Err(_) => false,
+    }
+}
 
 #[allow(unused_assignments)]
 pub async fn execute_action(
@@ -287,6 +299,110 @@ pub async fn execute_action(
                 Err(e) => {
                     detail = format!("Evidence collected but case insert failed: {}", e);
                 }
+            }
+        }
+
+        "block_ip" => {
+            let duration_hours = config["duration_hours"].as_u64().unwrap_or(24);
+            let agent_url = std::env::var("NDR_AGENT_URL")
+                .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
+
+            let (src_ip, src_port, dst_ip, dst_port) = match hit.source.as_str() {
+                "agent-s" => (
+                    hit.agent_s.source_ip.as_deref().unwrap_or("-"),
+                    hit.agent_s.source_port.unwrap_or(0),
+                    hit.agent_s.dest_ip.as_deref().unwrap_or("-"),
+                    hit.agent_s.dest_port.unwrap_or(0),
+                ),
+                _ => (
+                    hit.agent_z.source_ip.as_deref()
+                        .or(hit.agent_s.source_ip.as_deref()).unwrap_or("-"),
+                    hit.agent_z.source_port.or(hit.agent_s.source_port).unwrap_or(0),
+                    hit.agent_z.dest_ip.as_deref()
+                        .or(hit.agent_s.dest_ip.as_deref()).unwrap_or("-"),
+                    hit.agent_z.dest_port.or(hit.agent_s.dest_port).unwrap_or(0),
+                ),
+            };
+
+            if !is_routable(src_ip) {
+                detail = format!("block_ip skipped — {} is private/internal", src_ip);
+            } else {
+                // 1. RST injection via host agent
+                let rst_body = json!({
+                    "src_ip": src_ip, "src_port": src_port,
+                    "dst_ip": dst_ip, "dst_port": dst_port,
+                    "community_id": hit.community_id, "duration_hours": duration_hours,
+                });
+                let (rst_ok, expires_at) = match Client::new()
+                    .post(format!("{}/agent/block", agent_url))
+                    .json(&rst_body).timeout(Duration::from_secs(10)).send().await
+                {
+                    Ok(r) if r.status().is_success() => {
+                        let resp = r.json::<Value>().await.unwrap_or_default();
+                        (
+                            resp["rst_injected"].as_bool().unwrap_or(false),
+                            resp["expires_at"].as_str().unwrap_or("").to_string(),
+                        )
+                    }
+                    _ => (false, Utc::now().to_rfc3339()),
+                };
+
+                // 2. Optional firewall API push — look up configured firewall integration
+                let (fw_type, fw_rule_id) = {
+                    let integrations = state.ch_storage
+                        .get_integrations_by_tenant(&pb.tenant_id).await.unwrap_or_default();
+                    let fw_integration = integrations.iter().find(|i| {
+                        matches!(i["type"].as_str(), Some("pfsense"|"fortinet"|"panos"|"opnsense"|"rest"))
+                        && i["enabled"] == json!(true)
+                    });
+                    if let Some(fw) = fw_integration {
+                        let fw_type = fw["type"].as_str().unwrap_or("none").to_string();
+                        let fw_cfg  = &fw["config"];
+                        let host    = fw_cfg["host"].as_str().unwrap_or("");
+                        let api_key = fw_cfg["api_key"].as_str().unwrap_or("");
+                        let result  = crate::soar::firewall::push_block(
+                            &fw_type, fw_cfg, src_ip, duration_hours).await;
+                        info!("FIREWALL [{}@{}] block {}: {} — {}",
+                              fw_type, host, src_ip, result.success, result.message);
+                        (fw_type, result.rule_id)
+                    } else {
+                        ("none".to_string(), String::new())
+                    }
+                };
+
+                // 3. Persist to ndr.active_blocks
+                let block_id = Uuid::new_v4().to_string();
+                let expires_stored = if expires_at.contains('T') {
+                    expires_at.replace('T', " ").trim_end_matches('Z').to_string()
+                } else {
+                    Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+                };
+                let block = crate::soar::ActiveBlock {
+                    id: block_id.clone(),
+                    src_ip: src_ip.to_string(), src_port,
+                    dst_ip: dst_ip.to_string(), dst_port,
+                    community_id: hit.community_id.clone(),
+                    triggered_by: pb.name.clone(),
+                    sensor_id: String::new(),
+                    firewall_type: fw_type.clone(),
+                    firewall_rule_id: fw_rule_id.clone(),
+                    rst_injected: if rst_ok { 1 } else { 0 },
+                    duration_hours: duration_hours as u16,
+                    expires_at: expires_stored,
+                    status: "active".to_string(),
+                    reason: format!("Playbook: {}", pb.name),
+                    tenant_id: pb.tenant_id.clone(),
+                    created_at: Utc::now().to_rfc3339(),
+                };
+                let _ = state.ch_storage.insert_active_block(&block).await;
+
+                status = "success".to_string();
+                detail = format!(
+                    "Block #{} | RST: {} | Firewall: {} | rule: {} | expires: {}",
+                    &block_id[..8], rst_ok, fw_type,
+                    if fw_rule_id.is_empty() { "none" } else { &fw_rule_id },
+                    expires_at
+                );
             }
         }
 

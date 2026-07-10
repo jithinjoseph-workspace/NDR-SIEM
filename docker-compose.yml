@@ -120,10 +120,13 @@ services:
     container_name: ndr-engine-1
     stop_grace_period: 5s
     privileged: true
+    networks:
+      - default
+      - ndr-internal
     environment:
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
-      - NDR_AGENT_URL=http://${HOST_IP}:3001
-      - CLICKHOUSE_URL=http://${HOST_IP}:8123
+      - NDR_AGENT_URL=http://host.docker.internal:3001
+      - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=1
@@ -140,6 +143,8 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -171,10 +176,13 @@ services:
     container_name: ndr-engine-2
     stop_grace_period: 5s
     privileged: true
+    networks:
+      - default
+      - ndr-internal
     environment:
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
-      - NDR_AGENT_URL=http://${HOST_IP}:3001
-      - CLICKHOUSE_URL=http://${HOST_IP}:8123
+      - NDR_AGENT_URL=http://host.docker.internal:3001
+      - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=2
@@ -191,6 +199,8 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -222,10 +232,13 @@ services:
     container_name: ndr-engine-3
     stop_grace_period: 5s
     privileged: true
+    networks:
+      - default
+      - ndr-internal
     environment:
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
-      - NDR_AGENT_URL=http://${HOST_IP}:3001
-      - CLICKHOUSE_URL=http://${HOST_IP}:8123
+      - NDR_AGENT_URL=http://host.docker.internal:3001
+      - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
       - INSTANCE_ID=3
@@ -242,6 +255,8 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     volumes:
       - ${INSTALL_DIR}/scripts:/scripts
@@ -311,7 +326,8 @@ services:
   clickhouse-keeper:
     image: clickhouse/clickhouse-keeper:24.8
     container_name: clickhouse-keeper
-    network_mode: host
+    networks:
+      - ndr-internal
     volumes:
       - keeper-data:/var/lib/clickhouse
       - keeper-logs:/var/log/clickhouse-keeper
@@ -328,7 +344,10 @@ services:
   clickhouse1:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse1
-    network_mode: host
+    networks:
+      - ndr-internal
+    ports:
+      - "127.0.0.1:8123:8123"   # localhost-only — host agent (ndr-agent.py) access
     ulimits:
       nofile:
         soft: 262144
@@ -350,11 +369,12 @@ services:
       retries: 10
       start_period: 30s
 
-  # ── ClickHouse Node 2 — HTTP 8124, TCP 9001 ───────────────────────────────
+  # ── ClickHouse Node 2 — HTTP 8123, TCP 9000 (standard ports in bridge mode) ──
   clickhouse2:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse2
-    network_mode: host
+    networks:
+      - ndr-internal
     ulimits:
       nofile:
         soft: 262144
@@ -370,7 +390,7 @@ services:
       clickhouse-keeper:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8124/ping"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -381,7 +401,8 @@ services:
   clickhouse-init:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse-init
-    network_mode: host
+    networks:
+      - ndr-internal
     volumes:
       - ${INSTALL_DIR}/config/clickhouse/init.sql:/init.sql:ro
     depends_on:
@@ -389,7 +410,7 @@ services:
         condition: service_healthy
       clickhouse2:
         condition: service_healthy
-    entrypoint: ["bash", "-c", "clickhouse-client --host 127.0.0.1 --port 9000 --user ndr --password ndr123 --multiquery < /init.sql && echo '[NDR] ClickHouse schema ready'"]
+    entrypoint: ["bash", "-c", "clickhouse-client --host clickhouse1 --port 9000 --user ndr --password ndr123 --multiquery < /init.sql && echo '[NDR] ClickHouse schema ready'"]
     restart: on-failure
 
 volumes:
@@ -404,3 +425,7 @@ volumes:
   clickhouse2-logs:
   keeper-data:
   keeper-logs:
+
+networks:
+  ndr-internal:
+    driver: bridge

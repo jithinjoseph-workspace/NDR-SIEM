@@ -1,7 +1,36 @@
 #!/usr/bin/env python3
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json, subprocess, os, re, time, threading, ipaddress
+import json, subprocess, os, re, time, threading, ipaddress, socket
 from pathlib import Path
+
+
+def _docker_bridge_ip() -> str:
+    """Return the host IP on the Docker bridge so we bind only there.
+    Tries docker0 first, then any br- interface, falls back to 0.0.0.0."""
+    for iface in ("docker0",):
+        try:
+            out = subprocess.run(
+                ["ip", "-4", "addr", "show", iface],
+                capture_output=True, text=True
+            ).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("inet "):
+                    return line.split()[1].split("/")[0]
+        except Exception:
+            pass
+    # Fallback: scan for any br-* interface Docker created
+    try:
+        out = subprocess.run(["ip", "-4", "addr"], capture_output=True, text=True).stdout
+        iface = None
+        for line in out.splitlines():
+            if line and not line[0].isspace():
+                iface = line.split(":")[1].strip() if ":" in line else None
+            elif iface and iface.startswith("br-") and "inet " in line:
+                return line.strip().split()[1].split("/")[0]
+    except Exception:
+        pass
+    return "0.0.0.0"  # last resort — binds all interfaces
 
 HOME_DIR = os.path.expanduser("~")
 LOGDIR = os.path.join(HOME_DIR, "logs")
@@ -455,6 +484,25 @@ class AgentHandler(BaseHTTPRequestHandler):
             IFACE_FILE.write_text(iface)
             self.send_json({"status": "ok", "interface": iface})
 
+        elif self.path == "/agent/block":
+            body         = self.get_body()
+            src_ip       = body.get("src_ip", "").strip()
+            src_port     = int(body.get("src_port", 0))
+            dst_ip       = body.get("dst_ip", "").strip()
+            dst_port     = int(body.get("dst_port", 0))
+            community_id = body.get("community_id", "")
+            duration_h   = int(body.get("duration_hours", 24))
+            result = block_ip(src_ip, src_port, dst_ip, dst_port, community_id, duration_h)
+            code = 200 if result.get("status") == "blocked" else 400
+            self.send_json(result, code)
+
+        elif self.path == "/agent/unblock":
+            body   = self.get_body()
+            ip     = body.get("ip", "").strip()
+            result = unblock_ip(ip)
+            code   = 200 if result.get("status") == "unblocked" else 400
+            self.send_json(result, code)
+
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -554,6 +602,128 @@ def apply_suppress_sid(cmd: str) -> bool:
     return True
 
 
+# ── Active block registry (in-memory, survives until process restart) ─────
+_active_blocks: dict = {}   # ip -> threading.Timer
+_blocks_lock = threading.Lock()
+
+
+def _is_routable(ip: str) -> bool:
+    """Return True only for public routable IPs — refuse to block internal/link-local."""
+    try:
+        addr = ipaddress.ip_address(ip)
+        return not (addr.is_private or addr.is_loopback or
+                    addr.is_link_local or addr.is_multicast or
+                    addr.is_reserved or addr.is_unspecified)
+    except ValueError:
+        return False
+
+
+def _rst_inject(src_ip: str, src_port: int, dst_ip: str, dst_port: int) -> bool:
+    """
+    TCP RST window-flood injection.
+
+    Sends 512 RST packets in each direction (1024 total) with sequence numbers
+    evenly spaced across the full 32-bit sequence space (step = 2^32 / 512 = 8 MB).
+    At least one will fall inside the receiver's TCP window regardless of window
+    scaling, guaranteeing session teardown on both sides.
+
+    Requires scapy and CAP_NET_RAW (already held by the agent for packet capture).
+    """
+    try:
+        from scapy.all import IP, TCP, send, conf
+        conf.verb = 0
+
+        STEPS   = 512
+        SEQ_MAX = 2 ** 32
+        step    = SEQ_MAX // STEPS
+
+        pkts = []
+        for i in range(STEPS):
+            seq = i * step
+            # Attacker → Victim RST
+            pkts.append(
+                IP(src=src_ip, dst=dst_ip) /
+                TCP(sport=src_port, dport=dst_port, flags="R", seq=seq, window=0)
+            )
+            # Victim → Attacker RST (terminates both halves)
+            pkts.append(
+                IP(src=dst_ip, dst=src_ip) /
+                TCP(sport=dst_port, dport=src_port, flags="R", seq=seq, window=0)
+            )
+
+        send(pkts, verbose=False, inter=0)
+        print(f"[NDR-BLOCK] RST flood: {src_ip}:{src_port} <-> {dst_ip}:{dst_port} "
+              f"({len(pkts)} packets, {STEPS} seq values)")
+        return True
+
+    except ImportError:
+        print("[NDR-BLOCK] scapy not installed — RST injection skipped (pip install scapy)")
+        return False
+    except Exception as e:
+        print(f"[NDR-BLOCK] RST injection error: {e}")
+        return False
+
+
+def block_ip(src_ip: str, src_port: int, dst_ip: str, dst_port: int,
+             community_id: str, duration_hours: int) -> dict:
+    import datetime
+
+    if not src_ip:
+        return {"status": "error", "message": "src_ip required"}
+
+    if not _is_routable(src_ip):
+        return {
+            "status": "error",
+            "message": f"{src_ip} is private/internal — blocking refused to prevent self-lockout",
+        }
+
+    # 1. RST injection — kills the active session immediately
+    rst_ok = _rst_inject(src_ip, src_port, dst_ip, dst_port)
+
+    # 2. Register expiry timer for cleanup log entry
+    expires_ts = time.time() + duration_hours * 3600
+
+    def _expire():
+        with _blocks_lock:
+            _active_blocks.pop(src_ip, None)
+        print(f"[NDR-BLOCK] Block expired: {src_ip}")
+
+    with _blocks_lock:
+        existing = _active_blocks.pop(src_ip, None)
+        if existing:
+            existing.cancel()
+        timer = threading.Timer(duration_hours * 3600, _expire)
+        timer.daemon = True
+        timer.start()
+        _active_blocks[src_ip] = timer
+
+    expires_iso = datetime.datetime.utcfromtimestamp(expires_ts).isoformat() + "Z"
+    print(f"[NDR-BLOCK] Registered: {src_ip} blocked until {expires_iso}")
+
+    return {
+        "status":         "blocked",
+        "src_ip":         src_ip,
+        "dst_ip":         dst_ip,
+        "community_id":   community_id,
+        "rst_injected":   rst_ok,
+        "duration_hours": duration_hours,
+        "expires_at":     expires_iso,
+    }
+
+
+def unblock_ip(ip: str) -> dict:
+    if not ip:
+        return {"status": "error", "message": "ip required"}
+
+    with _blocks_lock:
+        timer = _active_blocks.pop(ip, None)
+        if timer:
+            timer.cancel()
+
+    print(f"[NDR-BLOCK] Unblocked: {ip}")
+    return {"status": "unblocked", "ip": ip}
+
+
 def suppression_sync_loop():
     """Poll ClickHouse directly every 5 min for pending suppress_sid commands.
     ClickHouse uses network_mode: host so localhost:8123 is always reachable.
@@ -597,6 +767,7 @@ def suppression_sync_loop():
 
 if __name__ == "__main__":
     threading.Thread(target=suppression_sync_loop, daemon=True).start()
-    server = HTTPServer(("0.0.0.0", 3001), AgentHandler)
-    print("🚀 NDR Host Agent listening on port 3001")
+    bind_host = _docker_bridge_ip()
+    server = HTTPServer((bind_host, 3001), AgentHandler)
+    print(f"NDR Host Agent listening on {bind_host}:3001")
     server.serve_forever()

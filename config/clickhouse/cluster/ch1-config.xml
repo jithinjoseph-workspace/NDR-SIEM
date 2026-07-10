@@ -16,12 +16,12 @@
         <ndr_cluster>
             <shard>
                 <replica>
-                    <host>127.0.0.1</host>
+                    <host>clickhouse1</host>
                     <port>9000</port>
                 </replica>
                 <replica>
-                    <host>127.0.0.1</host>
-                    <port>9001</port>
+                    <host>clickhouse2</host>
+                    <port>9000</port>
                 </replica>
             </shard>
         </ndr_cluster>
@@ -30,7 +30,7 @@
     <!-- ClickHouse Keeper for ReplicatedMergeTree coordination -->
     <zookeeper>
         <node>
-            <host>127.0.0.1</host>
+            <host>clickhouse-keeper</host>
             <port>2181</port>
         </node>
     </zookeeper>

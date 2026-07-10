@@ -240,6 +240,7 @@ fn support_message_to_json(row: SupportMessageRow) -> serde_json::Value {
     })
 }
 
+#[derive(Clone)]
 pub struct ClickhouseStorage {
     pub(crate) client: Client,
 }
@@ -5480,6 +5481,81 @@ pub async fn get_ioc_hits(
         }
     }
 
+    // ── Active Blocks ─────────────────────────────────────────────────────────
+
+    pub async fn insert_active_block(&self, b: &crate::soar::ActiveBlock) -> anyhow::Result<()> {
+        let q = format!(
+            "INSERT INTO ndr.active_blocks \
+             (id, src_ip, src_port, dst_ip, dst_port, community_id, triggered_by, \
+              sensor_id, firewall_type, firewall_rule_id, rst_injected, duration_hours, \
+              expires_at, status, reason, tenant_id) \
+             VALUES ('{}','{}',{},'{}'  ,{} ,'{}','{}','{}','{}','{}',{},{},\
+                     toDateTime('{}'),'{}','{}','{}')",
+            sql_escape(&b.id), sql_escape(&b.src_ip), b.src_port,
+            sql_escape(&b.dst_ip), b.dst_port,
+            sql_escape(&b.community_id), sql_escape(&b.triggered_by),
+            sql_escape(&b.sensor_id), sql_escape(&b.firewall_type),
+            sql_escape(&b.firewall_rule_id), b.rst_injected, b.duration_hours,
+            sql_escape(&b.expires_at), sql_escape(&b.status),
+            sql_escape(&b.reason), sql_escape(&b.tenant_id),
+        );
+        self.client.query(&q).execute().await?;
+        Ok(())
+    }
+
+    pub async fn list_active_blocks(&self, tenant_id: &str) -> anyhow::Result<Vec<crate::soar::ActiveBlock>> {
+        let where_clause = if tenant_id == "superadmin" {
+            "1=1".to_string()
+        } else {
+            format!("tenant_id = '{}'", sql_escape(tenant_id))
+        };
+        let q = format!(
+            "SELECT id, src_ip, src_port, dst_ip, dst_port, community_id, triggered_by, \
+             sensor_id, firewall_type, firewall_rule_id, rst_injected, duration_hours, \
+             toString(expires_at) AS expires_at, status, reason, tenant_id, \
+             toString(created_at) AS created_at \
+             FROM ndr.active_blocks FINAL \
+             WHERE {} ORDER BY created_at DESC LIMIT 200",
+            where_clause
+        );
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            id: String, src_ip: String, src_port: u16, dst_ip: String, dst_port: u16,
+            community_id: String, triggered_by: String, sensor_id: String,
+            firewall_type: String, firewall_rule_id: String, rst_injected: u8,
+            duration_hours: u16, expires_at: String, status: String, reason: String,
+            tenant_id: String, created_at: String,
+        }
+        let rows = self.client.query(&q).fetch_all::<Row>().await?;
+        Ok(rows.into_iter().map(|r| crate::soar::ActiveBlock {
+            id: r.id, src_ip: r.src_ip, src_port: r.src_port,
+            dst_ip: r.dst_ip, dst_port: r.dst_port,
+            community_id: r.community_id, triggered_by: r.triggered_by,
+            sensor_id: r.sensor_id, firewall_type: r.firewall_type,
+            firewall_rule_id: r.firewall_rule_id, rst_injected: r.rst_injected,
+            duration_hours: r.duration_hours, expires_at: r.expires_at,
+            status: r.status, reason: r.reason,
+            tenant_id: r.tenant_id, created_at: r.created_at,
+        }).collect())
+    }
+
+    pub async fn revoke_active_block(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<crate::soar::ActiveBlock>> {
+        // Fetch the block first (need firewall_rule_id, firewall_type, src_ip for cleanup)
+        let blocks = self.list_active_blocks(tenant_id).await?;
+        let block  = blocks.into_iter().find(|b| b.id == id).map(|b| b.clone());
+
+        let where_clause = if tenant_id == "superadmin" {
+            format!("id = '{}'", sql_escape(id))
+        } else {
+            format!("id = '{}' AND tenant_id = '{}'", sql_escape(id), sql_escape(tenant_id))
+        };
+        let q = format!(
+            "ALTER TABLE ndr.active_blocks UPDATE status = 'revoked' WHERE {}",
+            where_clause
+        );
+        self.client.query(&q).execute().await?;
+        Ok(block)
+    }
 }
 
 fn is_ip_in_cidr(ip: &str, cidr: &str) -> bool {

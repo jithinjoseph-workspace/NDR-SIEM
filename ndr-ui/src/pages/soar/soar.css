@@ -72,3 +72,6 @@
 .case-card-medium   { border-left: 3px solid rgb(234 179 8);   }
 .case-card-low      { border-left: 3px solid rgb(96 165 250);  }
 .case-card-default  { border-left: 3px solid rgb(71 85 105);   }
+
+/* ── Active Blocks tab ───────────────────────────────────────────────────── */
+.blocks-table td { font-variant-numeric: tabular-nums; }
