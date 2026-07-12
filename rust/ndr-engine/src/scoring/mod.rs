@@ -134,16 +134,16 @@ impl RiskScorer {
                     reasons.push(format!("Agent-S internal diagnostic: {}", alert.signature));
                 }
             } else {
-                score += 60.0;
-                reasons.push("Suricata IDS alert fired".into());
                 tags.push("ids-alert".into());
 
                 if let Some(alert) = &suricata.alert {
                     // Suricata severity: 1=high, 2=medium, 3=low
+                    // Sev-3 gets 20pts — needs a second signal (sensitive country, threat intel,
+                    // sigma) to reach hit threshold; prevents sev-3-only CDN noise from flooding
                     match alert.severity {
-                        1 => { score += 30.0; tags.push("alert-sev-high".into()); }
-                        2 => { score += 15.0; tags.push("alert-sev-medium".into()); }
-                        _ => {               tags.push("alert-sev-low".into()); }
+                        1 => { score += 90.0; reasons.push("Agent-S HIGH severity alert".into()); tags.push("alert-sev-high".into()); }
+                        2 => { score += 75.0; reasons.push("Agent-S MEDIUM severity alert".into()); tags.push("alert-sev-medium".into()); }
+                        _ => { score += 20.0; tags.push("alert-sev-low".into()); }
                     }
                     if !alert.signature.is_empty() {
                         reasons.push(format!("Rule: {}", alert.signature));

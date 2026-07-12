@@ -1184,6 +1184,8 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.ndr_hits MODIFY SETTING deduplicate_merge_projection_mode = 'rebuild'",
                 "ALTER TABLE ndr.ndr_hits ADD INDEX IF NOT EXISTS idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1",
                 "ALTER TABLE ndr.ndr_hits ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))",
+                "ALTER TABLE ndr.ai_suppressions ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime) DEFAULT NULL",
+                "ALTER TABLE ndr.ai_suppressions ADD COLUMN IF NOT EXISTS suppress_scope String DEFAULT 'individual'",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -1319,6 +1321,14 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     pub async fn insert_hit_for_tenant(&self, hit: NdrHit, tenant_id: &str) -> anyhow::Result<()> {
+        // Gate 1: drop suppressed hits before they reach the DB.
+        // CRITICAL hits (score ≥ 90) bypass suppression — a real threat is never hidden.
+        if hit.score < 90.0 {
+            let primary = hit.tags.first().map(String::as_str).unwrap_or("");
+            if self.is_group_suppressed(tenant_id, &hit.src_ip, primary).await {
+                return Ok(());
+            }
+        }
         let db_name = tenant_db(tenant_id);
         let table_name = format!("{}.ndr_hits", db_name);
         let mut insert = self.client.insert(&table_name)?;
@@ -2476,6 +2486,31 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             let list = sensor_ids.iter().map(|s| format!("'{}'", sql_escape(s))).collect::<Vec<_>>().join(",");
             format!("AND sensor_id IN ({})", list)
         };
+        // Pre-fetch active group suppressions (src_ip + tag) to build ARM 2 filter.
+        // ClickHouse does not support correlated subqueries, so we resolve them in Rust
+        // and inject as SQL literals into the main query.
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct GroupSup { suppress_ip: String, signature_name: String }
+        let group_sups: Vec<GroupSup> = self.client.query(&format!(
+            "SELECT suppress_ip, signature_name \
+             FROM ndr.ai_suppressions FINAL \
+             WHERE active = 1 AND community_id = '' AND suppress_ip != '' \
+               AND (expires_at IS NULL OR expires_at > now()) \
+               AND (tenant_id = '{tid}' OR tenant_id = '')",
+            tid = sql_escape(tenant_id)
+        )).fetch_all::<GroupSup>().await.unwrap_or_default();
+
+        let group_filter = if group_sups.is_empty() {
+            String::new()
+        } else {
+            let conds: Vec<String> = group_sups.iter().map(|s| format!(
+                "(src_ip = '{}' AND hasAny(tags, ['{}']))",
+                sql_escape(&s.suppress_ip),
+                sql_escape(&s.signature_name)
+            )).collect();
+            format!("AND NOT ({})", conds.join(" OR "))
+        };
+
         let rows = self.client.query(&format!(
             "SELECT \
                 toUInt32(timestamp) AS timestamp, \
@@ -2483,16 +2518,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 tags, sigma_hits, threat_intel, src_country, dst_country, \
                 correlation_status, agent_s_rule_id, toUInt32(corroborated_at) AS corroborated_at, \
                 sensor_id \
-             FROM {}.ndr_hits FINAL \
-             WHERE 1=1 {} \
+             FROM {db}.ndr_hits FINAL \
+             WHERE 1=1 {sf} \
                AND community_id NOT IN ( \
                  SELECT community_id FROM ndr.ai_suppressions FINAL \
                  WHERE active = 1 AND community_id != '' \
+                   AND (expires_at IS NULL OR expires_at > now()) \
                    AND (tenant_id = '{tid}' OR tenant_id = '') \
                ) \
+               {gf} \
              ORDER BY length(sigma_hits) DESC, score DESC, timestamp DESC LIMIT {lim}",
-            db_name, sensor_filter,
+            db  = db_name,
+            sf  = sensor_filter,
             tid = sql_escape(tenant_id),
+            gf  = group_filter,
             lim = limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
@@ -3560,7 +3599,7 @@ pub async fn clear_sensor_command(
         tenant_id:      &str,
         sig_id:         u64,
         sig_name:       &str,
-        suppress_type:  &str,   // "by_dst" | "by_src" | "by_sid"
+        suppress_type:  &str,        // "by_dst" | "by_src" | "by_sid"
         suppress_ip:    &str,
         src_ip:         &str,
         dst_ip:         &str,
@@ -3568,28 +3607,60 @@ pub async fn clear_sensor_command(
         ai_reason:      &str,
         ai_confidence:  u8,
         sensor_id:      &str,
+        expires_at:     Option<u32>, // Unix timestamp; None = no explicit expiry (table TTL applies)
+        suppress_scope: &str,        // "individual" | "group"
     ) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
+        let expires_expr = match expires_at {
+            Some(ts) => format!("toDateTime({})", ts),
+            None     => "NULL".to_string(),
+        };
         self.client.query(&format!(
-            "INSERT INTO {}.ai_suppressions \
+            "INSERT INTO {db}.ai_suppressions \
              (id, tenant_id, signature_id, signature_name, suppress_type, suppress_ip, \
-              src_ip, dst_ip, community_id, ai_reason, ai_confidence, sensor_id, active) \
-             VALUES ('{}','{}',{},  '{}','{}','{}','{}','{}','{}','{}',{}, '{}', 1)",
-            db,
-            uuid::Uuid::new_v4(),
-            sql_escape(tenant_id),
-            sig_id,
-            sql_escape(sig_name),
-            sql_escape(suppress_type),
-            sql_escape(suppress_ip),
-            sql_escape(src_ip),
-            sql_escape(dst_ip),
-            sql_escape(community_id),
-            sql_escape(ai_reason),
-            ai_confidence,
-            sql_escape(sensor_id),
+              src_ip, dst_ip, community_id, ai_reason, ai_confidence, sensor_id, active, \
+              expires_at, suppress_scope) \
+             VALUES ('{id}','{tid}',{sig_id},'{sig_name}','{stype}','{sip}',\
+                     '{src}','{dst}','{cid}','{reason}',{conf},'{sensor}',1,\
+                     {exp},'{scope}')",
+            db       = db,
+            id       = uuid::Uuid::new_v4(),
+            tid      = sql_escape(tenant_id),
+            sig_id   = sig_id,
+            sig_name = sql_escape(sig_name),
+            stype    = sql_escape(suppress_type),
+            sip      = sql_escape(suppress_ip),
+            src      = sql_escape(src_ip),
+            dst      = sql_escape(dst_ip),
+            cid      = sql_escape(community_id),
+            reason   = sql_escape(ai_reason),
+            conf     = ai_confidence,
+            sensor   = sql_escape(sensor_id),
+            exp      = expires_expr,
+            scope    = sql_escape(suppress_scope),
         )).execute().await?;
         Ok(())
+    }
+
+    /// Returns true if src_ip has an active group suppression matching primary_tag.
+    /// Used by Gate 1 in insert_hit_for_tenant to drop suppressed hits before DB write.
+    pub async fn is_group_suppressed(&self, tenant_id: &str, src_ip: &str, primary_tag: &str) -> bool {
+        if src_ip.is_empty() || primary_tag.is_empty() { return false; }
+        let db = tenant_db(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Cnt { cnt: u64 }
+        self.client.query(&format!(
+            "SELECT count() as cnt FROM {db}.ai_suppressions FINAL \
+             WHERE active = 1 AND community_id = '' AND suppress_ip != '' \
+               AND suppress_ip = '{ip}' AND signature_name = '{tag}' \
+               AND (expires_at IS NULL OR expires_at > now()) \
+               AND (tenant_id = '{tid}' OR tenant_id = '')",
+            db  = db,
+            ip  = sql_escape(src_ip),
+            tag = sql_escape(primary_tag),
+            tid = sql_escape(tenant_id),
+        )).fetch_all::<Cnt>().await.unwrap_or_default()
+          .first().map(|x| x.cnt > 0).unwrap_or(false)
     }
 
     pub async fn deactivate_ai_suppression(&self, tenant_id: &str, id: &str) -> anyhow::Result<()> {

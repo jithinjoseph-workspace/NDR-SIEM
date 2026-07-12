@@ -95,7 +95,7 @@ static JIRA_DEDUP: std::sync::LazyLock<Mutex<HashMap<String, i64>>> =
 
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
-        .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string())
+        .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string())
 }
 
 
@@ -431,6 +431,9 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
     let src = event.source_ip.as_deref().unwrap_or("-");
     let dst = event.dest_ip.as_deref().unwrap_or("-");
 
+    // Skip events with no IP tuple — no value in live stream
+    if src == "-" && dst == "-" { return; }
+
     let mut msg = match event.event_source {
         crate::normalizer::EventSource::Zeek => {
             let cs       = event.conn_state.as_deref().unwrap_or("-");
@@ -438,6 +441,9 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
             let svc      = event.network_protocol.as_deref().unwrap_or("-");
             let proto    = event.proto.as_deref().unwrap_or("-");
             let ts       = event.raw.get("ts").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            // Skip unclassified conn.log entries with no service and no conn_state —
+            // a richer dns/ssl/http log for the same UID already covers this flow
+            if svc == "-" && cs == "-" { return; }
             trace!("zeek {} | {}→{} [{}] {} cid={}",
                 svc, src, dst, proto, cs,
                 event.community_id.as_deref().unwrap_or("?"));
@@ -469,6 +475,7 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
                 "event_type": et,
                 "cid":  event.community_id,
                 "src":  src, "dst": dst,
+                "proto": event.proto,
                 "raw": event.raw,
             })
         }
@@ -1191,6 +1198,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                             suppress_type, &suppress_ip,
                             &src_ip, &dst_ip, &cid,
                             &reason, confidence, "",
+                            None,           // AI suppressions use 90-day table TTL
+                            "individual",   // AI always suppresses by SID/dst/src, not group
                         ).await;
 
                         // Queue suppress command to sensor
@@ -1696,7 +1705,7 @@ pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMa
 
 pub async fn get_interfaces() -> Json<Value> {
     let url = format!("{}/agent/interfaces", agent_url());
-    match reqwest::get(&url).await {
+    match add_agent_auth(reqwest::Client::new().get(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!([]));
             Json(data)
@@ -1704,14 +1713,10 @@ pub async fn get_interfaces() -> Json<Value> {
         Err(_) => Json(json!([])),
     }
 }
- 
 
-
-
-//get interface
 pub async fn get_interface() -> Json<Value> {
     let url = format!("{}/agent/status", agent_url());
-    match reqwest::get(&url).await {
+    match add_agent_auth(reqwest::Client::new().get(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!({ "interface": "eth0" }));
             Json(json!({ "interface": data.get("interface").and_then(|v| v.as_str()).unwrap_or("eth0") }))
@@ -1722,7 +1727,7 @@ pub async fn get_interface() -> Json<Value> {
 
 pub async fn set_interface(Json(payload): Json<Value>) -> StatusCode {
     let url = format!("{}/agent/interface", agent_url());
-    match reqwest::Client::new().post(&url).json(&payload).send().await {
+    match add_agent_auth(reqwest::Client::new().post(&url).json(&payload)).send().await {
         Ok(_) => StatusCode::OK,
         Err(_) => StatusCode::BAD_GATEWAY,
     }
@@ -1732,7 +1737,7 @@ pub async fn set_interface(Json(payload): Json<Value>) -> StatusCode {
 
 pub async fn start_services() -> Json<Value> {
     let url = format!("{}/agent/start", agent_url());
-    match reqwest::Client::new().post(&url).send().await {
+    match add_agent_auth(reqwest::Client::new().post(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await
                 .unwrap_or(json!({"status": "started"}));
@@ -1744,7 +1749,7 @@ pub async fn start_services() -> Json<Value> {
 
 pub async fn stop_services() -> Json<Value> {
     let url = format!("{}/agent/stop", agent_url());
-    match reqwest::Client::new().post(&url).send().await {
+    match add_agent_auth(reqwest::Client::new().post(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await
                 .unwrap_or(json!({"status": "stopped"}));
@@ -1754,15 +1759,9 @@ pub async fn stop_services() -> Json<Value> {
     }
 }
 
-
-
-
-
-//agent status 
-
 pub async fn get_agent_status() -> Json<Value> {
     let url = format!("{}/agent/status", agent_url());
-    match reqwest::get(&url).await {
+    match add_agent_auth(reqwest::Client::new().get(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!({
                 "agent-z": "stopped",
@@ -2230,27 +2229,58 @@ pub async fn sync_community_rules_api(
     let rules_dir = std::env::var("RULES_DIR").unwrap_or_else(|_| "rules".to_string());
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
 
-    match crate::detection::sync_now(
-        &rules_dir,
-        &redis_url,
-        &state.detection,
-        &state.ch_storage,
-    ).await {
-        Ok(count) => {
-            tracing::info!("Admin {} triggered SigmaHQ sync: {} new rules", claims.sub, count);
-            Json(json!({
-                "status":     "ok",
-                "new_rules":  count,
-                "message":    format!("{} community rules synced from SigmaHQ", count),
-            })).into_response()
-        }
-        Err(e) => {
-            tracing::warn!("SigmaHQ sync failed: {}", e);
-            (StatusCode::BAD_GATEWAY, Json(json!({
-                "error": format!("Sync failed: {}", e)
-            }))).into_response()
-        }
+    // Acquire a Redis lock so only one engine runs the sync at a time.
+    // TTL = 300s covers the worst-case GitHub download time.
+    let lock_acquired = match redis::Client::open(redis_url.clone()) {
+        Ok(client) => match client.get_multiplexed_async_connection().await {
+            Ok(mut conn) => {
+                let result: redis::RedisResult<Option<String>> = redis::cmd("SET")
+                    .arg("ndr:sync_rules_lock")
+                    .arg("1")
+                    .arg("NX")
+                    .arg("EX")
+                    .arg(300u64)
+                    .query_async(&mut conn)
+                    .await;
+                matches!(result, Ok(Some(_)))
+            }
+            Err(_) => true, // Redis unavailable — allow sync to proceed
+        },
+        Err(_) => true,
+    };
+
+    if !lock_acquired {
+        return Json(json!({
+            "status":  "already_running",
+            "message": "Sigma sync already in progress on another engine — check back in a minute",
+        })).into_response();
     }
+
+    // Spawn background — return immediately so nginx never times out
+    let detection  = state.detection.clone();
+    let ch_storage = state.ch_storage.clone();
+    let admin_sub  = claims.sub.clone();
+    tokio::spawn(async move {
+        match crate::detection::sync_now(&rules_dir, &redis_url, &detection, &ch_storage).await {
+            Ok(count) => tracing::info!("Admin {} SigmaHQ sync complete: {} new rules", admin_sub, count),
+            Err(e)    => tracing::warn!("Admin {} SigmaHQ sync failed: {}", admin_sub, e),
+        }
+        // Release lock regardless of outcome
+        if let Ok(client) = redis::Client::open(redis_url.clone()) {
+            if let Ok(mut conn) = client.get_multiplexed_async_connection().await {
+                let _: redis::RedisResult<()> = redis::cmd("DEL")
+                    .arg("ndr:sync_rules_lock")
+                    .query_async(&mut conn)
+                    .await;
+            }
+        }
+    });
+
+    tracing::info!("Admin {} triggered SigmaHQ sync in background", claims.sub);
+    Json(json!({
+        "status":  "started",
+        "message": "Sigma sync started in background",
+    })).into_response()
 }
 
 pub async fn get_soar_status(
@@ -3578,13 +3608,15 @@ pub async fn login(
                     Ok(true) => {}
                 }
             }
-            let permissions_str = if role == "super_admin"
-                || role == "tenant_admin"
-                || role == "default_user"
-            {
+            let permissions_str = if role == "super_admin" || role == "tenant_admin" {
                 crate::storage::clickhouse::default_permissions(role)
             } else {
-                user["permissions"].as_str().unwrap_or("dashboard,alerts").to_string()
+                let stored = user["permissions"].as_str().unwrap_or("").to_string();
+                if stored.is_empty() {
+                    crate::storage::clickhouse::default_permissions(role)
+                } else {
+                    stored
+                }
             };
             let permissions_vec: Vec<String> = permissions_str
                 .split(',')
@@ -3704,13 +3736,15 @@ pub async fn get_me(
                         }
                     }
 
-                    let permissions_str = if role == "super_admin"
-                        || role == "tenant_admin"
-                        || role == "default_user"
-                    {
+                    let permissions_str = if role == "super_admin" || role == "tenant_admin" {
                         crate::storage::clickhouse::default_permissions(role)
                     } else {
-                        user["permissions"].as_str().unwrap_or("dashboard,alerts").to_string()
+                        let stored = user["permissions"].as_str().unwrap_or("").to_string();
+                        if stored.is_empty() {
+                            crate::storage::clickhouse::default_permissions(role)
+                        } else {
+                            stored
+                        }
                     };
                     let permissions: Vec<String> = permissions_str
                         .split(',')
@@ -4064,7 +4098,7 @@ pub async fn update_user_permissions_api(
             "message": "Super admin permissions cannot be changed here"
         }));
     } else if claims.role == "tenant_admin" {
-        let manageable_roles = ["analyst", "senior_analyst", "viewer"];
+        let manageable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
         if claims.tenant_id != target_tenant_id || !manageable_roles.contains(&target_role) {
             return Json(json!({
                 "status": "error",
@@ -7614,6 +7648,196 @@ pub async fn get_evidence_timeline(
         .get_related_hits_by_ip(&claims.tenant_id, &src_ip, &alert_time, 30)
         .await.unwrap_or_default();
 
+    // 2c. UID-linked Zeek logs — find all log types for the same connection
+    //     Step 1: find the Zeek UID from ndr_events matching this community_id
+    //     Step 2: pull every log entry with that UID (conn/dns/ssl/http/weird/quic)
+    let db = crate::storage::clickhouse::tenant_db_pub(&claims.tenant_id);
+    let t  = crate::storage::clickhouse::sql_escape_pub(&claims.tenant_id);
+    let cid_esc = crate::storage::clickhouse::sql_escape_pub(&community_id);
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct UidRow { uid: String }
+
+    // Collect ALL Zeek UIDs for this community_id (one connection can have multiple UIDs
+    // e.g. conn.log splits a long session; pick all so we get http/files/weird entries)
+    let uid_rows: Vec<UidRow> = state.ch_storage.client
+        .query(&format!(
+            "SELECT DISTINCT JSONExtractString(raw, 'uid') AS uid \
+             FROM {db}.ndr_events \
+             WHERE tenant_id = '{t}' \
+               AND community_id = '{cid_esc}' \
+               AND JSONExtractString(raw, 'uid') != '' \
+             LIMIT 10"
+        ))
+        .fetch_all::<UidRow>().await.unwrap_or_default();
+
+    // Representative UID for display (first one)
+    let zeek_uid = uid_rows.first().map(|r| r.uid.clone()).unwrap_or_default();
+
+    // Step 2: logs for ALL UIDs combined, ordered by time
+    let uid_logs: Vec<Value> = if !zeek_uid.is_empty() {
+        let uid_list = uid_rows.iter()
+            .map(|r| format!("'{}'", crate::storage::clickhouse::sql_escape_pub(&r.uid)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct UidLog {
+            event_type: String,
+            ts:         f64,
+            raw:        String,
+        }
+        let rows: Vec<UidLog> = state.ch_storage.client
+            .query(&format!(
+                "SELECT event_type, \
+                        toFloat64(timestamp) AS ts, \
+                        raw \
+                 FROM {db}.ndr_events \
+                 WHERE tenant_id = '{t}' \
+                   AND JSONExtractString(raw, 'uid') IN ({uid_list}) \
+                 ORDER BY ts ASC \
+                 LIMIT 100"
+            ))
+            .fetch_all::<UidLog>().await.unwrap_or_default();
+
+        rows.into_iter().map(|r| {
+            let raw: Value = serde_json::from_str(&r.raw).unwrap_or(json!({}));
+            let log_type = if r.event_type.is_empty() { "conn".to_string() } else { r.event_type.clone() };
+            let description = match log_type.as_str() {
+                "conn" => {
+                    let state  = raw["conn_state"].as_str().unwrap_or("-");
+                    let dur    = raw["duration"].as_f64().unwrap_or(0.0);
+                    let bytes  = raw["orig_bytes"].as_u64().unwrap_or(0);
+                    format!("Connection {} — {:.3}s, {} bytes sent", state, dur, bytes)
+                }
+                "dns" => {
+                    let query   = raw["query"].as_str().unwrap_or("-");
+                    let rcode   = raw["rcode_name"].as_str().unwrap_or("?");
+                    let answers = raw["answers"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default();
+                    if answers.is_empty() {
+                        format!("DNS query: {} → {}", query, rcode)
+                    } else {
+                        format!("DNS query: {} → {} [{}]", query, rcode, answers)
+                    }
+                }
+                "ssl" => {
+                    let sni     = raw["server_name"].as_str().unwrap_or("");
+                    let ver     = raw["version"].as_str().unwrap_or("TLS");
+                    let cipher  = raw["cipher"].as_str().unwrap_or("");
+                    let resumed = raw["resumed"].as_bool().unwrap_or(false);
+                    format!("TLS {} handshake{} — SNI: {} cipher: {}",
+                        ver,
+                        if resumed { " (resumed)" } else { "" },
+                        if sni.is_empty() { "-" } else { sni },
+                        cipher)
+                }
+                "http" => {
+                    let method = raw["method"].as_str().unwrap_or("GET");
+                    let host   = raw["host"].as_str().unwrap_or("-");
+                    let uri    = raw["uri"].as_str().unwrap_or("/");
+                    let status = raw["status_code"].as_u64().unwrap_or(0);
+                    format!("HTTP {} {}{}  → {}", method, host, uri, status)
+                }
+                "weird" => {
+                    let name = raw["name"].as_str().unwrap_or("unknown anomaly");
+                    format!("Agent-Z anomaly: {}", name)
+                }
+                "quic" => {
+                    let ver = raw["version"].as_str().unwrap_or("?");
+                    format!("QUIC v{} connection", ver)
+                }
+                "files" => {
+                    let mime = raw["mime_type"].as_str().unwrap_or("?");
+                    let size = raw["total_bytes"].as_u64().unwrap_or(0);
+                    format!("File transfer: {} ({} bytes)", mime, size)
+                }
+                _ => format!("{} event", log_type),
+            };
+            json!({
+                "time":        (r.ts as u64) * 1000,
+                "log_type":    log_type,
+                "source":      "agent-z",
+                "description": description,
+                "uid":         zeek_uid,
+                "raw":         raw,
+            })
+        }).collect()
+    } else {
+        vec![]
+    };
+
+    // Agent-S events for this CID — no UID, linked by community_id only.
+    // Fetched separately and merged so the Connection Story shows Suricata alerts,
+    // flow summaries, and DNS events alongside the Zeek UID-linked logs.
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct AgentSLog { event_type: String, ts: f64, raw: String }
+    let agent_s_rows: Vec<AgentSLog> = state.ch_storage.client
+        .query(&format!(
+            "SELECT event_type, toFloat64(timestamp) AS ts, raw \
+             FROM {db}.ndr_events \
+             WHERE tenant_id = '{t}' \
+               AND community_id = '{cid_esc}' \
+               AND source = 'agent-s' \
+             ORDER BY ts ASC \
+             LIMIT 50"
+        ))
+        .fetch_all::<AgentSLog>().await.unwrap_or_default();
+
+    let agent_s_logs: Vec<Value> = agent_s_rows.into_iter().map(|r| {
+        let raw: Value = serde_json::from_str(&r.raw).unwrap_or(json!({}));
+        let log_type = if r.event_type.is_empty() { "flow".to_string() } else { r.event_type.clone() };
+        let description = match log_type.as_str() {
+            "alert" => {
+                let sig  = raw["alert"]["signature"].as_str().unwrap_or("Unknown rule");
+                let sid  = raw["alert"]["signature_id"].as_u64().unwrap_or(0);
+                let sev  = raw["alert"]["severity"].as_u64().unwrap_or(3);
+                let slbl = match sev { 1 => "HIGH", 2 => "MEDIUM", _ => "LOW" };
+                format!("Agent-S alert: {} (SID {} — {})", sig, sid, slbl)
+            }
+            "dns" => {
+                // Suricata DNS raw: dns.type is "request"/"response",
+                // name is in dns.queries[0].rrname (request) or dns.answers[0].rrname (response)
+                let dtype = raw["dns"]["type"].as_str().unwrap_or("request");
+                let qtype = if dtype == "response" { "response" } else { "request" };
+                let name = raw["dns"]["rrname"].as_str()
+                    .or_else(|| raw["dns"]["queries"][0]["rrname"].as_str())
+                    .or_else(|| raw["dns"]["answers"][0]["rrname"].as_str())
+                    .or_else(|| raw["query"].as_str())
+                    .unwrap_or("-");
+                let rcode = raw["dns"]["rcode"].as_str()
+                    .or_else(|| raw["rcode_name"].as_str())
+                    .unwrap_or("NOERROR");
+                format!("Agent-S DNS {}: {} → {}", qtype, name, rcode)
+            }
+            "flow" | "netflow" => {
+                let pkts  = raw["pkts_toserver"].as_u64()
+                    .or_else(|| raw["packets"].as_u64()).unwrap_or(0);
+                let bytes = raw["bytes_toserver"].as_u64()
+                    .or_else(|| raw["bytes"].as_u64()).unwrap_or(0);
+                let app   = raw["app_proto"].as_str().unwrap_or("");
+                if app.is_empty() || app == "failed" {
+                    format!("Agent-S flow summary: {} pkts, {} bytes", pkts, bytes)
+                } else {
+                    format!("Agent-S flow summary: {} pkts, {} bytes ({})", pkts, bytes, app)
+                }
+            }
+            _ => format!("Agent-S {}", log_type),
+        };
+        json!({
+            "time":        (r.ts as u64) * 1000,
+            "log_type":    log_type,
+            "source":      "agent-s",
+            "description": description,
+            "raw":         raw,
+        })
+    }).collect();
+
+    // Merge Agent-Z (UID-linked) + Agent-S (CID-linked), sort by time
+    let mut uid_logs = uid_logs;
+    uid_logs.extend(agent_s_logs);
+    uid_logs.sort_by_key(|e| e["time"].as_u64().unwrap_or(0));
+
     // 3. Get OpenSearch session info (on-premise)
     let session_info = if claims.tenant_id == "default" {
         let opensearch_url = std::env::var("OPENSEARCH_URL")
@@ -7685,15 +7909,28 @@ pub async fn get_evidence_timeline(
     }
 
     // 5. Build attack narrative
+    let dns_queries: Vec<&str> = uid_logs.iter()
+        .filter(|e| e["log_type"] == "dns")
+        .filter_map(|e| e["raw"]["query"].as_str())
+        .collect();
+    let tls_snis: Vec<&str> = uid_logs.iter()
+        .filter(|e| e["log_type"] == "ssl")
+        .filter_map(|e| e["raw"]["server_name"].as_str())
+        .filter(|s| !s.is_empty())
+        .collect();
+
     let narrative = format!(
         "At {}, host {} established a {} connection to {}. \
         NDR engine triggered rule '{}' with {} severity. \
         {} detection rule(s) fired on this connection. \
+        {} log entries linked to this connection (UID: {}). \
         {} related activity events were detected for the same \
         source host within a 30-minute window, suggesting {}.",
         alert_time, src_ip, protocol, dst_ip,
         rule_name, severity,
         rule_hits.len(),
+        uid_logs.len(),
+        if zeek_uid.is_empty() { "—".to_string() } else { zeek_uid.clone() },
         related.len(),
         if related.len() > 3 {
             "possible lateral movement or automated attack pattern"
@@ -7703,17 +7940,21 @@ pub async fn get_evidence_timeline(
     );
 
     Json(json!({
-        "community_id": community_id,
-        "narrative": narrative,
-        "primary_alert": hit,
-        "events": events,
-        "rule_hits": rule_hits,
-        "related_alerts": related,
+        "community_id":           community_id,
+        "zeek_uid":               zeek_uid,
+        "narrative":              narrative,
+        "primary_alert":          hit,
+        "events":                 events,
+        "uid_logs":               uid_logs,
+        "rule_hits":              rule_hits,
+        "related_alerts":         related,
         "related_sessions_count": related.len(),
-        "src_ip": src_ip,
-        "dst_ip": dst_ip,
-        "protocol": protocol,
-        "generated_at": chrono::Utc::now().to_rfc3339()
+        "dns_queries":            dns_queries,
+        "tls_snis":               tls_snis,
+        "src_ip":                 src_ip,
+        "dst_ip":                 dst_ip,
+        "protocol":               protocol,
+        "generated_at":           chrono::Utc::now().to_rfc3339()
     }))
 }
 
@@ -7979,6 +8220,44 @@ pub async fn aria_get_verdict(
     }
 }
 
+/// GET /api/ai-suppressions — list active suppressions (used by UI to filter WS hits)
+pub async fn list_ai_suppressions(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"error": "unauthorized"})),
+    };
+    let tid = crate::storage::clickhouse::sql_escape_pub(&claims.tenant_id);
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct SupRow {
+        suppress_ip:    String,
+        signature_name: String,
+        community_id:   String,
+        suppress_scope: String,
+    }
+    let rows: Vec<SupRow> = state.ch_storage.client
+        .query(&format!(
+            "SELECT suppress_ip, signature_name, community_id, suppress_scope \
+             FROM ndr.ai_suppressions FINAL \
+             WHERE active = 1 \
+               AND (expires_at IS NULL OR expires_at > now()) \
+               AND (tenant_id = '{tid}' OR tenant_id = '') \
+             ORDER BY rowNumberInAllBlocks() DESC \
+             LIMIT 200"
+        ))
+        .fetch_all::<SupRow>().await.unwrap_or_default();
+
+    let list: Vec<Value> = rows.into_iter().map(|r| json!({
+        "suppress_ip":    r.suppress_ip,
+        "signature_name": r.signature_name,
+        "community_id":   r.community_id,
+        "suppress_scope": r.suppress_scope,
+    })).collect();
+    Json(json!(list))
+}
+
 /// POST /api/ai-suppressions — analyst manually suppresses an alert pattern
 #[derive(serde::Deserialize)]
 pub struct ManualSuppressionBody {
@@ -8001,14 +8280,24 @@ pub async fn create_manual_suppression(
     let tag    = body.tag.as_deref().unwrap_or("manual");
     let dst_ip = body.dst_ip.as_deref().unwrap_or("");
     let cid    = body.community_id.as_deref().unwrap_or("");
-    let reason = format!("Manually suppressed by analyst ({}h)", body.duration_hours.unwrap_or(24));
+    let hours  = body.duration_hours.unwrap_or(24) as u64;
+    let now    = chrono::Utc::now().timestamp() as u64;
+    let expires_at = Some((now + hours * 3600) as u32);
+
+    // group = analyst suppressed the whole src_ip+tag group (no specific CID)
+    // individual = analyst suppressed one specific alert by CID
+    let suppress_scope = if cid.is_empty() { "group" } else { "individual" };
+    let reason = format!("Manually suppressed by analyst ({}h)", hours);
+
     match state.ch_storage.save_ai_suppression(
         &claims.tenant_id,
         0, tag, "by_src", &body.src_ip,
         &body.src_ip, dst_ip, cid,
         &reason, 100, "",
+        expires_at,
+        suppress_scope,
     ).await {
-        Ok(_)  => Json(json!({"ok": true, "suppressed_src": body.src_ip, "tag": tag})),
+        Ok(_)  => Json(json!({"ok": true, "suppressed_src": body.src_ip, "tag": tag, "expires_in_hours": hours})),
         Err(e) => Json(json!({"error": e.to_string()})),
     }
 }
@@ -8758,7 +9047,15 @@ pub async fn isolate_device_handler(
     };
     let tenant_id   = claims.tenant_id.clone();
     let enforcement = body.enforcement.as_deref().unwrap_or("arp");
-    let gateway_ip  = body.gateway_ip.as_deref().unwrap_or("192.168.1.1");
+    let gateway_ip_owned;
+    let gateway_ip = match body.gateway_ip.as_deref().filter(|s| !s.is_empty()) {
+        Some(gw) => gw,
+        None => {
+            // Let the agent auto-detect the gateway from its own routing table
+            gateway_ip_owned = String::new();
+            &gateway_ip_owned
+        }
+    };
     let reason      = body.reason.clone().unwrap_or_else(|| format!("Isolated by {}", claims.sub));
     let q_vlan      = body.quarantine_vlan.unwrap_or(999);
     let agent_url   = std::env::var("NDR_AGENT_URL")

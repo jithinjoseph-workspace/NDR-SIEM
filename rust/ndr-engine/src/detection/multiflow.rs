@@ -278,12 +278,18 @@ async fn emit(
     }
 }
 
-// Private IP range SQL fragment for a named column
+// Private IP range SQL fragment for a named column.
+// Covers IPv4 RFC-1918, IPv4 loopback, IPv6 ULA (fc00::/7), IPv6 link-local (fe80::/10),
+// and IPv6 loopback (::1) so multiflow detectors work correctly on dual-stack networks.
 fn is_private(col: &str) -> String {
     format!(
         "(isIPAddressInRange({c},'10.0.0.0/8') \
           OR isIPAddressInRange({c},'192.168.0.0/16') \
-          OR isIPAddressInRange({c},'172.16.0.0/12'))",
+          OR isIPAddressInRange({c},'172.16.0.0/12') \
+          OR isIPAddressInRange({c},'127.0.0.0/8') \
+          OR isIPAddressInRange({c},'fc00::/7') \
+          OR isIPAddressInRange({c},'fe80::/10') \
+          OR {c} = '::1')",
         c = col
     )
 }
@@ -323,6 +329,7 @@ async fn detect_port_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppre
          FROM {db}.ndr_events \
          WHERE timestamp > now() - INTERVAL 5 MINUTE \
            AND tenant_id = '{t}' AND src_ip != '' \
+           AND event_type IN ('conn', 'flow') \
          GROUP BY src_ip \
          HAVING cnt_a > 15 OR cnt_b > 20"
     );
@@ -356,8 +363,7 @@ async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &
          WHERE timestamp > now() - INTERVAL 10 MINUTE \
            AND tenant_id = '{t}' AND src_ip != '' \
            AND ( \
-             (source = 'agent-s' AND event_type = 'alert') \
-             OR JSONExtractUInt(raw, 'status_code') IN (401, 403, 407, 429) \
+             JSONExtractUInt(raw, 'status_code') IN (401, 403, 407, 429) \
              OR (event_type = 'ssh'  AND JSONExtractString(raw, 'auth_success') = 'false') \
              OR JSONExtractUInt(raw, 'reply_code') IN (530, 430, 332) \
              OR (event_type IN ('conn', 'flow') \
@@ -378,7 +384,16 @@ async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &
     }
 }
 
-// Lateral movement: internal src hitting >5 distinct internal hosts in 10 min
+// Lateral movement: internal src hitting >3 distinct internal hosts on high-risk
+// admin/protocol ports in 10 min.
+//
+// Scoped to lateral-movement-specific ports only:
+//   22=SSH, 135=RPC, 139=NetBIOS-ssn, 445=SMB, 3389=RDP,
+//   5985/5986=WinRM, 1433=MSSQL, 3306=MySQL, 5432=Postgres
+//
+// Excludes port 53/5353 (DNS) — internal resolvers query dozens of hosts per minute
+// and would flood this detector. Excludes ports 80/443 — developers deploy to many
+// hosts over HTTP, not a lateral movement signal.
 async fn detect_lateral_movement(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
     let db      = db_for(tenant);
     let t       = esc(tenant);
@@ -391,8 +406,10 @@ async fn detect_lateral_movement(ch: &ClickhouseStorage, tenant: &str, sup: &mut
            AND tenant_id = '{t}' \
            AND {prv_src} AND {prv_dst} \
            AND src_ip != '' \
+           AND event_type IN ('conn', 'flow') \
+           AND dst_port IN (22, 135, 139, 445, 3389, 5985, 5986, 1433, 3306, 5432) \
          GROUP BY src_ip \
-         HAVING cnt > 5"
+         HAVING cnt > 3"
     );
     let rows: Vec<OneCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {

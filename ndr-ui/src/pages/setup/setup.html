@@ -361,21 +361,21 @@
       </div>
 
       <div class="sensor-actions-footer">
-        <button class="action-btn green-btn" 
+        <button class="action-btn green-btn"
           (click)="controlExternalSensor(sensor, 'start')"
-          [disabled]="!sensor.active || isCommandPending(sensor) || isSensorRunning(sensor)">
+          [disabled]="!sensor.active || !sensor.online || isCommandPending(sensor) || isSensorRunning(sensor)">
           <lucide-icon [name]="PlayIcon" class="w-4 h-4"></lucide-icon>
           {{ isCommandPending(sensor, 'start') ? 'Starting...' : isSensorRunning(sensor) ? 'Running' : 'Start' }}
         </button>
         <button class="action-btn red-btn"
           (click)="controlExternalSensor(sensor, 'stop')"
-          [disabled]="!sensor.active || isCommandPending(sensor) || !isSensorRunning(sensor)">
+          [disabled]="!sensor.active || !sensor.online || isCommandPending(sensor) || !isSensorRunning(sensor)">
           <lucide-icon [name]="StopIcon" class="w-4 h-4"></lucide-icon>
           {{ isCommandPending(sensor, 'stop') ? 'Stopping...' : 'Stop' }}
         </button>
         <button class="action-btn blue-btn"
           (click)="controlExternalSensor(sensor, 'restart')"
-          [disabled]="!sensor.active || isCommandPending(sensor)">
+          [disabled]="!sensor.active || !sensor.online || isCommandPending(sensor)">
           <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
           {{ isCommandPending(sensor, 'restart') ? 'Restarting...' : 'Restart' }}
         </button>

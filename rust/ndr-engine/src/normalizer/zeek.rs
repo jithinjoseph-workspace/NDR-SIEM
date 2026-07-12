@@ -51,11 +51,11 @@ pub fn normalize_zeek(raw: Value) -> Option<NormalizedEvent> {
         .map(|s| s.to_lowercase());
 
     // Malcolm: network.protocol ← Zeek service field (e.g. "http", "dns", "ssl")
-    // Vector exposes this as network_protocol (Task 1 from previous session)
+    // or_else must run AFTER filtering so an empty network_protocol falls through to service
     let network_protocol = raw.get("network_protocol")
-        .or_else(|| raw.get("service"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty() && *s != "-")
+        .or_else(|| raw.get("service").and_then(|v| v.as_str()).filter(|s| !s.is_empty() && *s != "-"))
         .map(|s| s.to_lowercase());
 
     let uid = raw.get("uid")

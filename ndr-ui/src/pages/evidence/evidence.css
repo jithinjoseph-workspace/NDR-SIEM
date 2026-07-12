@@ -1452,3 +1452,154 @@ html[data-theme="light"] .custody-table td {
 .verdict-dot-true  { background: #ef4444; }
 .verdict-dot-false { background: #22c55e; }
 .verdict-dot-sus   { background: #f59e0b; }
+
+/* ── UID Connection Story (Attack Timeline tab) ──────────────────── */
+
+.uid-story {
+  margin-top: 1.25rem;
+  background: rgba(99,102,241,0.05);
+  border: 1px solid rgba(99,102,241,0.18);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+}
+
+.uid-story-empty {
+  background: rgba(110,117,136,0.07);
+  border-color: rgba(110,117,136,0.18);
+  font-size: 0.8rem;
+  color: rgba(110,117,136,0.6);
+}
+
+.uid-story-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.uid-story-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a5b4fc;
+}
+
+.uid-chip {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  background: rgba(99,102,241,0.13);
+  border: 1px solid rgba(99,102,241,0.28);
+  border-radius: 4px;
+  padding: 0.12rem 0.55rem;
+  color: #a5b4fc;
+  word-break: break-all;
+}
+
+.uid-summary-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+}
+
+.uid-summary-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: rgba(165,180,252,0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  min-width: 70px;
+}
+
+.uid-dns-chip {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  background: rgba(34,197,94,0.1);
+  border: 1px solid rgba(34,197,94,0.22);
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+  color: #86efac;
+}
+
+.uid-sni-chip {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  background: rgba(251,191,36,0.09);
+  border: 1px solid rgba(251,191,36,0.22);
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+  color: #fcd34d;
+}
+
+.uid-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.uid-log-row {
+  display: grid;
+  grid-template-columns: 90px 55px 1fr;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.03);
+}
+
+.uid-log-time {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: rgba(165,180,252,0.55);
+  white-space: nowrap;
+}
+
+.uid-log-type {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-align: center;
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  letter-spacing: 0.04em;
+}
+
+.uid-type-conn    { background: rgba(99,102,241,0.18); color: #a5b4fc; }
+.uid-type-dns     { background: rgba(34,197,94,0.15);  color: #86efac; }
+.uid-type-ssl     { background: rgba(251,191,36,0.15); color: #fcd34d; }
+.uid-type-http    { background: rgba(59,130,246,0.15); color: #93c5fd; }
+.uid-type-weird   { background: rgba(239,68,68,0.15);  color: #fca5a5; }
+.uid-type-quic    { background: rgba(168,85,247,0.15); color: #d8b4fe; }
+.uid-type-files   { background: rgba(249,115,22,0.15); color: #fdba74; }
+/* Agent-S event types */
+.uid-type-alert   { background: rgba(239,68,68,0.20);  color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+.uid-type-flow    { background: rgba(14,165,233,0.15);  color: #7dd3fc; }
+.uid-type-netflow { background: rgba(14,165,233,0.15);  color: #7dd3fc; }
+
+.uid-log-desc {
+  color: var(--color-on-surface-variant, #c5cbe3);
+  line-height: 1.4;
+}
+
+.uid-source-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
+}
+
+.agent-z-badge {
+  background: rgba(99,102,241,0.2);
+  border: 1px solid rgba(99,102,241,0.4);
+  color: #a5b4fc;
+}
+
+.agent-s-badge {
+  background: rgba(34,197,94,0.15);
+  border: 1px solid rgba(34,197,94,0.35);
+  color: #86efac;
+}

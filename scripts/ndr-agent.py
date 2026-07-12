@@ -384,7 +384,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "kafka":      "running" if kafka       else "stopped",
                 "clickhouse": "running" if clickhouse  else "stopped",
                 "arkime":     get_arkime_status(),
-                "interface":  iface
+                "interface":  iface,
+                "gateway":    _get_default_gateway(),
             })                   
 
         elif self.path == "/agent/interfaces":
@@ -523,7 +524,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif self.path == "/agent/isolate":
             body       = self.get_body()
             target_ip  = body.get("target_ip", "").strip()
-            gateway_ip = body.get("gateway_ip", "192.168.1.1").strip()
+            gateway_ip = body.get("gateway_ip") or _get_default_gateway()
             result     = isolate_device(target_ip, gateway_ip)
             code       = 200 if result.get("status") in ("isolated", "already_isolated") else 400
             self.send_json(result, code)
@@ -773,23 +774,66 @@ def unblock_ip(ip: str) -> dict:
     return {"status": "unblocked", "ip": ip}
 
 
-def _arp_poison_loop(target_ip: str, gateway_ip: str, iface: str, stop_event: threading.Event):
-    """Send unicast ARP spoofs continuously: tell target gateway MAC = our MAC, and vice versa."""
+def _get_default_gateway() -> str:
+    """Read the default gateway from the kernel routing table — works on any network."""
     try:
-        from scapy.all import ARP, Ether, sendp, get_if_hwaddr, getmacbyip, conf as scapy_conf
+        out = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True
+        ).stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if "via" in parts:
+                return parts[parts.index("via") + 1]
+    except Exception:
+        pass
+    return "192.168.1.1"
+
+
+def _get_mac_from_neigh(ip: str) -> str:
+    """Resolve MAC from kernel ARP/neighbour table — no CAP_NET_RAW needed."""
+    try:
+        out = subprocess.run(["ip", "neigh", "show", ip],
+                             capture_output=True, text=True).stdout.strip()
+        for line in out.splitlines():
+            parts = line.split()
+            if "lladdr" in parts:
+                return parts[parts.index("lladdr") + 1]
+    except Exception:
+        pass
+    return "ff:ff:ff:ff:ff:ff"
+
+def _get_our_mac(iface: str) -> str:
+    """Read our own MAC without scapy (no permissions needed)."""
+    try:
+        out = subprocess.run(["cat", f"/sys/class/net/{iface}/address"],
+                             capture_output=True, text=True).stdout.strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    return ""
+
+def _arp_poison_loop(target_ip: str, gateway_ip: str, iface: str, stop_event: threading.Event):
+    """Send unicast ARP spoofs via sudo python3 — works without CAP_NET_RAW on the agent process."""
+    # Resolve MACs from kernel neighbour table — no CAP_NET_RAW needed for reads
+    our_mac     = _get_our_mac(iface)
+    target_mac  = _get_mac_from_neigh(target_ip)  or "ff:ff:ff:ff:ff:ff"
+    gateway_mac = _get_mac_from_neigh(gateway_ip) or "ff:ff:ff:ff:ff:ff"
+    print(f"[NDR-ISOLATE] ARP loop start: target={target_ip}/{target_mac} gw={gateway_ip}/{gateway_mac} our_mac={our_mac}")
+
+    # sendp() requires CAP_NET_RAW. Grant it once with:
+    #   sudo setcap cap_net_raw+ep /usr/bin/python3.14
+    try:
+        from scapy.all import ARP, Ether, sendp, conf as scapy_conf
         scapy_conf.verb = 0
-        our_mac = get_if_hwaddr(iface)
-        # Resolve target and gateway MACs once; fall back to broadcast if unreachable
-        target_mac  = getmacbyip(target_ip)  or "ff:ff:ff:ff:ff:ff"
-        gateway_mac = getmacbyip(gateway_ip) or "ff:ff:ff:ff:ff:ff"
-        print(f"[NDR-ISOLATE] ARP loop: target_mac={target_mac} gateway_mac={gateway_mac}")
         while not stop_event.is_set():
-            # Unicast to target: "gateway is at our MAC" → target sends all packets to us
+            # Tell target: "gateway MAC = our MAC" → target sends traffic to us
             pkt1 = Ether(dst=target_mac) / ARP(
                 op=2, pdst=target_ip, hwdst=target_mac,
                 psrc=gateway_ip, hwsrc=our_mac
             )
-            # Unicast to gateway: "target is at our MAC" → gateway replies come to us
+            # Tell gateway: "target MAC = our MAC" → replies come to us
             pkt2 = Ether(dst=gateway_mac) / ARP(
                 op=2, pdst=gateway_ip, hwdst=gateway_mac,
                 psrc=target_ip, hwsrc=our_mac
@@ -797,15 +841,17 @@ def _arp_poison_loop(target_ip: str, gateway_ip: str, iface: str, stop_event: th
             sendp([pkt1, pkt2], iface=iface, verbose=False)
             stop_event.wait(2)
     except ImportError:
-        print("[NDR-ISOLATE] scapy not installed — ARP isolation unavailable (pip install scapy)")
+        print("[NDR-ISOLATE] scapy not installed — pip install scapy")
     except Exception as e:
         print(f"[NDR-ISOLATE] ARP loop error for {target_ip}: {e}")
 
 
-def isolate_device(target_ip: str, gateway_ip: str = "192.168.1.1") -> dict:
+def isolate_device(target_ip: str, gateway_ip: str = "") -> dict:
     import datetime
     if not target_ip:
         return {"status": "error", "message": "target_ip required"}
+    if not gateway_ip:
+        gateway_ip = _get_default_gateway()
 
     iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eno1"
 
@@ -861,12 +907,12 @@ def unisolate_device(target_ip: str) -> dict:
     # Send gratuitous ARPs to restore correct MAC mappings immediately —
     # without this the ARP caches on target+gateway stay poisoned for up to 5 min.
     try:
-        from scapy.all import ARP, Ether, sendp, getmacbyip, conf as scapy_conf
+        from scapy.all import ARP, Ether, sendp, conf as scapy_conf
         scapy_conf.verb = 0
         iface       = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eno1"
-        gateway_ip  = entry.get("gateway_ip", "192.168.1.1")
-        target_mac  = getmacbyip(target_ip)
-        gateway_mac = getmacbyip(gateway_ip)
+        gateway_ip  = entry.get("gateway_ip") or _get_default_gateway()
+        target_mac  = _get_mac_from_neigh(target_ip)
+        gateway_mac = _get_mac_from_neigh(gateway_ip)
         if target_mac and gateway_mac:
             # Restore: tell target the real gateway MAC
             pkt1 = Ether(dst=target_mac) / ARP(

@@ -57,7 +57,7 @@ export class Live implements OnInit, OnDestroy {
           this.eventCount++;
         } else if (msg.type === 'agent-s') {
           event = 'AGENT-S';
-          data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.event_type || '-'}]`;
+          data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.proto || '-'}] ${msg.event_type || ''}`;
           color = 'border-secondary/30';
           this.eventCount++;
         } else if (msg.type === 'hit') {

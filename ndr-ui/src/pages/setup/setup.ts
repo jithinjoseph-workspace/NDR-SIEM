@@ -577,16 +577,19 @@ export class Setup implements OnInit, OnDestroy {
       || this.cleanLabel(sensor.hostname)
       || sensor.key_prefix;
 
+    const online = sensor.active && this.isRecentlySeen(sensor.last_seen);
+    const neverRegistered = !sensor.hostname || sensor.hostname.trim() === '';
+
     return {
       ...sensor,
       displayName,
       hostname: this.cleanLabel(sensor.hostname) || 'Unregistered host',
       interface: sensor.interface || 'Unavailable',
       os: sensor.os || 'Unavailable',
-      'agent-z': this.normalizeExternalStatus(sensor['agent-z']),
-      'agent-s': this.normalizeExternalStatus(sensor['agent-s']),
-      vector: this.normalizeExternalStatus(sensor.vector),
-      online: sensor.active && this.isRecentlySeen(sensor.last_seen),
+      'agent-z': online ? this.normalizeExternalStatus(sensor['agent-z']) : (neverRegistered ? 'unknown' : 'stopped'),
+      'agent-s': online ? this.normalizeExternalStatus(sensor['agent-s']) : (neverRegistered ? 'unknown' : 'stopped'),
+      vector:    online ? this.normalizeExternalStatus(sensor.vector)      : (neverRegistered ? 'unknown' : 'stopped'),
+      online,
     };
   }
 

@@ -243,4 +243,8 @@ export class EvidenceComponent implements OnInit {
         this.loadAnnotations(b.id); this.newNote = ''; this.newTag = '';
       });
   }
+
+  hasAgentSLogs(): boolean {
+    return (this.timeline()?.uid_logs ?? []).some((e: any) => e.source === 'agent-s');
+  }
 }

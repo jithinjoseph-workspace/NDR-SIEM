@@ -382,12 +382,22 @@ export class Soar implements OnInit {
 
     openIsolateModal() {
         this.isolateIp = '';
-        this.isolateGateway = '192.168.1.1';
+        this.isolateGateway = '';
         this.isolateEnforcement = 'arp';
         this.isolateVlan = 999;
         this.isolateReason = '';
         this.isolateError = '';
         this.showIsolateModal = true;
+        // Pre-fill gateway from agent's own routing table
+        this.api.getAgentStatus().subscribe({
+            next: (s: any) => {
+                if (s?.gateway) {
+                    this.isolateGateway = s.gateway;
+                    this.cdr.detectChanges();
+                }
+            },
+            error: () => {}
+        });
     }
 
     private startIsolationProgress(title: string, target: string, steps: string[]) {

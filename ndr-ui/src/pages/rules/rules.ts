@@ -197,17 +197,16 @@ export class Rules implements OnInit {
     this.api.syncCommunityRules().subscribe({
       next: (res: any) => {
         this.syncing = false;
-        this.showMessage(
-          res.new_rules > 0
-            ? `${res.new_rules} SigmaHQ rules synced — engine reloaded`
-            : 'No new rules found (library is already up to date)',
-          'success',
-        );
-        this.loadRules();
+        if (res.status === 'already_running') {
+          this.showMessage(res.message || 'Sync already in progress — check back in a minute', 'success');
+        } else {
+          this.showMessage('Sync started in background — refresh rules in a minute', 'success');
+          setTimeout(() => this.loadRules(), 60_000);
+        }
       },
       error: (err: any) => {
         this.syncing = false;
-        this.showMessage(err?.error?.error || 'Sync failed — check engine connectivity', 'error');
+        this.showMessage(err?.error?.error || err?.error?.message || 'Sync failed — check engine connectivity', 'error');
       },
     });
   }

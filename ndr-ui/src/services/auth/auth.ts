@@ -161,7 +161,7 @@ export class AuthService implements OnDestroy {
   hasPermission(permission: string): boolean {
     const user = this.getUser();
     if (!user) return false;
-    if (this.isAdmin() || user.role === 'tenant_admin' || user.tenant_id === 'default') return true;
+    if (this.isAdmin() || user.role === 'tenant_admin') return true;
 
     return this.normalizePermissions(user.permissions).includes(permission);
   }

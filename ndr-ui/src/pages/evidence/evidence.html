@@ -180,6 +180,49 @@
           <div class="related-count">
             {{ timeline()?.related_sessions_count }} related sessions in ±5min window
           </div>
+
+          <!-- UID-linked connection story (shows when Agent-Z UID or any Agent-S events exist) -->
+          <div *ngIf="timeline()?.zeek_uid || timeline()?.uid_logs?.length" class="uid-story">
+            <div class="uid-story-header">
+              <span class="uid-story-title">Connection Story</span>
+              <span *ngIf="timeline()?.zeek_uid" class="uid-source-badge agent-z-badge">AGENT-Z</span>
+              <span *ngIf="hasAgentSLogs()" class="uid-source-badge agent-s-badge">AGENT-S</span>
+              <span *ngIf="timeline()?.zeek_uid" class="uid-chip" title="Agent-Z UID — links all log types for this connection">
+                UID: {{ timeline()?.zeek_uid }}
+              </span>
+            </div>
+
+            <!-- DNS queries seen on this connection -->
+            <div *ngIf="timeline()?.dns_queries?.length" class="uid-summary-row">
+              <span class="uid-summary-label">DNS Queries</span>
+              <span *ngFor="let q of timeline()?.dns_queries" class="uid-dns-chip">{{ q }}</span>
+            </div>
+
+            <!-- TLS SNIs seen on this connection -->
+            <div *ngIf="timeline()?.tls_snis?.length" class="uid-summary-row">
+              <span class="uid-summary-label">TLS SNI</span>
+              <span *ngFor="let s of timeline()?.tls_snis" class="uid-sni-chip">{{ s }}</span>
+            </div>
+
+            <!-- Per-log entries ordered by time (Agent-Z + Agent-S merged) -->
+            <div class="uid-log-list">
+              <div *ngFor="let entry of timeline()?.uid_logs" class="uid-log-row">
+                <span class="uid-log-time">{{ entry.time | date:'h:mm:ss a' }}</span>
+                <span class="uid-log-type" [class]="'uid-type-' + entry.log_type">{{ entry.log_type | uppercase }}</span>
+                <span class="uid-log-desc">
+                  <span *ngIf="entry.source === 'agent-s'" class="uid-source-badge agent-s-badge" style="font-size:0.55rem;padding:0.05rem 0.3rem;margin-right:0.35rem;vertical-align:middle">S</span>{{ entry.description }}
+                </span>
+              </div>
+            </div>
+
+            <div *ngIf="!timeline()?.uid_logs?.length" class="empty" style="margin-top:8px">
+              No log entries linked to this connection.
+            </div>
+          </div>
+
+          <div *ngIf="!timeline()?.zeek_uid" class="uid-story uid-story-empty">
+            No Zeek UID found for this connection — UID linking not available.
+          </div>
         </div>
       </div>
 

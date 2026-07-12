@@ -585,7 +585,7 @@ async fn main() {
 .route("/api/aria/investigate", post(api::aria_investigate))
 .route("/api/aria/verdict",     get(api::aria_get_verdict))
 .route("/api/ai-activity", get(api::get_ai_activity))
-.route("/api/ai-suppressions",                post(api::create_manual_suppression))
+.route("/api/ai-suppressions",                get(api::list_ai_suppressions).post(api::create_manual_suppression))
 .route("/api/ai-suppressions/:id/deactivate", patch(api::deactivate_ai_suppression_handler))
 .route("/api/ai-suppressions/:id", delete(api::delete_ai_suppression_handler))
 .route("/api/blocks",          get(api::list_active_blocks))

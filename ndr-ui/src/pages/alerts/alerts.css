@@ -770,8 +770,11 @@ html[data-theme="light"] .alerts-action.primary {
 
 .expand-icon { transition: transform 200ms; }
 
-.src-cell { font-family: var(--font-mono); font-size: 0.82rem; color: #c8d6f0; }
+.src-cell { font-family: var(--font-mono); font-size: 0.82rem; color: #c8d6f0; white-space: nowrap; display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
 .src-ip   { white-space: nowrap; }
+.flow-arrow-inline { color: var(--color-on-surface-variant); font-size: 0.75rem; opacity: 0.6; }
+.victim-ip  { color: #7dd3fc; white-space: nowrap; font-size: 0.8rem; }
+.victim-more { color: var(--color-on-surface-variant); font-size: 0.75rem; opacity: 0.7; }
 
 .tag-chip {
   display: inline-flex;

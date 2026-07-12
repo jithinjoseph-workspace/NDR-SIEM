@@ -875,13 +875,19 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 }
                 // -----------------------------------
 
-                // Broadcast immediately (non-blocking)
-                crate::api::broadcast_raw_event(&state, &event);
+                // Broadcast immediately (non-blocking) — skip IPAM subnet discovery events
+                // (already stored in ClickHouse for network map; no value in live stream)
+                if event.log_source.as_deref() != Some("ipam") {
+                    crate::api::broadcast_raw_event(&state, &event);
+                }
 
                 // Inline SIGMA for all Zeek events — Suricata can't always corroborate
                 // (DNS alerts have empty IPs; SMB/Kerberos/SSL often have no ET rule).
                 // Store as zeek_only; corroborated hits will overwrite via ReplacingMergeTree.
-                if event.event_source == EventSource::Zeek {
+                // Skip events with no IP context — Sigma hits without src/dst are unactionable.
+                let has_ip = event.source_ip.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+                          || event.dest_ip.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+                if event.event_source == EventSource::Zeek && has_ip {
                     let detections = {
                         let engine = state.detection.read().await;
                         engine.check_for_tenant(&event, &tenant_id)
@@ -907,6 +913,21 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         let cid = event.community_id.clone().unwrap_or_else(|| format!("zeek-{}-{}", now_ts, event.uid.as_deref().unwrap_or("x")));
                         let src = event.source_ip.clone().unwrap_or_default();
                         let dst = event.dest_ip.clone().unwrap_or_default();
+
+                        // Skip sigma hits where src is absent and dst is RFC1918 —
+                        // "Publicly Accessible" and exposure rules make no sense for
+                        // internal-only traffic with no external source observed
+                        let dst_is_private = dst.starts_with("10.") || dst.starts_with("192.168.") || {
+                            let p: Vec<&str> = dst.split('.').collect();
+                            dst.starts_with("172.") && p.get(1)
+                                .and_then(|s| s.parse::<u8>().ok())
+                                .map(|n| (16..=31).contains(&n))
+                                .unwrap_or(false)
+                        };
+                        if src.is_empty() && dst_is_private {
+                            continue;
+                        }
+
                         let agent_z_details = serde_json::to_string(&event.raw).unwrap_or_else(|_| "{}".into());
                         let ch_hit = crate::storage::clickhouse::NdrHit {
                             timestamp:          now_ts,

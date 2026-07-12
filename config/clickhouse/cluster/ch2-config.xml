@@ -42,4 +42,8 @@
     <logger>
         <level>warning</level>
     </logger>
+
+    <merge_tree>
+        <max_suspicious_broken_parts>200</max_suspicious_broken_parts>
+    </merge_tree>
 </clickhouse>

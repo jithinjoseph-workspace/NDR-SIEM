@@ -15,13 +15,14 @@ import {
 import { AuthService } from '../../services/auth/auth';
 import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
-// Detection tags that are meaningful for grouping
+// Detection tags that are meaningful for grouping — must match Rust tag strings exactly
 const DETECTION_TAGS = new Set([
-  'dns-beaconing','port-scan','lateral-movement','cred-stuffing','slow-scan',
+  'dns-beaconing','port-scan','lateral-movement','credential-stuffing','slow-scan',
   'beaconing','threat-intel','ids-alert','abnormal-rst','data-staging',
   'internal-recon','volume-anomaly','new-external-contact','icmp-flood',
-  'abnormal-hours','nxdomain-storm','dns-tunnel','tls-cert-anomaly',
-  'proto-misuse','large-exfiltration','sensitive-country',
+  'abnormal-hours','nxdomain-flood','dns-tunneling','tls-cert-anomaly',
+  'protocol-misuse','large-volume-exfil','sensitive-country',
+  'ip-conflict','sigma','dga','doh-evasion','malicious-domain',
 ]);
 
 function primaryTag(tags: string[]): string {
@@ -35,6 +36,7 @@ export interface AlertGroup {
   key:      string;
   tag:      string;
   src_ip:   string;
+  dstIps:   string[];   // unique victim IPs/hostnames for group header display
   count:    number;
   maxScore: number;
   severity: string;
@@ -68,6 +70,10 @@ export class Alerts implements OnInit, OnDestroy {
   filterMinScore = 0;           // 0–100
   filterSearch   = '';          // src_ip / dst_ip free text
   availableTags: string[] = []; // populated from loaded alerts
+
+  // ── Active group suppressions (fetched from API on init, updated on suppress) ─
+  // Used to filter both sessionStorage hits and live WebSocket hits.
+  private groupSups: { src_ip: string; tag: string }[] = [];
 
   // ── Toast ─────────────────────────────────────────────────────────────────
   toast = '';
@@ -118,12 +124,24 @@ export class Alerts implements OnInit, OnDestroy {
       })
     );
 
-    this.loadAlerts();
+    // Fetch active group suppressions first so WS filter is ready before hits arrive
+    this.api.getActiveSuppressions().subscribe({
+      next: (sups: any[]) => {
+        this.groupSups = sups
+          .filter(s => s.suppress_scope === 'group' && s.suppress_ip && s.signature_name)
+          .map(s => ({ src_ip: s.suppress_ip, tag: s.signature_name }));
+        this.loadAlerts();
+      },
+      error: () => this.loadAlerts(),
+    });
 
     this.subs.push(
       this.ws.continuousHits$.subscribe(hits => {
         if (!hits?.length) return;
-        const formatted = hits.map(h => this.formatHit(h));
+        const formatted = hits
+          .map((h: any) => this.formatHit(h))
+          .filter((h: any) => !this.isGroupSuppressedHit(h));
+        if (!formatted.length) return;
         const existingCids = new Set(formatted.map((h: any) => h.community_id));
         this.allAlerts = [...formatted, ...this.allAlerts.filter(a => !existingCids.has(a.community_id))];
         if (this.allAlerts.length > 500) this.allAlerts = this.allAlerts.slice(0, 500);
@@ -134,13 +152,24 @@ export class Alerts implements OnInit, OnDestroy {
     );
   }
 
+  private isGroupSuppressedHit(hit: any): boolean {
+    if (!hit.src_ip || !hit.tags?.length) return false;
+    const tag = primaryTag(hit.tags);
+    return this.groupSups.some(s => s.src_ip === hit.src_ip && s.tag === tag);
+  }
+
   loadAlerts() {
     if (!this.allAlerts.length) this.loading = true;
     this.api.getAlerts().subscribe({
       next: (data: any[]) => {
         const fresh = data.map(h => this.formatHit(h));
-        const existingCids = new Set(this.allAlerts.map(a => a.community_id));
-        this.allAlerts = [...this.allAlerts, ...fresh.filter(a => !existingCids.has(a.community_id))];
+        const freshCids = new Set(fresh.map((h: any) => h.community_id));
+        // API result is authoritative (suppression applied server-side).
+        // Preserve WS hits not in the API result (genuinely new) that aren't suppressed.
+        const liveOnly = this.allAlerts.filter(a =>
+          !freshCids.has(a.community_id) && !this.isGroupSuppressedHit(a)
+        );
+        this.allAlerts = [...fresh, ...liveOnly];
         if (this.allAlerts.length > 500) this.allAlerts = this.allAlerts.slice(0, 500);
         this.rebuild();
         this.loading = false;
@@ -197,6 +226,7 @@ export class Alerts implements OnInit, OnDestroy {
       if (!map.has(key)) {
         map.set(key, {
           key, tag, src_ip: a.src_ip,
+          dstIps: [],
           count: 0, maxScore: 0,
           severity: a.severity, latest: a.time,
           alerts: [], expanded: this.isExpanded(key),
@@ -209,6 +239,19 @@ export class Alerts implements OnInit, OnDestroy {
         g.maxScore    = a.score ?? 0;
         g.severity    = a.severity;
         g.latest      = a.time;
+      }
+    }
+
+    // Resolve unique victim IPs/hostnames per group (max 3 for display)
+    for (const g of map.values()) {
+      const seen = new Set<string>();
+      for (const a of g.alerts) {
+        const victim = a.dst_asset?.hostname || a.dst_ip;
+        if (victim && victim !== '-' && !seen.has(victim)) {
+          seen.add(victim);
+          g.dstIps.push(victim);
+          if (g.dstIps.length >= 3) break;
+        }
       }
     }
 
@@ -265,6 +308,10 @@ export class Alerts implements OnInit, OnDestroy {
   }
 
   suppressGroup(g: AlertGroup) {
+    // Add to local cache immediately so WS filter blocks incoming hits right away
+    if (!this.groupSups.some(s => s.src_ip === g.src_ip && s.tag === g.tag)) {
+      this.groupSups.push({ src_ip: g.src_ip, tag: g.tag });
+    }
     this.api.suppressAlert(g.src_ip, '', '', g.tag, 24).subscribe({
       next: () => {
         this.dismissGroup(g.src_ip, g.tag);
@@ -317,9 +364,13 @@ export class Alerts implements OnInit, OnDestroy {
   // ── Toast ──────────────────────────────────────────────────────────────────
 
   private showToast(msg: string) {
-    this.toast = msg;
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => { this.toast = ''; this.cdr.detectChanges(); }, 3000);
+    // setTimeout 0 defers past the current change-detection cycle, preventing NG0100
+    setTimeout(() => {
+      this.toast = msg;
+      this.cdr.detectChanges();
+      this.toastTimer = setTimeout(() => { this.toast = ''; this.cdr.detectChanges(); }, 3000);
+    }, 0);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

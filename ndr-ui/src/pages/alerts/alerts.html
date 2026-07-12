@@ -130,6 +130,11 @@
               </td>
               <td class="src-cell">
                 <span class="src-ip">{{ g.src_ip || '—' }}</span>
+                <ng-container *ngIf="g.dstIps?.length">
+                  <span class="flow-arrow-inline">→</span>
+                  <span class="victim-ip">{{ g.dstIps[0] }}</span>
+                  <span *ngIf="g.dstIps.length > 1" class="victim-more">+{{ g.dstIps.length - 1 }}</span>
+                </ng-container>
               </td>
               <td>
                 <span [class]="'score-pill ' + getScoreClass(g.maxScore)">

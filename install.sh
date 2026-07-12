@@ -839,6 +839,14 @@ SUDOERS
 sudo chmod 440 /etc/sudoers.d/ndr-stack
 log "Sudo configured"
 
+# ── ARP isolation capability ───────────────────
+# Device isolation uses scapy to send raw ARP frames (CAP_NET_RAW required).
+# setcap grants only that capability — no full root escalation.
+log "Granting python3 raw socket capability for ARP device isolation..."
+PYTHON3_BIN=$(readlink -f "$(which python3)")
+sudo setcap cap_net_raw+ep "$PYTHON3_BIN"
+log "ARP isolation ready (cap_net_raw set on $PYTHON3_BIN)"
+
 # ── NDR Agent service ─────────────────────────
 log "Setting up scripts..."
 chmod +x "$INSTALL_DIR/scripts/"*.py \
@@ -853,8 +861,6 @@ After=network.target
 [Service]
 Type=simple
 User=$USERNAME
-AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 ExecStartPre=-/bin/rm -f /var/run/suricata.pid /run/suricata.pid /tmp/suricata.pid
 ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/ndr-agent.py
 Restart=always

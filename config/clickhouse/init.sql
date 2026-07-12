@@ -432,24 +432,29 @@ TTL requested_at + INTERVAL 2 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.ai_suppressions ON CLUSTER ndr_cluster
 (
-    id             String   DEFAULT toString(generateUUIDv4()),
-    tenant_id      String   DEFAULT 'default',
-    signature_id   UInt64   DEFAULT 0,
-    signature_name String   DEFAULT '',
-    suppress_type  String   DEFAULT 'by_dst',
-    suppress_ip    String   DEFAULT '',
-    src_ip         String   DEFAULT '',
-    dst_ip         String   DEFAULT '',
-    community_id   String   DEFAULT '',
-    ai_reason      String   DEFAULT '',
-    ai_confidence  UInt8    DEFAULT 0,
-    sensor_id      String   DEFAULT '',
-    active         UInt8    DEFAULT 1,
-    created_at     DateTime DEFAULT now()
+    id             String            DEFAULT toString(generateUUIDv4()),
+    tenant_id      String            DEFAULT 'default',
+    signature_id   UInt64            DEFAULT 0,
+    signature_name String            DEFAULT '',
+    suppress_type  String            DEFAULT 'by_dst',
+    suppress_ip    String            DEFAULT '',
+    src_ip         String            DEFAULT '',
+    dst_ip         String            DEFAULT '',
+    community_id   String            DEFAULT '',
+    ai_reason      String            DEFAULT '',
+    ai_confidence  UInt8             DEFAULT 0,
+    sensor_id      String            DEFAULT '',
+    active         UInt8             DEFAULT 1,
+    created_at     DateTime          DEFAULT now(),
+    expires_at     Nullable(DateTime) DEFAULT NULL,
+    suppress_scope String            DEFAULT 'individual'
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ai_suppressions', '{replica}', created_at)
 ORDER BY (tenant_id, signature_id, suppress_type, suppress_ip)
 TTL created_at + INTERVAL 90 DAY;
+
+ALTER TABLE ndr.ai_suppressions ON CLUSTER ndr_cluster ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime) DEFAULT NULL;
+ALTER TABLE ndr.ai_suppressions ON CLUSTER ndr_cluster ADD COLUMN IF NOT EXISTS suppress_scope String DEFAULT 'individual';
 
 CREATE TABLE IF NOT EXISTS ndr.sensor_commands ON CLUSTER ndr_cluster
 (
@@ -900,20 +905,3 @@ ALTER TABLE ndr.soar_playbook_runs ON CLUSTER ndr_cluster MODIFY TTL created_at 
 ALTER TABLE ndr.evidence_log ON CLUSTER ndr_cluster MODIFY TTL performed_at + INTERVAL 90 DAY;
 ALTER TABLE ndr.soar_case_comments ON CLUSTER ndr_cluster MODIFY TTL created_at + INTERVAL 730 DAY;
 
--- ── LowCardinality migrations (idempotent — safe to re-run on existing tables) ──
--- Converts already-deployed tables; fresh installs already have these types in CREATE TABLE.
-ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN source       LowCardinality(String);
-ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN proto        LowCardinality(String);
-ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN event_type   LowCardinality(String);
-ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN tenant_id    LowCardinality(String);
-ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN sensor_id    LowCardinality(String);
-
-ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY COLUMN severity           LowCardinality(String);
-ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY COLUMN tenant_id          LowCardinality(String);
-ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY COLUMN correlation_status LowCardinality(String);
-
-ALTER TABLE ndr.device_isolations ON CLUSTER ndr_cluster MODIFY COLUMN method      LowCardinality(String);
-ALTER TABLE ndr.device_isolations ON CLUSTER ndr_cluster MODIFY COLUMN enforcement LowCardinality(String);
-ALTER TABLE ndr.device_isolations ON CLUSTER ndr_cluster MODIFY COLUMN status      LowCardinality(String);
-
-ALTER TABLE ndr.assets ON CLUSTER ndr_cluster MODIFY COLUMN device_type LowCardinality(String);
