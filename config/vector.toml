@@ -182,9 +182,19 @@ parsed, err = parse_json(.message)
 if err == null { . = parsed; .source = "zeek"; .log_type = "ipam" } else { abort }
 '''
 
+[transforms.stamp_local]
+type = "remap"
+inputs = ["suricata_json", "zeek_json", "zeek_http_json", "zeek_dns_json", "zeek_ssl_json", "zeek_files_json", "zeek_dhcp_json", "zeek_weird_json", "zeek_quic_json", "zeek_arp_json", "zeek_software_json", "zeek_ipam_json"]
+source = '''
+  .sensor_host = get_env_var("LOCAL_SENSOR_ID") ?? "local-central"
+  if !exists(.tenant_id) || .tenant_id == "" {
+    .tenant_id = get_env_var("TENANT_ID") ?? "default"
+  }
+'''
+
 [sinks.kafka]
 type = "kafka"
-inputs = ["suricata_json", "zeek_json", "zeek_http_json", "zeek_dns_json", "zeek_ssl_json", "zeek_files_json", "zeek_dhcp_json", "zeek_weird_json", "zeek_quic_json", "zeek_arp_json", "zeek_software_json", "zeek_ipam_json"]
+inputs = ["stamp_local"]
 bootstrap_servers = "kafka1:9092,kafka2:9092,kafka3:9092"
 topic = "ndr-events"
 encoding.codec = "json"

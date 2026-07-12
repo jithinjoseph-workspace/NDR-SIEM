@@ -165,6 +165,7 @@ IFACE_EARLY=${IFACE_EARLY:-eth0}
 HOST_IP_EARLY=$(ip -o -4 addr show "$IFACE_EARLY" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
 HOST_IP_EARLY=${HOST_IP_EARLY:-$(hostname -I | awk '{print $1}')}
 JWT_SECRET_EARLY=$(openssl rand -hex 32 2>/dev/null || echo "changeme-$(date +%s)")
+NDR_AGENT_SECRET_EARLY=$(openssl rand -hex 32 2>/dev/null || echo "changeme-agent-$(date +%s)")
 
 cat > "$INSTALL_DIR/.env" << _EARLY_ENV
 HOST_IP=${HOST_IP_EARLY}
@@ -172,12 +173,16 @@ HOME_DIR=${HOME_DIR}
 INSTALL_DIR=${INSTALL_DIR}
 IFACE=${IFACE_EARLY}
 DEPLOY_MODE=${DEPLOY_MODE}
-CLICKHOUSE_URL=http://clickhouse1:8123
-CLICKHOUSE_URL_SECONDARY=http://clickhouse1:8123
+LOCAL_SENSOR_ID=local-central
+TENANT_ID=default
+CLICKHOUSE_URL=http://ndr-nginx:8123
+CLICKHOUSE_URL_SECONDARY=http://clickhouse2:8123
 CLICKHOUSE_USER=ndr
 CLICKHOUSE_PASSWORD=ndr123
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=${JWT_SECRET_EARLY}
+NDR_AGENT_SECRET=${NDR_AGENT_SECRET_EARLY}
+CORS_ORIGIN=http://${HOST_IP_EARLY}:3000
 ARKIME_URL=http://${HOST_IP_EARLY}:8005
 ARKIME_PASS=admin
 OPENSEARCH_URL=http://${HOST_IP_EARLY}:9200
@@ -212,11 +217,14 @@ log "Updating package lists..."
 sudo apt-get update 2>&1 | grep -E "^Get|^Hit|^Err|^W:" || true
 log "Installing packages..."
 sudo apt-get install -y \
-    curl wget git jq python3 \
+    curl wget git jq python3 python3-pip \
     net-tools iproute2 \
     netcat-traditional \
     arp-scan iputils-arping snmp \
     libpcre3 2>/dev/null || true
+
+# scapy needed for ARP isolation in ndr-agent
+pip3 install scapy --break-system-packages -q 2>/dev/null || pip3 install scapy -q 2>/dev/null || true
 
 if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
     for PCRE3_URL in \
@@ -771,9 +779,14 @@ log "Host IP: $HOST_IP"
 
 # ── JWT & API keys ────────────────────────────
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "JWT_SECRET" "$INSTALL_DIR/.env"; then
-    JWT_SECRET=$(grep "JWT_SECRET" "$INSTALL_DIR/.env" | cut -d= -f2-)
+    JWT_SECRET=$(grep "^JWT_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
 else
     JWT_SECRET=$(openssl rand -hex 32)
+fi
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "NDR_AGENT_SECRET" "$INSTALL_DIR/.env"; then
+    NDR_AGENT_SECRET=$(grep "^NDR_AGENT_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+else
+    NDR_AGENT_SECRET=$(openssl rand -hex 32)
 fi
 
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "OPENAI_API_KEY" "$INSTALL_DIR/.env"; then
@@ -790,12 +803,16 @@ HOME_DIR=$HOME_DIR
 INSTALL_DIR=$INSTALL_DIR
 IFACE=$IFACE
 DEPLOY_MODE=$DEPLOY_MODE
+LOCAL_SENSOR_ID=local-central
+TENANT_ID=default
 CLICKHOUSE_URL=$CLICKHOUSE_URL
 CLICKHOUSE_URL_SECONDARY=$CLICKHOUSE_URL_SECONDARY
 CLICKHOUSE_USER=$CLOUD_CH_USER
 CLICKHOUSE_PASSWORD=$CLOUD_CH_PASS
 KAFKA_BROKERS=$CLOUD_KAFKA
 JWT_SECRET=$JWT_SECRET
+NDR_AGENT_SECRET=$NDR_AGENT_SECRET
+CORS_ORIGIN=http://${HOST_IP}:3000
 ARKIME_URL=http://${HOST_IP}:8005
 ARKIME_PASS=admin
 OPENSEARCH_URL=http://${HOST_IP}:9200
@@ -817,6 +834,7 @@ $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl
 $USERNAME ALL=(ALL) NOPASSWD: /bin/fuser
 $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tee
 $USERNAME ALL=(ALL) NOPASSWD: /usr/bin/suricatasc
+$USERNAME ALL=(root) NOPASSWD: /usr/sbin/iptables
 SUDOERS
 sudo chmod 440 /etc/sudoers.d/ndr-stack
 log "Sudo configured"
@@ -835,11 +853,15 @@ After=network.target
 [Service]
 Type=simple
 User=$USERNAME
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 ExecStartPre=-/bin/rm -f /var/run/suricata.pid /run/suricata.pid /tmp/suricata.pid
 ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/ndr-agent.py
 Restart=always
 RestartSec=3
 Environment=HOME=$HOME_DIR
+Environment=SENSOR_ID=local-central
+Environment=TENANT_ID=default
 
 [Install]
 WantedBy=multi-user.target

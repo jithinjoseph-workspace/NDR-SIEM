@@ -2,17 +2,17 @@ CREATE DATABASE IF NOT EXISTS ndr ON CLUSTER ndr_cluster;
 
 CREATE TABLE IF NOT EXISTS ndr.ndr_events ON CLUSTER ndr_cluster (
     timestamp    DateTime,
-    source       String,
+    source       LowCardinality(String),
     src_ip       String,
     dst_ip       String,
     src_port     UInt16,
     dst_port     UInt16,
-    proto        String,
-    event_type   String,
+    proto        LowCardinality(String),
+    event_type   LowCardinality(String),
     community_id String,
     raw          String,
-    tenant_id    String DEFAULT 'default',
-    sensor_id    String DEFAULT '',
+    tenant_id    LowCardinality(String) DEFAULT 'default',
+    sensor_id    LowCardinality(String) DEFAULT '',
     INDEX idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1,
     PROJECTION proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))
 ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_events', '{replica}')
@@ -26,14 +26,14 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
     src_ip              String,
     dst_ip              String,
     score               Float32,
-    severity            String,
+    severity            LowCardinality(String),
     tags                Array(String),
     sigma_hits          Array(String),
     threat_intel        UInt8,
     src_country         String,
     dst_country         String,
-    tenant_id           String DEFAULT 'default',
-    correlation_status  String DEFAULT 'agent_z_only',
+    tenant_id           LowCardinality(String) DEFAULT 'default',
+    correlation_status  LowCardinality(String) DEFAULT 'agent_z_only',
     agent_z_details     String DEFAULT '{}',
     agent_s_details     String DEFAULT '{}',
     corroborated_at     DateTime DEFAULT toDateTime(0),
@@ -297,10 +297,15 @@ CREATE TABLE IF NOT EXISTS ndr.users ON CLUSTER ndr_cluster
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/users', '{replica}', created_at)
 ORDER BY username;
 
--- Insert default admin user
--- Password: ndr@admin123 (bcrypt hash)
-INSERT INTO ndr.users (username, password_hash, role)
-VALUES ('admin', '$2b$12$qB5uFqakHidExby4EbdH6.tFvW34sj7CAQFZdUCzk5YSi/kV3S09.', 'super_admin');
+-- Insert default super_admin — internal NDR team only, never given to customer
+-- Password: ndr@admin123
+INSERT INTO ndr.users (username, password_hash, role, tenant_id)
+VALUES ('admin', '$2b$12$qB5uFqakHidExby4EbdH6.tFvW34sj7CAQFZdUCzk5YSi/kV3S09.', 'super_admin', 'default');
+
+-- Insert default tenant_admin for the default tenant — this is what the customer gets
+-- Password: ndr@tenant123  (customer must change on first login)
+INSERT INTO ndr.users (username, password_hash, role, tenant_id, permissions)
+VALUES ('tenant-admin', '$2b$12$wi15kWc0KGLG6FEtIysJHuqRfT7PDvOoW2IC3oT3hfoQmtmygZ5h6', 'tenant_admin', 'default', 'dashboard,alerts,sensors,users,soar');
 
 CREATE TABLE IF NOT EXISTS ndr.tenants ON CLUSTER ndr_cluster
 (
@@ -641,7 +646,7 @@ CREATE TABLE IF NOT EXISTS ndr.assets ON CLUSTER ndr_cluster
     hostname       String DEFAULT '',
     vendor         String DEFAULT '',
     os_guess       String DEFAULT '',
-    device_type    String DEFAULT 'unknown',
+    device_type    LowCardinality(String) DEFAULT 'unknown',
     custom_name    String DEFAULT '',
     tenant_id      String DEFAULT 'default',
     first_seen     DateTime DEFAULT now(),
@@ -867,9 +872,48 @@ CREATE TABLE IF NOT EXISTS ndr.user_sensor_assignments ON CLUSTER ndr_cluster
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/user_sensor_assignments', '{replica}', created_at)
 ORDER BY (tenant_id, user_id, sensor_id);
 
+-- Device isolations — ARP spoofing, switch VLAN quarantine, cloud firewall deny
+CREATE TABLE IF NOT EXISTS ndr.device_isolations ON CLUSTER ndr_cluster
+(
+    id                 String   DEFAULT toString(generateUUIDv4()),
+    tenant_id          String   DEFAULT 'default',
+    target_ip          String,
+    gateway_ip         String   DEFAULT '',
+    method             LowCardinality(String)   DEFAULT 'arp',       -- arp / switch_vlan / cloud_firewall
+    enforcement        LowCardinality(String)   DEFAULT 'arp',       -- arp / unifi / cisco / aruba / snmp / aws_sg / azure_nsg / gcp_vpc
+    enforcement_detail String   DEFAULT '{}',        -- JSON: switch IP, rule ID, port, VLAN, etc.
+    triggered_by       String   DEFAULT 'manual',    -- playbook name or 'manual'
+    sensor_id          String   DEFAULT '',
+    reason             String   DEFAULT '',
+    status             LowCardinality(String)   DEFAULT 'active',    -- active / restored / expired
+    created_at         DateTime DEFAULT now(),
+    updated_at         DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/device_isolations', '{replica}', updated_at)
+ORDER BY (tenant_id, id)
+TTL created_at + INTERVAL 180 DAY;
+
 -- ── Retention TTL migrations (idempotent — safe to re-run on existing tables) ──
 -- Applied here so already-deployed clusters pick up TTLs without a manual ALTER.
 ALTER TABLE ndr.ioc_hits ON CLUSTER ndr_cluster MODIFY TTL timestamp + INTERVAL 90 DAY;
 ALTER TABLE ndr.soar_playbook_runs ON CLUSTER ndr_cluster MODIFY TTL created_at + INTERVAL 90 DAY;
 ALTER TABLE ndr.evidence_log ON CLUSTER ndr_cluster MODIFY TTL performed_at + INTERVAL 90 DAY;
 ALTER TABLE ndr.soar_case_comments ON CLUSTER ndr_cluster MODIFY TTL created_at + INTERVAL 730 DAY;
+
+-- ── LowCardinality migrations (idempotent — safe to re-run on existing tables) ──
+-- Converts already-deployed tables; fresh installs already have these types in CREATE TABLE.
+ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN source       LowCardinality(String);
+ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN proto        LowCardinality(String);
+ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN event_type   LowCardinality(String);
+ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN tenant_id    LowCardinality(String);
+ALTER TABLE ndr.ndr_events ON CLUSTER ndr_cluster MODIFY COLUMN sensor_id    LowCardinality(String);
+
+ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY COLUMN severity           LowCardinality(String);
+ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY COLUMN tenant_id          LowCardinality(String);
+ALTER TABLE ndr.ndr_hits ON CLUSTER ndr_cluster MODIFY COLUMN correlation_status LowCardinality(String);
+
+ALTER TABLE ndr.device_isolations ON CLUSTER ndr_cluster MODIFY COLUMN method      LowCardinality(String);
+ALTER TABLE ndr.device_isolations ON CLUSTER ndr_cluster MODIFY COLUMN enforcement LowCardinality(String);
+ALTER TABLE ndr.device_isolations ON CLUSTER ndr_cluster MODIFY COLUMN status      LowCardinality(String);
+
+ALTER TABLE ndr.assets ON CLUSTER ndr_cluster MODIFY COLUMN device_type LowCardinality(String);

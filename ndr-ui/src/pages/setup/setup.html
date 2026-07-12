@@ -65,7 +65,7 @@
       <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
       Local Sensor
     </button>
-    <button *ngIf="!isDefaultTenant" type="button" (click)="selectTab('external')" [class.active]="activeTab === 'external'">
+    <button type="button" (click)="selectTab('external')" [class.active]="activeTab === 'external'">
       <lucide-icon [name]="ServerIcon" class="w-4 h-4"></lucide-icon>
       External Sensors
     </button>
@@ -388,12 +388,39 @@
     <div class="sensor-modal">
       <div class="modal-head">
         <div>
-          <h3>Add Sensor</h3>
-          <p>Generate a one-time API key and run the install command on the sensor machine.</p>
+          <h3>Add Remote Sensor</h3>
+          <p>Generate a one-time API key and run the install command on the remote sensor machine.</p>
         </div>
         <button type="button" class="icon-close" (click)="showAddSensorModal = false">
           x
         </button>
+      </div>
+
+      <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.25);border-radius:6px;padding:10px 14px;font-size:12px;color:#fbbf24;display:flex;gap:8px;align-items:flex-start;margin:12px 0 0;">
+        <span style="flex-shrink:0;">⚠</span>
+        <span>This key is for <strong>remote capture machines only</strong>. The local sensor on this server runs automatically via Docker and does not need a key.</span>
+      </div>
+
+      <!-- Server URL field (shown always; warning if localhost) -->
+      <div class="sensor-step">
+        <div class="step-number">0</div>
+        <div class="step-content">
+          <h4>Server URL</h4>
+          <p style="font-size:12px;color:#94a3b8;margin:0 0 8px;">
+            The URL remote sensors will use to reach this NDR server.
+          </p>
+          <div *ngIf="isLocalhostUrl" style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:8px 12px;font-size:12px;color:#fbbf24;margin-bottom:8px;">
+            You are accessing via localhost — enter the server's real IP or hostname so remote sensors can connect.
+          </div>
+          <label>
+            <input
+              [(ngModel)]="customServerUrl"
+              (ngModelChange)="rebuildInstallCommand()"
+              placeholder="http://192.168.1.100:3000"
+              style="width:100%;"
+            />
+          </label>
+        </div>
       </div>
 
       <div class="sensor-step">

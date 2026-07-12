@@ -117,7 +117,7 @@ async fn handle_ws(
     auth: WsAuthContext,
 ) {
     let agent = std::env::var("NDR_AGENT_URL")
-        .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string());
+        .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
     let client = state.http_client.clone();
 
     // Push interfaces only to default tenant
@@ -251,6 +251,19 @@ async fn handle_ws(
 
                                 // ── Normal tenant alert message ───────────
                                 if let Ok(payload) = m.get_payload::<String>() {
+                                    // Apply sensor filter — skip events from sensors
+                                    // the user is not assigned to.
+                                    if !auth.sensor_ids.is_empty() {
+                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
+                                            let event_sensor = parsed.get("sensor_host")
+                                                .or_else(|| parsed.get("sensor_id"))
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            if !auth.sensor_ids.iter().any(|s| s == event_sensor) {
+                                                continue;
+                                            }
+                                        }
+                                    }
                                     if socket.send(Message::Text(payload)).await.is_err() {
                                         break;
                                     }
@@ -326,10 +339,20 @@ async fn handle_ws(
                 match result {
                     Ok(msg) => {
                         let should_send = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
-                            parsed.get("tenant_id")
+                            let tenant_ok = parsed.get("tenant_id")
                                 .and_then(|t| t.as_str())
                                 .map(|t| t == auth.tenant_id)
-                                .unwrap_or(false)
+                                .unwrap_or(false);
+                            let sensor_ok = if auth.sensor_ids.is_empty() {
+                                true
+                            } else {
+                                let event_sensor = parsed.get("sensor_host")
+                                    .or_else(|| parsed.get("sensor_id"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                auth.sensor_ids.iter().any(|s| s == event_sensor)
+                            };
+                            tenant_ok && sensor_ok
                         } else {
                             false
                         };

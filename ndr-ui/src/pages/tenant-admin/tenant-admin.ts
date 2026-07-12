@@ -283,8 +283,8 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.tenantId = this.currentUser.tenant_id || 'default';
     this.tenantName = this.formatTenantName(this.tenantId);
 
-    const allowed = ['admin', 'tenant_admin'].includes(this.currentUser.role);
-    if (!allowed || this.tenantId === 'default') {
+    const allowed = ['admin', 'super_admin', 'tenant_admin'].includes(this.currentUser.role);
+    if (!allowed) {
       this.router.navigate(['/dashboard']);
       return;
     }

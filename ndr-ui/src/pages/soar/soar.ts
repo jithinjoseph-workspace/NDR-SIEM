@@ -9,7 +9,7 @@ import {
     CheckCircle, XCircle, Link,
     RefreshCw, ExternalLink, Plus,
     Trash2, Bell, Mail, Globe, Shield, Activity, ShieldAlert,
-    Ban, ShieldOff
+    Ban, ShieldOff, WifiOff, Wifi, AlertCircle
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
 import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
@@ -41,8 +41,12 @@ export class Soar implements OnInit {
     ShieldAlertIcon = ShieldAlert;
     BanIcon = Ban;
     ShieldOffIcon = ShieldOff;
+    WifiOffIcon = WifiOff;
+    WifiIcon = Wifi;
+    CheckCircleIcon = CheckCircle;
+    AlertCircleIcon = AlertCircle;
 
-    activeTab: 'cases' | 'playbooks' | 'integrations' | 'activity' | 'blocks' = 'cases';
+    activeTab: 'cases' | 'playbooks' | 'integrations' | 'activity' | 'blocks' | 'isolations' = 'cases';
     loading = false;
 
     // --- Cases ---
@@ -94,6 +98,38 @@ export class Soar implements OnInit {
     blockSaving = false;
     blockError = '';
 
+    // --- Device Isolations ---
+    isolations: any[] = [];
+    loadingIsolations = false;
+    showIsolateModal = false;
+    isolateIp = '';
+    isolateGateway = '192.168.1.1';
+    isolateEnforcement: 'arp' | 'unifi' | 'cisco' | 'aruba' | 'snmp' | 'aws_sg' | 'azure_nsg' | 'gcp_vpc' = 'arp';
+    isolateVlan = 999;
+    isolateReason = '';
+    isolateSaving = false;
+    isolateError = '';
+
+    // --- Isolation Progress Modal ---
+    showIsolationProgress = false;
+    isolationProgressTitle = '';
+    isolationProgressTarget = '';
+    isolationProgressSteps: { label: string; status: 'pending' | 'running' | 'done' | 'error' }[] = [];
+    isolationProgressComplete = false;
+    isolationProgressSuccess = false;
+    isolationProgressError = '';
+
+    isolationEnforcementTypes = [
+        { value: 'arp',       label: 'ARP Spoofing (instant, agent-side)' },
+        { value: 'unifi',     label: 'UniFi — Block Station (REST)' },
+        { value: 'cisco',     label: 'Cisco IOS — VLAN quarantine (SNMP)' },
+        { value: 'aruba',     label: 'Aruba CX — Access VLAN (REST)' },
+        { value: 'snmp',      label: 'Generic Switch — VLAN quarantine (SNMP)' },
+        { value: 'aws_sg',    label: 'AWS Security Group — revoke ingress' },
+        { value: 'azure_nsg', label: 'Azure NSG — Deny inbound rule' },
+        { value: 'gcp_vpc',   label: 'GCP VPC Firewall — Deny ingress rule' },
+    ];
+
     firewallIntegrationTypes = [
         { type: 'pfsense',  name: 'pfSense',          fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }] },
         { type: 'fortinet', name: 'Fortinet FortiOS',  fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }] },
@@ -103,33 +139,111 @@ export class Soar implements OnInit {
     ];
 
     integrationTypes = [
+        // ── Notification channels ──────────────────────────────────────────
         {
-            type: 'slack', name: 'Slack', abbr: 'SLK',
+            type: 'slack', name: 'Slack', abbr: 'SLK', group: 'notify',
             fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://hooks.slack.com/...', type: 'text' }]
         },
         {
-            type: 'teams', name: 'Microsoft Teams', abbr: 'TMS',
+            type: 'teams', name: 'MS Teams', abbr: 'TMS', group: 'notify',
             fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://outlook.office.com/webhook/...', type: 'text' }]
         },
         {
-            type: 'discord', name: 'Discord', abbr: 'DSC',
+            type: 'discord', name: 'Discord', abbr: 'DSC', group: 'notify',
             fields: [{ key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://discord.com/api/webhooks/...', type: 'text' }]
         },
         {
-            type: 'webhook', name: 'Custom Webhook', abbr: 'WHK',
+            type: 'webhook', name: 'Webhook', abbr: 'WHK', group: 'notify',
             fields: [{ key: 'webhook_url', label: 'Endpoint URL', placeholder: 'https://your-endpoint.com/alert', type: 'text' }]
         },
         {
-            type: 'smtp', name: 'SMTP Email', abbr: 'EML',
+            type: 'smtp', name: 'Email', abbr: 'EML', group: 'notify',
             fields: [
                 { key: 'smtp_host', label: 'SMTP Host', placeholder: 'smtp.gmail.com', type: 'text' },
                 { key: 'smtp_port', label: 'SMTP Port', placeholder: '587', type: 'text' },
                 { key: 'smtp_user', label: 'Username', placeholder: 'user@domain.com', type: 'text' },
                 { key: 'smtp_pass', label: 'Password', placeholder: '••••••••', type: 'password' },
                 { key: 'from_addr', label: 'From Address', placeholder: 'alerts@domain.com', type: 'text' },
-                { key: 'to_addr', label: 'Default Recipient', placeholder: 'soc@domain.com', type: 'text' }
+                { key: 'to_addr', label: 'Recipient', placeholder: 'soc@domain.com', type: 'text' }
             ]
-        }
+        },
+        // ── Firewall / block enforcement ───────────────────────────────────
+        {
+            type: 'pfsense', name: 'pfSense', abbr: 'PFS', group: 'firewall',
+            fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1', type: 'text' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }]
+        },
+        {
+            type: 'fortinet', name: 'FortiGate', abbr: 'FGT', group: 'firewall',
+            fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1', type: 'text' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }, { key: 'vdom', label: 'VDOM', placeholder: 'root', type: 'text' }]
+        },
+        {
+            type: 'panos', name: 'PAN-OS', abbr: 'PAN', group: 'firewall',
+            fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1', type: 'text' }, { key: 'api_key', label: 'API Key', placeholder: '...', type: 'password' }]
+        },
+        {
+            type: 'opnsense', name: 'OPNsense', abbr: 'OPN', group: 'firewall',
+            fields: [{ key: 'host', label: 'Host', placeholder: '192.168.1.1', type: 'text' }, { key: 'api_key', label: 'Key:Secret', placeholder: 'key:secret', type: 'password' }]
+        },
+        // ── Switch isolation ───────────────────────────────────────────────
+        {
+            type: 'unifi', name: 'UniFi', abbr: 'UFI', group: 'switch',
+            fields: [
+                { key: 'host', label: 'Controller URL', placeholder: 'https://192.168.1.1:8443', type: 'text' },
+                { key: 'username', label: 'Username', placeholder: 'admin', type: 'text' },
+                { key: 'password', label: 'Password', placeholder: '••••••••', type: 'password' },
+                { key: 'site', label: 'Site', placeholder: 'default', type: 'text' }
+            ]
+        },
+        {
+            type: 'cisco', name: 'Cisco SNMP', abbr: 'CSC', group: 'switch',
+            fields: [
+                { key: 'host', label: 'Switch IP', placeholder: '192.168.1.2', type: 'text' },
+                { key: 'community', label: 'Write Community', placeholder: 'private', type: 'password' },
+                { key: 'port_ifindex', label: 'Port ifIndex', placeholder: '1', type: 'text' }
+            ]
+        },
+        {
+            type: 'aruba', name: 'Aruba CX', abbr: 'ARB', group: 'switch',
+            fields: [
+                { key: 'host', label: 'Switch URL', placeholder: 'https://192.168.1.3', type: 'text' },
+                { key: 'username', label: 'Username', placeholder: 'admin', type: 'text' },
+                { key: 'password', label: 'Password', placeholder: '••••••••', type: 'password' },
+                { key: 'port', label: 'Port (e.g. 1/1/5)', placeholder: '1/1/5', type: 'text' }
+            ]
+        },
+        {
+            type: 'snmp', name: 'Generic SNMP', abbr: 'SNM', group: 'switch',
+            fields: [
+                { key: 'host', label: 'Switch IP', placeholder: '192.168.1.4', type: 'text' },
+                { key: 'community', label: 'Write Community', placeholder: 'private', type: 'password' },
+                { key: 'port_ifindex', label: 'Port ifIndex', placeholder: '1', type: 'text' }
+            ]
+        },
+        // ── Cloud firewall ─────────────────────────────────────────────────
+        {
+            type: 'aws_sg', name: 'AWS SG', abbr: 'AWS', group: 'cloud',
+            fields: [
+                { key: 'sg_id', label: 'Security Group ID', placeholder: 'sg-0123456789abcdef', type: 'text' },
+                { key: 'region', label: 'Region', placeholder: 'us-east-1', type: 'text' },
+                { key: 'aws_access_key_id', label: 'Access Key ID', placeholder: 'AKIA...', type: 'text' },
+                { key: 'aws_secret_access_key', label: 'Secret Access Key', placeholder: '...', type: 'password' }
+            ]
+        },
+        {
+            type: 'azure_nsg', name: 'Azure NSG', abbr: 'AZR', group: 'cloud',
+            fields: [
+                { key: 'resource_group', label: 'Resource Group', placeholder: 'my-rg', type: 'text' },
+                { key: 'nsg_name', label: 'NSG Name', placeholder: 'my-nsg', type: 'text' },
+                { key: 'subscription_id', label: 'Subscription ID (optional)', placeholder: '...', type: 'text' }
+            ]
+        },
+        {
+            type: 'gcp_vpc', name: 'GCP VPC', abbr: 'GCP', group: 'cloud',
+            fields: [
+                { key: 'project', label: 'Project ID', placeholder: 'my-project', type: 'text' },
+                { key: 'network', label: 'Network', placeholder: 'default', type: 'text' }
+            ]
+        },
     ];
     evidenceLoading = false;
     liveEvidence: any = null;
@@ -183,13 +297,14 @@ export class Soar implements OnInit {
     }
 
     // --- Tab Switching ---
-    switchTab(tab: 'cases' | 'playbooks' | 'integrations' | 'activity' | 'blocks') {
+    switchTab(tab: 'cases' | 'playbooks' | 'integrations' | 'activity' | 'blocks' | 'isolations') {
         this.activeTab = tab;
         if (tab === 'cases') this.loadCases();
         if (tab === 'playbooks') this.loadPlaybooks();
         if (tab === 'integrations') this.loadIntegrations();
         if (tab === 'activity') this.loadRuns();
         if (tab === 'blocks') this.loadBlocks();
+        if (tab === 'isolations') this.loadIsolations();
     }
 
     // --- Blocks Logic ---
@@ -250,6 +365,127 @@ export class Soar implements OnInit {
                 this.cdr.detectChanges();
             }
         });
+    }
+
+    // --- Isolations Logic ---
+    loadIsolations() {
+        this.loadingIsolations = true;
+        this.api.listIsolations().subscribe({
+            next: (res: any) => {
+                this.isolations = res.data || [];
+                this.loadingIsolations = false;
+                this.cdr.detectChanges();
+            },
+            error: () => { this.loadingIsolations = false; this.cdr.detectChanges(); }
+        });
+    }
+
+    openIsolateModal() {
+        this.isolateIp = '';
+        this.isolateGateway = '192.168.1.1';
+        this.isolateEnforcement = 'arp';
+        this.isolateVlan = 999;
+        this.isolateReason = '';
+        this.isolateError = '';
+        this.showIsolateModal = true;
+    }
+
+    private startIsolationProgress(title: string, target: string, steps: string[]) {
+        this.isolationProgressTitle = title;
+        this.isolationProgressTarget = target;
+        this.isolationProgressSteps = steps.map(label => ({ label, status: 'pending' as const }));
+        this.isolationProgressComplete = false;
+        this.isolationProgressSuccess = false;
+        this.isolationProgressError = '';
+        this.showIsolationProgress = true;
+        this.cdr.detectChanges();
+    }
+
+    private async runIsolationSteps(apiCall: Promise<any>, stepDelays: number[]) {
+        // Animate through all but last step while API call is in-flight
+        let stepIndex = 0;
+        const advance = (idx: number) => {
+            if (idx > 0) this.isolationProgressSteps[idx - 1].status = 'done';
+            this.isolationProgressSteps[idx].status = 'running';
+            this.cdr.detectChanges();
+        };
+        advance(stepIndex);
+        const timers: ReturnType<typeof setTimeout>[] = [];
+        for (let i = 1; i < this.isolationProgressSteps.length - 1; i++) {
+            const delay = stepDelays[i - 1] ?? (i * 900);
+            timers.push(setTimeout(() => { advance(i); stepIndex = i; this.cdr.detectChanges(); }, delay));
+        }
+        try {
+            const res = await apiCall;
+            timers.forEach(t => clearTimeout(t));
+            // Complete all steps
+            this.isolationProgressSteps.forEach(s => s.status = 'done');
+            this.isolationProgressComplete = true;
+            this.isolationProgressSuccess = true;
+            this.isolationProgressError = res?.message && res.status !== 'success' ? res.message : '';
+            if (res?.status !== 'success' && res?.message) {
+                this.isolationProgressSteps[this.isolationProgressSteps.length - 1].status = 'error';
+                this.isolationProgressSuccess = false;
+                this.isolationProgressError = res.message;
+            }
+        } catch (err: any) {
+            timers.forEach(t => clearTimeout(t));
+            const failIdx = this.isolationProgressSteps.findIndex(s => s.status === 'running');
+            if (failIdx >= 0) this.isolationProgressSteps[failIdx].status = 'error';
+            this.isolationProgressComplete = true;
+            this.isolationProgressSuccess = false;
+            this.isolationProgressError = err?.error?.message || err?.message || 'Request failed';
+        }
+        this.cdr.detectChanges();
+        this.loadIsolations();
+    }
+
+    submitIsolation() {
+        if (!this.isolateIp.trim()) { this.isolateError = 'IP address is required'; return; }
+        const ip = this.isolateIp.trim();
+        const enforcement = this.isolateEnforcement;
+        this.showIsolateModal = false;
+
+        const isArp = enforcement === 'arp';
+        const steps = isArp
+            ? ['Connecting to sensor agent', 'Starting ARP poisoning', 'Applying iptables firewall rules', 'Confirming device isolation']
+            : ['Connecting to sensor agent', `Sending ${enforcement.toUpperCase()} quarantine command`, 'Waiting for enforcement confirmation', 'Confirming device isolation'];
+
+        this.startIsolationProgress('Isolating Device', ip, steps);
+
+        const apiPromise = new Promise<any>((resolve, reject) => {
+            this.api.isolateDevice({
+                target_ip:       ip,
+                gateway_ip:      this.isolateGateway || undefined,
+                enforcement,
+                quarantine_vlan: this.isolateVlan,
+                reason:          this.isolateReason || undefined,
+            }).subscribe({ next: resolve, error: reject });
+        });
+        this.runIsolationSteps(apiPromise, [800, 1800, 2800]);
+    }
+
+    restoreIsolation(iso: any) {
+        const enforcement = iso.enforcement || 'arp';
+        const isArp = enforcement === 'arp';
+        const steps = isArp
+            ? ['Connecting to sensor agent', 'Stopping ARP poisoning', 'Removing iptables firewall rules', 'Network access restored']
+            : ['Connecting to sensor agent', `Reverting ${enforcement.toUpperCase()} quarantine`, 'Waiting for enforcement rollback', 'Network access restored'];
+
+        this.startIsolationProgress('Restoring Device', iso.target_ip, steps);
+
+        const apiPromise = new Promise<any>((resolve, reject) => {
+            this.api.unisolateDevice(iso.id).subscribe({ next: resolve, error: reject });
+        });
+        this.runIsolationSteps(apiPromise, [800, 1800, 2800]);
+    }
+
+    closeIsolationProgress() {
+        this.showIsolationProgress = false;
+    }
+
+    isolationMethodLabel(enforcement: string): string {
+        return this.isolationEnforcementTypes.find(t => t.value === enforcement)?.label.split(' — ')[0] || enforcement;
     }
 
     // --- Cases Logic ---
@@ -482,6 +718,10 @@ export class Soar implements OnInit {
     }
 
     // --- Integrations Logic (Reused) ---
+    integrationsByGroup(group: string): any[] {
+        return this.integrationTypes.filter((t: any) => t.group === group);
+    }
+
     getIntAbbr(type: string): string {
         return (this.integrationTypes as any[]).find((t: any) => t.type === type)?.abbr || type.slice(0,3).toUpperCase();
     }

@@ -655,4 +655,24 @@ export class Api {
   revokeBlock(id: string, sensor_id?: string): Observable<any> {
     return this.http.post(`${this.baseUrl}/blocks/revoke`, { id, sensor_id });
   }
+
+  // ── Device Isolations ─────────────────────────────────────────────────────
+
+  listIsolations(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/isolations`);
+  }
+
+  isolateDevice(data: {
+    target_ip: string;
+    gateway_ip?: string;
+    enforcement?: string;
+    quarantine_vlan?: number;
+    reason?: string;
+  }): Observable<any> {
+    return this.http.post(`${this.baseUrl}/isolate`, data);
+  }
+
+  unisolateDevice(id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/unisolate`, { id });
+  }
 }

@@ -98,6 +98,20 @@ fn agent_url() -> String {
         .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string())
 }
 
+
+fn agent_secret() -> String {
+    env::var("NDR_AGENT_SECRET").unwrap_or_default()
+}
+
+fn add_agent_auth(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let secret = agent_secret();
+    if secret.is_empty() {
+        rb
+    } else {
+        rb.header("X-Agent-Secret", secret)
+    }
+}
+
 fn percent_decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
@@ -465,8 +479,13 @@ pub fn broadcast_raw_event(state: &AppState, event: &NormalizedEvent) {
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string();
+    let sensor_host = event.raw.get("sensor_host")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if let Some(obj) = msg.as_object_mut() {
         obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
+        obj.insert("sensor_host".to_string(), serde_json::Value::String(sensor_host));
     }
 
     publish_event(state, &tenant_id, &msg.to_string());
@@ -1617,8 +1636,14 @@ for integration in &integrations {
         },
     });
 
+    let hit_sensor_host = hit.agent_z.raw.get("sensor_host")
+        .or_else(|| hit.agent_s.raw.get("sensor_host"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if let Some(obj) = hit_msg.as_object_mut() {
         obj.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
+        obj.insert("sensor_host".to_string(), serde_json::Value::String(hit_sensor_host));
     }
 
     if hit.community_id.starts_with("1:") {
@@ -5310,13 +5335,13 @@ pub async fn get_sensor_keys(
     };
     
     let target_tenant = if claims.role == "super_admin" || claims.role == "admin" {
-        "default".to_string()
-    } else if claims.tenant_id != "default" {
+        "all".to_string()
+    } else if claims.role == "tenant_admin" {
         claims.tenant_id.clone()
     } else {
         return Json(json!({"status": "error", "message": "Forbidden"}));
     };
-    
+
     match state.ch_storage.get_sensor_keys(&target_tenant).await {
         Ok(keys) => Json(json!({
             "status": "ok",
@@ -8576,10 +8601,10 @@ pub async fn revoke_active_block(
             // Call agent unblock (RST cleanup)
             let agent_url = std::env::var("NDR_AGENT_URL")
                 .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
-            let _ = reqwest::Client::new()
+            let _ = add_agent_auth(reqwest::Client::new()
                 .post(format!("{}/agent/unblock", agent_url))
                 .json(&json!({"ip": block.src_ip}))
-                .timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(5)))
                 .send().await;
 
             Json(json!({"status":"success","message":format!("Block {} revoked", body.id)}))
@@ -8636,9 +8661,9 @@ pub async fn manual_block(
             "dst_ip": "", "dst_port": 0,
             "community_id": "", "duration_hours": duration,
         });
-        if let Ok(r) = reqwest::Client::new()
+        if let Ok(r) = add_agent_auth(reqwest::Client::new()
             .post(format!("{}/agent/block", agent_url))
-            .json(&rst_payload).timeout(std::time::Duration::from_secs(10)).send().await
+            .json(&rst_payload).timeout(std::time::Duration::from_secs(10))).send().await
         {
             if r.status().is_success() {
                 let resp = r.json::<serde_json::Value>().await.unwrap_or_default();
@@ -8694,4 +8719,164 @@ pub async fn manual_block(
         Ok(_)  => Json(json!({"status":"success","id":block_id,"rst_injected":rst_ok})),
         Err(e) => Json(json!({"status":"error","message":e.to_string()})),
     }
+}
+
+// ── Device Isolation API ───────────────────────────────────────────────────
+
+pub async fn list_isolations(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let tenant_id = if claims.role == "superadmin" { "superadmin".to_string() } else { claims.tenant_id.clone() };
+    match state.ch_storage.list_isolations(&tenant_id).await {
+        Ok(items) => Json(json!({"status":"success","data":items})),
+        Err(e)    => Json(json!({"status":"error","message":e.to_string()})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct IsolateBody {
+    pub target_ip:       String,
+    pub gateway_ip:      Option<String>,
+    pub enforcement:     Option<String>,   // arp / unifi / cisco / aruba / snmp / aws_sg / azure_nsg / gcp_vpc
+    pub quarantine_vlan: Option<u16>,
+    pub reason:          Option<String>,
+}
+
+pub async fn isolate_device_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<IsolateBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let tenant_id   = claims.tenant_id.clone();
+    let enforcement = body.enforcement.as_deref().unwrap_or("arp");
+    let gateway_ip  = body.gateway_ip.as_deref().unwrap_or("192.168.1.1");
+    let reason      = body.reason.clone().unwrap_or_else(|| format!("Isolated by {}", claims.sub));
+    let q_vlan      = body.quarantine_vlan.unwrap_or(999);
+    let agent_url   = std::env::var("NDR_AGENT_URL")
+        .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
+
+    let (method, enforcement_detail) = match enforcement {
+        "arp" => {
+            // Call ndr-agent ARP isolation
+            let payload = json!({"target_ip": body.target_ip, "gateway_ip": gateway_ip});
+            let resp = add_agent_auth(reqwest::Client::new()
+                .post(format!("{}/agent/isolate", agent_url))
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(10)))
+                .send().await;
+            let detail = match resp {
+                Ok(r)  => r.json::<serde_json::Value>().await.unwrap_or_default().to_string(),
+                Err(e) => json!({"error": e.to_string()}).to_string(),
+            };
+            ("arp".to_string(), detail)
+        }
+        sw @ ("unifi" | "cisco" | "aruba" | "snmp") => {
+            let integrations = state.ch_storage.get_integrations_by_tenant(&tenant_id).await.unwrap_or_default();
+            if let Some(cfg) = integrations.iter().find(|i| i["type"].as_str() == Some(sw) && i["enabled"] == json!(true)) {
+                // Capture original VLAN before quarantine so restore works correctly
+                let original_vlan = crate::soar::switch::get_current_vlan(sw, &cfg["config"]).await.unwrap_or(1);
+                let res = crate::soar::switch::quarantine_device(sw, &cfg["config"], &body.target_ip, q_vlan).await;
+                // Merge original_vlan into the enforcement_detail JSON
+                let mut detail: serde_json::Value = serde_json::from_str(&res.detail).unwrap_or(json!({}));
+                detail["original_vlan"] = json!(original_vlan);
+                ("switch_vlan".to_string(), detail.to_string())
+            } else {
+                return Json(json!({"status":"error","message":format!("{sw} integration not configured")}));
+            }
+        }
+        cloud @ ("aws_sg" | "azure_nsg" | "gcp_vpc") => {
+            let integrations = state.ch_storage.get_integrations_by_tenant(&tenant_id).await.unwrap_or_default();
+            if let Some(cfg) = integrations.iter().find(|i| i["type"].as_str() == Some(cloud) && i["enabled"] == json!(true)) {
+                let res = crate::soar::firewall::push_cloud_deny(cloud, &cfg["config"], &body.target_ip).await;
+                ("cloud_firewall".to_string(), res.rule_id)
+            } else {
+                return Json(json!({"status":"error","message":format!("{cloud} integration not configured")}));
+            }
+        }
+        _ => return Json(json!({"status":"error","message":"unsupported enforcement type"})),
+    };
+
+    let iso_id = uuid::Uuid::new_v4().to_string();
+    let iso = crate::soar::DeviceIsolation {
+        id: iso_id.clone(),
+        tenant_id,
+        target_ip: body.target_ip.clone(),
+        gateway_ip: gateway_ip.to_string(),
+        method,
+        enforcement: enforcement.to_string(),
+        enforcement_detail,
+        triggered_by: "manual".to_string(),
+        sensor_id: String::new(),
+        reason,
+        status: "active".to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    match state.ch_storage.insert_isolation(&iso).await {
+        Ok(_)  => Json(json!({"status":"success","id":iso_id,"target_ip":body.target_ip})),
+        Err(e) => Json(json!({"status":"error","message":e.to_string()})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct UnisolateBody {
+    pub id: String,
+}
+
+pub async fn unisolate_device_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<UnisolateBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let tenant_id = if claims.role == "superadmin" { "superadmin".to_string() } else { claims.tenant_id.clone() };
+    let agent_url = std::env::var("NDR_AGENT_URL")
+        .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
+
+    let iso = match state.ch_storage.restore_isolation(&body.id, &tenant_id).await {
+        Ok(Some(i)) => i,
+        Ok(None)    => return Json(json!({"status":"error","message":"Isolation not found"})),
+        Err(e)      => return Json(json!({"status":"error","message":e.to_string()})),
+    };
+
+    // Call the appropriate unisolation method based on enforcement type
+    match iso.enforcement.as_str() {
+        "arp" => {
+            let _ = add_agent_auth(reqwest::Client::new()
+                .post(format!("{}/agent/unisolate", agent_url))
+                .json(&json!({"target_ip": iso.target_ip}))
+                .timeout(std::time::Duration::from_secs(10)))
+                .send().await;
+        }
+        sw @ ("unifi" | "cisco" | "aruba" | "snmp") => {
+            let integrations = state.ch_storage.get_integrations_by_tenant(&iso.tenant_id).await.unwrap_or_default();
+            if let Some(cfg) = integrations.iter().find(|i| i["type"].as_str() == Some(sw) && i["enabled"] == json!(true)) {
+                let original_vlan = serde_json::from_str::<serde_json::Value>(&iso.enforcement_detail)
+                    .ok().and_then(|v| v["original_vlan"].as_u64()).unwrap_or(1) as u16;
+                let _ = crate::soar::switch::restore_device(sw, &cfg["config"], &iso.target_ip, original_vlan).await;
+            }
+        }
+        cloud @ ("aws_sg" | "azure_nsg" | "gcp_vpc") => {
+            let integrations = state.ch_storage.get_integrations_by_tenant(&iso.tenant_id).await.unwrap_or_default();
+            if let Some(cfg) = integrations.iter().find(|i| i["type"].as_str() == Some(cloud) && i["enabled"] == json!(true)) {
+                let _ = crate::soar::firewall::revoke_cloud_deny(cloud, &cfg["config"], &iso.target_ip, &iso.enforcement_detail).await;
+            }
+        }
+        _ => {}
+    }
+
+    Json(json!({"status":"success","message":format!("Isolation {} restored", body.id)}))
 }

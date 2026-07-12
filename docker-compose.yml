@@ -104,6 +104,9 @@ services:
     image: timberio/vector:0.32.1-alpine
     container_name: ndr-vector
     profiles: ["onpremise"]
+    environment:
+      - LOCAL_SENSOR_ID=${LOCAL_SENSOR_ID:-local-central}
+      - TENANT_ID=${TENANT_ID:-default}
     volumes:
       - ${HOME_DIR}/.vector/vector.toml:/etc/vector/vector.toml:ro
       - ${HOME_DIR}/.vector/data:/etc/vector/data
@@ -126,6 +129,7 @@ services:
     environment:
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
       - NDR_AGENT_URL=http://host.docker.internal:3001
+      - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
@@ -135,6 +139,7 @@ services:
       - RULES_DIR=/app/ndr-engine/rules
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGIN=${CORS_ORIGIN}
       - ARKIME_URL=${ARKIME_URL}
       - ARKIME_PASS=${ARKIME_PASS}
       - OPENSEARCH_URL=http://opensearch:9200
@@ -182,6 +187,7 @@ services:
     environment:
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
       - NDR_AGENT_URL=http://host.docker.internal:3001
+      - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
@@ -191,6 +197,7 @@ services:
       - RULES_DIR=/app/ndr-engine/rules
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGIN=${CORS_ORIGIN}
       - ARKIME_URL=${ARKIME_URL}
       - ARKIME_PASS=${ARKIME_PASS}
       - OPENSEARCH_URL=http://opensearch:9200
@@ -238,6 +245,7 @@ services:
     environment:
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
       - NDR_AGENT_URL=http://host.docker.internal:3001
+      - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=ndr123
@@ -247,6 +255,7 @@ services:
       - RULES_DIR=/app/ndr-engine/rules
       - HOST_INSTALL_DIR=${INSTALL_DIR}
       - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGIN=${CORS_ORIGIN}
       - ARKIME_URL=${ARKIME_URL}
       - ARKIME_PASS=${ARKIME_PASS}
       - OPENSEARCH_URL=http://opensearch:9200
@@ -306,6 +315,8 @@ services:
         condition: service_healthy
       ndr-engine-3:
         condition: service_healthy
+    networks:
+      - ndr-internal
     restart: unless-stopped
 
   opensearch:

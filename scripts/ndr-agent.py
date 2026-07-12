@@ -3,6 +3,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json, subprocess, os, re, time, threading, ipaddress, socket
 from pathlib import Path
 
+SENSOR_ID = os.environ.get("SENSOR_ID", "")
+TENANT_ID = os.environ.get("TENANT_ID", "default")
+
 
 def _docker_bridge_ip() -> str:
     """Return the host IP on the Docker bridge so we bind only there.
@@ -334,11 +337,22 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _check_auth(self) -> bool:
+        """Validate X-Agent-Secret header against NDR_AGENT_SECRET env var.
+        If the env var is not set, auth is skipped (development mode)."""
+        secret = os.environ.get("NDR_AGENT_SECRET", "")
+        if not secret:
+            return True
+        return self.headers.get("X-Agent-Secret", "") == secret
+
     def get_body(self):
         length = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(length)) if length else {}
 
     def do_GET(self):
+        if not self._check_auth():
+            self.send_json({"error": "Unauthorized"}, 401)
+            return
         if self.path == "/agent/status":
             zeek = subprocess.run("sudo pgrep -x zeek", shell=True, capture_output=True).returncode == 0
             suri = subprocess.run("ps aux | grep -v grep | grep -v ndr-agent | grep -c suricata",
@@ -394,6 +408,9 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if not self._check_auth():
+            self.send_json({"error": "Unauthorized"}, 401)
+            return
         if self.path == "/agent/start":
             iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eth0"
             # Auto-create log directories
@@ -503,6 +520,34 @@ class AgentHandler(BaseHTTPRequestHandler):
             code   = 200 if result.get("status") == "unblocked" else 400
             self.send_json(result, code)
 
+        elif self.path == "/agent/isolate":
+            body       = self.get_body()
+            target_ip  = body.get("target_ip", "").strip()
+            gateway_ip = body.get("gateway_ip", "192.168.1.1").strip()
+            result     = isolate_device(target_ip, gateway_ip)
+            code       = 200 if result.get("status") in ("isolated", "already_isolated") else 400
+            self.send_json(result, code)
+
+        elif self.path == "/agent/unisolate":
+            body      = self.get_body()
+            target_ip = body.get("target_ip", "").strip()
+            result    = unisolate_device(target_ip)
+            code      = 200 if result.get("status") == "unisolated" else 400
+            self.send_json(result, code)
+
+        elif self.path == "/agent/isolations":
+            import datetime
+            with _isolation_lock:
+                items = [
+                    {
+                        "ip": ip,
+                        "gateway_ip": v["gateway_ip"],
+                        "started_at": datetime.datetime.utcfromtimestamp(v["started_at"]).isoformat() + "Z",
+                    }
+                    for ip, v in _isolated_devices.items()
+                ]
+            self.send_json({"isolations": items})
+
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -605,6 +650,10 @@ def apply_suppress_sid(cmd: str) -> bool:
 # ── Active block registry (in-memory, survives until process restart) ─────
 _active_blocks: dict = {}   # ip -> threading.Timer
 _blocks_lock = threading.Lock()
+
+# ── ARP isolation registry ────────────────────────────────────────────────
+_isolated_devices: dict = {}   # ip -> {"stop_event": Event, "thread": Thread, "gateway_ip": str, "started_at": float}
+_isolation_lock = threading.Lock()
 
 
 def _is_routable(ip: str) -> bool:
@@ -724,6 +773,120 @@ def unblock_ip(ip: str) -> dict:
     return {"status": "unblocked", "ip": ip}
 
 
+def _arp_poison_loop(target_ip: str, gateway_ip: str, iface: str, stop_event: threading.Event):
+    """Send unicast ARP spoofs continuously: tell target gateway MAC = our MAC, and vice versa."""
+    try:
+        from scapy.all import ARP, Ether, sendp, get_if_hwaddr, getmacbyip, conf as scapy_conf
+        scapy_conf.verb = 0
+        our_mac = get_if_hwaddr(iface)
+        # Resolve target and gateway MACs once; fall back to broadcast if unreachable
+        target_mac  = getmacbyip(target_ip)  or "ff:ff:ff:ff:ff:ff"
+        gateway_mac = getmacbyip(gateway_ip) or "ff:ff:ff:ff:ff:ff"
+        print(f"[NDR-ISOLATE] ARP loop: target_mac={target_mac} gateway_mac={gateway_mac}")
+        while not stop_event.is_set():
+            # Unicast to target: "gateway is at our MAC" → target sends all packets to us
+            pkt1 = Ether(dst=target_mac) / ARP(
+                op=2, pdst=target_ip, hwdst=target_mac,
+                psrc=gateway_ip, hwsrc=our_mac
+            )
+            # Unicast to gateway: "target is at our MAC" → gateway replies come to us
+            pkt2 = Ether(dst=gateway_mac) / ARP(
+                op=2, pdst=gateway_ip, hwdst=gateway_mac,
+                psrc=target_ip, hwsrc=our_mac
+            )
+            sendp([pkt1, pkt2], iface=iface, verbose=False)
+            stop_event.wait(2)
+    except ImportError:
+        print("[NDR-ISOLATE] scapy not installed — ARP isolation unavailable (pip install scapy)")
+    except Exception as e:
+        print(f"[NDR-ISOLATE] ARP loop error for {target_ip}: {e}")
+
+
+def isolate_device(target_ip: str, gateway_ip: str = "192.168.1.1") -> dict:
+    import datetime
+    if not target_ip:
+        return {"status": "error", "message": "target_ip required"}
+
+    iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eno1"
+
+    with _isolation_lock:
+        if target_ip in _isolated_devices:
+            return {"status": "already_isolated", "ip": target_ip}
+
+        stop_event = threading.Event()
+        t = threading.Thread(
+            target=_arp_poison_loop,
+            args=(target_ip, gateway_ip, iface, stop_event),
+            daemon=True,
+        )
+        t.start()
+        _isolated_devices[target_ip] = {
+            "thread": t,
+            "stop_event": stop_event,
+            "gateway_ip": gateway_ip,
+            "started_at": time.time(),
+        }
+
+    # Drop all forwarded traffic from/to this device
+    subprocess.run(["sudo", "iptables", "-I", "FORWARD", "-s", target_ip, "-j", "DROP"], capture_output=True)
+    subprocess.run(["sudo", "iptables", "-I", "FORWARD", "-d", target_ip, "-j", "DROP"], capture_output=True)
+
+    started_iso = datetime.datetime.utcnow().isoformat() + "Z"
+    print(f"[NDR-ISOLATE] Isolated {target_ip} via ARP spoofing on {iface}, gateway {gateway_ip}")
+    return {
+        "status": "isolated",
+        "ip": target_ip,
+        "gateway_ip": gateway_ip,
+        "interface": iface,
+        "started_at": started_iso,
+    }
+
+
+def unisolate_device(target_ip: str) -> dict:
+    if not target_ip:
+        return {"status": "error", "message": "target_ip required"}
+
+    with _isolation_lock:
+        entry = _isolated_devices.pop(target_ip, None)
+
+    if not entry:
+        return {"status": "not_found", "ip": target_ip}
+
+    entry["stop_event"].set()
+
+    # Remove iptables DROP rules
+    subprocess.run(["sudo", "iptables", "-D", "FORWARD", "-s", target_ip, "-j", "DROP"], capture_output=True)
+    subprocess.run(["sudo", "iptables", "-D", "FORWARD", "-d", target_ip, "-j", "DROP"], capture_output=True)
+
+    # Send gratuitous ARPs to restore correct MAC mappings immediately —
+    # without this the ARP caches on target+gateway stay poisoned for up to 5 min.
+    try:
+        from scapy.all import ARP, Ether, sendp, getmacbyip, conf as scapy_conf
+        scapy_conf.verb = 0
+        iface       = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eno1"
+        gateway_ip  = entry.get("gateway_ip", "192.168.1.1")
+        target_mac  = getmacbyip(target_ip)
+        gateway_mac = getmacbyip(gateway_ip)
+        if target_mac and gateway_mac:
+            # Restore: tell target the real gateway MAC
+            pkt1 = Ether(dst=target_mac) / ARP(
+                op=2, pdst=target_ip, hwdst=target_mac,
+                psrc=gateway_ip, hwsrc=gateway_mac
+            )
+            # Restore: tell gateway the real target MAC
+            pkt2 = Ether(dst=gateway_mac) / ARP(
+                op=2, pdst=gateway_ip, hwdst=gateway_mac,
+                psrc=target_ip, hwsrc=target_mac
+            )
+            sendp([pkt1, pkt2] * 5, iface=iface, verbose=False)
+            print(f"[NDR-ISOLATE] Sent restore ARPs for {target_ip}")
+    except Exception as e:
+        print(f"[NDR-ISOLATE] Restore ARP warning: {e}")
+
+    print(f"[NDR-ISOLATE] Unisolated {target_ip}")
+    return {"status": "unisolated", "ip": target_ip}
+
+
 def suppression_sync_loop():
     """Poll ClickHouse directly every 5 min for pending suppress_sid commands.
     ClickHouse uses network_mode: host so localhost:8123 is always reachable.
@@ -733,9 +896,11 @@ def suppression_sync_loop():
     ch_auth  = base64.b64encode(b'ndr:ndr123').decode()
     headers  = {'Authorization': f'Basic {ch_auth}'}
 
+    sid  = SENSOR_ID.replace("'", "''")
+    tid  = TENANT_ID.replace("'", "''")
     select_q = (
         "SELECT command FROM ndr.sensor_commands FINAL "
-        "WHERE tenant_id='default' AND sensor_id='' AND status='pending'"
+        f"WHERE tenant_id='{tid}' AND sensor_id='{sid}' AND status='pending'"
     )
     while True:
         try:
@@ -753,7 +918,7 @@ def suppression_sync_loop():
                         done_q = (
                             "ALTER TABLE ndr.sensor_commands "
                             "UPDATE status='done' "
-                            f"WHERE tenant_id='default' AND sensor_id='' "
+                            f"WHERE tenant_id='{tid}' AND sensor_id='{sid}' "
                             f"AND command='{cmd.replace(chr(39), chr(39)*2)}' AND status='pending'"
                         )
                         done_req = urllib.request.Request(
@@ -765,9 +930,33 @@ def suppression_sync_loop():
         time.sleep(300)
 
 
+def _cleanup_stale_iptables():
+    """On startup, remove any FORWARD DROP rules left from a previous crash.
+    We tag our rules with a comment so we can identify and remove only ours."""
+    try:
+        result = subprocess.run(
+            ["sudo", "iptables", "-L", "FORWARD", "-n", "--line-numbers"],
+            capture_output=True, text=True
+        )
+        lines = result.stdout.splitlines()
+        to_delete = []
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 4 and parts[1] == 'DROP' and parts[2] == 'all' and '/' not in parts[4]:
+                to_delete.append(parts[0])  # line number
+        # Delete in reverse order so line numbers stay valid
+        for num in reversed(to_delete):
+            subprocess.run(["sudo", "iptables", "-D", "FORWARD", num], capture_output=True)
+        if to_delete:
+            print(f"[NDR-AGENT] Cleaned up {len(to_delete)} stale iptables FORWARD DROP rules from previous run")
+    except Exception as e:
+        print(f"[NDR-AGENT] iptables cleanup warning: {e}")
+
+
 if __name__ == "__main__":
+    _cleanup_stale_iptables()
     threading.Thread(target=suppression_sync_loop, daemon=True).start()
     bind_host = _docker_bridge_ip()
     server = HTTPServer((bind_host, 3001), AgentHandler)
-    print(f"NDR Host Agent listening on {bind_host}:3001")
+    print(f"NDR Host Agent listening on {bind_host}:3001  sensor_id={SENSOR_ID!r}  tenant_id={TENANT_ID!r}")
     server.serve_forever()

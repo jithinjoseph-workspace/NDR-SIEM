@@ -21,6 +21,26 @@ use crate::storage::clickhouse::{
     sql_escape_pub as esc,
 };
 
+/// Returns a SQL fragment like `AND src_ip NOT IN ('x','y') AND dst_ip NOT IN ('x','y')`
+/// excluding the NDR host machine itself and well-known public DNS servers from all detections.
+fn host_exclusion_clause() -> String {
+    let mut ips: Vec<String> = vec![
+        // Well-known public DNS resolvers — their return traffic looks like slow-scan/beaconing
+        "8.8.8.8".to_string(), "8.8.4.4".to_string(),
+        "1.1.1.1".to_string(), "1.0.0.1".to_string(),
+        "9.9.9.9".to_string(), "149.112.112.112".to_string(),
+    ];
+    // NDR host machine's own IP — its traffic floods every detection
+    if let Ok(host) = std::env::var("HOST_IP") {
+        let h = host.trim().to_string();
+        if !h.is_empty() && !ips.contains(&h) {
+            ips.push(h);
+        }
+    }
+    let list = ips.iter().map(|ip| format!("'{}'", ip)).collect::<Vec<_>>().join(",");
+    format!(" AND src_ip NOT IN ({list}) AND dst_ip NOT IN ({list})")
+}
+
 // Suppression windows — how long after an alert fires before the same
 // (pattern, tenant, src_ip) is allowed to fire again.
 const SUP_PORT_SCAN:   Duration = Duration::from_secs(1800); // 30 min
@@ -405,6 +425,7 @@ async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &mut Su
         .map(|r| r.domain.to_lowercase())
         .collect();
 
+    let excl = host_exclusion_clause();
     let q = format!(
         "SELECT src_ip, \
                 JSONExtractString(raw, 'query') AS domain, \
@@ -416,6 +437,7 @@ async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &mut Su
            AND event_type = 'dns' \
            AND src_ip != '' \
            AND JSONExtractString(raw, 'query') != '' \
+           {excl} \
          GROUP BY src_ip, domain \
          HAVING cnt > 150 AND span > 60"
     );
@@ -436,10 +458,12 @@ async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &mut Su
     }
 }
 
-// Slow scan: >100 distinct ports OR >50 distinct hosts over 24 hours
+// Slow scan: >100 distinct ports AND >50 distinct hosts over 24 hours (AND prevents false positives
+// from normal hosts that simply talk to many ports over a day, or DNS resolvers with many targets)
 async fn detect_slow_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
-    let db = db_for(tenant);
-    let t  = esc(tenant);
+    let db   = db_for(tenant);
+    let t    = esc(tenant);
+    let excl = host_exclusion_clause();
     let q = format!(
         "SELECT src_ip, \
                 count(DISTINCT dst_port) AS cnt_a, \
@@ -447,8 +471,9 @@ async fn detect_slow_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppre
          FROM {db}.ndr_events \
          WHERE timestamp > now() - INTERVAL 24 HOUR \
            AND tenant_id = '{t}' AND src_ip != '' \
+           {excl} \
          GROUP BY src_ip \
-         HAVING cnt_a > 100 OR cnt_b > 50"
+         HAVING cnt_a > 100 AND cnt_b > 50"
     );
     let rows: Vec<TwoCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {

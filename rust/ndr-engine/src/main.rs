@@ -4,6 +4,7 @@
 
 mod api;
 mod auth;
+mod ratelimit;
 mod consumer;
 mod correlator;
 mod detection;
@@ -22,9 +23,25 @@ use api::{websocket::ws_handler, AppState};
 use futures_util::StreamExt;
 use axum::{routing::{get, post, put, delete, patch}, Router};
 use axum::extract::DefaultBodyLimit;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{Any, CorsLayer, AllowOrigin};
+use axum::http::HeaderValue;
 use tower_http::decompression::RequestDecompressionLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
+
+async fn security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert("X-Frame-Options",        HeaderValue::from_static("SAMEORIGIN"));
+    h.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    h.insert("Content-Security-Policy", HeaderValue::from_static(
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+         connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self';"
+    ));
+    res
+}
 use enrichment::{AsnLookup, AssetIdentifier, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -42,7 +59,19 @@ async fn main() {
         )
         .init();
 
-    info!("🚀 NDR Engine starting on 172.25.86.150:3000");
+    info!("NDR Engine starting");
+
+    // ── Production credential warnings ────────────────────────────────────
+    let default_jwt = "1c14f97d4d12b77a471227ab268ae22b1765df18b188cdceb9c5d4668189e85c";
+    if std::env::var("JWT_SECRET").as_deref() == Ok(default_jwt) {
+        tracing::warn!("SECURITY: JWT_SECRET is still the default value — change it in .env before production!");
+    }
+    if std::env::var("NDR_AGENT_SECRET").unwrap_or_default().contains("change-this") {
+        tracing::warn!("SECURITY: NDR_AGENT_SECRET is still the default placeholder — set a strong secret in .env!");
+    }
+    if std::env::var("CORS_ORIGIN").unwrap_or_default().is_empty() {
+        tracing::warn!("SECURITY: CORS_ORIGIN not set — API accepts requests from any origin. Set CORS_ORIGIN in .env for production!");
+    }
 
     // ── Ensure required storage directories exist ─────────────────────────
     for dir in &["/opt/ndr/pcap", "/opt/ndr/evidence"] {
@@ -399,8 +428,24 @@ async fn main() {
 
 
 
+    let cors_origin: AllowOrigin = match std::env::var("CORS_ORIGIN") {
+        Ok(origin) if !origin.is_empty() => {
+            // Support comma-separated list of allowed origins
+            let origins: Vec<HeaderValue> = origin
+                .split(',')
+                .filter_map(|o| o.trim().parse::<HeaderValue>().ok())
+                .collect();
+            if origins.is_empty() {
+                AllowOrigin::any()
+            } else {
+                AllowOrigin::list(origins)
+            }
+        }
+        _ => AllowOrigin::any(), // dev fallback
+    };
+
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(cors_origin)
         .allow_methods(Any)
         .allow_headers([
             AUTHORIZATION,
@@ -543,9 +588,12 @@ async fn main() {
 .route("/api/ai-suppressions",                post(api::create_manual_suppression))
 .route("/api/ai-suppressions/:id/deactivate", patch(api::deactivate_ai_suppression_handler))
 .route("/api/ai-suppressions/:id", delete(api::delete_ai_suppression_handler))
-.route("/api/blocks",         get(api::list_active_blocks))
-.route("/api/blocks/manual",  post(api::manual_block))
-.route("/api/blocks/revoke",  post(api::revoke_active_block))
+.route("/api/blocks",          get(api::list_active_blocks))
+.route("/api/blocks/manual",   post(api::manual_block))
+.route("/api/blocks/revoke",   post(api::revoke_active_block))
+.route("/api/isolations",      get(api::list_isolations))
+.route("/api/isolate",         post(api::isolate_device_handler))
+.route("/api/unisolate",       post(api::unisolate_device_handler))
 .route("/api/threat/predictions",         get(api::get_threat_predictions))
 .route("/api/threat/predictions/history", get(api::get_threat_predictions_history))
 .route("/api/threat/exposure",            get(api::get_threat_exposure))
@@ -554,6 +602,8 @@ async fn main() {
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
+        .layer(axum::middleware::from_fn(ratelimit::rate_limit_middleware))
+        .layer(axum::middleware::from_fn(security_headers))
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB for PCAP uploads
         .layer(RequestDecompressionLayer::new())
         .layer(cors);
@@ -620,7 +670,7 @@ async fn main() {
 
     // ── Start server + graceful shutdown with leader release ─────────────
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    let server   = axum::serve(listener, app);
+    let server   = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     tokio::select! {
         res = server => {

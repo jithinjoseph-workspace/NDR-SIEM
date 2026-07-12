@@ -295,6 +295,257 @@ async fn generic_rest_revoke(host: &str, api_key: &str, src_ip: &str, rule_id: &
         .unwrap_or(false)
 }
 
+// ── Cloud Firewall ─────────────────────────────────────────────────────────
+// AWS Security Groups, Azure NSG, GCP VPC firewall deny rules.
+// All use CLI subprocesses so no extra SDK crates are needed.
+
+pub async fn push_cloud_deny(
+    cloud_type: &str,
+    config:     &Value,
+    src_ip:     &str,
+) -> FirewallResult {
+    match cloud_type {
+        "aws_sg"    => aws_sg_deny(config, src_ip).await,
+        "azure_nsg" => azure_nsg_deny(config, src_ip).await,
+        "gcp_vpc"   => gcp_vpc_deny(config, src_ip).await,
+        _           => FirewallResult::err(cloud_type, "unsupported cloud type"),
+    }
+}
+
+pub async fn revoke_cloud_deny(
+    cloud_type: &str,
+    config:     &Value,
+    src_ip:     &str,
+    rule_id:    &str,
+) -> bool {
+    match cloud_type {
+        "aws_sg"    => aws_sg_revoke(config, src_ip).await,
+        "azure_nsg" => azure_nsg_revoke(config, src_ip, rule_id).await,
+        "gcp_vpc"   => gcp_vpc_revoke(config, rule_id).await,
+        _           => false,
+    }
+}
+
+// ── AWS Security Group ─────────────────────────────────────────────────────
+// Revokes ingress for src_ip on all ports in the given security group.
+// config keys: sg_id, region, aws_access_key_id, aws_secret_access_key
+
+async fn aws_sg_deny(config: &Value, src_ip: &str) -> FirewallResult {
+    let sg_id      = config["sg_id"].as_str().unwrap_or("");
+    let region     = config["region"].as_str().unwrap_or("us-east-1");
+    let access_key = config["aws_access_key_id"].as_str().unwrap_or("");
+    let secret_key = config["aws_secret_access_key"].as_str().unwrap_or("");
+
+    if sg_id.is_empty() {
+        return FirewallResult::err("aws_sg", "sg_id not configured");
+    }
+
+    // Revoke existing ingress from this IP (if any), then add explicit DENY
+    // AWS SGs use allowlist model — remove any allow rule for the IP
+    let cidr = format!("{}/32", src_ip);
+    let out  = tokio::process::Command::new("aws")
+        .env("AWS_ACCESS_KEY_ID",     access_key)
+        .env("AWS_SECRET_ACCESS_KEY", secret_key)
+        .env("AWS_DEFAULT_REGION",    region)
+        .args([
+            "ec2", "revoke-security-group-ingress",
+            "--group-id", sg_id,
+            "--protocol", "all",
+            "--cidr", &cidr,
+        ])
+        .output()
+        .await;
+
+    match out {
+        Ok(o) => {
+            // AWS returns exit 0 even when rule didn't exist — treat both as success
+            let rule_id = format!("aws_sg:{}:{}", sg_id, src_ip);
+            if o.status.success() || String::from_utf8_lossy(&o.stderr).contains("InvalidPermission") {
+                FirewallResult::ok("aws_sg", &rule_id,
+                    format!("AWS SG {}: removed ingress for {}", sg_id, src_ip))
+            } else {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                warn!("[FIREWALL] aws_sg error: {}", stderr);
+                FirewallResult::err("aws_sg", format!("aws cli error: {}", stderr))
+            }
+        }
+        Err(e) => FirewallResult::err("aws_sg", format!("aws cli not found: {}", e)),
+    }
+}
+
+async fn aws_sg_revoke(config: &Value, src_ip: &str) -> bool {
+    // Re-authorize ingress — restore default allow if needed
+    // In most deployments "revoke" of a deny just means removing the block entry;
+    // since AWS uses allowlist the original allow rule was already there, no-op.
+    let sg_id      = config["sg_id"].as_str().unwrap_or("");
+    let region     = config["region"].as_str().unwrap_or("us-east-1");
+    let access_key = config["aws_access_key_id"].as_str().unwrap_or("");
+    let secret_key = config["aws_secret_access_key"].as_str().unwrap_or("");
+
+    if sg_id.is_empty() { return false; }
+
+    // Add back allow rule for the IP (caller decides scope)
+    let cidr = format!("{}/32", src_ip);
+    tokio::process::Command::new("aws")
+        .env("AWS_ACCESS_KEY_ID",     access_key)
+        .env("AWS_SECRET_ACCESS_KEY", secret_key)
+        .env("AWS_DEFAULT_REGION",    region)
+        .args([
+            "ec2", "authorize-security-group-ingress",
+            "--group-id", sg_id,
+            "--protocol", "all",
+            "--cidr", &cidr,
+        ])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+// ── Azure NSG ──────────────────────────────────────────────────────────────
+// Creates a Deny inbound rule in the given NSG.
+// config keys: resource_group, nsg_name, subscription_id (optional)
+
+async fn azure_nsg_deny(config: &Value, src_ip: &str) -> FirewallResult {
+    let rg       = config["resource_group"].as_str().unwrap_or("");
+    let nsg_name = config["nsg_name"].as_str().unwrap_or("");
+    let sub      = config["subscription_id"].as_str().unwrap_or("");
+
+    if rg.is_empty() || nsg_name.is_empty() {
+        return FirewallResult::err("azure_nsg", "resource_group or nsg_name not configured");
+    }
+
+    // Rule name: NDR-BLOCK-<ip> (dots replaced with dashes for Azure naming)
+    let rule_name = format!("NDR-BLOCK-{}", src_ip.replace('.', "-").replace(':', "-"));
+    let cidr      = format!("{}/32", src_ip);
+
+    let mut args = vec![
+        "network", "nsg", "rule", "create",
+        "--resource-group", rg,
+        "--nsg-name",       nsg_name,
+        "--name",           &rule_name,
+        "--priority",       "100",
+        "--direction",      "Inbound",
+        "--access",         "Deny",
+        "--protocol",       "*",
+        "--source-address-prefixes", &cidr,
+        "--destination-address-prefixes", "*",
+        "--source-port-ranges",      "*",
+        "--destination-port-ranges", "*",
+    ];
+
+    let sub_args;
+    if !sub.is_empty() {
+        sub_args = format!("--subscription {}", sub);
+        args.push("--subscription");
+        args.push(sub);
+    }
+    let _ = sub_args; // suppress unused warning
+
+    let out = tokio::process::Command::new("az")
+        .args(&args)
+        .output()
+        .await;
+
+    match out {
+        Ok(o) if o.status.success() => {
+            FirewallResult::ok("azure_nsg", &rule_name,
+                format!("Azure NSG {}: deny rule {} created for {}", nsg_name, rule_name, src_ip))
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!("[FIREWALL] azure_nsg error: {}", stderr);
+            FirewallResult::err("azure_nsg", format!("az cli error: {}", stderr))
+        }
+        Err(e) => FirewallResult::err("azure_nsg", format!("az cli not found: {}", e)),
+    }
+}
+
+async fn azure_nsg_revoke(config: &Value, _src_ip: &str, rule_name: &str) -> bool {
+    let rg       = config["resource_group"].as_str().unwrap_or("");
+    let nsg_name = config["nsg_name"].as_str().unwrap_or("");
+
+    if rg.is_empty() || nsg_name.is_empty() || rule_name.is_empty() { return false; }
+
+    tokio::process::Command::new("az")
+        .args([
+            "network", "nsg", "rule", "delete",
+            "--resource-group", rg,
+            "--nsg-name",       nsg_name,
+            "--name",           rule_name,
+        ])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+// ── GCP VPC Firewall ───────────────────────────────────────────────────────
+// Creates a deny-all-ingress firewall rule targeting the source IP.
+// config keys: project, network (default "default")
+
+async fn gcp_vpc_deny(config: &Value, src_ip: &str) -> FirewallResult {
+    let project = config["project"].as_str().unwrap_or("");
+    let network = config["network"].as_str().unwrap_or("default");
+
+    if project.is_empty() {
+        return FirewallResult::err("gcp_vpc", "project not configured");
+    }
+
+    let rule_name = format!("ndr-block-{}", src_ip.replace('.', "-").replace(':', "-"));
+    let cidr      = format!("{}/32", src_ip);
+
+    let out = tokio::process::Command::new("gcloud")
+        .args([
+            "compute", "firewall-rules", "create", &rule_name,
+            "--project",     project,
+            "--network",     network,
+            "--direction",   "INGRESS",
+            "--action",      "DENY",
+            "--rules",       "all",
+            "--source-ranges", &cidr,
+            "--priority",    "900",
+            "--description", "NDR auto-block",
+        ])
+        .output()
+        .await;
+
+    match out {
+        Ok(o) if o.status.success() => {
+            FirewallResult::ok("gcp_vpc", &rule_name,
+                format!("GCP VPC: deny rule {} created for {} in project {}", rule_name, src_ip, project))
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            // "already exists" is fine — treat as success
+            if stderr.contains("already exists") {
+                FirewallResult::ok("gcp_vpc", &rule_name,
+                    format!("GCP VPC: rule {} already existed", rule_name))
+            } else {
+                warn!("[FIREWALL] gcp_vpc error: {}", stderr);
+                FirewallResult::err("gcp_vpc", format!("gcloud error: {}", stderr))
+            }
+        }
+        Err(e) => FirewallResult::err("gcp_vpc", format!("gcloud not found: {}", e)),
+    }
+}
+
+async fn gcp_vpc_revoke(config: &Value, rule_name: &str) -> bool {
+    let project = config["project"].as_str().unwrap_or("");
+    if project.is_empty() || rule_name.is_empty() { return false; }
+
+    tokio::process::Command::new("gcloud")
+        .args([
+            "compute", "firewall-rules", "delete", rule_name,
+            "--project", project,
+            "--quiet",
+        ])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 // ── Helper ─────────────────────────────────────────────────────────────────
 
 fn insecure_client() -> Client {

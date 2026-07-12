@@ -30,18 +30,25 @@ API_KEY=""
 IFACE=""
 KAFKA_BOOTSTRAP=""
 SENSOR_MODE=""   # "tap" = passive probe/SPAN, "agent" = installed on monitored server
+NDR_AGENT_SECRET=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --cloud-url)      CLOUD_URL="$2";      shift 2 ;;
-    --tenant-id)      TENANT_ID="$2";      shift 2 ;;
-    --api-key)        API_KEY="$2";        shift 2 ;;
-    --interface)      IFACE="$2";          shift 2 ;;
-    --kafka)          KAFKA_BOOTSTRAP="$2";shift 2 ;;
-    --mode)           SENSOR_MODE="$2";    shift 2 ;;
+    --cloud-url)      CLOUD_URL="$2";        shift 2 ;;
+    --tenant-id)      TENANT_ID="$2";        shift 2 ;;
+    --api-key)        API_KEY="$2";          shift 2 ;;
+    --interface)      IFACE="$2";            shift 2 ;;
+    --kafka)          KAFKA_BOOTSTRAP="$2";  shift 2 ;;
+    --mode)           SENSOR_MODE="$2";      shift 2 ;;
+    --agent-secret)   NDR_AGENT_SECRET="$2"; shift 2 ;;
     *) warn "Unknown option: $1"; shift ;;
   esac
 done
+
+# Generate agent secret if not provided
+if [ -z "$NDR_AGENT_SECRET" ]; then
+  NDR_AGENT_SECRET=$(openssl rand -hex 32 2>/dev/null || echo "ndr-sensor-$(date +%s)")
+fi
 
 # ── Validate ─────────────────────────────────────
 if [ -z "$CLOUD_URL" ] || \
@@ -167,6 +174,14 @@ apt-get install -y -qq \
   libpcre3 libpcre3-dev \
   ethtool docker.io \
   arp-scan iputils-arping snmp > /dev/null 2>&1 || true
+
+# scapy needed for ARP isolation on the sensor
+pip3 install scapy --break-system-packages -q 2>/dev/null || pip3 install scapy -q 2>/dev/null || true
+
+# Allow sensor agent to run iptables without a password
+echo "${SENSOR_USER:-root} ALL=(root) NOPASSWD: /usr/sbin/iptables" \
+  > /etc/sudoers.d/ndr-iptables
+chmod 440 /etc/sudoers.d/ndr-iptables
 
 log "Installing tshark (>= 3.4 required for community-id filter) and zstd..."
 # communityid.id dissector requires tshark >= 3.4.0 AND --enable-protocol communityid.
@@ -374,6 +389,7 @@ TENANT_ID=${TENANT_ID}
 API_KEY=${API_KEY}
 IFACE=${IFACE}
 KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
+NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
 INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
@@ -1809,6 +1825,149 @@ def do_checkin():
         print(f"[NDR] Checkin failed: {e}")
         return 30
 
+# ── ARP isolation (same logic as ndr-agent.py local agent) ────────────────
+import pathlib, socket as _socket
+
+_isolated_devices = {}
+_isolation_lock   = threading.Lock()
+IFACE_FILE = pathlib.Path("/opt/ndr-sensor/iface")
+
+def _arp_poison_loop(target_ip, gateway_ip, iface, stop_event):
+    try:
+        from scapy.all import ARP, Ether, sendp, get_if_hwaddr, getmacbyip, conf as scapy_conf
+        scapy_conf.verb = 0
+        our_mac     = get_if_hwaddr(iface)
+        target_mac  = getmacbyip(target_ip)  or "ff:ff:ff:ff:ff:ff"
+        gateway_mac = getmacbyip(gateway_ip) or "ff:ff:ff:ff:ff:ff"
+        print(f"[NDR-ISOLATE] ARP loop: target_mac={target_mac} gateway_mac={gateway_mac}")
+        while not stop_event.is_set():
+            pkt1 = Ether(dst=target_mac) / ARP(
+                op=2, pdst=target_ip, hwdst=target_mac,
+                psrc=gateway_ip, hwsrc=our_mac)
+            pkt2 = Ether(dst=gateway_mac) / ARP(
+                op=2, pdst=gateway_ip, hwdst=gateway_mac,
+                psrc=target_ip, hwsrc=our_mac)
+            sendp([pkt1, pkt2], iface=iface, verbose=False)
+            stop_event.wait(2)
+    except ImportError:
+        print("[NDR-ISOLATE] scapy not installed (pip install scapy)")
+    except Exception as e:
+        print(f"[NDR-ISOLATE] ARP loop error: {e}")
+
+def isolate_device(target_ip, gateway_ip="192.168.1.1"):
+    import datetime
+    if not target_ip:
+        return {"status": "error", "message": "target_ip required"}
+    iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else IFACE
+    with _isolation_lock:
+        if target_ip in _isolated_devices:
+            return {"status": "already_isolated", "ip": target_ip}
+        stop_event = threading.Event()
+        t = threading.Thread(
+            target=_arp_poison_loop,
+            args=(target_ip, gateway_ip, iface, stop_event),
+            daemon=True)
+        t.start()
+        _isolated_devices[target_ip] = {
+            "thread": t, "stop_event": stop_event,
+            "gateway_ip": gateway_ip, "started_at": time.time()}
+    subprocess.run(["sudo", "iptables", "-I", "FORWARD", "-s", target_ip, "-j", "DROP"], capture_output=True)
+    subprocess.run(["sudo", "iptables", "-I", "FORWARD", "-d", target_ip, "-j", "DROP"], capture_output=True)
+    print(f"[NDR-ISOLATE] Isolated {target_ip} via ARP on {iface}, gw {gateway_ip}")
+    return {"status": "isolated", "ip": target_ip, "gateway_ip": gateway_ip,
+            "interface": iface, "started_at": datetime.datetime.utcnow().isoformat() + "Z"}
+
+def unisolate_device(target_ip):
+    if not target_ip:
+        return {"status": "error", "message": "target_ip required"}
+    with _isolation_lock:
+        entry = _isolated_devices.pop(target_ip, None)
+    if not entry:
+        return {"status": "not_found", "ip": target_ip}
+    entry["stop_event"].set()
+    subprocess.run(["sudo", "iptables", "-D", "FORWARD", "-s", target_ip, "-j", "DROP"], capture_output=True)
+    subprocess.run(["sudo", "iptables", "-D", "FORWARD", "-d", target_ip, "-j", "DROP"], capture_output=True)
+    try:
+        from scapy.all import ARP, Ether, sendp, getmacbyip, conf as scapy_conf
+        scapy_conf.verb = 0
+        iface       = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else IFACE
+        gateway_ip  = entry.get("gateway_ip", "192.168.1.1")
+        target_mac  = getmacbyip(target_ip)
+        gateway_mac = getmacbyip(gateway_ip)
+        if target_mac and gateway_mac:
+            pkt1 = Ether(dst=target_mac) / ARP(
+                op=2, pdst=target_ip, hwdst=target_mac,
+                psrc=gateway_ip, hwsrc=gateway_mac)
+            pkt2 = Ether(dst=gateway_mac) / ARP(
+                op=2, pdst=gateway_ip, hwdst=gateway_mac,
+                psrc=target_ip, hwsrc=target_mac)
+            sendp([pkt1, pkt2] * 5, iface=iface, verbose=False)
+    except Exception as e:
+        print(f"[NDR-ISOLATE] Restore ARP warning: {e}")
+    print(f"[NDR-ISOLATE] Unisolated {target_ip}")
+    return {"status": "unisolated", "ip": target_ip}
+
+# ── HTTP agent server on :3001 for NDR engine to call ─────────────────────
+import json as _json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+NDR_AGENT_SECRET = config.get("NDR_AGENT_SECRET", "")
+
+class SensorAgentHandler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args): pass  # suppress access logs
+
+    def _auth(self):
+        if not NDR_AGENT_SECRET:
+            return True
+        return self.headers.get("X-Agent-Secret", "") == NDR_AGENT_SECRET
+
+    def _json(self, code, data):
+        body = _json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if not self._auth():
+            self._json(401, {"error": "unauthorized"}); return
+        if self.path == "/agent/status":
+            statuses = check_and_restart()
+            self._json(200, statuses)
+        elif self.path == "/agent/isolations":
+            with _isolation_lock:
+                result = [{"ip": ip, "gateway_ip": v["gateway_ip"],
+                           "started_at": v["started_at"]}
+                          for ip, v in _isolated_devices.items()]
+            self._json(200, result)
+        else:
+            self._json(404, {"error": "not found"})
+
+    def do_POST(self):
+        if not self._auth():
+            self._json(401, {"error": "unauthorized"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        body = _json.loads(self.rfile.read(length) or b"{}") if length else {}
+        if self.path == "/agent/isolate":
+            result = isolate_device(body.get("target_ip", ""), body.get("gateway_ip", "192.168.1.1"))
+            code = 200 if result.get("status") in ("isolated", "already_isolated") else 400
+            self._json(code, result)
+        elif self.path == "/agent/unisolate":
+            result = unisolate_device(body.get("target_ip", ""))
+            code = 200 if result.get("status") == "unisolated" else 400
+            self._json(code, result)
+        else:
+            self._json(404, {"error": "not found"})
+
+def _start_agent_server():
+    try:
+        server = HTTPServer(("0.0.0.0", 3001), SensorAgentHandler)
+        print("[NDR] Sensor agent HTTP server listening on :3001")
+        server.serve_forever()
+    except Exception as e:
+        print(f"[NDR] Agent server error: {e}")
+
 if __name__ == '__main__':
     print(f"[NDR] Agent starting — "
           f"tenant={TENANT_ID}")
@@ -1829,6 +1988,7 @@ if __name__ == '__main__':
     start_capture()
     threading.Thread(target=arp_scan, args=(IFACE,), daemon=True).start()
     threading.Thread(target=arp_probe_unknown, daemon=True).start()
+    threading.Thread(target=_start_agent_server, daemon=True).start()
     time.sleep(10)  # wait for capture to init
 
     checkin_interval = 30  # server will update this on first response
@@ -2364,6 +2524,8 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 [Install]
 WantedBy=multi-user.target
 EOF

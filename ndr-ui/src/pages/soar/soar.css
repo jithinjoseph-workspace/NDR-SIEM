@@ -75,3 +75,6 @@
 
 /* ── Active Blocks tab ───────────────────────────────────────────────────── */
 .blocks-table td { font-variant-numeric: tabular-nums; }
+
+/* ── Isolated Devices tab ────────────────────────────────────────────────── */
+.isolations-table td { font-variant-numeric: tabular-nums; }

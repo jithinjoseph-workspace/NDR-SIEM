@@ -72,6 +72,8 @@ export class Setup implements OnInit, OnDestroy {
   keyCopied = false;
   commandCopied = false;
   cloudUrl = this.detectCloudUrl();
+  customServerUrl = '';
+  isLocalhostUrl = false;
 
   showErrorModal = false;
   errorTitle = '';
@@ -309,6 +311,8 @@ export class Setup implements OnInit, OnDestroy {
     this.installCommand = '';
     this.externalError = '';
     this.externalActionMessage = '';
+    this.isLocalhostUrl = this.cloudUrl.includes('localhost') || this.cloudUrl.includes('127.0.0.1');
+    this.customServerUrl = this.isLocalhostUrl ? '' : this.cloudUrl;
     this.showAddSensorModal = true;
   }
 
@@ -561,11 +565,11 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   private getVisibleExternalSensors(sensors: SensorKey[]): SensorKey[] {
+    const filtered = sensors.filter(sensor => sensor.key_prefix !== 'local-central');
     if (this.currentRole !== 'tenant_admin') {
-      return sensors;
+      return filtered;
     }
-
-    return sensors.filter(sensor => sensor.active);
+    return filtered.filter(sensor => sensor.active);
   }
 
   private mapExternalSensor(sensor: SensorKey): ExternalSensorCard {
@@ -642,7 +646,15 @@ export class Setup implements OnInit, OnDestroy {
   }
 
   private buildInstallCommand(key: string): string {
-    return `curl -fsSL ${this.cloudUrl}/api/install-sensor.sh | sudo bash -s -- --cloud-url ${this.cloudUrl} --tenant-id ${this.currentTenantId} --api-key ${key}`;
+    const url = this.customServerUrl.trim() || this.cloudUrl;
+    return `curl -fsSL ${url}/api/install-sensor.sh | sudo bash -s -- --cloud-url ${url} --tenant-id ${this.currentTenantId} --api-key ${key}`;
+  }
+
+  rebuildInstallCommand() {
+    if (this.createdSensorKey?.key) {
+      this.installCommand = this.buildInstallCommand(this.createdSensorKey.key);
+      this.cdr.detectChanges();
+    }
   }
 
   private detectCloudUrl(): string {

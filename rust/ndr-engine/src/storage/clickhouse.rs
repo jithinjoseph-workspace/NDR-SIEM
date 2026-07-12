@@ -2349,22 +2349,28 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let sf = Self::sensor_filter(sensor_ids);
-        let (events_row, hits_row) = tokio::try_join!(
-            self.client.query(&format!(
+        // Run queries independently — a failure in one returns zeros for that metric
+        // rather than making the entire dashboard blank.
+        let events_row = self.client.query(&format!(
                 "SELECT count() as events_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as events_1h, \
                  countIf(source='agent-z') as agent_z_events, \
                  countIf(source='agent-s') as agent_s_events \
                  FROM {db}.ndr_events WHERE 1=1{sf}",
                 db = db_name, sf = sf))
-                .fetch_one::<(u64, u64, u64, u64)>(),
-            self.client.query(&format!(
+                .fetch_one::<(u64, u64, u64, u64)>()
+                .await
+                .unwrap_or((0, 0, 0, 0));
+
+        let hits_row = self.client.query(&format!(
                 "SELECT count() as hits_total, \
                  countIf(timestamp > now() - INTERVAL 1 HOUR) as hits_1h \
                  FROM {db}.ndr_hits FINAL WHERE 1=1{sf}",
                 db = db_name, sf = sf))
                 .fetch_one::<(u64, u64)>()
-        )?;
+                .await
+                .unwrap_or((0, 0));
+
         Ok(serde_json::json!({
             "events_total": events_row.0, "hits_total": hits_row.0,
             "events_1h": events_row.1,   "hits_1h": hits_row.1,
@@ -2479,7 +2485,15 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 sensor_id \
              FROM {}.ndr_hits FINAL \
              WHERE 1=1 {} \
-             ORDER BY length(sigma_hits) DESC, score DESC, timestamp DESC LIMIT {}", db_name, sensor_filter, limit))
+               AND community_id NOT IN ( \
+                 SELECT community_id FROM ndr.ai_suppressions FINAL \
+                 WHERE active = 1 AND community_id != '' \
+                   AND (tenant_id = '{tid}' OR tenant_id = '') \
+               ) \
+             ORDER BY length(sigma_hits) DESC, score DESC, timestamp DESC LIMIT {lim}",
+            db_name, sensor_filter,
+            tid = sql_escape(tenant_id),
+            lim = limit))
             .fetch_all::<RecentHitDetail>()
             .await.unwrap_or_default();
 
@@ -2978,6 +2992,12 @@ pub async fn validate_sensor_key(
     if key.len() < 16 { return Ok(None); }
     let prefix = &key[..16];
     
+    // local-central is a local-only sensor — it writes directly via Vector/Kafka
+    // and must never authenticate via the HTTP API key path
+    if prefix == "local-central" {
+        return Ok(None);
+    }
+
     let result = self.client
         .query(&format!(
             "SELECT key_hash, tenant_id, active \
@@ -2988,7 +3008,7 @@ pub async fn validate_sensor_key(
         ))
         .fetch_all::<(String, String, u8)>()
         .await?;
-    
+
     if let Some((hash, tenant_id, _)) = result.first() {
         if bcrypt::verify(key, hash).unwrap_or(false) {
             return Ok(Some(tenant_id.clone()));
@@ -3001,7 +3021,7 @@ pub async fn get_sensor_keys(
     &self,
     tenant_id: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let filter = if tenant_id == "default" {
+    let filter = if tenant_id == "all" {
         "1=1".to_string()
     } else {
         format!("tenant_id='{}'", tenant_id)
@@ -5555,6 +5575,79 @@ pub async fn get_ioc_hits(
         );
         self.client.query(&q).execute().await?;
         Ok(block)
+    }
+
+    // ── Device isolations ──────────────────────────────────────────────────
+
+    pub async fn insert_isolation(&self, iso: &crate::soar::DeviceIsolation) -> anyhow::Result<()> {
+        let q = format!(
+            "INSERT INTO ndr.device_isolations \
+             (id, tenant_id, target_ip, gateway_ip, method, enforcement, \
+              enforcement_detail, triggered_by, sensor_id, reason, status) \
+             VALUES ('{}','{}','{}','{}','{}','{}','{}','{}','{}','{}','{}')",
+            sql_escape(&iso.id),     sql_escape(&iso.tenant_id),
+            sql_escape(&iso.target_ip), sql_escape(&iso.gateway_ip),
+            sql_escape(&iso.method), sql_escape(&iso.enforcement),
+            sql_escape(&iso.enforcement_detail), sql_escape(&iso.triggered_by),
+            sql_escape(&iso.sensor_id), sql_escape(&iso.reason),
+            sql_escape(&iso.status),
+        );
+        self.client.query(&q).execute().await?;
+        Ok(())
+    }
+
+    pub async fn list_isolations(&self, tenant_id: &str) -> anyhow::Result<Vec<crate::soar::DeviceIsolation>> {
+        let where_clause = if tenant_id == "superadmin" {
+            "status = 'active'".to_string()
+        } else {
+            format!("tenant_id = '{}' AND status = 'active'", sql_escape(tenant_id))
+        };
+        let q = format!(
+            "SELECT id, tenant_id, target_ip, gateway_ip, method, enforcement, \
+             enforcement_detail, triggered_by, sensor_id, reason, status, \
+             toString(created_at) AS created_at, toString(updated_at) AS updated_at \
+             FROM ndr.device_isolations FINAL \
+             WHERE {} ORDER BY created_at DESC LIMIT 200",
+            where_clause
+        );
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            id: String, tenant_id: String, target_ip: String, gateway_ip: String,
+            method: String, enforcement: String, enforcement_detail: String,
+            triggered_by: String, sensor_id: String, reason: String, status: String,
+            created_at: String, updated_at: String,
+        }
+        let rows = self.client.query(&q).fetch_all::<Row>().await?;
+        Ok(rows.into_iter().map(|r| crate::soar::DeviceIsolation {
+            id: r.id, tenant_id: r.tenant_id, target_ip: r.target_ip,
+            gateway_ip: r.gateway_ip, method: r.method, enforcement: r.enforcement,
+            enforcement_detail: r.enforcement_detail, triggered_by: r.triggered_by,
+            sensor_id: r.sensor_id, reason: r.reason, status: r.status,
+            created_at: r.created_at, updated_at: r.updated_at,
+        }).collect())
+    }
+
+    pub async fn restore_isolation(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<crate::soar::DeviceIsolation>> {
+        let isolations = self.list_isolations(tenant_id).await?;
+        let iso = isolations.into_iter().find(|i| i.id == id);
+
+        if let Some(ref i) = iso {
+            // INSERT a new row with status='restored' — ReplacingMergeTree(updated_at)
+            // picks this up immediately under FINAL, no async mutation needed.
+            let q = format!(
+                "INSERT INTO ndr.device_isolations \
+                 (id, tenant_id, target_ip, gateway_ip, method, enforcement, \
+                  enforcement_detail, triggered_by, sensor_id, reason, status, updated_at) \
+                 VALUES ('{}','{}','{}','{}','{}','{}','{}','{}','{}','{}','restored', now())",
+                sql_escape(&i.id), sql_escape(&i.tenant_id),
+                sql_escape(&i.target_ip), sql_escape(&i.gateway_ip),
+                sql_escape(&i.method), sql_escape(&i.enforcement),
+                sql_escape(&i.enforcement_detail), sql_escape(&i.triggered_by),
+                sql_escape(&i.sensor_id), sql_escape(&i.reason),
+            );
+            self.client.query(&q).execute().await?;
+        }
+        Ok(iso)
     }
 }
 
