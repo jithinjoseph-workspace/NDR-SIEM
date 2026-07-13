@@ -4761,12 +4761,19 @@ if [ -z "$ENGINE" ]; then echo "No running engine found as blueprint" >&2; exit 
 NEW_ENGINE="{0}"
 NEW_INSTANCE_ID="{1}"
 IMAGE=$(docker inspect --format '{{{{.Config.Image}}}}' "$ENGINE")
-NETWORK=$(docker inspect --format '{{{{range $k, $v := .NetworkSettings.Networks}}}}{{{{$k}}}}{{{{end}}}}' "$ENGINE")
+# Each network on its own line — docker run only accepts one --network flag
+NETWORKS=$(docker inspect --format '{{{{range $k, $v := .NetworkSettings.Networks}}}}{{{{$k}}}}{{{{"\n"}}}}{{{{end}}}}' "$ENGINE" | grep -v '^$')
+PRIMARY_NET=$(echo "$NETWORKS" | head -n 1)
+EXTRA_NETS=$(echo "$NETWORKS" | tail -n +2)
 BINDS=$(docker inspect --format '{{{{range .HostConfig.Binds}}}}-v {{{{.}}}} {{{{end}}}}' "$ENGINE")
 ENVS=$(docker inspect --format '{{{{range .Config.Env}}}}-e {{{{.}}}} {{{{end}}}}' "$ENGINE" | sed "s/INSTANCE_ID=[0-9]*/INSTANCE_ID=$NEW_INSTANCE_ID/")
 # Remove any stopped container with the same name to avoid conflicts
 docker rm -f "$NEW_ENGINE" 2>/dev/null || true
-eval docker run -d --name "$NEW_ENGINE" --privileged --network "$NETWORK" $BINDS $ENVS "$IMAGE"
+eval docker run -d --name "$NEW_ENGINE" --privileged --network "$PRIMARY_NET" $BINDS $ENVS "$IMAGE"
+# Connect to any additional networks
+for net in $EXTRA_NETS; do
+    [ -n "$net" ] && docker network connect "$net" "$NEW_ENGINE" || true
+done
 "#, new_name, new_instance_id);
 
             tracing::debug!("Start script:\n{}", start_script);
