@@ -10,7 +10,8 @@ import { ActivatedRoute, Router } from '@angular/router';
 import {
   LucideAngularModule,
   TriangleAlert, BellOff, ChevronDown, ChevronRight,
-  Download, ExternalLink, Globe, Package, RefreshCw, ShieldAlert, X
+  Download, ExternalLink, Globe, Package, RefreshCw, ShieldAlert, X,
+  Copy, ShieldCheck,
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
 import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
@@ -75,6 +76,11 @@ export class Alerts implements OnInit, OnDestroy {
   // Used to filter both sessionStorage hits and live WebSocket hits.
   private groupSups: { src_ip: string; tag: string }[] = [];
 
+  // ── Entity scores panel ───────────────────────────────────────────────────
+  entityScores: any[] = [];
+  entityScoresLoading = false;
+  activeHostFilter = '';      // IP currently pinned via host card click
+
   // ── Toast ─────────────────────────────────────────────────────────────────
   toast = '';
   private toastTimer: any;
@@ -97,6 +103,8 @@ export class Alerts implements OnInit, OnDestroy {
   PackageIcon      = Package;
   RefreshIcon      = RefreshCw;
   XIcon            = X;
+  CopyIcon         = Copy;
+  ShieldCheckIcon  = ShieldCheck;
 
   private subs: Subscription[] = [];
   sensorIds: string[] = [];
@@ -135,6 +143,8 @@ export class Alerts implements OnInit, OnDestroy {
       error: () => this.loadAlerts(),
     });
 
+    this.loadEntityScores();
+
     this.subs.push(
       this.ws.continuousHits$.subscribe(hits => {
         if (!hits?.length) return;
@@ -154,8 +164,13 @@ export class Alerts implements OnInit, OnDestroy {
 
   private isGroupSuppressedHit(hit: any): boolean {
     if (!hit.src_ip || !hit.tags?.length) return false;
-    const tag = primaryTag(hit.tags);
-    return this.groupSups.some(s => s.src_ip === hit.src_ip && s.tag === tag);
+    // Mirror ARM2 SQL: hasAny(tags, [suppressed_tag]) — a hit is suppressed if
+    // ANY of its tags matches the group suppression, not just the primary tag.
+    // This prevents multi-tag alerts from leaking through the WebSocket filter
+    // when primaryTag() returns a different tag than the one being suppressed.
+    return this.groupSups.some(s =>
+      s.src_ip === hit.src_ip && hit.tags.includes(s.tag)
+    );
   }
 
   loadAlerts() {
@@ -191,12 +206,14 @@ export class Alerts implements OnInit, OnDestroy {
       community_id: hit.community_id || hit.cid || '',
       src_ip:      srcIp,
       dst_ip:      dstIp,
-      src_country: this.formatOrigin(srcIp, hit.src_country),
-      dst_country: hit.dst_country,
+      src_country:  this.formatOrigin(srcIp, hit.src_country),
+      dst_country:  hit.dst_country || '',
       threat_intel: !!hit.threat_intel,
-      tags:        hit.tags || [],
-      src_asset:   hit.src_asset || null,
-      dst_asset:   hit.dst_asset || null,
+      corroborated: !!hit.corroborated,
+      sigma_hits:   hit.sigma_hits || [],
+      tags:         hit.tags || [],
+      src_asset:    hit.src_asset || null,
+      dst_asset:    hit.dst_asset || null,
     };
   }
 
@@ -293,14 +310,15 @@ export class Alerts implements OnInit, OnDestroy {
   // ── Actions ───────────────────────────────────────────────────────────────
 
   suppress(alert: any) {
-    const tag = primaryTag(alert.tags);
+    // For sigma hits use the specific rule name; for other hits use the primary tag.
+    // This prevents "suppress sigma from IP" from silencing ALL sigma rules on that host.
+    const tag = alert.sigma_hits?.length ? alert.sigma_hits[0] : primaryTag(alert.tags);
     this.api.suppressAlert(alert.src_ip, alert.dst_ip, alert.community_id, tag, 24).subscribe({
       next: () => {
         this.dismissGroup(alert.src_ip, tag);
-        this.showToast(`Suppressed ${tag} from ${alert.src_ip} for 24h`);
+        this.showToast(`Suppressed "${tag}" from ${alert.src_ip} for 24h`);
       },
       error: () => {
-        // Still dismiss locally even if backend fails
         this.dismissGroup(alert.src_ip, tag);
         this.showToast(`Dismissed locally (backend error)`);
       },
@@ -308,7 +326,30 @@ export class Alerts implements OnInit, OnDestroy {
   }
 
   suppressGroup(g: AlertGroup) {
-    // Add to local cache immediately so WS filter blocks incoming hits right away
+    if (!g.src_ip) return; // guard: never suppress with an empty src_ip
+
+    if (g.tag === 'sigma') {
+      // Suppress each unique Sigma rule name in the group individually so we don't
+      // create a blanket "suppress all sigma from IP" rule.
+      const ruleNames = [...new Set(
+        g.alerts.flatMap((a: any) => a.sigma_hits?.length ? a.sigma_hits : [])
+      )];
+      if (!ruleNames.length) return;
+      for (const ruleName of ruleNames) {
+        if (!this.groupSups.some(s => s.src_ip === g.src_ip && s.tag === ruleName)) {
+          this.groupSups.push({ src_ip: g.src_ip, tag: ruleName });
+        }
+        this.api.suppressAlert(g.src_ip, '', '', ruleName, 24).subscribe({
+          next: () => this.showToast(`Suppressed "${ruleName}" from ${g.src_ip} for 24h`),
+        });
+      }
+      this.dismissGroup(g.src_ip, g.tag);
+      this.rebuild();
+      this.cdr.detectChanges();
+      return;
+    }
+
+    // Non-sigma groups: suppress by primary tag as before
     if (!this.groupSups.some(s => s.src_ip === g.src_ip && s.tag === g.tag)) {
       this.groupSups.push({ src_ip: g.src_ip, tag: g.tag });
     }
@@ -360,6 +401,43 @@ export class Alerts implements OnInit, OnDestroy {
   }
 
   onFilterChange() { this.rebuild(); }
+
+  // ── Entity scores ─────────────────────────────────────────────────────────
+
+  loadEntityScores() {
+    this.entityScoresLoading = true;
+    this.api.getEntityScores().subscribe({
+      next: (scores: any[]) => {
+        this.entityScores = scores;
+        this.entityScoresLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => { this.entityScoresLoading = false; },
+    });
+  }
+
+  filterByHost(ip: string) {
+    if (this.activeHostFilter === ip) {
+      // Toggle off
+      this.activeHostFilter = '';
+      this.filterSearch = '';
+    } else {
+      this.activeHostFilter = ip;
+      this.filterSearch = ip;
+    }
+    this.rebuild();
+    this.cdr.detectChanges();
+  }
+
+  severityColor(sev: string): string {
+    switch (sev?.toUpperCase()) {
+      case 'CRITICAL': return '#ff4444';
+      case 'HIGH':     return '#ff8800';
+      case 'MEDIUM':   return '#ffcc00';
+      case 'LOW':      return '#44aaff';
+      default:         return '#888888';
+    }
+  }
 
   // ── Toast ──────────────────────────────────────────────────────────────────
 
@@ -417,6 +495,18 @@ export class Alerts implements OnInit, OnDestroy {
     this.arkime.getSessionLink(cid).subscribe({
       next: (data: any) => { if (data.link) window.open(data.link, '_blank'); },
     });
+  }
+
+  copyIp(ip: string, event: MouseEvent) {
+    event.stopPropagation();
+    if (!ip) return;
+    navigator.clipboard.writeText(ip).then(() => this.showToast(`Copied ${ip}`)).catch(() => {});
+  }
+
+  goToNetworkMap(ip: string, event: MouseEvent) {
+    event.stopPropagation();
+    if (!ip) return;
+    this.router.navigate(['/network-map'], { queryParams: { ip } });
   }
 
   downloadPcap(sessionId: string)       { this.arkime.downloadPcap(sessionId); }

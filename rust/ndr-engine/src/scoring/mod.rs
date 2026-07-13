@@ -105,6 +105,7 @@ impl RiskScorer {
         is_malicious: bool,
         sensitive_country: bool,
         is_trusted_cloud: bool,
+        entity_score: f32,
     ) -> RiskResult {
         let mut score: f32 = 0.0;
         let mut tags       = Vec::<String>::new();
@@ -160,7 +161,10 @@ impl RiskScorer {
         }
 
         // ── 3. Sensitive country GeoIP ────────────────────────────────
-        if sensitive_country {
+        // Skip if dst is a trusted cloud provider — major clouds (Azure, Google,
+        // Amazon) have PoPs in every country including sensitive ones. Traffic to
+        // AS8075 in India is Windows Update, not a geo threat signal.
+        if sensitive_country && !is_trusted_cloud {
             score += 30.0;
             reasons.push("Traffic involves a sensitive country".into());
             tags.push("sensitive-country".into());
@@ -264,6 +268,22 @@ impl RiskScorer {
                     "Destination is trusted cloud provider — behavioral noise suppressed".into()
                 );
             }
+        }
+
+        // ── 8. Entity score (per-host accumulated risk from last 24 h) ──────
+        // entity_score is the host's accumulated hit score normalized to 0-100.
+        // A history of repeated suspicious activity boosts new hits from that host.
+        if entity_score >= 80.0 {
+            score += 20.0;
+            reasons.push(format!("Compromised-host history (entity score {:.0})", entity_score));
+            tags.push("compromised-host".into());
+        } else if entity_score >= 50.0 {
+            score += 10.0;
+            reasons.push(format!("Risky host (entity score {:.0})", entity_score));
+            tags.push("risky-host".into());
+        } else if entity_score >= 30.0 {
+            score += 5.0;
+            tags.push("flagged-host".into());
         }
 
         score = score.min(100.0);

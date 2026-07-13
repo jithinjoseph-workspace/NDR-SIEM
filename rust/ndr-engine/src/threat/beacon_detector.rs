@@ -17,31 +17,44 @@ const MIN_CONNS: u64 = 10;
 // Look-back window hours
 const WINDOW_HOURS: u32 = 1;
 
-pub fn spawn_beacon_detector(ch: Arc<ClickhouseStorage>) {
+pub fn spawn_beacon_detector(
+    ch:        Arc<ClickhouseStorage>,
+    redis_mux: redis::aio::MultiplexedConnection,
+    ws_tx:     tokio::sync::broadcast::Sender<String>,
+) {
     tokio::spawn(async move {
         // Initial delay — let traffic accumulate before first scan
         tokio::time::sleep(std::time::Duration::from_secs(180)).await;
         loop {
-            run_scan(&ch).await;
+            run_scan(&ch, &redis_mux, &ws_tx).await;
             tokio::time::sleep(std::time::Duration::from_secs(1800)).await; // every 30 min
         }
     });
 }
 
-async fn run_scan(ch: &Arc<ClickhouseStorage>) {
+async fn run_scan(
+    ch:        &Arc<ClickhouseStorage>,
+    redis_mux: &redis::aio::MultiplexedConnection,
+    ws_tx:     &tokio::sync::broadcast::Sender<String>,
+) {
     info!("beacon_detector: starting scan");
 
     let tenant_ids = ch.get_all_tenants().await
         .unwrap_or_else(|_| vec!["default".to_string()]);
 
     for tenant_id in &tenant_ids {
-        if let Err(e) = scan_tenant(ch, tenant_id).await {
+        if let Err(e) = scan_tenant(ch, tenant_id, redis_mux, ws_tx).await {
             warn!("beacon_detector: tenant {} failed — {}", tenant_id, e);
         }
     }
 }
 
-async fn scan_tenant(ch: &Arc<ClickhouseStorage>, tenant_id: &str) -> anyhow::Result<()> {
+async fn scan_tenant(
+    ch:        &Arc<ClickhouseStorage>,
+    tenant_id: &str,
+    redis_mux: &redis::aio::MultiplexedConnection,
+    ws_tx:     &tokio::sync::broadcast::Sender<String>,
+) -> anyhow::Result<()> {
     let candidates = ch.get_beacon_candidates(tenant_id, WINDOW_HOURS, MIN_CONNS).await?;
 
     if candidates.is_empty() {
@@ -66,7 +79,7 @@ async fn scan_tenant(ch: &Arc<ClickhouseStorage>, tenant_id: &str) -> anyhow::Re
                 "beacon_detector: BEACON detected tenant={} {}→{} score={:.1} conns={}",
                 tenant_id, src_ip, dst_ip, score, timestamps.len()
             );
-            store_beacon_hit(ch, tenant_id, &src_ip, &dst_ip, score, timestamps.len()).await;
+            store_beacon_hit(ch, tenant_id, &src_ip, &dst_ip, score, timestamps.len(), redis_mux, ws_tx).await;
         }
     }
 
@@ -119,8 +132,11 @@ async fn store_beacon_hit(
     dst_ip:    &str,
     score:     f64,
     conn_cnt:  usize,
+    redis_mux: &redis::aio::MultiplexedConnection,
+    ws_tx:     &tokio::sync::broadcast::Sender<String>,
 ) {
     let community_id = format!("beacon:{}:{}:{}", tenant_id, src_ip, dst_ip);
+    let severity = if score >= 85.0 { "HIGH" } else { "MEDIUM" };
     let reason = format!(
         "Beaconing detected — {} connections in {}h with regular intervals (score={:.0}/100). \
          Bypasses trusted-cloud suppression. Investigate for C2 activity.",
@@ -142,14 +158,41 @@ async fn store_beacon_hit(
         src     = crate::storage::clickhouse::sql_escape_pub(src_ip),
         dst     = crate::storage::clickhouse::sql_escape_pub(dst_ip),
         score   = score,
-        sev     = if score >= 85.0 { "HIGH" } else { "MEDIUM" },
-        tags    = format!("['beaconing', 'c2-suspect']"),
+        sev     = severity,
+        tags    = "['beaconing', 'c2-suspect']",
         details = crate::storage::clickhouse::sql_escape_pub(&reason),
     );
 
     if let Err(e) = ch.client.query(&q).execute().await {
         warn!("beacon_detector: failed to store hit for {}→{}: {}", src_ip, dst_ip, e);
+        return;
     }
+
+    // GAP 4b: broadcast beacon hit via WebSocket so the UI shows it in real-time
+    let ws_msg = serde_json::json!({
+        "type":         "hit",
+        "community_id": community_id,
+        "src_ip":       src_ip,
+        "dst_ip":       dst_ip,
+        "severity":     severity,
+        "score":        score,
+        "tags":         ["beaconing", "c2-suspect"],
+        "tenant_id":    tenant_id,
+    }).to_string();
+
+    let channel = format!("tenant:{}", tenant_id);
+    let mut mux  = redis_mux.clone();
+    let msg_copy = ws_msg.clone();
+    let tx_copy  = ws_tx.clone();
+    tokio::spawn(async move {
+        if redis::cmd("PUBLISH")
+            .arg(&channel).arg(&msg_copy)
+            .query_async::<_, i32>(&mut mux).await
+            .is_err()
+        {
+            let _ = tx_copy.send(msg_copy);
+        }
+    });
 }
 
 /// Load (src→dst) pairs already flagged as beaconing in the last hour

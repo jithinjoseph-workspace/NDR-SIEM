@@ -7,8 +7,62 @@ pub mod multiflow;
 pub use sigma::{SigmaRule, DetectionMatch, load_rules_from_dir, parse_rule_content};
 pub use updater::{spawn_sigma_updater, sync_now};
 
-use crate::normalizer::NormalizedEvent;
+use crate::normalizer::{NormalizedEvent, EventSource};
+use crate::detection::sigma::LogSource;
 use std::collections::{HashMap, HashSet};
+
+/// Returns true if a Sigma rule's logsource is compatible with the event.
+/// Rules with no logsource constraints always match.
+/// Windows / sysmon rules are skipped for Zeek/Suricata events (and vice-versa).
+fn logsource_matches(ls: &LogSource, event: &NormalizedEvent) -> bool {
+    // If no constraints, rule is universal
+    let has_constraint = ls.product.is_some() || ls.category.is_some() || ls.service.is_some();
+    if !has_constraint { return true; }
+
+    let product  = ls.product.as_deref().unwrap_or("").to_lowercase();
+    let category = ls.category.as_deref().unwrap_or("").to_lowercase();
+    let service  = ls.service.as_deref().unwrap_or("").to_lowercase();
+
+    match &event.event_source {
+        EventSource::Zeek => {
+            // Windows / endpoint-only rules don't apply to Zeek network events
+            if matches!(product.as_str(), "windows" | "macos" | "linux" | "azure" | "okta" | "aws") {
+                return false;
+            }
+            // Service field narrows to a specific Zeek log type (rdp, ssl, dns, http, …).
+            // Must be checked BEFORE the category early-return so rules with
+            // `service: rdp` don't accidentally fire on every Zeek event.
+            if !service.is_empty() {
+                let log_src = event.log_source.as_deref().unwrap_or("");
+                return service == log_src || service == "zeek";
+            }
+            // Network-specific categories always apply to Zeek (only when no service filter)
+            if matches!(category.as_str(), "network_connection" | "dns" | "proxy" | "firewall" | "webserver") {
+                return true;
+            }
+            // No category and no service → generic Zeek network rule, matches all Zeek events
+            if category.is_empty() {
+                return true;
+            }
+            false
+        }
+        EventSource::Suricata => {
+            if matches!(product.as_str(), "windows" | "macos" | "azure" | "okta" | "aws") {
+                return false;
+            }
+            true
+        }
+        EventSource::Linux => {
+            // Linux auditd rules must specify linux or be universal
+            if product == "windows" || product == "macos" { return false; }
+            if product == "linux" || product.is_empty() { return true; }
+            // Sysmon-for-linux category rules
+            if category == "process_creation" || category == "network_connection" { return true; }
+            false
+        }
+        EventSource::Unknown => true,
+    }
+}
 
 pub struct DetectionEngine {
     rules: Vec<SigmaRule>,
@@ -39,6 +93,7 @@ impl DetectionEngine {
         self.rules.iter()
             .filter(|rule| rule.tenant_id == "*" || rule.tenant_id == tenant_id)
             .filter(|rule| disabled.map_or(true, |d| !d.contains(&rule.id)))
+            .filter(|rule| logsource_matches(&rule.logsource, event))
             .filter_map(|rule| self.eval(rule, event))
             .collect()
     }

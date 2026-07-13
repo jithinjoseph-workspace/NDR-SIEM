@@ -41,6 +41,33 @@
     </div>
   </section>
 
+  <!-- ── Top Risky Hosts ── -->
+  <section *ngIf="!loading && entityScores.length > 0" class="entity-panel" aria-label="Top risky hosts">
+    <div class="entity-panel-header">
+      <lucide-icon [name]="ShieldAlertIcon" class="w-3.5 h-3.5"></lucide-icon>
+      <span>Top Risky Hosts</span>
+      <span class="entity-panel-hint">click to filter</span>
+    </div>
+    <div class="entity-cards">
+      <button
+        *ngFor="let h of entityScores"
+        class="entity-card"
+        [class.active]="activeHostFilter === h.src_ip"
+        (click)="filterByHost(h.src_ip)"
+        type="button"
+        [title]="h.src_ip"
+      >
+        <span class="entity-sev-dot" [style.background]="severityColor(h.top_severity)"></span>
+        <span class="entity-ip">{{ h.src_ip }}</span>
+        <span class="entity-score">{{ h.accumulated_score | number:'1.0-0' }}</span>
+        <span class="entity-count">{{ h.alert_count }} alerts</span>
+        <div class="entity-tags">
+          <span *ngFor="let t of h.top_tags.slice(0,3)" class="entity-tag">{{ t }}</span>
+        </div>
+      </button>
+    </div>
+  </section>
+
   <!-- ── Filter bar ── -->
   <section *ngIf="!loading" class="filter-bar" aria-label="Filters">
     <div class="filter-search-wrap">
@@ -130,6 +157,9 @@
               </td>
               <td class="src-cell">
                 <span class="src-ip">{{ g.src_ip || '—' }}</span>
+                <button *ngIf="g.src_ip" class="ip-copy-btn" (click)="copyIp(g.src_ip, $event)" title="Copy IP" type="button">
+                  <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>
+                </button>
                 <ng-container *ngIf="g.dstIps?.length">
                   <span class="flow-arrow-inline">→</span>
                   <span class="victim-ip">{{ g.dstIps[0] }}</span>
@@ -169,21 +199,40 @@
                         {{ alert.src_asset?.hostname || alert.src_ip || '-' }}
                         <span *ngIf="alert.src_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
                         <span *ngIf="alert.src_asset?.threat_flagged && !alert.src_asset?.trusted" class="asset-threat-badge" title="AI flagged">!</span>
+                        <button *ngIf="alert.src_ip" class="ip-copy-btn" (click)="copyIp(alert.src_ip, $event)" title="Copy {{ alert.src_ip }}" type="button">
+                          <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>
+                        </button>
+                        <button *ngIf="alert.src_ip" class="ip-map-btn" (click)="goToNetworkMap(alert.src_ip, $event)" title="View in network map" type="button">
+                          <lucide-icon [name]="GlobeIcon" class="w-3 h-3"></lucide-icon>
+                        </button>
                       </span>
                       <span class="flow-arrow">→</span>
                       <span class="flow-endpoint">
                         {{ alert.dst_asset?.hostname || alert.dst_ip || '-' }}
                         <span *ngIf="alert.dst_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
+                        <button *ngIf="alert.dst_ip" class="ip-copy-btn" (click)="copyIp(alert.dst_ip, $event)" title="Copy {{ alert.dst_ip }}" type="button">
+                          <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>
+                        </button>
                       </span>
                     </span>
                     <small class="flow-meta">
-                      {{ alert.src_country || 'Origin unavailable' }}
+                      <span *ngIf="alert.src_country">{{ alert.src_country }}</span>
+                      <span *ngIf="alert.dst_country" class="dst-country-sep">→ {{ alert.dst_country }}</span>
+                      <span *ngIf="!alert.src_country && !alert.dst_country">Origin unavailable</span>
+                      <span *ngIf="alert.corroborated" class="corroborated-badge">
+                        <lucide-icon [name]="ShieldCheckIcon" class="w-3 h-3"></lucide-icon>
+                        Corroborated
+                      </span>
                       <span *ngIf="alert.threat_intel" class="intel-flag">
                         <lucide-icon [name]="TriangleAlertIcon" class="w-3 h-3"></lucide-icon>
                         Threat Intel
                       </span>
                     </small>
-                    <small class="description-cell">{{ alert.description }}</small>
+                    <!-- Sigma rule name chips (named rules take priority over generic tag text) -->
+                    <div *ngIf="alert.sigma_hits?.length" class="sigma-chips">
+                      <span *ngFor="let rule of alert.sigma_hits" class="sigma-chip" [title]="rule">{{ rule }}</span>
+                    </div>
+                    <small *ngIf="!alert.sigma_hits?.length" class="description-cell">{{ alert.description }}</small>
                   </div>
                 </td>
                 <td>
@@ -204,6 +253,9 @@
                   </button>
                   <button *ngIf="alert.community_id" class="icon-action" title="PCAP sessions" type="button" (click)="viewPcap(alert.community_id)">
                     <lucide-icon [name]="PackageIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  </button>
+                  <button *ngIf="alert.community_id" class="icon-action" title="Open in Arkime" type="button" (click)="openArkime(alert.community_id)">
+                    <lucide-icon [name]="ExternalLinkIcon" class="w-3.5 h-3.5"></lucide-icon>
                   </button>
                   <button *ngIf="alert.community_id" class="icon-action" title="Download evidence" type="button" (click)="downloadEvidence(alert.community_id)">
                     <lucide-icon [name]="DownloadIcon" class="w-3.5 h-3.5"></lucide-icon>

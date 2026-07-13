@@ -2049,6 +2049,43 @@ pub async fn get_high_volume_clean_dst_ips(
 /// Returns (src_ip, dst_ip, Vec<unix_timestamp_secs>) for pairs that have
 /// >= min_conns connections in the last `hours` hours, excluding private→private
 /// and excluding known-malicious dst IPs (threat_intel hits).
+pub async fn get_entity_scores(
+    &self,
+    tenant_id: &str,
+    limit:     u32,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let tid = sql_escape(tenant_id);
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row {
+        src_ip:            String,
+        accumulated_score: f64,
+        alert_count:       u64,
+        top_severity:      String,
+        top_tags:          Vec<String>,
+        last_seen:         u32,
+    }
+
+    let rows = self.client.query(&format!(
+        "SELECT src_ip, accumulated_score, alert_count, top_severity, top_tags,
+                toUnixTimestamp(last_seen) AS last_seen
+         FROM ndr.entity_scores FINAL
+         WHERE tenant_id = '{tid}'
+         ORDER BY accumulated_score DESC
+         LIMIT {limit}",
+        tid = tid, limit = limit,
+    )).fetch_all::<Row>().await?;
+
+    Ok(rows.into_iter().map(|r| serde_json::json!({
+        "src_ip":            r.src_ip,
+        "accumulated_score": r.accumulated_score,
+        "alert_count":       r.alert_count,
+        "top_severity":      r.top_severity,
+        "top_tags":          r.top_tags,
+        "last_seen":         r.last_seen,
+    })).collect())
+}
+
 pub async fn get_beacon_candidates(
     &self,
     tenant_id: &str,
@@ -2504,9 +2541,9 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             String::new()
         } else {
             let conds: Vec<String> = group_sups.iter().map(|s| format!(
-                "(src_ip = '{}' AND hasAny(tags, ['{}']))",
+                "(src_ip = '{}' AND (hasAny(tags, ['{name}']) OR hasAny(sigma_hits, ['{name}'])))",
                 sql_escape(&s.suppress_ip),
-                sql_escape(&s.signature_name)
+                name = sql_escape(&s.signature_name)
             )).collect();
             format!("AND NOT ({})", conds.join(" OR "))
         };
@@ -3639,6 +3676,10 @@ pub async fn clear_sensor_command(
             exp      = expires_expr,
             scope    = sql_escape(suppress_scope),
         )).execute().await?;
+        // Force immediate deduplication so FINAL queries see the new row without
+        // waiting for the background merge (table is tiny so this is cheap).
+        let _ = self.client.query("OPTIMIZE TABLE ndr.ai_suppressions FINAL")
+            .execute().await;
         Ok(())
     }
 

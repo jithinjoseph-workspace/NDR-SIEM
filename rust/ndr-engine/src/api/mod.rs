@@ -181,6 +181,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub trusted: Arc<tokio::sync::RwLock<crate::threat::cloud_trust::TrustedRanges>>,
     pub sensor_ip: Option<std::net::IpAddr>,
+    pub entity_cache: Arc<dashmap::DashMap<String, f32>>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -650,7 +651,11 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 
     // Score — use tenant-configured severity thresholds so critical_threshold
     // and alert_threshold bands from the Settings page are respected.
-    let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud);
+    let entity_score = state.entity_cache
+        .get(&format!("{}:{}", tenant_id, src))
+        .map(|v| *v)
+        .unwrap_or(0.0);
+    let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud, entity_score);
 
     // Trusted-asset check: if src is a user-marked trusted device, halve score and tag it
     let is_trusted_asset = state.ch_storage
@@ -674,7 +679,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         50,
         25,
     );
-    let risk = crate::scoring::RiskResult {
+    let mut risk = crate::scoring::RiskResult {
         score:    adjusted_score,
         severity,
         tags:     adjusted_tags,
@@ -940,6 +945,29 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         d.extend(engine.check_for_tenant(&hit.agent_s, &tenant_id));
         d
     };
+
+    // GAP 5: apply Sigma rule floor so a high-severity Sigma match can't be
+    // downgraded by a lower correlator score (mirrors the inline Sigma path fix).
+    if !detections.is_empty() {
+        let rule_floor: f32 = detections.iter().map(|d| match d.severity.to_lowercase().as_str() {
+            "critical" => 90.0_f32, "high" => 70.0, "medium" => 50.0, "low" => 30.0, _ => 10.0,
+        }).fold(0.0_f32, f32::max);
+        if !risk.tags.contains(&"sigma".to_string()) {
+            risk.tags.push("sigma".to_string());
+        }
+        if rule_floor > risk.score {
+            let floored = rule_floor.min(100.0);
+            let floored_sev = crate::scoring::Severity::from_score_with_thresholds(
+                floored, critical_threshold, alert_threshold as u32, 50, 25,
+            );
+            risk = crate::scoring::RiskResult {
+                score:    floored,
+                severity: floored_sev,
+                tags:     std::mem::take(&mut risk.tags),
+                reasons:  std::mem::take(&mut risk.reasons),
+            };
+        }
+    }
 
     let cs      = hit.agent_z.conn_state.as_deref().unwrap_or("-");
     let cs_desc = conn_state_description(cs);
@@ -1876,6 +1904,18 @@ pub async fn get_hits(State(state): State<AppState>, headers: axum::http::Header
         Ok(hits) => Json(json!(hits)),
         Err(e) => {
             tracing::warn!("Hits query error: {}", e);
+            Json(json!([]))
+        }
+    }
+}
+
+pub async fn get_entity_scores(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_entity_scores(&tenant_id, 20).await {
+        Ok(scores) => Json(json!(scores)),
+        Err(e) => {
+            tracing::warn!("entity_scores query error: {}", e);
             Json(json!([]))
         }
     }

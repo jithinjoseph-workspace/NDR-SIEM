@@ -46,6 +46,8 @@
     </logger>
 
     <merge_tree>
-        <max_suspicious_broken_parts>200</max_suspicious_broken_parts>
+        <!-- Raised from 200: unclean shutdowns leave empty broken parts that exceed the default -->
+        <max_suspicious_broken_parts>10000</max_suspicious_broken_parts>
+        <max_suspicious_broken_parts_bytes>1073741824</max_suspicious_broken_parts_bytes>
     </merge_tree>
 </clickhouse>

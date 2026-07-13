@@ -7,6 +7,7 @@ pub mod correlator;
 pub mod cloud_trust;
 pub mod cloud_suggestions;
 pub mod beacon_detector;
+pub mod entity_scorer;
 
 use std::sync::Arc;
 
@@ -14,9 +15,12 @@ use std::sync::Arc;
 /// Only the elected leader runs tasks — automatic failover if leader dies.
 /// Returns (election handle, trusted ranges Arc) — both stored in AppState.
 pub fn spawn_all(
-    ch:        Arc<crate::storage::ClickhouseStorage>,
-    redis_url: &str,
-    asn:       Arc<Option<crate::enrichment::AsnLookup>>,
+    ch:           Arc<crate::storage::ClickhouseStorage>,
+    redis_url:    &str,
+    asn:          Arc<Option<crate::enrichment::AsnLookup>>,
+    entity_cache: Arc<dashmap::DashMap<String, f32>>,
+    redis_mux:    redis::aio::MultiplexedConnection,
+    ws_tx:        tokio::sync::broadcast::Sender<String>,
 ) -> (
     Arc<crate::leader::LeaderElection>,
     Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
@@ -65,6 +69,9 @@ pub fn spawn_all(
         let asn_for_elect   = asn.clone();
         let trusted_clone   = Arc::clone(&trusted_for_spawn);
 
+        let entity_cache_for_spawn = entity_cache.clone();
+        let redis_mux_for_spawn    = redis_mux.clone();
+        let ws_tx_for_spawn        = ws_tx.clone();
         election_arc.start(
             move || {
                 if !flag.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -74,6 +81,9 @@ pub fn spawn_all(
                         redis_for_elect.clone(),
                         asn_for_elect.clone(),
                         Arc::clone(&trusted_clone),
+                        entity_cache_for_spawn.clone(),
+                        redis_mux_for_spawn.clone(),
+                        ws_tx_for_spawn.clone(),
                     );
                 } else {
                     tracing::info!("Re-elected — tasks already running, no restart needed");
@@ -97,10 +107,13 @@ pub fn spawn_all(
 
 /// Start all 5 threat background tasks. Called once when this engine wins election.
 fn spawn_threat_tasks(
-    ch:      Arc<crate::storage::ClickhouseStorage>,
-    redis:   Arc<redis::Client>,
-    asn:     Arc<Option<crate::enrichment::AsnLookup>>,
-    trusted: Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
+    ch:           Arc<crate::storage::ClickhouseStorage>,
+    redis:        Arc<redis::Client>,
+    asn:          Arc<Option<crate::enrichment::AsnLookup>>,
+    trusted:      Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
+    entity_cache: Arc<dashmap::DashMap<String, f32>>,
+    redis_mux:    redis::aio::MultiplexedConnection,
+    ws_tx:        tokio::sync::broadcast::Sender<String>,
 ) {
     let chain_trigger = Arc::new(tokio::sync::Notify::new());
 
@@ -118,10 +131,11 @@ fn spawn_threat_tasks(
     chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&trusted), Arc::clone(&asn));
     correlator::spawn_correlator(Arc::clone(&ch));
     cloud_suggestions::spawn_suggestion_scanner(Arc::clone(&ch));
-    beacon_detector::spawn_beacon_detector(Arc::clone(&ch));
+    beacon_detector::spawn_beacon_detector(Arc::clone(&ch), redis_mux, ws_tx);
+    entity_scorer::spawn_entity_scorer(Arc::clone(&ch), entity_cache);
     crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch));
 
-    tracing::info!("All 8 threat background tasks started on elected leader");
+    tracing::info!("All 9 threat background tasks started on elected leader");
 }
 
 // ── Row structs for ClickHouse queries ───────────────────────────────────────

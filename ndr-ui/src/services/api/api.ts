@@ -150,6 +150,10 @@ export class Api {
     return this.http.get(`${this.baseUrl}/severity`);
   }
 
+  getEntityScores(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/entity-scores`);
+  }
+
   getNetworkMap(mode?: string, limit?: number): Observable<any> {
     let url = `${this.baseUrl}/network-map`;
     const params: string[] = [];

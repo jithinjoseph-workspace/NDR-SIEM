@@ -202,7 +202,13 @@ async fn main() {
         tracing::info!("Sensor self-IP: {} — own trusted traffic will be filtered", ip);
     }
 
-    let (election, trusted) = threat::spawn_all(ch_storage_arc.clone(), &redis_url, Arc::clone(&asn_arc));
+    let entity_cache: Arc<dashmap::DashMap<String, f32>> = Arc::new(dashmap::DashMap::new());
+    let (election, trusted) = threat::spawn_all(
+        ch_storage_arc.clone(), &redis_url, Arc::clone(&asn_arc),
+        entity_cache.clone(),
+        redis_mux.clone(),
+        tx.clone(),
+    );
 
     // Start sensor key cache refresh loop (after ch_storage is ready)
     auth::sensor_cache::spawn_refresh_loop(
@@ -236,6 +242,7 @@ async fn main() {
             .unwrap_or_default(),
         trusted,
         sensor_ip,
+        entity_cache,
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
@@ -467,6 +474,7 @@ async fn main() {
         .route("/api/protocols",     get(api::get_protocols))
         .route("/api/severity",      get(api::get_severity))
         .route("/api/hits",          get(api::get_hits))
+        .route("/api/entity-scores", get(api::get_entity_scores))
         .route("/api/network-map", get(api::get_network_map))
         .route("/api/network-map/node/:ip", get(api::get_network_map_node))
         .route("/api/network-map/search", get(api::search_network_map))

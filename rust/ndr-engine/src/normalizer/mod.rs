@@ -70,9 +70,43 @@ pub struct NormalizedEvent {
 
     // Raw payload kept for dashboard & storage display
     pub raw:              Value,
+
+    // ── Enrichment fields ─────────────────────────────────────────────────
+    // Populated by the consumer BEFORE Sigma detection so rules can test
+    // geo, threat-intel, and direction. Absent from wire data — default.
+    #[serde(default)]
+    pub is_malicious:     bool,
+    #[serde(default)]
+    pub src_country_code: String,
+    #[serde(default)]
+    pub dst_country_code: String,
+    #[serde(default)]
+    pub src_asn_org:      String,
+    #[serde(default)]
+    pub dst_asn_org:      String,
+    #[serde(default)]
+    pub direction:        String,  // "inbound" | "outbound" | "internal" | "unknown"
 }
 
 impl NormalizedEvent {
+    /// A blank event used as the "absent" half of a Zeek-only CorrelationHit
+    /// when we need to call RiskScorer without a matching Suricata event.
+    pub fn blank() -> Self {
+        NormalizedEvent {
+            source_ip: None, source_port: None,
+            dest_ip:   None, dest_port:   None,
+            proto: None, network_protocol: None, community_id: None,
+            event_source: EventSource::Unknown, log_source: None,
+            timestamp: 0, uid: None, conn_state: None,
+            event_type: None, alert: None,
+            raw: Value::Null,
+            is_malicious: false,
+            src_country_code: String::new(), dst_country_code: String::new(),
+            src_asn_org: String::new(),      dst_asn_org: String::new(),
+            direction: String::new(),
+        }
+    }
+
     /// Parse a raw JSON value arriving from Vector into a NormalizedEvent.
     /// Returns None if the event is missing a community_id or is totally malformed.
     pub fn from_raw(raw: Value) -> Option<Self> {
@@ -165,6 +199,17 @@ impl NormalizedEvent {
         "type"                => self.raw.get("record_type").and_then(|v| v.as_str()).map(String::from),
         "exe"                 => self.raw.get("exe").and_then(|v| v.as_str()).map(String::from),
         "comm"                => self.raw.get("comm").and_then(|v| v.as_str()).map(String::from),
+
+        // ── Enrichment fields (populated before Sigma in consumer) ───────
+        "is_malicious"      => Some(self.is_malicious.to_string()),
+        "direction"         => if self.direction.is_empty() { None } else { Some(self.direction.clone()) },
+        "src_country_code"
+        | "src_country"     => if self.src_country_code.is_empty() { None } else { Some(self.src_country_code.clone()) },
+        "dst_country_code"
+        | "dst_country"     => if self.dst_country_code.is_empty() { None } else { Some(self.dst_country_code.clone()) },
+        "src_asn_org"       => if self.src_asn_org.is_empty() { None } else { Some(self.src_asn_org.clone()) },
+        "dst_asn_org"
+        | "asn_org"         => if self.dst_asn_org.is_empty() { None } else { Some(self.dst_asn_org.clone()) },
 
         // ── Aliases ───────────────────────────────
         "src_ip"    => self.source_ip.clone(),

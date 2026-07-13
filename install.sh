@@ -633,6 +633,12 @@ export {
     };
 }
 
+# NDR sensor self-exclusion — ndr-agent rewrites this file at every Start
+# with the real sensor MAC and IP so ARP isolation doesn't self-alert.
+# Empty sets here are safe: Zeek loads them only if agent hasn't started yet.
+const NDR_SENSOR_MACS: set[string] = {};
+const NDR_SENSOR_IPS:  set[addr]   = {};
+
 event zeek_init() &priority=5
 {
     Log::create_stream(ARP::LOG, [$columns=Info, $path="arp"]);
@@ -642,6 +648,8 @@ event arp_request(mac_src: string, mac_dst: string,
                   SPA: addr, SHA: string,
                   TPA: addr, THA: string)
 {
+    if (SHA in NDR_SENSOR_MACS) return;
+    if (SPA in NDR_SENSOR_IPS)  return;
     Log::write(ARP::LOG, Info(
         $ts        = network_time(),
         $operation = "request",
@@ -656,6 +664,8 @@ event arp_reply(mac_src: string, mac_dst: string,
                 SPA: addr, SHA: string,
                 TPA: addr, THA: string)
 {
+    if (SHA in NDR_SENSOR_MACS) return;
+    if (SPA in NDR_SENSOR_IPS)  return;
     Log::write(ARP::LOG, Info(
         $ts        = network_time(),
         $operation = "reply",

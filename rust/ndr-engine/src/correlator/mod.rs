@@ -3,7 +3,7 @@
 // Upgrades to full correlation if both arrive
 // License: Apache-2.0
 
-mod session;
+pub mod session;
 pub use session::{Session, CorrelationHit};
 
 use crate::normalizer::{EventSource, NormalizedEvent};

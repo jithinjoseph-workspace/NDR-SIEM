@@ -174,7 +174,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     Err(_) => continue,
                 };
 
-                let Some(event) = NormalizedEvent::from_raw(raw.clone()) else { continue; };
+                let Some(mut event) = NormalizedEvent::from_raw(raw.clone()) else { continue; };
 
                 if event.should_drop() { continue; }
 
@@ -246,15 +246,50 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 sensor_id:          raw.get("sensor_host")
                                     .and_then(|v| v.as_str()).unwrap_or("").to_string(),
                             };
-                            let ch_cl  = state.ch_storage.clone();
-                            let tid_cl = tenant_id.clone();
-                            let sha_log = sha256.clone();
+                            let ch_cl      = state.ch_storage.clone();
+                            let tid_cl     = tenant_id.clone();
+                            let sha_log    = sha256.clone();
+                            let state_soar = Arc::clone(&state);
+                            let cid_s      = ch_hit.community_id.clone();
+                            let src_s      = ch_hit.src_ip.clone();
+                            let dst_s      = ch_hit.dst_ip.clone();
+                            let sev_s      = ch_hit.severity.clone();
+                            let hit_soar   = crate::correlator::session::CorrelationHit {
+                                community_id: cid_s.clone(),
+                                agent_z:      event.clone(),
+                                agent_s:      crate::normalizer::NormalizedEvent::blank(),
+                                hit_time:     now_ts as u64,
+                                source:       "hash".to_string(),
+                            };
+                            let risk_soar  = crate::scoring::RiskResult {
+                                score:    90.0,
+                                severity: crate::scoring::Severity::High,
+                                tags:     vec!["malware-hash".to_string(), "threat-intel".to_string()],
+                                reasons:  vec!["malware hash matched".to_string()],
+                            };
+                            let enrich_soar = crate::enrichment::EnrichmentData {
+                                src_geo: None, dst_geo: None,
+                                src_asn: None, dst_asn: None,
+                                is_malicious: true,
+                                direction: String::new(),
+                                sensitive_country: false,
+                            };
                             tokio::spawn(async move {
                                 if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
                                     tracing::warn!("hash-match hit insert error: {}", e);
-                                } else {
-                                    tracing::info!(sha256 = %sha_log, tenant = %tid_cl, "malware hash matched — hit created");
+                                    return;
                                 }
+                                tracing::info!(sha256 = %sha_log, tenant = %tid_cl, "malware hash matched — hit created");
+                                crate::soar::execute_native_playbooks(
+                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                ).await;
+                                let ws_msg = serde_json::json!({
+                                    "type": "hit", "community_id": cid_s,
+                                    "src_ip": src_s, "dst_ip": dst_s,
+                                    "severity": sev_s, "score": 90.0,
+                                    "tenant_id": tid_cl,
+                                });
+                                crate::api::publish_event(&state_soar, &tid_cl, &ws_msg.to_string());
                             });
                         }
                     }
@@ -315,15 +350,50 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 updated_at:         now_ts,
                                 sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                             };
-                            let ch_cl  = state.ch_storage.clone();
-                            let tid_cl = tenant_id.clone();
-                            let ja3_log = ja3.clone();
+                            let ch_cl      = state.ch_storage.clone();
+                            let tid_cl     = tenant_id.clone();
+                            let ja3_log    = ja3.clone();
+                            let state_soar = Arc::clone(&state);
+                            let cid_s      = ch_hit.community_id.clone();
+                            let src_s      = ch_hit.src_ip.clone();
+                            let dst_s      = ch_hit.dst_ip.clone();
+                            let sev_s      = ch_hit.severity.clone();
+                            let hit_soar   = crate::correlator::session::CorrelationHit {
+                                community_id: cid_s.clone(),
+                                agent_z:      event.clone(),
+                                agent_s:      crate::normalizer::NormalizedEvent::blank(),
+                                hit_time:     now_ts as u64,
+                                source:       "ja3".to_string(),
+                            };
+                            let risk_soar  = crate::scoring::RiskResult {
+                                score:    80.0,
+                                severity: crate::scoring::Severity::High,
+                                tags:     vec!["malicious-ja3".to_string(), "threat-intel".to_string()],
+                                reasons:  vec!["malicious JA3 fingerprint matched".to_string()],
+                            };
+                            let enrich_soar = crate::enrichment::EnrichmentData {
+                                src_geo: None, dst_geo: None,
+                                src_asn: None, dst_asn: None,
+                                is_malicious: true,
+                                direction: String::new(),
+                                sensitive_country: false,
+                            };
                             tokio::spawn(async move {
                                 if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
                                     tracing::warn!("ja3-match hit insert error: {}", e);
-                                } else {
-                                    tracing::info!(ja3 = %ja3_log, tenant = %tid_cl, "malicious JA3 matched — hit created");
+                                    return;
                                 }
+                                tracing::info!(ja3 = %ja3_log, tenant = %tid_cl, "malicious JA3 matched — hit created");
+                                crate::soar::execute_native_playbooks(
+                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                ).await;
+                                let ws_msg = serde_json::json!({
+                                    "type": "hit", "community_id": cid_s,
+                                    "src_ip": src_s, "dst_ip": dst_s,
+                                    "severity": sev_s, "score": 80.0,
+                                    "tenant_id": tid_cl,
+                                });
+                                crate::api::publish_event(&state_soar, &tid_cl, &ws_msg.to_string());
                             });
                         }
                     }
@@ -377,15 +447,50 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     updated_at:         now_ts,
                                     sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                                 };
-                                let ch_cl  = state.ch_storage.clone();
-                                let tid_cl = tenant_id.clone();
-                                let src_log = src.clone();
+                                let ch_cl      = state.ch_storage.clone();
+                                let tid_cl     = tenant_id.clone();
+                                let src_log    = src.clone();
+                                let state_soar = Arc::clone(&state);
+                                let cid_s      = ch_hit.community_id.clone();
+                                let src_s      = ch_hit.src_ip.clone();
+                                let dst_s      = ch_hit.dst_ip.clone();
+                                let sev_s      = ch_hit.severity.clone();
+                                let hit_soar   = crate::correlator::session::CorrelationHit {
+                                    community_id: cid_s.clone(),
+                                    agent_z:      event.clone(),
+                                    agent_s:      crate::normalizer::NormalizedEvent::blank(),
+                                    hit_time:     now_ts as u64,
+                                    source:       "doh".to_string(),
+                                };
+                                let risk_soar  = crate::scoring::RiskResult {
+                                    score:    65.0,
+                                    severity: crate::scoring::Severity::Medium,
+                                    tags:     vec!["doh-evasion".to_string(), "t:command-and-control".to_string()],
+                                    reasons:  vec!["DoH evasion — HTTPS to known DNS-over-HTTPS resolver".to_string()],
+                                };
+                                let enrich_soar = crate::enrichment::EnrichmentData {
+                                    src_geo: None, dst_geo: None,
+                                    src_asn: None, dst_asn: None,
+                                    is_malicious: false,
+                                    direction: "outbound".to_string(),
+                                    sensitive_country: false,
+                                };
                                 tokio::spawn(async move {
                                     if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
                                         tracing::warn!("doh-evasion hit insert error: {}", e);
-                                    } else {
-                                        tracing::info!(src = %src_log, tenant = %tid_cl, "DoH evasion detected — hit created");
+                                        return;
                                     }
+                                    tracing::info!(src = %src_log, tenant = %tid_cl, "DoH evasion detected — hit created");
+                                    crate::soar::execute_native_playbooks(
+                                        &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                    ).await;
+                                    let ws_msg = serde_json::json!({
+                                        "type": "hit", "community_id": cid_s,
+                                        "src_ip": src_s, "dst_ip": dst_s,
+                                        "severity": sev_s, "score": 65.0,
+                                        "tenant_id": tid_cl,
+                                    });
+                                    crate::api::publish_event(&state_soar, &tid_cl, &ws_msg.to_string());
                                 });
                             }
                         }
@@ -780,15 +885,50 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 updated_at:         now_ts,
                                 sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                             };
-                            let ch_cl   = state.ch_storage.clone();
-                            let tid_cl  = tenant_id.clone();
-                            let dom_log = domain.clone();
+                            let ch_cl      = state.ch_storage.clone();
+                            let tid_cl     = tenant_id.clone();
+                            let dom_log    = domain.clone();
+                            let state_soar = Arc::clone(&state);
+                            let cid_s      = ch_hit.community_id.clone();
+                            let src_s      = ch_hit.src_ip.clone();
+                            let dst_s      = ch_hit.dst_ip.clone();
+                            let sev_s      = ch_hit.severity.clone();
+                            let hit_soar   = crate::correlator::session::CorrelationHit {
+                                community_id: cid_s.clone(),
+                                agent_z:      event.clone(),
+                                agent_s:      crate::normalizer::NormalizedEvent::blank(),
+                                hit_time:     now_ts as u64,
+                                source:       "domain".to_string(),
+                            };
+                            let risk_soar  = crate::scoring::RiskResult {
+                                score:    85.0,
+                                severity: crate::scoring::Severity::High,
+                                tags:     vec!["malicious-domain".to_string(), "threat-intel".to_string()],
+                                reasons:  vec!["malicious domain in DNS query".to_string()],
+                            };
+                            let enrich_soar = crate::enrichment::EnrichmentData {
+                                src_geo: None, dst_geo: None,
+                                src_asn: None, dst_asn: None,
+                                is_malicious: true,
+                                direction: String::new(),
+                                sensitive_country: false,
+                            };
                             tokio::spawn(async move {
                                 if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
                                     tracing::warn!("domain-match hit insert error: {}", e);
-                                } else {
-                                    tracing::info!(domain = %dom_log, tenant = %tid_cl, "malicious domain in DNS query — hit created");
+                                    return;
                                 }
+                                tracing::info!(domain = %dom_log, tenant = %tid_cl, "malicious domain in DNS query — hit created");
+                                crate::soar::execute_native_playbooks(
+                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                ).await;
+                                let ws_msg = serde_json::json!({
+                                    "type": "hit", "community_id": cid_s,
+                                    "src_ip": src_s, "dst_ip": dst_s,
+                                    "severity": sev_s, "score": 85.0,
+                                    "tenant_id": tid_cl,
+                                });
+                                crate::api::publish_event(&state_soar, &tid_cl, &ws_msg.to_string());
                             });
                         }
 
@@ -888,31 +1028,29 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 let has_ip = event.source_ip.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
                           || event.dest_ip.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
                 if event.event_source == EventSource::Zeek && has_ip {
+                    // ── GAP 1: Enrich BEFORE Sigma so rules can test geo/threat-intel ──
+                    let src = event.source_ip.clone().unwrap_or_default();
+                    let dst = event.dest_ip.clone().unwrap_or_default();
+                    let enrich = state.enrichment.enrich(&src, &dst);
+                    event.is_malicious     = enrich.is_malicious;
+                    event.src_country_code = enrich.src_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
+                    event.dst_country_code = enrich.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
+                    event.src_asn_org      = enrich.src_asn.as_ref().map(|a| a.org.clone()).unwrap_or_default();
+                    event.dst_asn_org      = enrich.dst_asn.as_ref().map(|a| a.org.clone()).unwrap_or_default();
+                    event.direction        = enrich.direction.clone();
+
                     let detections = {
                         let engine = state.detection.read().await;
                         engine.check_for_tenant(&event, &tenant_id)
                     };
                     if !detections.is_empty() {
                         let now_ts = chrono::Utc::now().timestamp() as u32;
-                        let score: f32 = detections.iter().map(|d| match d.severity.to_lowercase().as_str() {
-                            "critical" => 90.0_f32,
-                            "high"     => 70.0,
-                            "medium"   => 50.0,
-                            "low"      => 30.0,
-                            _          => 10.0,
-                        }).fold(0.0_f32, f32::max);
-                        let severity = if score >= 90.0 { "CRITICAL" }
-                            else if score >= 70.0 { "HIGH" }
-                            else if score >= 50.0 { "MEDIUM" }
-                            else if score >= 30.0 { "LOW" }
-                            else { "INFO" };
+
                         let sigma_titles: Vec<String> = {
                             let mut seen = std::collections::HashSet::new();
                             detections.iter().map(|d| d.title.clone()).filter(|t| seen.insert(t.clone())).collect()
                         };
                         let cid = event.community_id.clone().unwrap_or_else(|| format!("zeek-{}-{}", now_ts, event.uid.as_deref().unwrap_or("x")));
-                        let src = event.source_ip.clone().unwrap_or_default();
-                        let dst = event.dest_ip.clone().unwrap_or_default();
 
                         // Skip sigma hits where src is absent and dst is RFC1918 —
                         // "Publicly Accessible" and exposure rules make no sense for
@@ -928,6 +1066,43 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             continue;
                         }
 
+                        // ── GAP 2: Use RiskScorer instead of inline severity map ──────
+                        // Build a CorrelationHit with the enriched Zeek event + blank
+                        // Suricata half so the scorer gets conn_state, port, protocol signals.
+                        let corr_hit = crate::correlator::session::CorrelationHit {
+                            community_id: cid.clone(),
+                            agent_z:      event.clone(),
+                            agent_s:      crate::normalizer::NormalizedEvent::blank(),
+                            hit_time:     now_ts as u64,
+                            source:       "sigma".to_string(),
+                        };
+                        let is_trusted_cloud = {
+                            let tr = state.trusted.read().await;
+                            if tr.is_trusted_ip(&dst) { true }
+                            else { enrich.dst_asn.as_ref().map(|a| tr.is_trusted_asn(&a.org)).unwrap_or(false) }
+                        };
+                        let entity_score = state.entity_cache
+                            .get(&format!("{}:{}", tenant_id, src))
+                            .map(|v| *v)
+                            .unwrap_or(0.0);
+                        let raw_risk = state.scorer.score(
+                            &corr_hit,
+                            enrich.is_malicious,
+                            enrich.sensitive_country,
+                            is_trusted_cloud,
+                            entity_score,
+                        );
+                        // Sigma rule severity acts as a floor — take the max of scorer and rule
+                        let rule_floor: f32 = detections.iter().map(|d| match d.severity.to_lowercase().as_str() {
+                            "critical" => 90.0_f32, "high" => 70.0, "medium" => 50.0, "low" => 30.0, _ => 10.0,
+                        }).fold(0.0_f32, f32::max);
+                        let score    = raw_risk.score.max(rule_floor).min(100.0);
+                        let severity = crate::scoring::Severity::from_score(score).as_str();
+                        // Clone raw_risk before partially moving its fields
+                        let risk_soar       = raw_risk.clone();
+                        let mut tags = raw_risk.tags;
+                        if !tags.contains(&"sigma".to_string()) { tags.push("sigma".to_string()); }
+
                         let agent_z_details = serde_json::to_string(&event.raw).unwrap_or_else(|_| "{}".into());
                         let ch_hit = crate::storage::clickhouse::NdrHit {
                             timestamp:          now_ts,
@@ -936,11 +1111,11 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             dst_ip:             dst,
                             score,
                             severity:           severity.to_string(),
-                            tags:               vec!["sigma".to_string()],
+                            tags,
                             sigma_hits:         sigma_titles,
-                            threat_intel:       0,
-                            src_country:        String::new(),
-                            dst_country:        String::new(),
+                            threat_intel:       enrich.is_malicious as u8,
+                            src_country:        enrich.src_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default(),
+                            dst_country:        enrich.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default(),
                             tenant_id:          tenant_id.clone(),
                             correlation_status: "zeek_only".to_string(),
                             agent_z_details,
@@ -960,6 +1135,11 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         let sigma_log       = detections.iter().map(|d| d.title.as_str()).collect::<Vec<_>>().join(",");
                         let do_evidence     = matches!(severity, "HIGH" | "CRITICAL" | "MEDIUM")
                                              && cid_clone.starts_with("1:");
+                        // GAP 3: SOAR + WS broadcast for Sigma hits
+                        let state_soar      = Arc::clone(&state);
+                        let enrich_soar     = enrich.clone();
+                        let hit_soar        = corr_hit.clone();
+                        let score_soar      = score;
                         tracing::info!(
                             sigma = %sigma_log,
                             src   = %event.source_ip.as_deref().unwrap_or("-"),
@@ -970,6 +1150,20 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             if let Err(e) = ch_clone.insert_hit_for_tenant(ch_hit, &tid_clone).await {
                                 tracing::warn!("zeek_only hit insert error: {}", e);
                                 return;
+                            }
+                            // GAP 3: SOAR playbooks
+                            crate::soar::execute_native_playbooks(
+                                &state_soar, hit_soar, risk_soar, enrich_soar, &tid_clone,
+                            ).await;
+                            // GAP 3: WS broadcast so the alert appears in real-time
+                            if cid_clone.starts_with("1:") {
+                                let ws_msg = serde_json::json!({
+                                    "type": "hit", "community_id": cid_clone,
+                                    "src_ip": src_clone, "dst_ip": dst_clone,
+                                    "severity": sev_clone, "score": score_soar,
+                                    "tenant_id": tid_clone,
+                                });
+                                crate::api::publish_event(&state_soar, &tid_clone, &ws_msg.to_string());
                             }
                             if !do_evidence { return; }
 
@@ -1020,6 +1214,54 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                             "Evidence bundle {} captured for zeek_only cid {}",
                                             bundle_id, cid_clone
                                         );
+                                        // GAP 4c: AI threat analysis for Sigma zeek_only hits.
+                                        // The correlator path runs AI for corroborated hits, but
+                                        // when the correlator score falls below store_threshold,
+                                        // only this path runs — so AI must fire here too.
+                                        if ch_clone.get_tenant_ai_enabled(&tid_clone).await {
+                                            let bundles = ch_clone
+                                                .get_bundles_for_cid(&tid_clone, &cid_clone)
+                                                .await.unwrap_or_default();
+                                            let sys = "You are a senior NDR (Network Detection & Response) \
+                                                security analyst. A Sigma detection rule matched on a Zeek \
+                                                network event. Analyse the alert and respond in plain text \
+                                                with three short sections:\n\
+                                                THREAT: what this detection indicates (2-3 sentences)\n\
+                                                RISK: potential impact (1-2 sentences)\n\
+                                                ACTION: recommended immediate response steps (2-3 bullet points)\n\
+                                                Be concise and actionable. No markdown headers.";
+                                            let q = format!(
+                                                "Sigma rule(s) fired: {sigma_log}\n\
+                                                 Session community_id: {cid_clone}\n\
+                                                 Source: {src_clone} → Destination: {dst_clone}\n\
+                                                 Severity: {sev_clone}\n\
+                                                 Evidence bundles: {}\n\
+                                                 Tenant: {tid_clone}\n\
+                                                 Provide your threat analysis.",
+                                                bundles.len()
+                                            );
+                                            match crate::ai::provider::generate_chat(
+                                                &ch_clone, sys, &[], &q
+                                            ).await {
+                                                Ok((analysis, _)) => {
+                                                    let safe = analysis.replace('\'', "''");
+                                                    let _ = ch_clone.delete_ai_annotations_for_cid(
+                                                        &tid_clone, &cid_clone,
+                                                    ).await;
+                                                    let _ = ch_clone.add_evidence_annotation(
+                                                        &tid_clone, &bundle_id, &cid_clone,
+                                                        "ARIA-AI", &safe, "ai_analysis",
+                                                    ).await;
+                                                    tracing::info!(
+                                                        "AI analysis saved for zeek_only cid {}",
+                                                        cid_clone
+                                                    );
+                                                }
+                                                Err(e) => tracing::warn!(
+                                                    "AI analysis failed for zeek_only {}: {}", cid_clone, e
+                                                ),
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => tracing::warn!("Evidence capture failed for {}: {}", cid_clone, e),

@@ -46,5 +46,11 @@ pub fn normalize_linux(raw: Value) -> Option<NormalizedEvent> {
         event_type:       Some("endpoint".to_string()),
         alert:            None,
         raw,
+        is_malicious: false,
+        src_country_code: String::new(),
+        dst_country_code: String::new(),
+        src_asn_org:      String::new(),
+        dst_asn_org:      String::new(),
+        direction:        String::new(),
     })
 }

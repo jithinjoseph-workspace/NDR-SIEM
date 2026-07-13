@@ -95,5 +95,11 @@ pub fn normalize_zeek(raw: Value) -> Option<NormalizedEvent> {
         event_type: None,
         alert: None,
         raw,
+        is_malicious: false,
+        src_country_code: String::new(),
+        dst_country_code: String::new(),
+        src_asn_org:      String::new(),
+        dst_asn_org:      String::new(),
+        direction:        String::new(),
     })
 }
