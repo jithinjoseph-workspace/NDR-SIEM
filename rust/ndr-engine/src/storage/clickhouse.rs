@@ -265,17 +265,17 @@ fn sql_array_literal(values: &[String]) -> String {
 pub fn default_permissions(role: &str) -> String {
   match role {
     "super_admin" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup",
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup,evidence,assets,ai-activity,ai-report",
     "admin" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup",
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup,evidence,assets,ai-activity,ai-report",
     "tenant_admin" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users",
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users,evidence,assets,ai-activity,ai-report",
     "default_user" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,setup",
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,setup,evidence,assets,ai-activity,ai-report",
     "senior_analyst" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health",
+      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,evidence,assets,ai-activity,ai-report",
     "analyst" =>
-      "dashboard,alerts,logs,live,network-map,intel,health",
+      "dashboard,alerts,logs,live,network-map,intel,health,evidence,assets,ai-activity,ai-report",
     _ => "dashboard,alerts,health",
   }.to_string()
 }

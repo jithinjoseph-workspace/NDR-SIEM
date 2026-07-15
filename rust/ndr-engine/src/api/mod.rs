@@ -697,11 +697,13 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         }
     }
 
-    // Auto-capture evidence for HIGH, CRITICAL, and MEDIUM hits
+    // Auto-capture evidence for HIGH, CRITICAL, and MEDIUM hits.
+    // Non-1: CIDs (hash/JA3/domain/DoH/beacon) are included — Arkime PCAP fetch
+    // is skipped internally for those, but threat-intel and log evidence still captures.
     let severity_str = risk.severity.as_str().to_string();
     let hit_is_malicious = enrichment.is_malicious;
     if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM")
-        && hit.community_id.starts_with("1:")
+        && !hit.community_id.is_empty()
     {
         let cid = hit.community_id.clone();
         let tenant = tenant_id.clone();
@@ -765,7 +767,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                             &file_path, &sha256, size,
                             1, // auto_captured
                             90, // expires in 90 days
-                            &src_ip_str, &dst_ip_str, &severity_str, "",
+                            &src_ip_str, &dst_ip_str, &severity_str,
+                            &cid, // alert_id = community_id (natural cross-reference key)
                         ).await;
                         let _ = ch.log_evidence_action(
                             &tenant, &cid, &bundle_id,

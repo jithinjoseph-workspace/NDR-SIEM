@@ -157,6 +157,17 @@ export class Soar implements OnInit {
             fields: [{ key: 'webhook_url', label: 'Endpoint URL', placeholder: 'https://your-endpoint.com/alert', type: 'text' }]
         },
         {
+            type: 'pagerduty', name: 'PagerDuty', abbr: 'PDY', group: 'notify',
+            fields: [{ key: 'routing_key', label: 'Routing Key', placeholder: 'abc123...', type: 'password' }]
+        },
+        {
+            type: 'telegram', name: 'Telegram', abbr: 'TGM', group: 'notify',
+            fields: [
+                { key: 'bot_token', label: 'Bot Token', placeholder: '123456:ABC-DEF...', type: 'password' },
+                { key: 'chat_id',   label: 'Chat ID',   placeholder: '-1001234567890',   type: 'text' }
+            ]
+        },
+        {
             type: 'smtp', name: 'Email', abbr: 'EML', group: 'notify',
             fields: [
                 { key: 'smtp_host', label: 'SMTP Host', placeholder: 'smtp.gmail.com', type: 'text' },

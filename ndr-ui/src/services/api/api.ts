@@ -625,9 +625,32 @@ export class Api {
     return this.http.get(`${this.baseUrl}/threat/predictions`);
   }
 
+  getThreatPredictionsHistory(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat/predictions/history`);
+  }
+
+  getThreatPatterns(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat/patterns`);
+  }
 
   getThreatExposure(): Observable<any> {
     return this.http.get(`${this.baseUrl}/threat/exposure`);
+  }
+
+  getSubnetRoles(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/assets/subnet-roles`);
+  }
+
+  setSubnetRoles(roles: any): Observable<any> {
+    return this.http.put(`${this.baseUrl}/assets/subnet-roles`, roles);
+  }
+
+  addManualIoc(type: string, value: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/threat-intel/add`, { type, value });
+  }
+
+  getJiraTickets(config: { url: string; email: string; token: string; project_key: string }): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/jira/tickets`, config);
   }
 
   // ── Sensor Assignments ────────────────────────────────────────────────────

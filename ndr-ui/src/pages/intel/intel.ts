@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Subscription } from 'rxjs';
-import { LucideAngularModule, Search, ShieldCheck, CircleAlert, RefreshCw, Hash, Bell } from 'lucide-angular';
+import { LucideAngularModule, Search, ShieldCheck, CircleAlert, RefreshCw, Hash, Bell, Plus } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
 import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
@@ -35,6 +35,13 @@ export class Intel implements OnInit, OnDestroy {
   RefreshIcon     = RefreshCw;
   HashIcon        = Hash;
   BellIcon        = Bell;
+  PlusIcon        = Plus;
+
+  // Manual IOC add
+  addIocType: string = 'ip';
+  addIocValue: string = '';
+  addIocLoading: boolean = false;
+  addIocResult: { status: string; message: string } | null = null;
 
   private subs: Subscription[] = [];
   private processedAlertHits = new Map<string, number>();
@@ -110,6 +117,25 @@ export class Intel implements OnInit, OnDestroy {
   clearAlerts() {
     this.notifications.clearAlerts();
     this.cdr.detectChanges();
+  }
+
+  addManualIoc() {
+    if (!this.addIocValue.trim()) return;
+    this.addIocLoading = true;
+    this.addIocResult = null;
+    this.api.addManualIoc(this.addIocType, this.addIocValue.trim()).subscribe({
+      next: (res: any) => {
+        this.addIocResult = { status: 'ok', message: res.message || `${res.type} IOC added` };
+        this.addIocValue = '';
+        this.addIocLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.addIocResult = { status: 'error', message: 'Failed to add IOC' };
+        this.addIocLoading = false;
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   private syncDetectedNetworkAlerts(alerts: ThreatNotification[]) {
