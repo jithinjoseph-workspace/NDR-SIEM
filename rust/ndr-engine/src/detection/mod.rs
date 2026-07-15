@@ -47,7 +47,9 @@ fn logsource_matches(ls: &LogSource, event: &NormalizedEvent) -> bool {
             false
         }
         EventSource::Suricata => {
-            if matches!(product.as_str(), "windows" | "macos" | "azure" | "okta" | "aws") {
+            // Issue 3 fix: linux endpoint rules use auditd/sysmon fields that
+            // don't exist on Suricata network events — block them to skip wasted eval.
+            if matches!(product.as_str(), "windows" | "macos" | "linux" | "azure" | "okta" | "aws") {
                 return false;
             }
             true

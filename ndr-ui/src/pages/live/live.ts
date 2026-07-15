@@ -65,6 +65,11 @@ export class Live implements OnInit, OnDestroy {
           data = `Score:${msg.score?.toFixed(0)} | ${msg.severity?.toUpperCase()} | ${msg.tags?.join(', ') || ''} | CID:${msg.cid || '-'}`;
           color = 'border-tertiary/50';
           this.hitCount++;
+        } else if (msg.type === 'alert') {
+          event = 'ALERT';
+          data = msg.description || msg.rule || 'Rule triggered';
+          color = 'border-red-400/50';
+          this.hitCount++;
         }
 
         this.messages.unshift({

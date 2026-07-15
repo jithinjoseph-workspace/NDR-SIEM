@@ -106,11 +106,12 @@ async fn refresh_tenant(
         );
 
         let q = format!(
-            "INSERT INTO ndr.entity_scores \
+            "INSERT INTO {db}.entity_scores \
              (src_ip, tenant_id, accumulated_score, alert_count, top_severity, top_tags, last_seen, updated_at) \
              VALUES \
              ('{src}', '{tid}', {score:.2}, {cnt}, '{sev}', {tags}, \
               toDateTime({ls}), now())",
+            db    = db,
             src   = sql_escape_pub(&row.src_ip),
             tid   = sql_escape_pub(tenant_id),
             score = row.accumulated_score,

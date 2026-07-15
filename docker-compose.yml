@@ -8,6 +8,7 @@ services:
   kafka1:
     image: apache/kafka:4.2.0
     container_name: kafka1
+    mem_limit: 512m
     ports:
       - "127.0.0.1:9092:9092"
     environment:
@@ -41,6 +42,7 @@ services:
   kafka2:
     image: apache/kafka:4.2.0
     container_name: kafka2
+    mem_limit: 512m
     environment:
       KAFKA_NODE_ID: 2
       KAFKA_PROCESS_ROLES: broker,controller
@@ -72,6 +74,7 @@ services:
   kafka3:
     image: apache/kafka:4.2.0
     container_name: kafka3
+    mem_limit: 512m
     environment:
       KAFKA_NODE_ID: 3
       KAFKA_PROCESS_ROLES: broker,controller
@@ -121,6 +124,7 @@ services:
   ndr-engine-1:
     build: ./rust
     container_name: ndr-engine-1
+    mem_limit: 256m
     stop_grace_period: 5s
     privileged: true
     networks:
@@ -179,6 +183,7 @@ services:
   ndr-engine-2:
     build: ./rust
     container_name: ndr-engine-2
+    mem_limit: 256m
     stop_grace_period: 5s
     privileged: true
     networks:
@@ -237,6 +242,7 @@ services:
   ndr-engine-3:
     build: ./rust
     container_name: ndr-engine-3
+    mem_limit: 256m
     stop_grace_period: 5s
     privileged: true
     networks:
@@ -300,14 +306,16 @@ services:
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
 
-  # Nginx Load Balancer — single entry point on port 3000
+  # Nginx Load Balancer — HTTPS entry point (port 3000→443) with HTTP redirect (port 3001→80)
   nginx:
     image: nginx:alpine
     container_name: ndr-nginx
     ports:
-      - "3000:80"
+      - "3000:443"   # HTTPS — primary entry point
+      - "3080:80"    # HTTP — issues 301 redirect to https://<host>:3000
     volumes:
       - ${INSTALL_DIR}/config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${INSTALL_DIR}/config/nginx/ssl:/etc/nginx/ssl:ro   # TLS cert & key
     depends_on:
       ndr-engine-1:
         condition: service_healthy
@@ -322,6 +330,8 @@ services:
   opensearch:
     image: opensearchproject/opensearch:2.5.0
     container_name: ndr-opensearch
+    mem_limit: 512m
+    cpus: "0.5"
     profiles: ["onpremise"]
     environment:
       - discovery.type=single-node
@@ -333,7 +343,6 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
 
-  # ── ClickHouse Keeper (ZooKeeper replacement — must start first) ──────────
   clickhouse-keeper:
     image: clickhouse/clickhouse-keeper:24.8
     container_name: clickhouse-keeper
@@ -343,6 +352,8 @@ services:
       - keeper-data:/var/lib/clickhouse
       - keeper-logs:/var/log/clickhouse-keeper
       - ${INSTALL_DIR}/config/clickhouse/cluster/keeper-config.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+    entrypoint: [""]
+    command: ["/bin/sh", "-c", "chown -R 0:0 /var/lib/clickhouse /var/log/clickhouse-keeper && exec clickhouse-keeper --config-file=/etc/clickhouse-keeper/keeper_config.xml"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/2181 && echo ruok >&3 && timeout 2 cat <&3 | grep -q imok' 2>/dev/null || exit 1"]
@@ -351,7 +362,6 @@ services:
       retries: 10
       start_period: 30s
 
-  # ── ClickHouse Node 1 — HTTP 8123, TCP 9000 ───────────────────────────────
   clickhouse1:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse1
@@ -369,6 +379,8 @@ services:
       - ${INSTALL_DIR}/config/clickhouse/cluster/ch1-config.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
       - ${INSTALL_DIR}/config/clickhouse/cluster/z-ndr-listen.xml:/etc/clickhouse-server/config.d/z-ndr-listen.xml:ro
       - ${INSTALL_DIR}/config/clickhouse/cluster/users.xml:/etc/clickhouse-server/users.d/ndr-users.xml:ro
+    entrypoint: [""]
+    command: ["/bin/sh", "-c", "chown -R 0:0 /var/lib/clickhouse /var/log/clickhouse-server && exec clickhouse-server --config-file=/etc/clickhouse-server/config.xml"]
     restart: unless-stopped
     depends_on:
       clickhouse-keeper:
@@ -380,7 +392,6 @@ services:
       retries: 10
       start_period: 30s
 
-  # ── ClickHouse Node 2 — HTTP 8123, TCP 9000 (standard ports in bridge mode) ──
   clickhouse2:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse2
@@ -396,6 +407,8 @@ services:
       - ${INSTALL_DIR}/config/clickhouse/cluster/ch2-config.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
       - ${INSTALL_DIR}/config/clickhouse/cluster/z-ndr-listen.xml:/etc/clickhouse-server/config.d/z-ndr-listen.xml:ro
       - ${INSTALL_DIR}/config/clickhouse/cluster/users.xml:/etc/clickhouse-server/users.d/ndr-users.xml:ro
+    entrypoint: [""]
+    command: ["/bin/sh", "-c", "chown -R 0:0 /var/lib/clickhouse /var/log/clickhouse-server && exec clickhouse-server --config-file=/etc/clickhouse-server/config.xml"]
     restart: unless-stopped
     depends_on:
       clickhouse-keeper:

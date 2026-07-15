@@ -168,7 +168,7 @@ sleep 2
 log "Installing dependencies..."
 apt-get update -qq
 apt-get install -y -qq \
-  curl wget git python3 python3-pip \
+  curl wget git python3 python3-pip python3-requests \
   apt-transport-https gnupg2 \
   software-properties-common \
   libpcre3 libpcre3-dev \
@@ -407,7 +407,7 @@ if ss -tlnp 2>/dev/null | grep -q ":9200 " || \
   echo "⚠️  Port 9200 is already in use."
   echo "   1) Kill whatever is on port 9200 and use it"
   echo "   2) Use a different port"
-  read -rp "   Choice [1/2]: " _PORT_CHOICE
+  read -rp "   Choice [1/2]: " _PORT_CHOICE < /dev/tty
   if [ "$_PORT_CHOICE" = "1" ]; then
     log "Killing process on port 9200..."
     fuser -k 9200/tcp 2>/dev/null || \
@@ -415,7 +415,7 @@ if ss -tlnp 2>/dev/null | grep -q ":9200 " || \
     sleep 2
     OS_PORT=9200
   else
-    read -rp "   Enter port number [default 9201]: " _NEW_PORT
+    read -rp "   Enter port number [default 9201]: " _NEW_PORT < /dev/tty
     OS_PORT="${_NEW_PORT:-9201}"
     log "Using port $OS_PORT for OpenSearch"
   fi
@@ -832,61 +832,61 @@ data_dir = "/etc/vector/data"
 [sources.zeek_conn]
 type = "file"
 include = ["/var/log/ndr/zeek/conn.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_dns]
 type = "file"
 include = ["/var/log/ndr/zeek/dns.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_http]
 type = "file"
 include = ["/var/log/ndr/zeek/http.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_ssl]
 type = "file"
 include = ["/var/log/ndr/zeek/ssl.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_files]
 type = "file"
 include = ["/var/log/ndr/zeek/files.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_weird]
 type = "file"
 include = ["/var/log/ndr/zeek/weird.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_dhcp]
 type = "file"
 include = ["/var/log/ndr/zeek/dhcp.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_quic]
 type = "file"
 include = ["/var/log/ndr/zeek/quic.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_arp]
 type = "file"
 include = ["/var/log/ndr/zeek/arp.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_software]
 type = "file"
 include = ["/var/log/ndr/zeek/software.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [sources.zeek_ipam]
@@ -898,7 +898,7 @@ glob_minimum_cooldown_ms = 500
 [sources.suricata]
 type = "file"
 include = ["/var/log/ndr/suricata/eve.json"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 100
 
 [transforms.suricata_json]
@@ -1071,7 +1071,7 @@ if err == null {
 [sources.auditd]
 type = "file"
 include = ["/var/log/audit/audit.log"]
-read_from = "end"
+read_from = "beginning"
 glob_minimum_cooldown_ms = 200
 
 [transforms.auditd_json]
@@ -1233,7 +1233,7 @@ def start_zeek():
             ["/opt/zeek/bin/zeek", "-i", IFACE,
              "local",
              "Log::default_logdir=/var/log/ndr/zeek"],
-            stdout=open("/tmp/zeek.log", "w"),
+            stdout=open("/var/log/ndr/zeek/startup.log", "w"),
             stderr=subprocess.STDOUT
         )
         print("[NDR] ✅ Zeek started")
@@ -2029,7 +2029,7 @@ def sha16(key):
 
 def find_session_in_opensearch(cid):
     try:
-        url = "http://localhost:9200/" \
+        url = "http://localhost:9201/" \
               "arkime_sessions3-*/_search"
         query = {
             "query": {
@@ -2092,7 +2092,7 @@ def get_arkime_files(file_ids):
     if not file_ids:
         return []
     try:
-        url = "http://localhost:9200/" \
+        url = "http://localhost:9201/" \
               "arkime_files/_search"
         query = {
             "query": {"terms": {"num": file_ids}},

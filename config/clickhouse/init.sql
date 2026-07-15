@@ -69,6 +69,19 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_baselines ON CLUSTER ndr_cluster (
 ORDER BY (tenant_id, src_ip, metric, window_ts)
 TTL window_ts + INTERVAL 35 DAY;
 
+CREATE TABLE IF NOT EXISTS ndr.entity_scores ON CLUSTER ndr_cluster (
+    src_ip            String,
+    tenant_id         String,
+    accumulated_score Float64  DEFAULT 0,
+    alert_count       UInt64   DEFAULT 0,
+    top_severity      String   DEFAULT '',
+    top_tags          Array(String) DEFAULT [],
+    last_seen         DateTime DEFAULT now(),
+    updated_at        DateTime DEFAULT now()
+) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/entity_scores', '{replica}', updated_at)
+ORDER BY (tenant_id, src_ip)
+TTL updated_at + INTERVAL 90 DAY;
+
 CREATE TABLE IF NOT EXISTS ndr.ndr_stats ON CLUSTER ndr_cluster ( 
     timestamp      DateTime,
     events_per_min UInt32,

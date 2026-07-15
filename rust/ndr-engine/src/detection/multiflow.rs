@@ -80,6 +80,79 @@ fn evict_old(map: &mut SuppressMap) {
     map.retain(|_, v| v.elapsed() < Duration::from_secs(86400));
 }
 
+// Issues 7 & 8 fix: load recent multiflow hits from ClickHouse into the SuppressMap.
+// Called once at startup so suppression state survives engine restarts and leader re-elections.
+// Composite keys (dns-beaconing, new-contact, tls-cert, proto-misuse) are reconstructed
+// from src_ip + dst_ip — consistent with how they are keyed during detection.
+async fn load_suppressions_from_db(ch: &ClickhouseStorage) -> SuppressMap {
+    static PATTERNS: &[(&str, &str, u64)] = &[
+        ("portscan",      "port-scan",              1800),
+        ("credstuff",     "credential-stuffing",    1800),
+        ("lateral",       "lateral-movement",       1800),
+        ("dnsbeacon",     "dns-beaconing",          3600),
+        ("slowscan",      "slow-scan",              3600),
+        ("recon",         "internal-recon",         1800),
+        ("staging",       "data-staging",           3600),
+        ("volanom",       "volume-anomaly",         3600),
+        ("newcontact",    "new-external-contact",   86400),
+        ("icmpflood",     "icmp-flood",             1800),
+        ("tlscert",       "tls-cert-anomaly",       3600),
+        ("protomisuse",   "protocol-misuse",        1800),
+        ("largeexfil",    "large-volume-exfil",     3600),
+        ("abnormalhours", "abnormal-hours",         3600),
+        ("nxdomain",      "nxdomain-flood",         1800),
+        ("dnstunnel",     "dns-tunneling",          3600),
+    ];
+
+    let tag_list = PATTERNS.iter()
+        .map(|(_, tag, _)| format!("'{}'", tag))
+        .collect::<Vec<_>>().join(",");
+
+    let mut map = SuppressMap::new();
+    let now_secs = chrono::Utc::now().timestamp() as u64;
+    let tenants = ch.get_all_tenants().await.unwrap_or_default();
+
+    for tenant in &tenants {
+        let db = db_for(tenant);
+        let t   = esc(tenant);
+        let q   = format!(
+            "SELECT src_ip, dst_ip, tags, timestamp \
+             FROM {db}.ndr_hits FINAL \
+             WHERE timestamp > now() - INTERVAL 86400 SECOND \
+               AND tenant_id = '{t}' \
+               AND hasAny(tags, [{tag_list}])"
+        );
+
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct HitRow {
+            src_ip:    String,
+            dst_ip:    String,
+            tags:      Vec<String>,
+            timestamp: u32,
+        }
+
+        let rows: Vec<HitRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
+        for row in rows {
+            let elapsed_secs = now_secs.saturating_sub(row.timestamp as u64);
+            for (pattern, tag, window) in PATTERNS {
+                if elapsed_secs >= *window { continue; }
+                if !row.tags.iter().any(|t| t == *tag) { continue; }
+                let identifier = match *pattern {
+                    "dnsbeacon" | "newcontact" | "tlscert" | "protomisuse"
+                        if !row.dst_ip.is_empty() =>
+                        format!("{}:{}", row.src_ip, row.dst_ip),
+                    _ => row.src_ip.clone(),
+                };
+                let k = (pattern.to_string(), tenant.clone(), identifier);
+                let elapsed = Duration::from_secs(elapsed_secs);
+                let last = Instant::now().checked_sub(elapsed).unwrap_or_else(Instant::now);
+                map.entry(k).or_insert(last);
+            }
+        }
+    }
+    map
+}
+
 // ── Query result row types ────────────────────────────────────────────────────
 
 #[derive(Row, Serialize, Deserialize)]
@@ -156,7 +229,8 @@ pub fn spawn(ch: Arc<ClickhouseStorage>, election: Arc<LeaderElection>) {
         let el  = election.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-            let mut sup: SuppressMap = HashMap::new();
+            // Issues 7 & 8 fix: seed from DB so recent suppressions survive restarts.
+            let mut sup: SuppressMap = load_suppressions_from_db(&ch).await;
             let mut evict_tick = 0u32;
             loop {
                 if el.is_leader() {
@@ -188,7 +262,7 @@ pub fn spawn(ch: Arc<ClickhouseStorage>, election: Arc<LeaderElection>) {
         let el = election.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
-            let mut sup: SuppressMap = HashMap::new();
+            let mut sup: SuppressMap = load_suppressions_from_db(&ch).await;
             loop {
                 if el.is_leader() {
                     run_tier3(&ch, &mut sup).await;

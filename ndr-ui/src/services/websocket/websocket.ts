@@ -69,7 +69,8 @@ export class Websocket {
         return;
       }
       
-      const wsUrl = `ws://localhost:3000/ws?token=${token}`;
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProtocol}//${location.host}/ws?token=${token}`;
 
       this.socket = new WebSocket(wsUrl);
 

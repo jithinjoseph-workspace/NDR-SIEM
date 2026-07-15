@@ -2604,17 +2604,22 @@ pub async fn toggle_rule(
     Json(payload): Json<TogglePayload>,
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    // Save state to ClickHouse
-    if let Err(e) = state.ch_storage
-        .set_rule_enabled(&rule_id, payload.enabled, &tenant_id).await {
-        return Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }));
-    }
 
-    // Also update enabled field in sigma_rules table
-    let _ = state.ch_storage.toggle_sigma_rule(&rule_id, payload.enabled, &tenant_id).await;
+    // Bug 5 fix: toggle_sigma_rule now returns whether the rule is a community rule.
+    // Community rules can't be modified in sigma_rules directly — they use rules_state overrides.
+    // Custom rules use sigma_rules.enabled directly — rules_state is redundant and skipped.
+    let is_community = match state.ch_storage
+        .toggle_sigma_rule(&rule_id, payload.enabled, &tenant_id).await {
+        Ok(v) => v,
+        Err(e) => return Json(json!({"status": "error", "message": e.to_string()})),
+    };
+
+    if is_community {
+        if let Err(e) = state.ch_storage
+            .set_rule_enabled(&rule_id, payload.enabled, &tenant_id).await {
+            return Json(json!({"status": "error", "message": e.to_string()}));
+        }
+    }
 
     // Reload rules respecting disabled state
     let rules_dir = std::env::var("RULES_DIR")

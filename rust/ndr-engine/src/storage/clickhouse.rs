@@ -1328,6 +1328,14 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             if self.is_group_suppressed(tenant_id, &hit.src_ip, primary).await {
                 return Ok(());
             }
+            // Bug 9 fix: also check specific sigma rule names so suppressions
+            // created for individual rule titles (e.g. "DNS TOR Proxies") fire
+            // at Gate 1, not just the generic "sigma" tag.
+            for rule_name in &hit.sigma_hits {
+                if self.is_group_suppressed(tenant_id, &hit.src_ip, rule_name).await {
+                    return Ok(());
+                }
+            }
         }
         let db_name = tenant_db(tenant_id);
         let table_name = format!("{}.ndr_hits", db_name);
@@ -1647,9 +1655,10 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(())
     }
 
-    pub async fn toggle_sigma_rule(&self, id: &str, enabled: bool, tenant_id: &str) -> anyhow::Result<()> {
-        // Community rules (tenant_id='*') must never be modified directly — use per-tenant
-        // rules_state overrides instead (already written by set_rule_enabled in the caller).
+    /// Returns `true` if the rule is a community rule (tenant_id='*'), `false` if custom.
+    /// Bug 5 fix: caller uses the return value to decide whether to also write rules_state,
+    /// avoiding a redundant dual-write for custom rules.
+    pub async fn toggle_sigma_rule(&self, id: &str, enabled: bool, tenant_id: &str) -> anyhow::Result<bool> {
         let is_community = self.client
             .query("SELECT count() FROM ndr.sigma_rules FINAL WHERE id = ? AND tenant_id = '*'")
             .bind(id)
@@ -1658,8 +1667,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             .unwrap_or(0) > 0;
 
         if is_community {
-            // rules_state already updated by set_rule_enabled — nothing more to do here.
-            return Ok(());
+            return Ok(true);
         }
 
         // Custom rule — update enabled flag directly in the tenant's sigma_rules table.
@@ -1669,7 +1677,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
              SELECT id, name, content, tenant_id, ?, now() FROM {db}.sigma_rules FINAL WHERE id = ?"
         );
         self.client.query(&query).bind(enabled as u8).bind(id).execute().await?;
-        Ok(())
+        Ok(false)
     }
 
     pub async fn get_sigma_rule_by_id(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<(String, String, String, String, u8)>> {
@@ -2054,6 +2062,7 @@ pub async fn get_entity_scores(
     tenant_id: &str,
     limit:     u32,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db  = tenant_db(tenant_id);
     let tid = sql_escape(tenant_id);
 
     #[derive(clickhouse::Row, serde::Deserialize)]
@@ -2069,11 +2078,11 @@ pub async fn get_entity_scores(
     let rows = self.client.query(&format!(
         "SELECT src_ip, accumulated_score, alert_count, top_severity, top_tags,
                 toUnixTimestamp(last_seen) AS last_seen
-         FROM ndr.entity_scores FINAL
+         FROM {db}.entity_scores FINAL
          WHERE tenant_id = '{tid}'
          ORDER BY accumulated_score DESC
          LIMIT {limit}",
-        tid = tid, limit = limit,
+        db = db, tid = tid, limit = limit,
     )).fetch_all::<Row>().await?;
 
     Ok(rows.into_iter().map(|r| serde_json::json!({

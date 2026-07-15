@@ -182,7 +182,7 @@ CLICKHOUSE_PASSWORD=ndr123
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=${JWT_SECRET_EARLY}
 NDR_AGENT_SECRET=${NDR_AGENT_SECRET_EARLY}
-CORS_ORIGIN=http://${HOST_IP_EARLY}:3000
+CORS_ORIGIN=https://${HOST_IP_EARLY}:3000
 ARKIME_URL=http://${HOST_IP_EARLY}:8005
 ARKIME_PASS=admin
 OPENSEARCH_URL=http://${HOST_IP_EARLY}:9200
@@ -822,7 +822,7 @@ CLICKHOUSE_PASSWORD=$CLOUD_CH_PASS
 KAFKA_BROKERS=$CLOUD_KAFKA
 JWT_SECRET=$JWT_SECRET
 NDR_AGENT_SECRET=$NDR_AGENT_SECRET
-CORS_ORIGIN=http://${HOST_IP}:3000
+CORS_ORIGIN=https://${HOST_IP}:3000
 ARKIME_URL=http://${HOST_IP}:8005
 ARKIME_PASS=admin
 OPENSEARCH_URL=http://${HOST_IP}:9200
@@ -995,6 +995,26 @@ step "Detection Stack  (Building)"
 log "Building Docker stack (this may take a few minutes)..."
 cd "$INSTALL_DIR"
 
+# ── TLS certificate for Nginx ─────────────────────────────────────────────────
+# Generated once before Docker starts so Nginx can find it at /etc/nginx/ssl/.
+# Skipped automatically if a cert already exists (e.g. CA-signed cert placed by admin).
+SSL_DIR="$INSTALL_DIR/config/nginx/ssl"
+if [ ! -f "$SSL_DIR/ndr.crt" ] || [ ! -f "$SSL_DIR/ndr.key" ]; then
+    log "Generating self-signed TLS certificate for $HOST_IP..."
+    mkdir -p "$SSL_DIR"
+    openssl req -x509 -nodes -days 730 -newkey rsa:2048 \
+        -keyout "$SSL_DIR/ndr.key" \
+        -out    "$SSL_DIR/ndr.crt" \
+        -subj   "/CN=$HOST_IP" \
+        -addext "subjectAltName=IP:$HOST_IP,IP:127.0.0.1,DNS:localhost" \
+        2>/dev/null
+    chmod 600 "$SSL_DIR/ndr.key"
+    log "✅ TLS certificate generated → $SSL_DIR"
+else
+    log "TLS certificate already exists — skipping generation"
+fi
+# ─────────────────────────────────────────────────────────────────────────────
+
 sudo docker compose --profile onpremise down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
@@ -1081,12 +1101,12 @@ info "Configure playbooks, cases and integrations from the UI → SOAR page"
 cat > "$INSTALL_DIR/ndr-ui/proxy.conf.json" << 'PROXYEOF'
 {
   "/api": {
-    "target": "http://localhost:3000",
+    "target": "https://localhost:3000",
     "secure": false,
     "changeOrigin": true
   },
   "/ws": {
-    "target": "ws://localhost:3000",
+    "target": "wss://localhost:3000",
     "secure": false,
     "ws": true
   }
@@ -1166,7 +1186,7 @@ printf "  ${CYAN}╠════════════════════
 printf "  ${CYAN}║${NC}  ${BOLD}$(_pad "Service         Access Point")${NC}  ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  ${DIM}$(_pad "─────────────── ────────────────────────")${NC}  ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "Dashboard       http://${HOST_IP}:4200")${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}  $(_pad "API Gateway     http://${HOST_IP}:3000")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "API Gateway     https://${HOST_IP}:3000")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "NDR Agent       http://localhost:3001")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "Packet Recorder http://localhost:8005")${CYAN}║${NC}\n"
 printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"

@@ -420,6 +420,22 @@ async fn main() {
         });
     }
 
+    // ── Periodic rule reload (safety net — bounds propagation to ≤60s) ────────
+    {
+        let ch = state.ch_storage.clone();
+        let det = state.detection.clone();
+        let rules_dir = rules_dir.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await; // skip the immediate first tick
+            loop {
+                interval.tick().await;
+                let (rules, overrides) = api::load_rules_from_clickhouse(&ch, &rules_dir).await;
+                det.write().await.set_rules(rules, overrides);
+            }
+        });
+    }
+
     // ── Weekly SigmaHQ community rules auto-updater ────────────────────────
     detection::spawn_sigma_updater(
         rules_dir.clone(),
