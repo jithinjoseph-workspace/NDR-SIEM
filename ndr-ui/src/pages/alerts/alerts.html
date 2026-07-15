@@ -41,6 +41,112 @@
     </div>
   </section>
 
+  <!-- ── Page tabs ── -->
+  <div class="page-tabs">
+    <button class="page-tab" [class.active]="activeTab === 'alerts'" (click)="switchTab('alerts')" type="button">
+      <lucide-icon [name]="ShieldAlertIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Alerts
+    </button>
+    <button class="page-tab" [class.active]="activeTab === 'incidents'" (click)="switchTab('incidents')" type="button">
+      <lucide-icon [name]="GitBranchIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Attack Stories
+      <span *ngIf="incidents.length > 0" class="tab-badge">{{ incidents.length }}</span>
+    </button>
+  </div>
+
+  <!-- ── Incidents (Attack Stories) tab ── -->
+  <div *ngIf="activeTab === 'incidents'" class="incidents-panel">
+    <div *ngIf="incidentsLoading" class="incidents-loading">Loading attack stories...</div>
+
+    <div *ngIf="!incidentsLoading && incidents.length === 0" class="incidents-empty">
+      <lucide-icon [name]="LayersIcon" class="w-8 h-8"></lucide-icon>
+      <p>No lateral movement detected yet.</p>
+      <span>Attack stories appear here when a compromised host attacks the next device in a chain.</span>
+    </div>
+
+    <div *ngIf="!incidentsLoading && incidents.length > 0" class="incidents-list">
+      <div *ngFor="let inc of incidents" class="incident-card" [class.expanded]="selectedIncident?.id === inc.id">
+
+        <!-- Card header -->
+        <div class="incident-header" (click)="openIncident(inc)">
+          <div class="incident-sev" [ngClass]="incidentSeverityClass(inc.severity)">{{ inc.severity }}</div>
+          <div class="incident-info">
+            <div class="incident-title">{{ inc.title }}</div>
+            <div class="incident-meta">
+              {{ inc.attack_chain.length }} hops &nbsp;·&nbsp;
+              {{ inc.affected_ips.length }} devices &nbsp;·&nbsp;
+              {{ formatIncidentTs(inc.first_seen) }}
+            </div>
+          </div>
+          <div class="incident-status-badge" [ngClass]="'status-' + inc.status">{{ inc.status }}</div>
+          <lucide-icon [name]="inc.id === selectedIncident?.id ? ChevronDownIcon : ChevronRightIcon" class="w-4 h-4 ml-auto"></lucide-icon>
+        </div>
+
+        <!-- Expanded detail -->
+        <div *ngIf="selectedIncident?.id === inc.id" class="incident-detail">
+
+          <!-- Attack path SVG diagram -->
+          <div class="attack-graph">
+            <svg [attr.width]="inc.affected_ips.length * 130 + 40" height="90" class="chain-svg">
+              <ng-container *ngFor="let ip of inc.affected_ips; let i = index">
+                <!-- Arrow between nodes -->
+                <line *ngIf="i < inc.affected_ips.length - 1"
+                  [attr.x1]="i * 130 + 88" y1="44"
+                  [attr.x2]="i * 130 + 130 + 22" y2="44"
+                  stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow)" />
+                <!-- Node circle -->
+                <circle [attr.cx]="i * 130 + 55" cy="44" r="22"
+                  fill="var(--card-bg)" stroke="var(--accent)" stroke-width="1.5"/>
+                <!-- IP label inside -->
+                <text [attr.x]="i * 130 + 55" y="40" text-anchor="middle" class="svg-ip-top">
+                  {{ ip.split('.').slice(0,3).join('.') }}.
+                </text>
+                <text [attr.x]="i * 130 + 55" y="52" text-anchor="middle" class="svg-ip-bot">
+                  {{ ip.split('.')[3] }}
+                </text>
+                <!-- Isolate button under node -->
+                <foreignObject [attr.x]="i * 130 + 26" y="70" width="58" height="22">
+                  <button xmlns="http://www.w3.org/1999/xhtml"
+                    class="svg-isolate-btn"
+                    [disabled]="isolatingIp === ip"
+                    (click)="$event.stopPropagation(); isolateIp(ip)">
+                    {{ isolatingIp === ip ? '…' : 'Isolate' }}
+                  </button>
+                </foreignObject>
+              </ng-container>
+              <defs>
+                <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L8,3 z" fill="var(--accent)"/>
+                </marker>
+              </defs>
+            </svg>
+            <div *ngIf="isolateResult" class="isolate-result">{{ isolateResult }}</div>
+          </div>
+
+          <!-- Timeline -->
+          <div class="incident-timeline">
+            <div *ngFor="let step of inc.attack_chain; let i = index" class="timeline-step">
+              <div class="timeline-dot" [ngClass]="incidentSeverityClass(step.severity)"></div>
+              <div class="timeline-body">
+                <div class="timeline-rule">{{ step.rule_name || 'Alert' }}</div>
+                <div class="timeline-ips">{{ step.src_ip }} → {{ step.dst_ip }}</div>
+                <div class="timeline-ts">{{ formatIncidentTs(step.timestamp) }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Status actions -->
+          <div class="incident-actions">
+            <button class="btn-secondary" (click)="setIncidentStatus(inc, 'contained')" [disabled]="inc.status === 'contained'">Mark Contained</button>
+            <button class="btn-secondary" (click)="setIncidentStatus(inc, 'resolved')"  [disabled]="inc.status === 'resolved'">Mark Resolved</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <ng-container *ngIf="activeTab === 'alerts'">
+
   <!-- ── Top Risky Hosts ── -->
   <section *ngIf="!loading && entityScores.length > 0" class="entity-panel" aria-label="Top risky hosts">
     <div class="entity-panel-header">
@@ -272,6 +378,8 @@
   <div *ngIf="groups.length > 0" class="alerts-footnote">
     {{ groups.length }} groups · {{ totalAlerts }} total alerts — real-time via WebSocket
   </div>
+
+  </ng-container>
 </div>
 
 <!-- Toast -->

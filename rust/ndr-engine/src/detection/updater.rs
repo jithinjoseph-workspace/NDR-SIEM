@@ -14,6 +14,12 @@ const GITHUB_NETWORK_API: &str =
 const GITHUB_LINUX_API: &str =
     "https://api.github.com/repos/SigmaHQ/sigma/contents/rules/linux";
 
+/// Rules that should never appear in the active rule set regardless of sync or DB state.
+/// These are removed from ClickHouse on startup and skipped during every sync.
+pub const GLOBAL_RULE_BLOCKLIST: &[&str] = &[
+    "1fc0809e-06bf-4de3-ad52-25e5263b7623", // Publicly Accessible RDP Service (noisy false-positive)
+];
+
 /// Spawn a background task that re-fetches SigmaHQ network rules once a week
 /// and publishes the Redis `system:reload_rules` signal on success.
 pub fn spawn_sigma_updater(
@@ -92,6 +98,9 @@ async fn fetch_all_rules(
         ));
     }
 
+    // Rules permanently excluded from community sync — see GLOBAL_RULE_BLOCKLIST above.
+    let sync_blocklist = GLOBAL_RULE_BLOCKLIST;
+
     // Fetch existing community rule IDs so we never overwrite a manually disabled rule
     let existing_ids = ch.get_community_rule_ids().await.unwrap_or_default();
 
@@ -106,6 +115,11 @@ async fn fetch_all_rules(
             Ok(r)  => r,
             Err(e) => { warn!("SIGMA updater: skipping {} — {}", filename, e); continue; }
         };
+
+        // Permanently blocked rules — never import even after a DB wipe
+        if sync_blocklist.contains(&rule.id.as_str()) {
+            continue;
+        }
 
         // Skip rules already in DB — preserves enabled/disabled state set by admin
         if existing_ids.contains(&rule.id) {

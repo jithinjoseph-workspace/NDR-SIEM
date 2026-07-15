@@ -1632,6 +1632,19 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         Ok(())
     }
 
+    /// Permanently remove a community rule from the DB (used by startup blocklist cleanup).
+    pub async fn delete_community_rule(&self, id: &str) -> anyhow::Result<()> {
+        // ReplacingMergeTree doesn't support DELETE natively — disable it instead.
+        // The engine will skip disabled rules; the updater blocklist prevents re-import.
+        self.client
+            .query("INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, source, enabled, updated_at) \
+                    SELECT id, name, content, tenant_id, source, 0, now() \
+                    FROM ndr.sigma_rules FINAL WHERE id = ? LIMIT 1")
+            .bind(id)
+            .execute().await?;
+        Ok(())
+    }
+
     pub async fn save_sigma_rule(&self, id: &str, name: &str, content: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         self.client
@@ -5750,6 +5763,142 @@ pub async fn get_ioc_hits(
     }
 
     /// Persist a manual IOC to the ioc_watchlist table so it survives restarts.
+    // ── Incident (attack story) storage ─────────────────────────────────────
+
+    pub async fn save_incident(
+        &self,
+        tenant_id:    &str,
+        id:           &str,
+        title:        &str,
+        severity:     &str,
+        affected_ips: &[String],
+        attack_chain: &str,
+        alert_ids:    &[String],
+        first_seen:   i64,
+        last_seen:    i64,
+    ) -> anyhow::Result<()> {
+        let ips_arr = affected_ips.iter()
+            .map(|s| format!("'{}'", sql_escape(s)))
+            .collect::<Vec<_>>().join(",");
+        let ids_arr = alert_ids.iter()
+            .map(|s| format!("'{}'", sql_escape(s)))
+            .collect::<Vec<_>>().join(",");
+        self.client.query(&format!(
+            "INSERT INTO ndr.ndr_incidents \
+             (id, tenant_id, title, severity, status, affected_ips, attack_chain, \
+              alert_ids, first_seen, last_seen) VALUES \
+             ('{id}', '{tid}', '{title}', '{sev}', 'active', [{ips}], '{chain}', [{aids}], \
+              fromUnixTimestamp({fs}), fromUnixTimestamp({ls}))",
+            id    = sql_escape(id),
+            tid   = sql_escape(tenant_id),
+            title = sql_escape(title),
+            sev   = sql_escape(severity),
+            ips   = ips_arr,
+            chain = sql_escape(attack_chain),
+            aids  = ids_arr,
+            fs    = first_seen,
+            ls    = last_seen,
+        )).execute().await?;
+        Ok(())
+    }
+
+    pub async fn get_incidents(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            id:           String,
+            title:        String,
+            severity:     String,
+            status:       String,
+            affected_ips: Vec<String>,
+            attack_chain: String,
+            alert_ids:    Vec<String>,
+            first_seen:   u32,
+            last_seen:    u32,
+        }
+        let rows = self.client.query(&format!(
+            "SELECT id, title, severity, status, affected_ips, attack_chain, alert_ids, \
+                    toUnixTimestamp(first_seen), toUnixTimestamp(last_seen) \
+             FROM ndr.ndr_incidents FINAL \
+             WHERE tenant_id = '{}' \
+             ORDER BY last_seen DESC \
+             LIMIT 200",
+            sql_escape(tenant_id)
+        )).fetch_all::<Row>().await?;
+
+        Ok(rows.iter().map(|r| serde_json::json!({
+            "id":           r.id,
+            "title":        r.title,
+            "severity":     r.severity,
+            "status":       r.status,
+            "affected_ips": r.affected_ips,
+            "attack_chain": serde_json::from_str::<serde_json::Value>(&r.attack_chain)
+                                .unwrap_or(serde_json::json!([])),
+            "alert_ids":    r.alert_ids,
+            "first_seen":   r.first_seen,
+            "last_seen":    r.last_seen,
+        })).collect())
+    }
+
+    pub async fn incident_exists_for_alerts(&self, tenant_id: &str, alert_ids: &[String]) -> bool {
+        if alert_ids.is_empty() { return false; }
+        let ids = alert_ids.iter()
+            .map(|s| format!("'{}'", sql_escape(s)))
+            .collect::<Vec<_>>().join(",");
+        self.client.query(&format!(
+            "SELECT count() FROM ndr.ndr_incidents FINAL \
+             WHERE tenant_id = '{}' AND hasAny(alert_ids, [{}])",
+            sql_escape(tenant_id), ids
+        )).fetch_one::<u64>().await.map(|n| n > 0).unwrap_or(false)
+    }
+
+    pub async fn update_incident_status(
+        &self,
+        tenant_id: &str,
+        id:        &str,
+        status:    &str,
+    ) -> anyhow::Result<()> {
+        self.client.query(&format!(
+            "INSERT INTO ndr.ndr_incidents (id, tenant_id, status, last_seen) \
+             VALUES ('{}', '{}', '{}', now())",
+            sql_escape(id), sql_escape(tenant_id), sql_escape(status)
+        )).execute().await?;
+        Ok(())
+    }
+
+    /// Ensure the built-in local sensor always appears in the sensor_keys table.
+    /// local-central connects via Vector→Kafka (no API key), so it is never written
+    /// by normal registration. After a DB wipe this would leave 0 sensors in the UI.
+    pub async fn seed_local_sensor(&self) {
+        let tenant_id  = std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string());
+        let sensor_id  = std::env::var("LOCAL_SENSOR_ID").unwrap_or_else(|_| "local-central".to_string());
+        let fixed_id   = "00000000-0000-0000-0000-000000000001";
+
+        // Check if the row already exists
+        let exists: bool = self.client
+            .query(&format!(
+                "SELECT count() FROM ndr.sensor_keys FINAL WHERE id = '{}'", fixed_id
+            ))
+            .fetch_one::<u64>().await
+            .map(|n| n > 0)
+            .unwrap_or(false);
+
+        if exists { return; }
+
+        let q = format!(
+            "INSERT INTO ndr.sensor_keys \
+             (id, key_hash, key_prefix, tenant_id, name, active) \
+             VALUES ('{}', '', '{}', '{}', 'Local Sensor', 1)",
+            fixed_id,
+            sql_escape(&sensor_id),
+            sql_escape(&tenant_id),
+        );
+        if let Err(e) = self.client.query(&q).execute().await {
+            tracing::warn!("seed_local_sensor: failed — {}", e);
+        } else {
+            tracing::info!("seed_local_sensor: inserted local sensor '{}' for tenant '{}'", sensor_id, tenant_id);
+        }
+    }
+
     pub async fn save_watchlist_ioc(
         &self,
         tenant_id: &str,

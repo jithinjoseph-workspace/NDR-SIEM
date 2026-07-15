@@ -11,7 +11,7 @@ import {
   LucideAngularModule,
   TriangleAlert, BellOff, ChevronDown, ChevronRight,
   Download, ExternalLink, Globe, Package, RefreshCw, ShieldAlert, X,
-  Copy, ShieldCheck,
+  Copy, ShieldCheck, Layers, GitBranch, ShieldX,
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
 import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
@@ -105,6 +105,19 @@ export class Alerts implements OnInit, OnDestroy {
   XIcon            = X;
   CopyIcon         = Copy;
   ShieldCheckIcon  = ShieldCheck;
+  LayersIcon       = Layers;
+  GitBranchIcon    = GitBranch;
+  ShieldXIcon      = ShieldX;
+
+  // ── Tab ───────────────────────────────────────────────────────────────────
+  activeTab: 'alerts' | 'incidents' = 'alerts';
+
+  // ── Incidents ─────────────────────────────────────────────────────────────
+  incidents:         any[]    = [];
+  incidentsLoading            = false;
+  selectedIncident:  any|null = null;
+  isolatingIp                 = '';
+  isolateResult               = '';
 
   private subs: Subscription[] = [];
   sensorIds: string[] = [];
@@ -551,4 +564,67 @@ export class Alerts implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() { this.subs.forEach(s => s.unsubscribe()); clearTimeout(this.toastTimer); }
+
+  // ── Incidents tab ─────────────────────────────────────────────────────────
+
+  switchTab(tab: 'alerts' | 'incidents') {
+    this.activeTab = tab;
+    if (tab === 'incidents' && this.incidents.length === 0) {
+      this.loadIncidents();
+    }
+  }
+
+  loadIncidents() {
+    this.incidentsLoading = true;
+    this.api.getIncidents().subscribe({
+      next: (res: any) => {
+        this.incidents = res.incidents || [];
+        this.incidentsLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => { this.incidentsLoading = false; this.cdr.detectChanges(); }
+    });
+  }
+
+  openIncident(inc: any) {
+    this.selectedIncident = inc === this.selectedIncident ? null : inc;
+    this.isolateResult = '';
+  }
+
+  setIncidentStatus(inc: any, status: string) {
+    this.api.updateIncidentStatus(inc.id, status).subscribe({
+      next: () => {
+        inc.status = status;
+        this.showToast(`Incident marked as ${status}`);
+        this.cdr.detectChanges();
+      },
+      error: () => this.showToast('Failed to update status')
+    });
+  }
+
+  isolateIp(ip: string) {
+    this.isolatingIp = ip;
+    this.isolateResult = '';
+    this.api.isolateDevice({ target_ip: ip, enforcement: 'arp', reason: 'Isolated via incident story' }).subscribe({
+      next: (res: any) => {
+        this.isolatingIp = '';
+        this.isolateResult = res.status === 'ok' ? `${ip} isolated` : (res.message || 'Failed');
+        this.showToast(this.isolateResult);
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.isolatingIp = '';
+        this.isolateResult = 'Isolation failed';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  incidentSeverityClass(sev: string): string {
+    return sev === 'CRITICAL' ? 'sev-critical' : sev === 'HIGH' ? 'sev-high' : 'sev-medium';
+  }
+
+  formatIncidentTs(ts: number): string {
+    return new Date(ts * 1000).toLocaleString();
+  }
 }

@@ -710,4 +710,12 @@ export class Api {
   unisolateDevice(id: string): Observable<any> {
     return this.http.post(`${this.baseUrl}/unisolate`, { id });
   }
+
+  getIncidents(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/incidents`);
+  }
+
+  updateIncidentStatus(id: string, status: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/incidents/${id}/status/${status}`, {});
+  }
 }

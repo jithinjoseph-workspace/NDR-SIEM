@@ -911,6 +911,25 @@ ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/device_iso
 ORDER BY (tenant_id, id)
 TTL created_at + INTERVAL 180 DAY;
 
+-- Attack incidents — lateral movement chains grouped into a single story
+CREATE TABLE IF NOT EXISTS ndr.ndr_incidents ON CLUSTER ndr_cluster
+(
+    id              String   DEFAULT toString(generateUUIDv4()),
+    tenant_id       String   DEFAULT 'default',
+    title           String,
+    severity        LowCardinality(String) DEFAULT 'MEDIUM',
+    status          LowCardinality(String) DEFAULT 'active',   -- active / contained / resolved
+    affected_ips    Array(String),
+    attack_chain    String   DEFAULT '[]',  -- JSON: [{src_ip,dst_ip,timestamp,severity,rule_name,community_id}]
+    alert_ids       Array(String),
+    first_seen      DateTime DEFAULT now(),
+    last_seen       DateTime DEFAULT now(),
+    created_at      DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_incidents', '{replica}', last_seen)
+ORDER BY (tenant_id, id)
+TTL created_at + INTERVAL 90 DAY;
+
 -- ── Retention TTL migrations (idempotent — safe to re-run on existing tables) ──
 -- Applied here so already-deployed clusters pick up TTLs without a manual ALTER.
 ALTER TABLE ndr.ioc_hits ON CLUSTER ndr_cluster MODIFY TTL timestamp + INTERVAL 90 DAY;

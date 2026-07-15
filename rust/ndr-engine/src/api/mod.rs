@@ -9153,6 +9153,41 @@ pub async fn manual_block(
 
 // ── Device Isolation API ───────────────────────────────────────────────────
 
+// ── Incidents (attack story) ─────────────────────────────────────────────────
+
+pub async fn list_incidents(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    match state.ch_storage.get_incidents(&claims.tenant_id).await {
+        Ok(incidents) => Json(json!({"status":"ok","incidents":incidents})),
+        Err(e)        => Json(json!({"status":"error","message":e.to_string()})),
+    }
+}
+
+pub async fn update_incident_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path((id, status)): axum::extract::Path<(String, String)>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let allowed = ["active", "contained", "resolved"];
+    if !allowed.contains(&status.as_str()) {
+        return Json(json!({"status":"error","message":"invalid status"}));
+    }
+    match state.ch_storage.update_incident_status(&claims.tenant_id, &id, &status).await {
+        Ok(_)  => Json(json!({"status":"ok"})),
+        Err(e) => Json(json!({"status":"error","message":e.to_string()})),
+    }
+}
+
 pub async fn list_isolations(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,

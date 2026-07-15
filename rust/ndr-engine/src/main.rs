@@ -192,6 +192,7 @@ async fn main() {
         let ch = Arc::new(storage::ClickhouseStorage::new());
         ch.init_tables().await;
         ch.migrate_ipam_subnets().await;
+        ch.seed_local_sensor().await;
         ch
     };
 
@@ -455,6 +456,16 @@ async fn main() {
     }
 
     // ── Weekly SigmaHQ community rules auto-updater ────────────────────────
+    // Remove any blocked rules that slipped into the DB (e.g. before blocklist existed)
+    {
+        let ch_bl = ch_storage_arc.clone();
+        tokio::spawn(async move {
+            for &id in detection::updater::GLOBAL_RULE_BLOCKLIST {
+                let _ = ch_bl.delete_community_rule(id).await;
+            }
+        });
+    }
+
     detection::spawn_sigma_updater(
         rules_dir.clone(),
         redis_url.clone(),
@@ -633,6 +644,8 @@ async fn main() {
 .route("/api/blocks",          get(api::list_active_blocks))
 .route("/api/blocks/manual",   post(api::manual_block))
 .route("/api/blocks/revoke",   post(api::revoke_active_block))
+.route("/api/incidents",                          get(api::list_incidents))
+.route("/api/incidents/:id/status/:status",       post(api::update_incident_status))
 .route("/api/isolations",      get(api::list_isolations))
 .route("/api/isolate",         post(api::isolate_device_handler))
 .route("/api/unisolate",       post(api::unisolate_device_handler))
