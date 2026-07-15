@@ -103,6 +103,28 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # ── One-shot Kafka topic initialiser — creates ndr-events before engines start ──
+  kafka-init:
+    image: apache/kafka:4.2.0
+    container_name: kafka-init
+    depends_on:
+      kafka1:
+        condition: service_healthy
+      kafka2:
+        condition: service_healthy
+      kafka3:
+        condition: service_healthy
+    entrypoint: ["bash", "-c",
+      "/opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 \
+        --create \
+        --if-not-exists \
+        --topic ndr-events \
+        --partitions 4 \
+        --replication-factor 3 \
+      && echo '[NDR] Kafka topic ndr-events ready'"]
+    restart: "no"
+
   vector:
     image: timberio/vector:0.32.1-alpine
     container_name: ndr-vector
@@ -115,9 +137,8 @@ services:
       - ${HOME_DIR}/.vector/data:/etc/vector/data
       - ${HOME_DIR}/logs:/logs
     depends_on:
-      - kafka1
-      - kafka2
-      - kafka3
+      kafka-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 
@@ -171,8 +192,8 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      kafka1:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
       ndr-redis:
         condition: service_started
       clickhouse1:
@@ -230,8 +251,8 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      kafka1:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
       ndr-redis:
         condition: service_started
       clickhouse1:
@@ -289,8 +310,8 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      kafka1:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
       ndr-redis:
         condition: service_started
       clickhouse1:

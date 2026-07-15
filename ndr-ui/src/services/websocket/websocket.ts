@@ -83,10 +83,18 @@ export class Websocket {
             if (data.type === 'agent_status') this.lastAgentStatus$.next(data);
             if (data.type === 'interfaces')  this.lastInterfaces$.next(data);
             if (data.type === 'telemetry')   this.lastTelemetry$.next(data);
+            if (data.type === 'force_logout') {
+              this.disconnect();
+              localStorage.removeItem('ndr_token');
+              localStorage.removeItem('ndr_user');
+              sessionStorage.clear();
+              window.location.href = '/login';
+              return;
+            }
             if (data.type === 'hit') {
               this.hitsHistory.unshift(data);
               if (this.hitsHistory.length > 100) this.hitsHistory.pop();
-              
+
               // Throttle updates to BehaviorSubject and sessionStorage to prevent browser freeze
               if (!this.updateTimeout) {
                 this.updateTimeout = setTimeout(() => {

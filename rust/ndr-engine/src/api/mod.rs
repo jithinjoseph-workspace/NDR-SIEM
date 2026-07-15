@@ -3438,6 +3438,87 @@ async fn test_integration(
         Err(e) => format!("❌ {}", e)
     }
 }
+        "smtp" => {
+            let host = config["smtp_host"].as_str().unwrap_or("");
+            let port = config["smtp_port"].as_u64().unwrap_or(587) as u16;
+            if host.is_empty() {
+                return "No SMTP host configured".to_string();
+            }
+            match tokio::net::TcpStream::connect((host, port)).await {
+                Ok(_)  => format!("✅ SMTP reachable ({}:{})", host, port),
+                Err(e) => format!("❌ SMTP connect failed: {}", e),
+            }
+        }
+        fw @ ("pfsense" | "fortinet" | "panos" | "opnsense") => {
+            let host = config["host"].as_str().unwrap_or("");
+            let api_key = config["api_key"].as_str().unwrap_or("");
+            if host.is_empty() {
+                return format!("No host configured for {}", fw);
+            }
+            if api_key.is_empty() {
+                return format!("No API key configured for {}", fw);
+            }
+            match tokio::net::TcpStream::connect((host, 443u16)).await {
+                Ok(_)  => format!("✅ {} reachable at {}", fw, host),
+                Err(_) => match tokio::net::TcpStream::connect((host, 80u16)).await {
+                    Ok(_)  => format!("✅ {} reachable at {}:80", fw, host),
+                    Err(e) => format!("❌ {} unreachable: {}", fw, e),
+                }
+            }
+        }
+        "unifi" => {
+            let host = config["host"].as_str().unwrap_or("");
+            if host.is_empty() {
+                return "No host configured for UniFi".to_string();
+            }
+            match reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+            {
+                Ok(client) => match client.get(format!("{}/", host)).send().await {
+                    Ok(_)  => format!("✅ UniFi reachable at {}", host),
+                    Err(e) => format!("❌ UniFi unreachable: {}", e),
+                },
+                Err(e) => format!("❌ Client error: {}", e),
+            }
+        }
+        sw @ ("cisco" | "aruba" | "snmp") => {
+            let host = config["host"].as_str().unwrap_or("");
+            if host.is_empty() {
+                return format!("No host configured for {}", sw);
+            }
+            let port: u16 = if sw == "snmp" { 161 } else { 22 };
+            match tokio::net::TcpStream::connect((host, port)).await {
+                Ok(_)  => format!("✅ {} reachable at {}:{}", sw, host, port),
+                Err(e) => format!("❌ {} unreachable ({}:{}): {}", sw, host, port, e),
+            }
+        }
+        "aws_sg" => {
+            let sg_id  = config["sg_id"].as_str().unwrap_or("");
+            let key_id = config["aws_access_key_id"].as_str().unwrap_or("");
+            let secret = config["aws_secret_access_key"].as_str().unwrap_or("");
+            if sg_id.is_empty() || key_id.is_empty() || secret.is_empty() {
+                return "❌ Missing sg_id, aws_access_key_id, or aws_secret_access_key".to_string();
+            }
+            "✅ AWS SG config present (credentials not validated at test time)".to_string()
+        }
+        "azure_nsg" => {
+            let rg  = config["resource_group"].as_str().unwrap_or("");
+            let nsg = config["nsg_name"].as_str().unwrap_or("");
+            if rg.is_empty() || nsg.is_empty() {
+                return "❌ Missing resource_group or nsg_name".to_string();
+            }
+            "✅ Azure NSG config present (az CLI used at enforcement time)".to_string()
+        }
+        "gcp_vpc" => {
+            let project = config["project_id"].as_str().unwrap_or("");
+            let network = config["network"].as_str().unwrap_or("");
+            if project.is_empty() || network.is_empty() {
+                return "❌ Missing project_id or network".to_string();
+            }
+            "✅ GCP VPC config present (gcloud CLI used at enforcement time)".to_string()
+        }
         _ => "Unknown integration".to_string()
     }
 }
