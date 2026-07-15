@@ -31,6 +31,10 @@ export class AuthService implements OnDestroy {
     setup: '/setup',
     soar: '/soar',
     settings: '/settings',
+    evidence: '/evidence',
+    assets: '/assets',
+    'ai-activity': '/ai-activity',
+    'ai-report': '/ai-report',
   };
 
   constructor(

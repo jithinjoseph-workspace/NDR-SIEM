@@ -493,6 +493,10 @@ export class Api {
     return this.http.get(`${this.baseUrl}/monitor/kafka`);
   }
 
+  getLeaderStatus(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/leader-status`);
+  }
+
   scaleEngines(action: string, engine?: string): Observable<any> {
     return this.http.post(
       `${this.baseUrl}/admin/engines/scale`,

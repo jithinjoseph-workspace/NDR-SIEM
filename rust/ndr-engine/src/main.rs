@@ -195,6 +195,24 @@ async fn main() {
         ch
     };
 
+    // ── Seed in-memory threat-intel from persisted IOC watchlist ─────────
+    {
+        let ch_wl = ch_storage_arc.clone();
+        let ti_wl = ti_ref.clone();
+        tokio::spawn(async move {
+            match ch_wl.load_watchlist_iocs().await {
+                Ok(iocs) if !iocs.is_empty() => {
+                    let n = iocs.len();
+                    for (ioc_type, value) in iocs {
+                        ti_wl.add_ioc(&ioc_type, &value);
+                    }
+                    tracing::info!("Loaded {} manual IOCs from ioc_watchlist", n);
+                }
+                _ => {}
+            }
+        });
+    }
+
     // ── Background: Threat tasks with Redis leader election ───────────────
     let sensor_ip: Option<std::net::IpAddr> = std::env::var("HOST_IP").ok()
         .and_then(|s| s.trim().parse().ok());

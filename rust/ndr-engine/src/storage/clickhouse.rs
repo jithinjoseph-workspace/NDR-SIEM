@@ -5749,6 +5749,36 @@ pub async fn get_ioc_hits(
         }).collect())
     }
 
+    /// Persist a manual IOC to the ioc_watchlist table so it survives restarts.
+    pub async fn save_watchlist_ioc(
+        &self,
+        tenant_id: &str,
+        ioc_type:  &str,
+        value:     &str,
+    ) -> anyhow::Result<()> {
+        self.client.query(&format!(
+            "INSERT INTO ndr.ioc_watchlist \
+             (tenant_id, ioc_type, ioc_value, source, active) \
+             VALUES ('{}', '{}', '{}', 'manual', 1)",
+            sql_escape(tenant_id), sql_escape(ioc_type), sql_escape(value)
+        )).execute().await?;
+        Ok(())
+    }
+
+    /// Load all active, non-expired watchlist IOCs — called at startup to
+    /// seed the in-memory threat-intel store from persisted manual additions.
+    pub async fn load_watchlist_iocs(&self) -> anyhow::Result<Vec<(String, String)>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { ioc_type: String, ioc_value: String }
+        let rows = self.client
+            .query(
+                "SELECT ioc_type, ioc_value FROM ndr.ioc_watchlist FINAL \
+                 WHERE active = 1 AND expires_at > now()"
+            )
+            .fetch_all::<Row>().await?;
+        Ok(rows.into_iter().map(|r| (r.ioc_type, r.ioc_value)).collect())
+    }
+
     pub async fn restore_isolation(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<crate::soar::DeviceIsolation>> {
         let isolations = self.list_isolations(tenant_id).await?;
         let iso = isolations.into_iter().find(|i| i.id == id);

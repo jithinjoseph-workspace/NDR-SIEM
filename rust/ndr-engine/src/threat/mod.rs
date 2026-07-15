@@ -135,7 +135,7 @@ fn spawn_threat_tasks(
     entity_scorer::spawn_entity_scorer(Arc::clone(&ch), entity_cache);
     crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch));
 
-    tracing::info!("All 9 threat background tasks started on elected leader");
+    tracing::info!("All 10 threat background tasks started on elected leader");
 }
 
 // ── Row structs for ClickHouse queries ───────────────────────────────────────

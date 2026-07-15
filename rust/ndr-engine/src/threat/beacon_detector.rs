@@ -168,7 +168,57 @@ async fn store_beacon_hit(
         return;
     }
 
-    // GAP 4b: broadcast beacon hit via WebSocket so the UI shows it in real-time
+    // Capture evidence bundle — no PCAP (beacon: CIDs are not network-session CIDs),
+    // but threat-intel enrichment and log data are bundled for analyst review.
+    {
+        let cid_ev   = community_id.clone();
+        let tid_ev   = tenant_id.to_string();
+        let sev_ev   = severity.to_string();
+        let src_ev   = src_ip.to_string();
+        let dst_ev   = dst_ip.to_string();
+        let ch_ev    = ch.clone();
+        let now_str  = chrono::Utc::now().to_rfc3339();
+        let alert_ev = serde_json::json!({
+            "community_id": cid_ev,
+            "tenant_id":    tid_ev,
+            "severity":     sev_ev,
+            "src_ip":       src_ev,
+            "dst_ip":       dst_ev,
+            "rule_name":    "beacon-detector",
+            "timestamp":    now_str,
+        });
+        tokio::spawn(async move {
+            let opensearch_url = std::env::var("OPENSEARCH_URL")
+                .unwrap_or_else(|_| "http://localhost:9200".to_string());
+            let arkime_url  = std::env::var("ARKIME_URL").unwrap_or_default();
+            let arkime_pass = std::env::var("ARKIME_PASS")
+                .unwrap_or_else(|_| "admin".to_string());
+            match crate::evidence::build_evidence_bundle(
+                &opensearch_url, &arkime_url, &arkime_pass,
+                &cid_ev, alert_ev, &tid_ev, None,
+            ).await {
+                Ok((zip_bytes, sha256, _manifest)) => {
+                    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                    let dir  = format!("/opt/ndr/evidence/{}/{}", tid_ev, date);
+                    let _ = tokio::fs::create_dir_all(&dir).await;
+                    let bundle_id = uuid::Uuid::new_v4().to_string();
+                    let file_path = format!("{}/{}.zip", dir, bundle_id);
+                    let size = zip_bytes.len() as u64;
+                    if tokio::fs::write(&file_path, &zip_bytes).await.is_ok() {
+                        let _ = ch_ev.save_evidence_bundle(
+                            &tid_ev, &bundle_id, &cid_ev,
+                            &file_path, &sha256, size,
+                            1, 90, &src_ev, &dst_ev, &sev_ev,
+                            &cid_ev,
+                        ).await;
+                    }
+                }
+                Err(e) => warn!("beacon_detector: evidence bundle failed for {}: {}", cid_ev, e),
+            }
+        });
+    }
+
+    // Broadcast beacon hit via WebSocket so the UI shows it in real-time
     let ws_msg = serde_json::json!({
         "type":         "hit",
         "community_id": community_id,

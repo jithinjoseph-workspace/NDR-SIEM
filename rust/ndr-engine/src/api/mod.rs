@@ -2196,30 +2196,35 @@ pub async fn lookup_ioc(
         "source":       "abuse.ch (Feodo + MalwareBazaar + URLhaus)"
     }))
 }
-//add manaual ioc
 pub async fn add_manual_ioc(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> Json<Value> {
-    let ioc_type = payload["type"].as_str()
-        .unwrap_or("ip");
-    let value = payload["value"].as_str()
-        .unwrap_or("");
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    let tenant_id = claims.tenant_id.clone();
+
+    let ioc_type = payload["type"].as_str().unwrap_or("ip");
+    let value    = payload["value"].as_str().unwrap_or("");
 
     if value.is_empty() {
-        return Json(json!({
-            "status":  "error",
-            "message": "value is required"
-        }));
+        return Json(json!({"status": "error", "message": "value is required"}));
     }
 
+    // Add to in-memory store for immediate effect
     state.enrichment.threat_intel.add_ioc(ioc_type, value);
+
+    // Persist to ioc_watchlist so it survives engine restarts
+    let _ = state.ch_storage.save_watchlist_ioc(&tenant_id, ioc_type, value).await;
 
     Json(json!({
         "status":  "added",
         "type":    ioc_type,
         "value":   value,
-        "message": format!("IOC {} added successfully", ioc_type)
+        "message": format!("IOC {} added and persisted to watchlist", ioc_type)
     }))
 }
 

@@ -249,6 +249,8 @@ export class Admin implements OnInit, OnDestroy {
   installCommand = '';
 
   engines: any[] = [];
+  leaderEngineId: string | null = null;
+  leaderTtlMs: number | null = null;
   loadingEngines = false;
   scaling = false;
   lastEngineRefresh: Date | null = null;
@@ -1314,6 +1316,14 @@ export class Admin implements OnInit, OnDestroy {
         this.showMsg('Failed to load engines', 'error');
         this.cdr.detectChanges();
       },
+    });
+    this.api.getLeaderStatus().subscribe({
+      next: (data: any) => {
+        this.leaderEngineId = data.current_leader ?? null;
+        this.leaderTtlMs   = data.ttl_ms ?? null;
+        this.cdr.detectChanges();
+      },
+      error: () => {}
     });
   }
 
