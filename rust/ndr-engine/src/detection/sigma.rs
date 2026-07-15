@@ -9,6 +9,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 // ── Primitive types ───────────────────────────────────────────────────────
@@ -25,27 +26,41 @@ pub enum Matcher { Equals, Contains, StartsWith, EndsWith, Regex, Cidr }
 
 #[derive(Debug, Clone)]
 pub struct FieldCondition {
-    pub field:   String,
-    pub matcher: Matcher,
-    pub values:  Vec<String>, // OR within same field
-    pub negated: bool,
+    pub field:          String,
+    pub matcher:        Matcher,
+    pub values:         Vec<String>,
+    // Bug 1 fix: regex compiled once at rule load time, not per-event
+    pub compiled_regex: Vec<Option<Arc<Regex>>>,
+    pub negated:        bool,
 }
 
 impl FieldCondition {
     pub fn matches(&self, event: &NormalizedEvent) -> bool {
+        // Bug 2 fix: field="*" means keyword match — search the full raw event string
+        if self.field == "*" {
+            let raw = event.raw.to_string().to_lowercase();
+            let hit = self.values.iter().any(|val| raw.contains(&val.to_lowercase()));
+            return if self.negated { !hit } else { hit };
+        }
+
         let field_val = match event.get_field(&self.field) {
             Some(v) => v.to_lowercase(),
             None    => return self.negated,
         };
-        let hit = self.values.iter().any(|val| {
+        let hit = self.values.iter().enumerate().any(|(i, val)| {
             let v = val.to_lowercase();
             match &self.matcher {
                 Matcher::Equals     => field_val == v,
                 Matcher::Contains   => field_val.contains(&v),
                 Matcher::StartsWith => field_val.starts_with(&v),
                 Matcher::EndsWith   => field_val.ends_with(&v),
-                Matcher::Regex      => Regex::new(val).map(|r| r.is_match(&field_val)).unwrap_or(false),
                 Matcher::Cidr       => ip_in_cidr(&field_val, val),
+                // Bug 1 fix: use pre-compiled regex, fall back to compile if missing
+                Matcher::Regex      => self.compiled_regex
+                    .get(i)
+                    .and_then(|o| o.as_ref())
+                    .map(|r| r.is_match(&field_val))
+                    .unwrap_or_else(|| Regex::new(val).map(|r| r.is_match(&field_val)).unwrap_or(false)),
             }
         });
         if self.negated { !hit } else { hit }
@@ -283,13 +298,14 @@ fn parse_selection_group(val: &serde_yaml::Value) -> SelectionGroup {
             }
             SelectionGroup { alternatives: vec![alt] }
         }
-        // Scalar keyword — wildcard match
+        // Scalar keyword — raw event string search (Bug 2 fix: field="*" triggers raw search)
         serde_yaml::Value::String(s) => {
             let cond = FieldCondition {
-                field:   "*".to_string(),
-                matcher: Matcher::Contains,
-                values:  vec![s.clone()],
-                negated: false,
+                field:          "*".to_string(),
+                matcher:        Matcher::Contains,
+                values:         vec![s.clone()],
+                compiled_regex: vec![],
+                negated:        false,
             };
             SelectionGroup { alternatives: vec![vec![cond]] }
         }
@@ -414,7 +430,13 @@ fn parse_field_condition(field_modifier: &str, value: &serde_yaml::Value, out: &
     };
 
     if !values.is_empty() {
-        out.push(FieldCondition { field, matcher, values, negated });
+        // Bug 1 fix: pre-compile regex values at parse time
+        let compiled_regex = if matches!(matcher, Matcher::Regex) {
+            values.iter().map(|v| Regex::new(v).ok().map(Arc::new)).collect()
+        } else {
+            vec![]
+        };
+        out.push(FieldCondition { field, matcher, values, compiled_regex, negated });
     }
 }
 
@@ -730,10 +752,11 @@ logsource:
 
     fn make_selection(field: &str, value: &str) -> SelectionGroup {
         let cond = FieldCondition {
-            field: field.to_string(),
-            matcher: Matcher::Equals,
-            values: vec![value.to_string()],
-            negated: false,
+            field:          field.to_string(),
+            matcher:        Matcher::Equals,
+            values:         vec![value.to_string()],
+            compiled_regex: vec![],
+            negated:        false,
         };
         SelectionGroup { alternatives: vec![vec![cond]] }
     }

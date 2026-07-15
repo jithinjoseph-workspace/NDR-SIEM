@@ -3737,6 +3737,7 @@ pub async fn clear_sensor_command(
         let r = self.client.query(&format!(
             "SELECT count() as cnt FROM {}.ai_suppressions FINAL \
              WHERE tenant_id = '{}' AND active = 1 \
+             AND (expires_at IS NULL OR expires_at > now()) \
              AND signature_id = {} \
              AND (suppress_type = 'by_sid' \
                OR (suppress_type = 'by_dst' AND suppress_ip = '{}') \

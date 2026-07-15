@@ -1133,6 +1133,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         let dst_clone       = ch_hit.dst_ip.clone();
                         let sev_clone       = ch_hit.severity.clone();
                         let sigma_log       = detections.iter().map(|d| d.title.as_str()).collect::<Vec<_>>().join(",");
+                        // Evidence (PCAP) only meaningful for proper network flows with a
+                        // standard community_id. WS broadcast has no such restriction (Bug 6 fix).
                         let do_evidence     = matches!(severity, "HIGH" | "CRITICAL" | "MEDIUM")
                                              && cid_clone.starts_with("1:");
                         // GAP 3: SOAR + WS broadcast for Sigma hits
@@ -1155,16 +1157,16 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             crate::soar::execute_native_playbooks(
                                 &state_soar, hit_soar, risk_soar, enrich_soar, &tid_clone,
                             ).await;
-                            // GAP 3: WS broadcast so the alert appears in real-time
-                            if cid_clone.starts_with("1:") {
-                                let ws_msg = serde_json::json!({
-                                    "type": "hit", "community_id": cid_clone,
-                                    "src_ip": src_clone, "dst_ip": dst_clone,
-                                    "severity": sev_clone, "score": score_soar,
-                                    "tenant_id": tid_clone,
-                                });
-                                crate::api::publish_event(&state_soar, &tid_clone, &ws_msg.to_string());
-                            }
+                            // GAP 3: WS broadcast — always send regardless of community_id format
+                            // (Bug 6 fix: removed starts_with("1:") guard that silently dropped
+                            // DNS/weird/software sigma hits from live alerts)
+                            let ws_msg = serde_json::json!({
+                                "type": "hit", "community_id": cid_clone,
+                                "src_ip": src_clone, "dst_ip": dst_clone,
+                                "severity": sev_clone, "score": score_soar,
+                                "tenant_id": tid_clone,
+                            });
+                            crate::api::publish_event(&state_soar, &tid_clone, &ws_msg.to_string());
                             if !do_evidence { return; }
 
                             let opensearch_url = std::env::var("OPENSEARCH_URL")
