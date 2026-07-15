@@ -44,6 +44,7 @@ export class Logs implements OnInit, OnDestroy {
     if (this.updateScheduled) return;
     this.updateScheduled = true;
     setTimeout(() => {
+      this.applyFilter();
       this.cdr.detectChanges();
       this.updateScheduled = false;
     }, 0);
@@ -90,7 +91,6 @@ export class Logs implements OnInit, OnDestroy {
         };
         this.logs.unshift(log);
         if (this.logs.length > 200) this.logs.pop();
-        this.applyFilter();
         this.scheduleUpdate();
       })
     );

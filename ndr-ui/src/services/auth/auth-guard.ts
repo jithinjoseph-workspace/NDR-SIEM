@@ -7,10 +7,30 @@ import { catchError, map, of } from 'rxjs';
 export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: RouterStateSnapshot) => {
   const auth = inject(AuthService);
   const router = inject(Router);
-  
+
   if (!auth.isLoggedIn()) {
     router.navigate(['/login'], { replaceUrl: true });
     return false;
+  }
+
+  // Skip the /api/auth/me round-trip when we just set fresh user data (e.g. right
+  // after login). The login response already returned up-to-date user/permissions.
+  if (auth.isUserDataFresh()) {
+    const requiredRole       = route.data?.['role'];
+    const requiredPermission = route.data?.['permission'];
+    if (requiredRole === 'admin' && !auth.isAdmin()) {
+      router.navigate([auth.getDefaultRoute()]);
+      return false;
+    }
+    if (requiredRole === 'analyst' && auth.isAdmin()) {
+      router.navigate([auth.getDefaultRoute()]);
+      return false;
+    }
+    if (requiredPermission && !auth.hasPermission(requiredPermission)) {
+      router.navigate([auth.getDefaultRoute()]);
+      return false;
+    }
+    return true;
   }
 
   return auth.refreshUser().pipe(

@@ -1,7 +1,7 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { Observable, tap, Subscription } from 'rxjs';
+import { Observable, of, tap, Subscription } from 'rxjs';
 import { Websocket } from '../websocket/websocket';
 
 @Injectable({ providedIn: 'root' })
@@ -18,6 +18,10 @@ export class AuthService implements OnDestroy {
   private readonly SESSION_POLL_MS = 30_000;
   private sessionPollInterval: ReturnType<typeof setInterval> | null = null;
   private sessionPollSub: Subscription | null = null;
+
+  /** Timestamp (ms) of last successful user data write — used to skip a redundant
+   *  /api/auth/me round-trip in authGuard immediately after login. */
+  private userDataFreshAt = 0;
 
   private readonly defaultRouteByPermission: Record<string, string> = {
     dashboard: '/dashboard',
@@ -58,9 +62,16 @@ export class AuthService implements OnDestroy {
             ...res.user,
             permissions: this.normalizePermissions(res.user?.permissions),
           }));
+          this.userDataFreshAt = Date.now();
         }
       })
     );
+  }
+
+  /** True if user data was written within the last 10 seconds — authGuard can
+   *  skip the /api/auth/me round-trip when this returns true. */
+  isUserDataFresh(): boolean {
+    return Date.now() - this.userDataFreshAt < 10_000;
   }
 
   /** Check if a username exists in the database (no auth required). */
@@ -94,6 +105,7 @@ export class AuthService implements OnDestroy {
             ...res.user,
             permissions: this.normalizePermissions(res.user.permissions),
           }));
+          this.userDataFreshAt = Date.now();
         }
         // If backend returns USER_DISABLED via get_me (HTTP 200 with error body),
         // the authGuard already calls logout() when status !== 'ok'.
