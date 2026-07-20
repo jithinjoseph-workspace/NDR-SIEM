@@ -1,6 +1,8 @@
 # Rust
 rust/target/
 rust/ndr-engine/target/
+rust/ndr-engine/test_fmt
+rust/ndr-engine/test_*
 rust/ndr-engine/ndr.db
 rust/ndr-engine/ndr.db-shm
 rust/ndr-engine/ndr.db-wal

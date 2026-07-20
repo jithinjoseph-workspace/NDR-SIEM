@@ -157,7 +157,7 @@ services:
       - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
-      - CLICKHOUSE_PASSWORD=ndr123
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-ndr123}
       - INSTANCE_ID=1
       - REDIS_URL=redis://ndr-redis:6379
       - INSTALL_DIR=${INSTALL_DIR}
@@ -216,7 +216,7 @@ services:
       - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
-      - CLICKHOUSE_PASSWORD=ndr123
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-ndr123}
       - INSTANCE_ID=2
       - REDIS_URL=redis://ndr-redis:6379
       - INSTALL_DIR=${INSTALL_DIR}
@@ -275,7 +275,7 @@ services:
       - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
-      - CLICKHOUSE_PASSWORD=ndr123
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-ndr123}
       - INSTANCE_ID=3
       - REDIS_URL=redis://ndr-redis:6379
       - INSTALL_DIR=${INSTALL_DIR}
@@ -455,7 +455,7 @@ services:
         condition: service_healthy
       clickhouse2:
         condition: service_healthy
-    entrypoint: ["bash", "-c", "clickhouse-client --host clickhouse1 --port 9000 --user ndr --password ndr123 --multiquery < /init.sql && echo '[NDR] ClickHouse schema ready'"]
+    entrypoint: ["bash", "-c", "clickhouse-client --host clickhouse1 --port 9000 --user ndr --password ${CLICKHOUSE_PASSWORD:-ndr123} --multiquery < /init.sql && echo '[NDR] ClickHouse schema ready'"]
     restart: on-failure
 
 volumes:

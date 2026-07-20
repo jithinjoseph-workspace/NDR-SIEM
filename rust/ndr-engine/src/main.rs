@@ -674,7 +674,7 @@ async fn main() {
         tokio::spawn(async move {
             let client = reqwest::Client::new();
             let agent = std::env::var("NDR_AGENT_URL")
-                .unwrap_or_else(|_| "http://172.25.86.150:3001".to_string());
+                .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 if let Ok(resp) = client.get(format!("{}/agent/status", agent)).send().await {

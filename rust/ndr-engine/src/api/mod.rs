@@ -65,8 +65,7 @@ struct Claims {
 fn generate_jwt(username: &str, role: &str,
     tenant_id: &str, permissions: Vec<String>, sensor_ids: Vec<String>) -> String {
     let secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_|
-            "ndr-secret-key-2026".to_string());
+        .expect("JWT_SECRET env var must be set");
     let expiry = chrono::Utc::now()
         .timestamp() as usize + 86400; // 24 hours
     let claims = Claims {
@@ -222,7 +221,7 @@ pub struct AuthClaims {
 #[allow(dead_code)]
 pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
     let secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "ndr-secret-key-2026".to_string());
+        .expect("JWT_SECRET env var must be set");
     decode::<AuthClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -239,8 +238,7 @@ pub fn extract_claims(
         .and_then(|v| v.strip_prefix("Bearer "))?;
 
     let secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| 
-            "ndr-secret-key-2026".to_string());
+        .expect("JWT_SECRET env var must be set");
 
     decode::<AuthClaims>(
         token,
@@ -3831,8 +3829,7 @@ pub async fn get_me(
         .unwrap_or("");
 
     let secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| 
-            "ndr-secret-key-2026".to_string());
+        .expect("JWT_SECRET env var must be set");
 
     match decode::<Claims>(
         token,
