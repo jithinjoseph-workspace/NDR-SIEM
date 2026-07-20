@@ -206,6 +206,24 @@ async fn refresh(
         .filter(|s| !s.is_empty())
         .collect();
 
+    // ── Admin-defined CIDRs from ndr.settings (trusted_cloud_cidrs) ──────
+    // Any CIDR added here is treated as trusted cloud — no sensitive-country
+    // scoring, no cloud-traffic suppression bypass. Admins can add Azure,
+    // private clouds, on-prem CDN ranges etc. without touching code.
+    let custom_cidr_str = ch.get_global_setting("trusted_cloud_cidrs").await
+        .unwrap_or_default();
+    let mut custom_count = 0usize;
+    for cidr in custom_cidr_str.split(',') {
+        let c = cidr.trim();
+        if c.is_empty() { continue; }
+        if let Some(r) = cidr_to_range(c) {
+            nets.push(r);
+            custom_count += 1;
+        } else {
+            warn!("cloud_trust: invalid CIDR in trusted_cloud_cidrs: '{}'", c);
+        }
+    }
+
     let total     = nets.len();
     let dom_count = domain_suffixes.len();
     let kw_count  = asn_keywords.len();
@@ -218,8 +236,8 @@ async fn refresh(
         guard.asn_keywords    = asn_keywords;
     }
 
-    info!("cloud_trust: updated — {} IPv4 ranges, {} domain suffixes, {} ASN keywords",
-          total, dom_count, kw_count);
+    info!("cloud_trust: updated — {} IPv4 ranges ({} custom), {} domain suffixes, {} ASN keywords",
+          total, custom_count, dom_count, kw_count);
 
     // Heartbeat in Redis — visible to ops tooling, no functional role
     if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
