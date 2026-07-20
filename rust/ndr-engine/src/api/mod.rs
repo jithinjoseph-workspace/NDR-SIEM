@@ -185,6 +185,8 @@ pub struct AppState {
     pub siem: Option<Arc<crate::siem::SiemForwarder>>,
     // (bool trusted, Instant expires) — 5-min TTL avoids a ClickHouse round-trip per hit
     pub trusted_asset_cache: Arc<dashmap::DashMap<String, (bool, std::time::Instant)>>,
+    // CIDR ranges whose source IPs are always treated as trusted assets (env TRUSTED_SOURCE_CIDRS)
+    pub trusted_source_cidrs: Arc<Vec<ipnetwork::IpNetwork>>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -661,24 +663,33 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         .unwrap_or(0.0);
     let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud, entity_score);
 
-    // Trusted-asset check: if src is a user-marked trusted device, halve score and tag it.
-    // Result cached in-memory for 5 minutes to avoid a ClickHouse round-trip on every hit.
+    // Trusted-asset check: src is trusted if it matches a CIDR in trusted_source_cidrs OR
+    // is manually marked trusted in the assets table (5-min cache).
     let ta_key = format!("{}:{}", tenant_id, src);
     let is_trusted_asset = {
-        const TTL: std::time::Duration = std::time::Duration::from_secs(300);
-        let cached = state.trusted_asset_cache.get(&ta_key)
-            .filter(|e| e.1.elapsed() < TTL)
-            .map(|e| e.0);
-        if let Some(v) = cached {
-            v
+        // Fast path: check CIDR list first (no DB, no cache needed)
+        let cidr_trusted = src.parse::<std::net::IpAddr>().ok()
+            .map(|addr| state.trusted_source_cidrs.iter().any(|net| net.contains(addr)))
+            .unwrap_or(false);
+
+        if cidr_trusted {
+            true
         } else {
-            let v = state.ch_storage
-                .get_asset_by_ip(&tenant_id, src).await
-                .ok().flatten()
-                .map(|a| a.trusted == 1)
-                .unwrap_or(false);
-            state.trusted_asset_cache.insert(ta_key, (v, std::time::Instant::now()));
-            v
+            const TTL: std::time::Duration = std::time::Duration::from_secs(300);
+            let cached = state.trusted_asset_cache.get(&ta_key)
+                .filter(|e| e.1.elapsed() < TTL)
+                .map(|e| e.0);
+            if let Some(v) = cached {
+                v
+            } else {
+                let v = state.ch_storage
+                    .get_asset_by_ip(&tenant_id, src).await
+                    .ok().flatten()
+                    .map(|a| a.trusted == 1)
+                    .unwrap_or(false);
+                state.trusted_asset_cache.insert(ta_key, (v, std::time::Instant::now()));
+                v
+            }
         }
     };
 

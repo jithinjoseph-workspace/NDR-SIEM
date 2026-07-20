@@ -322,6 +322,18 @@ async fn main() {
         doh_ips,
         siem,
         trusted_asset_cache: Arc::new(dashmap::DashMap::new()),
+        trusted_source_cidrs: Arc::new({
+            std::env::var("TRUSTED_SOURCE_CIDRS").unwrap_or_default()
+                .split(',')
+                .filter_map(|s| {
+                    let s = s.trim();
+                    if s.is_empty() { return None; }
+                    s.parse::<ipnetwork::IpNetwork>().map_err(|e| {
+                        tracing::warn!("TRUSTED_SOURCE_CIDRS: invalid CIDR '{}': {}", s, e);
+                    }).ok()
+                })
+                .collect()
+        }),
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────

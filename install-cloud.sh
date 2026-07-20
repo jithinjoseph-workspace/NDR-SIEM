@@ -191,6 +191,7 @@ BEACON_WINDOW_HOURS=1
 INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
+TRUSTED_SOURCE_CIDRS=
 ENVEOF
 log "✅ Cloud .env generated"
 info "  CLOUD_MODE=true — Zeek/Suricata/Arkime/OpenSearch are disabled"

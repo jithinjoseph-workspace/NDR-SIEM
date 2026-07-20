@@ -193,6 +193,7 @@ BEACON_WINDOW_HOURS=1
 INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
+TRUSTED_SOURCE_CIDRS=
 _EARLY_ENV
 log ".env written early (will be updated with final values in network step)"
 
