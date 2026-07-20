@@ -17,11 +17,12 @@ pub fn spawn_entity_scorer(
     cache: Arc<dashmap::DashMap<String, f32>>,
 ) {
     tokio::spawn(async move {
-        // Short initial delay so hits can accumulate before first run
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        // Run immediately on startup so the in-memory cache is pre-populated.
+        // Previously delayed 60s, leaving entity_score=0 for all new hits in that window.
+        run_refresh(&ch, &cache).await;
         loop {
-            run_refresh(&ch, &cache).await;
             tokio::time::sleep(std::time::Duration::from_secs(REFRESH_SECS)).await;
+            run_refresh(&ch, &cache).await;
         }
     });
 }

@@ -183,6 +183,8 @@ pub struct AppState {
     pub entity_cache: Arc<dashmap::DashMap<String, f32>>,
     pub doh_ips: Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>,
     pub siem: Option<Arc<crate::siem::SiemForwarder>>,
+    // (bool trusted, Instant expires) — 5-min TTL avoids a ClickHouse round-trip per hit
+    pub trusted_asset_cache: Arc<dashmap::DashMap<String, (bool, std::time::Instant)>>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -659,14 +661,26 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         .unwrap_or(0.0);
     let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud, entity_score);
 
-    // Trusted-asset check: if src is a user-marked trusted device, halve score and tag it
-    let is_trusted_asset = state.ch_storage
-        .get_asset_by_ip(&tenant_id, src)
-        .await
-        .ok()
-        .flatten()
-        .map(|a| a.trusted == 1)
-        .unwrap_or(false);
+    // Trusted-asset check: if src is a user-marked trusted device, halve score and tag it.
+    // Result cached in-memory for 5 minutes to avoid a ClickHouse round-trip on every hit.
+    let ta_key = format!("{}:{}", tenant_id, src);
+    let is_trusted_asset = {
+        const TTL: std::time::Duration = std::time::Duration::from_secs(300);
+        let cached = state.trusted_asset_cache.get(&ta_key)
+            .filter(|e| e.1.elapsed() < TTL)
+            .map(|e| e.0);
+        if let Some(v) = cached {
+            v
+        } else {
+            let v = state.ch_storage
+                .get_asset_by_ip(&tenant_id, src).await
+                .ok().flatten()
+                .map(|a| a.trusted == 1)
+                .unwrap_or(false);
+            state.trusted_asset_cache.insert(ta_key, (v, std::time::Instant::now()));
+            v
+        }
+    };
 
     let adjusted_score = if is_trusted_asset { raw_risk.score * 0.5 } else { raw_risk.score };
     let mut adjusted_tags = raw_risk.tags.clone();
@@ -1129,10 +1143,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             let threat_intel    = enrichment.is_malicious;
             let sensitive_ctry  = enrichment.sensitive_country;
 
-            let src_scope = if src_ip.starts_with("10.") || src_ip.starts_with("192.168.")
-                || src_ip.starts_with("172.") { "private/internal" } else { "public/external" };
-            let dst_scope = if dst_ip.starts_with("10.") || dst_ip.starts_with("192.168.")
-                || dst_ip.starts_with("172.") { "private/internal" } else { "public/external" };
+            let src_scope = if crate::enrichment::is_private_ip(&src_ip) { "private/internal" } else { "public/external" };
+            let dst_scope = if crate::enrichment::is_private_ip(&dst_ip) { "private/internal" } else { "public/external" };
 
             tokio::spawn(async move {
                 // Hard-block 1: hit itself has threat intel match — AI cannot override this

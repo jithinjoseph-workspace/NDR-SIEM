@@ -321,6 +321,7 @@ async fn main() {
         entity_cache,
         doh_ips,
         siem,
+        trusted_asset_cache: Arc::new(dashmap::DashMap::new()),
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
@@ -622,8 +623,8 @@ async fn main() {
         .route("/api/soar/native/playbooks", get(api::get_native_playbooks).post(api::create_native_playbook))
         .route("/api/soar/native/playbooks/:id", put(api::update_native_playbook).delete(api::delete_native_playbook))
         .route("/api/soar/runs", get(api::get_soar_runs))
-        .route("/api/soar/integrations/delete",post(api::delete_integration))
-        .route("/api/soar/integrations/:id", put(api::update_integration))
+        .route("/api/soar/integrations/delete",post(api::delete_integration)) // legacy
+        .route("/api/soar/integrations/:id", put(api::update_integration).delete(api::delete_integration))
         .route("/api/soar/jira/tickets", post(api::get_jira_tickets))
         .route("/api/auth/login",          post(api::login))
         .route("/api/auth/check-username",  get(api::check_username))

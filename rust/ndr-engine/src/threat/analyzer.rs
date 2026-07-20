@@ -2,6 +2,29 @@ use tracing::info;
 
 use crate::storage::clickhouse::tenant_db_pub;
 
+// Validate values before interpolating into SQL IN clauses.
+// These values come from Zeek logs (which parse real packets) but an attacker
+// could craft logs with unexpected strings, so we validate before injection.
+
+fn is_valid_ip(s: &str) -> bool {
+    s.parse::<std::net::IpAddr>().is_ok()
+}
+
+fn is_valid_domain(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+fn is_valid_hash(s: &str) -> bool {
+    matches!(s.len(), 32 | 40 | 64 | 128)
+        && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn sql_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
 #[derive(Debug, Clone)]
 pub struct IocMatch {
     pub ip:          String, // IP address, domain, or hash depending on ioc_type
@@ -49,9 +72,11 @@ pub async fn match_iocs(
 
     if traffic_ips.is_empty() { return vec![]; }
 
-    // 2. Build IN clause of unique IPs
-    let unique_ips: std::collections::HashSet<String> =
-        traffic_ips.iter().map(|r| format!("'{}'", r.ip.replace('\'', "''"))).collect();
+    // 2. Build IN clause of unique IPs — validate each to prevent injection
+    let unique_ips: std::collections::HashSet<String> = traffic_ips.iter()
+        .filter(|r| is_valid_ip(&r.ip))
+        .map(|r| sql_quote(&r.ip))
+        .collect();
     let ip_list = unique_ips.into_iter().collect::<Vec<_>>().join(",");
 
     // 3. Find which of those IPs appear in threat intel
@@ -114,12 +139,12 @@ pub async fn match_iocs(
     let unique_domains: std::collections::HashSet<String> = dns_domains.into_iter()
         .chain(sni_domains)
         .map(|r| r.domain)
-        .filter(|d| !d.is_empty())
+        .filter(|d| is_valid_domain(d))
         .collect();
 
     if !unique_domains.is_empty() {
         let domain_list = unique_domains.iter()
-            .map(|d| format!("'{}'", d.replace('\'', "''")))
+            .map(|d| sql_quote(d))
             .collect::<Vec<_>>().join(",");
         let domain_intel: Vec<IntelIp> = ch.client
             .query(&format!(
@@ -173,12 +198,12 @@ pub async fn match_iocs(
     let unique_hashes: std::collections::HashSet<String> = sha256_hashes.into_iter()
         .chain(md5_hashes)
         .map(|r| r.hash)
-        .filter(|h| !h.is_empty())
+        .filter(|h| is_valid_hash(h))
         .collect();
 
     if !unique_hashes.is_empty() {
         let hash_list = unique_hashes.iter()
-            .map(|h| format!("'{}'", h.replace('\'', "''")))
+            .map(|h| sql_quote(h))
             .collect::<Vec<_>>().join(",");
         let hash_intel: Vec<IntelIp> = ch.client
             .query(&format!(

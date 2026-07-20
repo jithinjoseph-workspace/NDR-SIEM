@@ -164,7 +164,10 @@ async fn build_asset_map(
 ) -> std::collections::HashMap<String, String> {
     if ips.is_empty() { return Default::default(); }
     let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
-    let ip_list = ips.iter().map(|ip| format!("'{}'", ip.replace('\'', "\\'"))).collect::<Vec<_>>().join(",");
+    let ip_list = ips.iter()
+        .filter(|ip| ip.parse::<std::net::IpAddr>().is_ok())
+        .map(|ip| format!("'{}'", ip))
+        .collect::<Vec<_>>().join(",");
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct Row { ip: String, hostname: String, custom_name: String, device_type: String }
     let rows = ch.client.query(&format!(
