@@ -187,6 +187,10 @@ ARKIME_PASS=
 # AI — add providers in Settings > AI Providers (super admin). Env vars are the fallback.
 GROQ_API_KEY=$GROQ_API_KEY
 GROQ_MODEL=llama-3.3-70b-versatile
+BEACON_WINDOW_HOURS=1
+INGEST_RATE_LIMIT=50000
+SIEM_SYSLOG_HOST=
+SIEM_SYSLOG_PORT=514
 ENVEOF
 log "✅ Cloud .env generated"
 info "  CLOUD_MODE=true — Zeek/Suricata/Arkime/OpenSearch are disabled"
