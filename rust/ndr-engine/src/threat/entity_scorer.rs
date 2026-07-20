@@ -64,6 +64,7 @@ async fn refresh_tenant(
              WHERE tenant_id = '{tid}'
                AND timestamp  > now() - INTERVAL {hours} HOUR
                AND src_ip    != ''
+               AND score     >= 20
          )
          GROUP BY src_ip
          HAVING accumulated_score > 0
