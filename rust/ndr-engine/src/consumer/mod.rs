@@ -991,10 +991,37 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         let ip_clone = ip.to_string();
                         let tenant_clone = tenant.to_string();
                         tokio::spawn(async move {
-                            if let Ok(Some(mut existing)) = ch_clone.get_asset_by_ip(&tenant_clone, &ip_clone).await {
-                                if !existing.mac.is_empty() {
-                                    existing.last_seen = chrono::Utc::now().timestamp() as u32;
+                            let now_ts = chrono::Utc::now().timestamp() as u32;
+                            match ch_clone.get_asset_by_ip(&tenant_clone, &ip_clone).await {
+                                Ok(Some(mut existing)) => {
+                                    existing.last_seen = now_ts;
                                     let _ = ch_clone.upsert_asset(&existing).await;
+                                }
+                                // Asset not yet in DB — create a minimal stub from IP alone.
+                                // MAC/vendor/hostname will be filled later when ARP/DHCP arrives.
+                                _ => {
+                                    let is_gateway = ip_clone.ends_with(".1") || ip_clone.ends_with(".254");
+                                    let asset = crate::storage::clickhouse::AssetRow {
+                                        ip:             ip_clone.clone(),
+                                        mac:            String::new(),
+                                        hostname:       String::new(),
+                                        vendor:         String::new(),
+                                        os_guess:       String::new(),
+                                        device_type:    if is_gateway { "router".into() } else { "unknown".into() },
+                                        custom_name:    String::new(),
+                                        tenant_id:      tenant_clone.clone(),
+                                        first_seen:     now_ts,
+                                        last_seen:      now_ts,
+                                        ip_history:     "[]".to_string(),
+                                        trusted:        0,
+                                        threat_flagged: 0,
+                                        role:           String::new(),
+                                        criticality:    0,
+                                        open_ports:     "[]".to_string(),
+                                        subnet_role:    String::new(),
+                                        ja3_os:         String::new(),
+                                    };
+                                    let _ = ch_clone.upsert_asset(&asset).await;
                                 }
                             }
                         });
