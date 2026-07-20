@@ -82,15 +82,6 @@ CREATE TABLE IF NOT EXISTS ndr.entity_scores ON CLUSTER ndr_cluster (
 ORDER BY (tenant_id, src_ip)
 TTL updated_at + INTERVAL 90 DAY;
 
-CREATE TABLE IF NOT EXISTS ndr.ndr_stats ON CLUSTER ndr_cluster ( 
-    timestamp      DateTime,
-    events_per_min UInt32,
-    hits_per_min   UInt32,
-    top_src_ip     String,
-    top_dst_ip     String
-) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/ndr_stats', '{replica}')
-ORDER BY timestamp
-TTL timestamp + INTERVAL 7 DAY;
 
 CREATE TABLE IF NOT EXISTS ndr.rules_state ON CLUSTER ndr_cluster (
     id      String,

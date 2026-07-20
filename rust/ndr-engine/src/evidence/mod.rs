@@ -1271,8 +1271,8 @@ async fn build_evidence_bundle_inner(
             .map(|ip| format!("'{}'", ip.replace('\'', "")))
             .collect::<Vec<_>>().join(", ");
         query_ch(&http, &ch_url, &ch_user, &ch_pass, &format!(
-            "SELECT indicator, threat_type, confidence, source, tags \
-             FROM ndr.threat_intel WHERE indicator IN ({}) LIMIT 10", ip_list
+            "SELECT ioc_value, attack_type, severity, source, description \
+             FROM ndr.threat_intel WHERE ioc_value IN ({}) LIMIT 10", ip_list
         )).await
     } else { json!([]) };
 
