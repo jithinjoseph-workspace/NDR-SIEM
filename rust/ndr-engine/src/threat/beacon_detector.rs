@@ -14,8 +14,14 @@ use crate::storage::ClickhouseStorage;
 const BEACON_SCORE_THRESHOLD: f64 = 70.0;
 // Minimum connections in window to bother scoring
 const MIN_CONNS: u64 = 10;
-// Look-back window hours
-const WINDOW_HOURS: u32 = 1;
+
+fn beacon_window_hours() -> u32 {
+    std::env::var("BEACON_WINDOW_HOURS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&h: &u32| h >= 1 && h <= 168) // clamp to 1h – 7 days
+        .unwrap_or(1)
+}
 
 pub fn spawn_beacon_detector(
     ch:        Arc<ClickhouseStorage>,
@@ -55,7 +61,7 @@ async fn scan_tenant(
     redis_mux: &redis::aio::MultiplexedConnection,
     ws_tx:     &tokio::sync::broadcast::Sender<String>,
 ) -> anyhow::Result<()> {
-    let candidates = ch.get_beacon_candidates(tenant_id, WINDOW_HOURS, MIN_CONNS).await?;
+    let candidates = ch.get_beacon_candidates(tenant_id, beacon_window_hours(), MIN_CONNS).await?;
 
     if candidates.is_empty() {
         info!("beacon_detector: no candidates for tenant {}", tenant_id);
@@ -140,7 +146,7 @@ async fn store_beacon_hit(
     let reason = format!(
         "Beaconing detected — {} connections in {}h with regular intervals (score={:.0}/100). \
          Bypasses trusted-cloud suppression. Investigate for C2 activity.",
-        conn_cnt, WINDOW_HOURS, score
+        conn_cnt, beacon_window_hours(), score
     );
 
     // Write directly as a scored hit — tags include "beaconing" which the API

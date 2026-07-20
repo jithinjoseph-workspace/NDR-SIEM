@@ -181,6 +181,8 @@ pub struct AppState {
     pub trusted: Arc<tokio::sync::RwLock<crate::threat::cloud_trust::TrustedRanges>>,
     pub sensor_ip: Option<std::net::IpAddr>,
     pub entity_cache: Arc<dashmap::DashMap<String, f32>>,
+    pub doh_ips: Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>,
+    pub siem: Option<Arc<crate::siem::SiemForwarder>>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -566,6 +568,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let store_threshold    = settings["store_threshold"].as_f64().unwrap_or(10.0) as f32;
     let alert_threshold    = settings["alert_threshold"].as_f64().unwrap_or(75.0) as f32;
     let critical_threshold = settings["critical_threshold"].as_f64().unwrap_or(90.0) as u32;
+    let medium_threshold   = settings["medium_threshold"].as_f64().unwrap_or(50.0) as u32;
+    let low_threshold      = settings["low_threshold"].as_f64().unwrap_or(25.0) as u32;
     let soar_threshold     = settings["soar_threshold"].as_f64().unwrap_or(75.0) as f32;
         
     let (src, dst) = match hit.source.as_str() {
@@ -674,8 +678,8 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         adjusted_score,
         critical_threshold,
         alert_threshold as u32,
-        50,
-        25,
+        medium_threshold,
+        low_threshold,
     );
     let mut risk = crate::scoring::RiskResult {
         score:    adjusted_score,
@@ -959,7 +963,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         if rule_floor > risk.score {
             let floored = rule_floor.min(100.0);
             let floored_sev = crate::scoring::Severity::from_score_with_thresholds(
-                floored, critical_threshold, alert_threshold as u32, 50, 25,
+                floored, critical_threshold, alert_threshold as u32, medium_threshold, low_threshold,
             );
             risk = crate::scoring::RiskResult {
                 score:    floored,
@@ -1057,6 +1061,30 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             tracing::warn!("ClickHouse hit insert error: {}", e);
         }
     });
+
+    // SIEM forwarding — HIGH/CRITICAL hits emitted as CEF over UDP syslog
+    if matches!(risk.severity.as_str(), "HIGH" | "CRITICAL") {
+        if let Some(siem) = &state.siem {
+            let siem2      = Arc::clone(siem);
+            let src_s      = src.to_string();
+            let dst_s      = dst.to_string();
+            let sport      = hit.agent_z.source_port.or(hit.agent_s.source_port).unwrap_or(0) as u16;
+            let dport      = hit.agent_z.dest_port.or(hit.agent_s.dest_port).unwrap_or(0) as u16;
+            let sev_s      = risk.severity.as_str().to_string();
+            let score_f    = risk.score;
+            let rule_n     = hit.agent_s.alert.as_ref()
+                .map(|a| a.signature.clone())
+                .unwrap_or_else(|| "NDR Detection".to_string());
+            let reasons_cl = risk.reasons.clone();
+            let tenant_cl  = tenant_id.clone();
+            tokio::spawn(async move {
+                siem2.send_hit(
+                    &src_s, &dst_s, sport, dport,
+                    &sev_s, score_f, &rule_n, &reasons_cl, &tenant_cl,
+                ).await;
+            });
+        }
+    }
 
     // Queue PCAP upload request for external sensors — HIGH/CRITICAL only.
     // MEDIUM generates too many short-lived multicast sessions (SSDP etc.)
@@ -2746,6 +2774,8 @@ pub async fn get_settings(
                 "store_threshold":    10,
                 "alert_threshold":    75,
                 "critical_threshold": 90,
+                "medium_threshold":   50,
+                "low_threshold":      25,
                 "soar_threshold":     75
             }
         }))
@@ -2761,8 +2791,10 @@ pub async fn update_settings(
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let settings = vec![
         "store_threshold",
-        "alert_threshold", 
+        "alert_threshold",
         "critical_threshold",
+        "medium_threshold",
+        "low_threshold",
         "soar_threshold",
     ];
 
@@ -5840,6 +5872,20 @@ pub async fn ingest_events(
 
     // The sensor key prefix identifies which sensor sent these events.
     let key_prefix = extract_sensor_key_prefix(&headers).unwrap_or_default();
+
+    // Per-sensor event-volume rate limit — prevents a misconfigured or compromised
+    // sensor from flooding Kafka. Default: 50,000 events/60s (env: INGEST_RATE_LIMIT).
+    if !crate::ratelimit::check_ingest_rate(&key_prefix, events_arr.len()) {
+        tracing::warn!(
+            "ingest rate limit exceeded for sensor '{}' ({} events in batch)",
+            key_prefix, events_arr.len()
+        );
+        return Json(json!({
+            "status": "error",
+            "message": "Rate limit exceeded — too many events. Retry after 60s.",
+            "code": 429
+        }));
+    }
 
     for event in &events_arr {
         // Add tenant_id and sensor_host to event so the consumer can tag hits.
@@ -9349,4 +9395,63 @@ pub async fn unisolate_device_handler(
     }
 
     Json(json!({"status":"success","message":format!("Isolation {} restored", body.id)}))
+}
+// ── DoH Providers ─────────────────────────────────────────────────────────
+
+pub async fn list_doh_providers(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let _claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    match state.ch_storage.list_doh_providers().await {
+        Ok(rows) => Json(json!({"status":"ok","providers":rows})),
+        Err(e)   => Json(json!({"status":"error","message":e.to_string()})),
+    }
+}
+
+pub async fn add_doh_provider(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    let _claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let ip   = match body["ip"].as_str() {
+        Some(v) => v.to_string(),
+        None => return Json(json!({"status":"error","message":"ip required"})),
+    };
+    let name = body["provider_name"].as_str().unwrap_or("").to_string();
+
+    if let Err(e) = state.ch_storage.add_doh_provider(&ip, &name).await {
+        return Json(json!({"status":"error","message":e.to_string()}));
+    }
+    // Refresh in-memory cache
+    if let Ok(set) = state.ch_storage.load_doh_providers().await {
+        *state.doh_ips.write().await = set;
+    }
+    Json(json!({"status":"ok","ip":ip}))
+}
+
+pub async fn delete_doh_provider(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(ip): axum::extract::Path<String>,
+) -> Json<Value> {
+    let _claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    if let Err(e) = state.ch_storage.remove_doh_provider(&ip).await {
+        return Json(json!({"status":"error","message":e.to_string()}));
+    }
+    // Refresh in-memory cache
+    if let Ok(set) = state.ch_storage.load_doh_providers().await {
+        *state.doh_ips.write().await = set;
+    }
+    Json(json!({"status":"ok","removed":ip}))
 }

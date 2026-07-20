@@ -5,6 +5,7 @@
 mod api;
 mod auth;
 mod ratelimit;
+mod siem;
 mod consumer;
 mod correlator;
 mod detection;
@@ -104,10 +105,28 @@ async fn main() {
         .expect("Redis connection failed");
     // Shared multiplexed connection for publishing — avoids opening a new
     // TCP connection on every event (was causing per-event latency spikes)
-    let redis_mux = redis_client
-        .get_multiplexed_async_connection()
-        .await
-        .expect("Redis multiplexed connection failed");
+    let redis_mux = {
+        let mut conn = None;
+        let mut last_err = String::new();
+        for attempt in 1u8..=6 {
+            match redis_client.get_multiplexed_async_connection().await {
+                Ok(c) => { conn = Some(c); break; }
+                Err(e) => {
+                    last_err = e.to_string();
+                    tracing::warn!("Redis not ready (attempt {}/6): {} — retrying in 5s", attempt, e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+        conn.unwrap_or_else(|| {
+            tracing::error!(
+                "Redis unreachable after 30 s ({}). \
+                 Check REDIS_URL={} or ensure the Redis container is running. Exiting.",
+                last_err, redis_url
+            );
+            std::process::exit(1);
+        })
+    };
 
     let storage = storage::SqliteStorage::new("ndr.db")
         .expect("Failed to open SQLite database");
@@ -193,8 +212,46 @@ async fn main() {
         ch.init_tables().await;
         ch.migrate_ipam_subnets().await;
         ch.seed_local_sensor().await;
+        ch.seed_doh_providers().await;
         ch
     };
+
+    // ── DoH provider IP cache (DB-backed, refreshed every 24h) ──────────────
+    let doh_ips = {
+        let set = ch_storage_arc.load_doh_providers().await.unwrap_or_default();
+        Arc::new(tokio::sync::RwLock::new(set))
+    };
+    {
+        let ch_doh = ch_storage_arc.clone();
+        let doh_ref = Arc::clone(&doh_ips);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(86_400)).await;
+                if let Ok(set) = ch_doh.load_doh_providers().await {
+                    *doh_ref.write().await = set;
+                }
+            }
+        });
+    }
+
+    // ── SIEM syslog forwarder (optional, set SIEM_SYSLOG_HOST to enable) ────
+    let siem: Option<Arc<crate::siem::SiemForwarder>> =
+        if let Ok(host) = std::env::var("SIEM_SYSLOG_HOST") {
+            let port: u16 = std::env::var("SIEM_SYSLOG_PORT")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(514);
+            match crate::siem::SiemForwarder::new(&host, port).await {
+                Ok(f) => {
+                    tracing::info!("SIEM syslog forwarder enabled → {}:{}", host, port);
+                    Some(Arc::new(f))
+                }
+                Err(e) => {
+                    tracing::warn!("SIEM forwarder init failed (disabling): {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
     // ── Seed in-memory threat-intel from persisted IOC watchlist ─────────
     {
@@ -262,6 +319,8 @@ async fn main() {
         trusted,
         sensor_ip,
         entity_cache,
+        doh_ips,
+        siem,
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
@@ -646,6 +705,8 @@ async fn main() {
 .route("/api/blocks/revoke",   post(api::revoke_active_block))
 .route("/api/incidents",                          get(api::list_incidents))
 .route("/api/incidents/:id/status/:status",       post(api::update_incident_status))
+.route("/api/doh-providers",                      get(api::list_doh_providers).post(api::add_doh_provider))
+.route("/api/doh-providers/:ip",                  delete(api::delete_doh_provider))
 .route("/api/isolations",      get(api::list_isolations))
 .route("/api/isolate",         post(api::isolate_device_handler))
 .route("/api/unisolate",       post(api::unisolate_device_handler))
@@ -771,16 +832,12 @@ async fn cleanup_expired_pcaps(ch: &storage::clickhouse::ClickhouseStorage) {
         )).fetch_all::<ExpiredRow>().await.unwrap_or_default();
 
         for row in &rows {
-            // Delete file from disk
+            // Delete file from disk only — pcap_sessions has TTL start_time + INTERVAL 30 DAY
+            // so ClickHouse cleans up the DB rows automatically; ALTER TABLE DELETE is redundant
+            // and heavyweight (async mutation, doesn't reclaim space immediately).
             if std::fs::remove_file(&row.file_path).is_ok() {
                 total_deleted += 1;
             }
-            // Remove row from pcap_sessions
-            let _ = ch.client.query(&format!(
-                "ALTER TABLE {}.pcap_sessions DELETE \
-                 WHERE session_id = '{}'",
-                db, row.session_id
-            )).execute().await;
         }
     }
 

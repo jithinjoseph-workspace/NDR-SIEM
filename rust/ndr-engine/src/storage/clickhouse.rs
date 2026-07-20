@@ -1186,6 +1186,10 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.ndr_hits ADD PROJECTION IF NOT EXISTS proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))",
                 "ALTER TABLE ndr.ai_suppressions ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime) DEFAULT NULL",
                 "ALTER TABLE ndr.ai_suppressions ADD COLUMN IF NOT EXISTS suppress_scope String DEFAULT 'individual'",
+                "CREATE TABLE IF NOT EXISTS ndr.doh_providers \
+                 (ip String, provider_name String DEFAULT '', enabled UInt8 DEFAULT 1, \
+                  created_at DateTime DEFAULT now()) \
+                 ENGINE = ReplacingMergeTree(created_at) ORDER BY ip",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -5949,6 +5953,85 @@ pub async fn get_ioc_hits(
             self.client.query(&q).execute().await?;
         }
         Ok(iso)
+    }
+
+    // ── DoH Providers ────────────────────────────────────────────────────────
+
+    /// Seed the doh_providers table with well-known public DoH resolver IPs.
+    /// Idempotent — skips if any rows already exist.
+    pub async fn seed_doh_providers(&self) {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Cnt { cnt: u64 }
+        let cnt: u64 = self.client
+            .query("SELECT count() AS cnt FROM ndr.doh_providers")
+            .fetch_one::<Cnt>().await
+            .map(|r| r.cnt)
+            .unwrap_or(0);
+        if cnt > 0 { return; }
+
+        let providers = [
+            ("1.1.1.1",           "Cloudflare"),
+            ("1.0.0.1",           "Cloudflare"),
+            ("8.8.8.8",           "Google"),
+            ("8.8.4.4",           "Google"),
+            ("9.9.9.9",           "Quad9"),
+            ("149.112.112.112",   "Quad9"),
+            ("208.67.222.222",    "OpenDNS"),
+            ("208.67.220.220",    "OpenDNS"),
+            ("94.140.14.14",      "AdGuard"),
+            ("94.140.15.15",      "AdGuard"),
+            ("185.228.168.168",   "CleanBrowsing"),
+            ("185.228.169.168",   "CleanBrowsing"),
+            ("76.76.2.0",         "Alternate DNS"),
+            ("76.76.10.0",        "Alternate DNS"),
+        ];
+        for (ip, name) in &providers {
+            let q = format!(
+                "INSERT INTO ndr.doh_providers (ip, provider_name, enabled) \
+                 VALUES ('{}', '{}', 1)",
+                sql_escape(ip), sql_escape(name)
+            );
+            let _ = self.client.query(&q).execute().await;
+        }
+        tracing::info!("seed_doh_providers: seeded {} entries", providers.len());
+    }
+
+    /// Load all enabled DoH provider IPs into a HashSet for fast lookup.
+    pub async fn load_doh_providers(&self) -> anyhow::Result<std::collections::HashSet<String>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { ip: String }
+        let rows = self.client
+            .query("SELECT ip FROM ndr.doh_providers FINAL WHERE enabled = 1")
+            .fetch_all::<Row>().await?;
+        Ok(rows.into_iter().map(|r| r.ip).collect())
+    }
+
+    /// Return all DoH providers as JSON for the admin API.
+    pub async fn list_doh_providers(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { ip: String, provider_name: String, enabled: u8 }
+        let rows = self.client
+            .query("SELECT ip, provider_name, enabled FROM ndr.doh_providers FINAL ORDER BY ip")
+            .fetch_all::<Row>().await?;
+        Ok(rows.into_iter().map(|r| serde_json::json!({
+            "ip": r.ip, "provider_name": r.provider_name, "enabled": r.enabled == 1
+        })).collect())
+    }
+
+    pub async fn add_doh_provider(&self, ip: &str, provider_name: &str) -> anyhow::Result<()> {
+        self.client.query(&format!(
+            "INSERT INTO ndr.doh_providers (ip, provider_name, enabled) VALUES ('{}', '{}', 1)",
+            sql_escape(ip), sql_escape(provider_name)
+        )).execute().await?;
+        Ok(())
+    }
+
+    pub async fn remove_doh_provider(&self, ip: &str) -> anyhow::Result<()> {
+        self.client.query(&format!(
+            "INSERT INTO ndr.doh_providers (ip, provider_name, enabled) VALUES ('{}', '', 0)",
+            sql_escape(ip)
+        )).execute().await?;
+        Ok(())
     }
 }
 

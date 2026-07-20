@@ -402,23 +402,16 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 // ── DoH evasion: HTTPS traffic to known DNS-over-HTTPS providers ─
                 // A host bypassing the local resolver to use DoH is a policy violation
                 // and common C2 evasion technique.
+                // Provider list is DB-backed (ndr.doh_providers) — add/remove via admin API.
                 {
-                    const DOH_IPS: &[&str] = &[
-                        "1.1.1.1", "1.0.0.1",                   // Cloudflare
-                        "8.8.8.8", "8.8.4.4",                   // Google
-                        "9.9.9.9", "149.112.112.112",            // Quad9
-                        "208.67.222.222", "208.67.220.220",      // OpenDNS
-                        "94.140.14.14",  "94.140.15.15",         // AdGuard
-                        "185.228.168.168", "185.228.169.168",    // CleanBrowsing
-                        "76.76.2.0", "76.76.10.0",               // Alternate DNS
-                    ];
                     let dst_port = event.dest_port.unwrap_or(0);
                     let dst_ip   = event.dest_ip.as_deref().unwrap_or("");
+                    let is_doh_ip = state.doh_ips.read().await.contains(dst_ip);
                     let is_conn_or_ssl = matches!(
                         event.log_source.as_deref().or(event.event_type.as_deref()),
                         Some("conn") | Some("ssl") | Some("flow")
                     );
-                    if is_conn_or_ssl && dst_port == 443 && DOH_IPS.contains(&dst_ip) {
+                    if is_conn_or_ssl && dst_port == 443 && is_doh_ip {
                         if let Some(src) = event.source_ip.clone() {
                             if crate::enrichment::is_private_ip(&src) {
                                 let now_ts = chrono::Utc::now().timestamp() as u32;

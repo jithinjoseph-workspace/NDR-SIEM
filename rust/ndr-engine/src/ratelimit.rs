@@ -21,6 +21,14 @@ const WINDOW:       Duration = Duration::from_secs(60);
 const LIMIT_API:    usize    = 300;
 const LIMIT_LOGIN:  usize    = 20;
 
+fn ingest_event_limit() -> usize {
+    std::env::var("INGEST_RATE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n: &usize| n > 0)
+        .unwrap_or(50_000)
+}
+
 struct Bucket {
     timestamps: VecDeque<Instant>,
 }
@@ -44,6 +52,45 @@ impl Bucket {
 
 static BUCKETS: LazyLock<Arc<DashMap<String, Bucket>>> =
     LazyLock::new(|| Arc::new(DashMap::new()));
+
+// ── Per-sensor ingest event-volume rate limit ─────────────────────────────
+// Tracks cumulative event count per sensor key over a fixed 60s window.
+// This is intentionally a simple tumbling window (not sliding) — cheap and
+// sufficient for burst protection.
+
+struct CountBucket {
+    count:        usize,
+    window_start: Instant,
+}
+
+impl CountBucket {
+    fn new() -> Self { Self { count: 0, window_start: Instant::now() } }
+
+    fn allow_n(&mut self, n: usize, limit: usize) -> bool {
+        if Instant::now().duration_since(self.window_start) > WINDOW {
+            self.count = 0;
+            self.window_start = Instant::now();
+        }
+        if self.count + n > limit {
+            return false;
+        }
+        self.count += n;
+        true
+    }
+}
+
+static INGEST_BUCKETS: LazyLock<Arc<DashMap<String, CountBucket>>> =
+    LazyLock::new(|| Arc::new(DashMap::new()));
+
+/// Returns false (and logs a warning) if `sensor_key` has sent more than
+/// INGEST_RATE_LIMIT events in the last 60 seconds.
+pub fn check_ingest_rate(sensor_key: &str, event_count: usize) -> bool {
+    let limit = ingest_event_limit();
+    INGEST_BUCKETS
+        .entry(sensor_key.to_string())
+        .or_insert_with(CountBucket::new)
+        .allow_n(event_count, limit)
+}
 
 pub async fn rate_limit_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
