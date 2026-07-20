@@ -454,7 +454,7 @@ CREATE TABLE IF NOT EXISTS ndr.ai_suppressions ON CLUSTER ndr_cluster
     suppress_scope String            DEFAULT 'individual'
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ai_suppressions', '{replica}', created_at)
-ORDER BY (tenant_id, signature_id, suppress_type, suppress_ip)
+ORDER BY (tenant_id, signature_id, suppress_type, suppress_ip, signature_name, community_id)
 TTL created_at + INTERVAL 90 DAY;
 
 ALTER TABLE ndr.ai_suppressions ON CLUSTER ndr_cluster ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime) DEFAULT NULL;
