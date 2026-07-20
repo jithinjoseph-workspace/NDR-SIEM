@@ -158,12 +158,23 @@ pub async fn execute_action(
                 let user = sc["smtp_user"].as_str().unwrap_or("");
                 let pass = sc["smtp_pass"].as_str().unwrap_or("");
 
-                let email = Message::builder()
-                    .from(from_addr.parse().unwrap())
-                    .to(to_addr.parse().unwrap())
-                    .subject(format!("NDR Alert: {}", risk.severity.as_str()))
-                    .body(format!("Alert for {} -> {}. Score: {}", src, dst, risk.score))
-                    .unwrap();
+                let email = match (|| -> Option<lettre::Message> {
+                    let f = from_addr.parse().ok()?;
+                    let t = to_addr.parse().ok()?;
+                    Message::builder()
+                        .from(f)
+                        .to(t)
+                        .subject(format!("NDR Alert: {}", risk.severity.as_str()))
+                        .body(format!("Alert for {} -> {}. Score: {}", src, dst, risk.score))
+                        .ok()
+                })() {
+                    Some(e) => e,
+                    None => {
+                        tracing::warn!("SOAR email: invalid address (from='{}', to='{}')", from_addr, to_addr);
+                        detail = format!("Invalid email address (from='{}', to='{}')", from_addr, to_addr);
+                        return;
+                    }
+                };
 
                 let mut mailer_builder = SmtpTransport::relay(host)
                     .unwrap_or_else(|_| SmtpTransport::builder_dangerous(host))

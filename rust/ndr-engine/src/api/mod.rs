@@ -1991,6 +1991,9 @@ pub async fn get_rule_by_id(
     axum::extract::Path(rule_id): axum::extract::Path<String>,
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    if rule_id.chars().any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+        return Json(json!({"status": "error", "message": "Invalid rule ID"}));
+    }
     // Try ClickHouse first
     if let Ok(Some((id, name, content, _tenant_id, _enabled))) = state.ch_storage.get_sigma_rule_by_id(&rule_id, &tenant_id).await {
         let doc: std::collections::HashMap<String, serde_yaml::Value> =
@@ -2557,7 +2560,9 @@ pub async fn delete_rule(
     axum::extract::Path(rule_id): axum::extract::Path<String>,
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    
+    if rule_id.chars().any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+        return Json(json!({"status": "error", "message": "Invalid rule ID"}));
+    }
     // Delete from ClickHouse
     let ch_deleted = state.ch_storage.delete_sigma_rule(&rule_id, &tenant_id).await.is_ok();
     
