@@ -296,6 +296,20 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 }
                 // ── JA3 threat-intel + asset OS fingerprint: Zeek ssl log ───────
                 if event.log_source.as_deref() == Some("ssl") {
+                    // Store SNI → dst_ip in passive_dns so alerts can show the
+                    // hostname (e.g. "outlook.office365.com") instead of the raw IP.
+                    if let (Some(sni), Some(dst)) = (
+                        raw.get("server_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()),
+                        event.dest_ip.as_deref().filter(|s| !s.is_empty()),
+                    ) {
+                        let ch_cl  = state.ch_storage.clone();
+                        let sni_s  = sni.to_string();
+                        let dst_s  = dst.to_string();
+                        tokio::spawn(async move {
+                            let _ = ch_cl.insert_passive_dns(&dst_s, &sni_s).await;
+                        });
+                    }
+
                     let ja3_opt = raw.get("ja3")
                         .and_then(|v| v.as_str())
                         .filter(|s| s.len() == 32)

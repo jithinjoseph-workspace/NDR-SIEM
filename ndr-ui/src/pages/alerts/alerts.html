@@ -314,7 +314,7 @@
                       </span>
                       <span class="flow-arrow">→</span>
                       <span class="flow-endpoint">
-                        {{ alert.dst_asset?.hostname || alert.dst_ip || '-' }}
+                        {{ alert.dst_asset?.hostname || alert.dst_domain || alert.dst_ip || '-' }}
                         <span *ngIf="alert.dst_asset?.trusted" class="asset-trusted-badge" title="Trusted device">✓</span>
                         <button *ngIf="alert.dst_ip" class="ip-copy-btn" (click)="copyIp(alert.dst_ip, $event)" title="Copy {{ alert.dst_ip }}" type="button">
                           <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>

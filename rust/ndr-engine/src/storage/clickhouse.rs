@@ -2624,9 +2624,36 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             }
         }
 
+        // Passive-DNS domain lookup for destination IPs not in the asset map
+        // (public IPs never appear in assets; use SNI-derived passive_dns entries instead)
+        let mut pdns_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        {
+            let public_dst_ips: Vec<String> = rows.iter()
+                .map(|r| r.dst_ip.clone())
+                .filter(|ip| !ip.is_empty() && !asset_map.contains_key(ip))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            if !public_dst_ips.is_empty() {
+                let ip_list = public_dst_ips.iter()
+                    .map(|ip| format!("'{}'", sql_escape(ip)))
+                    .collect::<Vec<_>>().join(",");
+                if let Ok(dns_rows) = self.client.query(&format!(
+                    "SELECT ip, domain FROM ndr.passive_dns FINAL \
+                     WHERE ip IN ({ip_list}) ORDER BY last_seen DESC",
+                    ip_list = ip_list
+                )).fetch_all::<(String, String)>().await {
+                    for (ip, domain) in dns_rows {
+                        pdns_map.entry(ip).or_insert(domain);
+                    }
+                }
+            }
+        }
+
         Ok(rows.iter().map(|r| {
-            let src_asset = asset_map.get(&r.src_ip).cloned().unwrap_or(serde_json::Value::Null);
-            let dst_asset = asset_map.get(&r.dst_ip).cloned().unwrap_or(serde_json::Value::Null);
+            let src_asset  = asset_map.get(&r.src_ip).cloned().unwrap_or(serde_json::Value::Null);
+            let dst_asset  = asset_map.get(&r.dst_ip).cloned().unwrap_or(serde_json::Value::Null);
+            let dst_domain = pdns_map.get(&r.dst_ip).cloned().unwrap_or_default();
             serde_json::json!({
                 "timestamp":          r.timestamp,
                 "community_id":       r.community_id,
@@ -2646,6 +2673,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 "sensor_id":          r.sensor_id,
                 "src_asset":          src_asset,
                 "dst_asset":          dst_asset,
+                "dst_domain":         dst_domain,
             })
         }).collect())
     }

@@ -227,6 +227,7 @@ export class Alerts implements OnInit, OnDestroy {
       tags:         hit.tags || [],
       src_asset:    hit.src_asset || null,
       dst_asset:    hit.dst_asset || null,
+      dst_domain:   hit.dst_domain || '',
     };
   }
 
@@ -276,7 +277,7 @@ export class Alerts implements OnInit, OnDestroy {
     for (const g of map.values()) {
       const seen = new Set<string>();
       for (const a of g.alerts) {
-        const victim = a.dst_asset?.hostname || a.dst_ip;
+        const victim = a.dst_asset?.hostname || a.dst_domain || a.dst_ip;
         if (victim && victim !== '-' && !seen.has(victim)) {
           seen.add(victim);
           g.dstIps.push(victim);
