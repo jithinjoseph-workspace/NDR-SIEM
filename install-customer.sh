@@ -34,12 +34,12 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
 
     echo "  Downloading config, scripts and detection rules..."
     GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
-import urllib.request, urllib.error, json, os, sys
+import urllib.request, json, os, base64
 
-token      = os.environ["GH_TOKEN"]
-dest       = os.environ["INSTALL_DIR"]
-api_base   = "https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
-headers    = {"Authorization": f"token {token}"}
+token    = os.environ["GH_TOKEN"]
+dest     = os.environ["INSTALL_DIR"]
+api_base = "https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
+headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
 def gh_get(url):
     req = urllib.request.Request(url, headers=headers)
@@ -52,16 +52,18 @@ def download_dir(repo_path, local_path):
     for item in items:
         target = os.path.join(local_path, item["name"])
         if item["type"] == "file":
-            data = gh_get(item["download_url"])
+            # Fetch via contents API and decode base64 — avoids CDN redirect auth drop
+            meta = json.loads(gh_get(f"{api_base}/contents/{item['path']}?ref=arkime"))
+            content = base64.b64decode(meta["content"].replace("\n", ""))
             with open(target, "wb") as f:
-                f.write(data)
+                f.write(content)
             print(f"    {item['path']}")
         elif item["type"] == "dir":
             download_dir(item["path"], target)
 
-download_dir("config",                  f"{dest}/config")
-download_dir("scripts",                 f"{dest}/scripts")
-download_dir("rust/ndr-engine/rules",   f"{dest}/rust/ndr-engine/rules")
+download_dir("config",                f"{dest}/config")
+download_dir("scripts",               f"{dest}/scripts")
+download_dir("rust/ndr-engine/rules", f"{dest}/rust/ndr-engine/rules")
 PYEOF
 
     echo ""
