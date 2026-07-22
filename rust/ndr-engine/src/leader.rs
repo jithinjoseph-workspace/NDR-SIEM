@@ -105,6 +105,9 @@ impl LeaderElection {
             }
 
             // ── TASK A: Leader renewal loop (every 10s, no-op when follower) ──
+            // Connection is established once and reused across renewals.
+            // On Redis error the connection is refreshed rather than creating
+            // a new TCP handshake every 10 seconds.
             {
                 let redis         = self_arc.redis.clone();
                 let is_leader     = self_arc.is_leader.clone();
@@ -112,6 +115,15 @@ impl LeaderElection {
                 let on_lost_clone = on_lost.clone();
 
                 tokio::spawn(async move {
+                    // Establish once; refresh inside the loop only on error.
+                    let mut conn = match redis.get_multiplexed_async_connection().await {
+                        Ok(c)  => c,
+                        Err(e) => {
+                            tracing::error!("Leader renewal: Redis unavailable at start: {} — loop inactive", e);
+                            return;
+                        }
+                    };
+
                     loop {
                         tokio::time::sleep(
                             Duration::from_millis(RENEW_INTERVAL_MS)
@@ -121,14 +133,20 @@ impl LeaderElection {
                             continue; // follower — nothing to renew
                         }
 
-                        let Ok(mut conn) = redis.get_multiplexed_async_connection().await
-                        else { continue };
-
-                        let current: Option<String> = redis::cmd("GET")
+                        let current: Option<String> = match redis::cmd("GET")
                             .arg(LEADER_KEY)
                             .query_async(&mut conn)
                             .await
-                            .unwrap_or(None);
+                        {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!("Leader renewal: Redis error ({}), reconnecting", e);
+                                if let Ok(new) = redis.get_multiplexed_async_connection().await {
+                                    conn = new;
+                                }
+                                continue;
+                            }
+                        };
 
                         if current.as_deref() == Some(instance_id.as_str()) {
                             // Atomic: only extend TTL if we still own the key (Lua = single round-trip)
@@ -150,7 +168,6 @@ impl LeaderElection {
                                 is_leader.store(false, Ordering::Relaxed);
                                 tracing::warn!("LEADERSHIP LOST (renewal race): {}", instance_id);
                                 on_lost_clone();
-                                continue;
                             }
                         } else {
                             // Key gone or taken — we lost it

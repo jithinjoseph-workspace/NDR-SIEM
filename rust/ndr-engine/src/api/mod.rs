@@ -178,7 +178,10 @@ pub struct AppState {
     pub kafka_producer: Arc<rdkafka::producer::FutureProducer>,
     pub correlation_semaphore: Arc<tokio::sync::Semaphore>,
     pub sensor_key_cache: Arc<crate::auth::sensor_cache::SensorKeyCache>,
-    pub ingest_tx: tokio::sync::mpsc::Sender<(String, String)>,
+    pub ingest_tx:   tokio::sync::mpsc::Sender<(String, String)>,
+    // Single-task publish drain — eliminates per-event tokio::spawn overhead.
+    // try_send is synchronous; the drain task batches PUBLISH via Redis pipeline.
+    pub publish_tx:  tokio::sync::mpsc::Sender<(String, String)>,
     pub http_client: reqwest::Client,
     pub trusted: Arc<tokio::sync::RwLock<crate::threat::cloud_trust::TrustedRanges>>,
     pub sensor_ip: Option<std::net::IpAddr>,
@@ -195,23 +198,12 @@ pub struct AppState {
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
-    let mut conn = state.redis_mux.clone();
-    let msg_str = msg.to_string();
     let channel = format!("tenant:{}", tenant_id);
-    let tx = state.tx.clone();
-    let msg_fallback = msg_str.clone();
-    tokio::spawn(async move {
-        let result: Result<(), _> = redis::cmd("PUBLISH")
-            .arg(&channel)
-            .arg(&msg_str)
-            .query_async(&mut conn)
-            .await;
-        if result.is_err() {
-            // Redis unavailable — fall back to in-process broadcast
-            tracing::warn!("Redis publish failed, falling back to local broadcast");
-            let _ = tx.send(msg_fallback);
-        }
-    });
+    // Non-blocking hand-off to the single publish drain task.
+    // Falls back to in-process broadcast only when the channel is full (rare).
+    if state.publish_tx.try_send((channel, msg.to_string())).is_err() {
+        let _ = state.tx.send(msg.to_string());
+    }
 }
 
 
@@ -1024,9 +1016,19 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         return;
     }
 
-    // Persist to SQLite
-    if let Err(e) = state.storage.store_hit(&hit, &risk, &detections, &enrichment) {
-        warn!("Storage error: {}", e);
+    // Persist to SQLite — run on the blocking thread pool so the Tokio worker
+    // is never stalled waiting on rusqlite's synchronous Mutex.
+    {
+        let storage_ref = Arc::clone(&state.storage);
+        let hit_c = hit.clone();
+        let risk_c = risk.clone();
+        let det_c = detections.clone();
+        let enr_c = enrichment.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            storage_ref.store_hit(&hit_c, &risk_c, &det_c, &enr_c)
+        }).await.unwrap_or(Ok(())) {
+            warn!("Storage error: {}", e);
+        }
     }
 
     // Persist to ClickHouse

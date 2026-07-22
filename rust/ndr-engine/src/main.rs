@@ -207,6 +207,56 @@ async fn main() {
         });
     }
 
+    // ── Redis publish drain (replaces per-event tokio::spawn in publish_event) ──
+    // One task batches up to 64 PUBLISH commands into a single Redis pipeline
+    // every 5 ms, eliminating unbounded task spawning under high event rates.
+    let (publish_tx, mut publish_rx) =
+        tokio::sync::mpsc::channel::<(String, String)>(4_096);
+    {
+        let mut pub_conn   = redis_mux.clone();
+        let tx_ws_fallback = tx.clone();
+        tokio::spawn(async move {
+            let mut batch  = Vec::<(String, String)>::with_capacity(64);
+            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(5));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            macro_rules! flush_batch {
+                () => {
+                    if !batch.is_empty() {
+                        let mut pipe = redis::pipe();
+                        for (ch, msg) in &batch {
+                            pipe.cmd("PUBLISH").arg(ch).arg(msg).ignore();
+                        }
+                        if pipe.query_async::<_, redis::Value>(&mut pub_conn).await.is_err() {
+                            // Redis unavailable — fall back to in-process broadcast
+                            for (_, msg) in batch.drain(..) {
+                                let _ = tx_ws_fallback.send(msg);
+                            }
+                        } else {
+                            batch.clear();
+                        }
+                    }
+                };
+            }
+
+            loop {
+                tokio::select! {
+                    biased;
+                    maybe = publish_rx.recv() => {
+                        match maybe {
+                            Some(m) => {
+                                batch.push(m);
+                                if batch.len() >= 64 { flush_batch!(); }
+                            }
+                            None => { flush_batch!(); break; }
+                        }
+                    }
+                    _ = ticker.tick() => flush_batch!(),
+                }
+            }
+        });
+    }
+
     let ch_storage_arc = {
         let ch = Arc::new(storage::ClickhouseStorage::new());
         ch.init_tables().await;
@@ -329,6 +379,7 @@ async fn main() {
         correlation_semaphore: Arc::new(tokio::sync::Semaphore::new(16)),
         sensor_key_cache,
         ingest_tx,
+        publish_tx,
         http_client: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("NDR-Engine/1.0")
