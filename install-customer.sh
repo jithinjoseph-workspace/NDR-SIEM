@@ -21,11 +21,11 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     echo "  NDR repo not found locally — cloning from GitHub..."
     echo ""
     read -rp "  GitHub token (provided by your NDR vendor): " GH_TOKEN
-    read -rp "  Install directory [default: /opt/ndr]: " CLONE_DIR
-    CLONE_DIR="${CLONE_DIR:-/opt/ndr}"
+    CLONE_DIR="${1:-/opt/ndr}"
+    echo "  Installing to: $CLONE_DIR"
     sudo git clone "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
     sudo chown -R "$USER:$USER" "$CLONE_DIR"
-    exec bash "$CLONE_DIR/install-customer.sh" "$@"
+    exec bash "$CLONE_DIR/install-customer.sh"
 fi
 
 # ── Fix DNS early — before any curl/apt/wget ──
