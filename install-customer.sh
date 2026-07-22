@@ -25,7 +25,7 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     CLONE_DIR="${CLONE_DIR:-/opt/ndr}"
     sudo git clone "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
     sudo chown -R "$USER:$USER" "$CLONE_DIR"
-    exec bash "$CLONE_DIR/install.sh" "$@"
+    exec bash "$CLONE_DIR/install-customer.sh" "$@"
 fi
 
 # ── Fix DNS early — before any curl/apt/wget ──
