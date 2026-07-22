@@ -23,36 +23,7 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     echo "  Installing to: $INSTALL_DIR"
     mkdir -p "$INSTALL_DIR"
 
-    API="https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
-    AUTH="Authorization: token $GH_TOKEN"
     RAW="https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime"
-
-    # Download a directory recursively from GitHub contents API
-    _gh_download_dir() {
-        local repo_path="$1"
-        local local_path="$2"
-        mkdir -p "$local_path"
-        curl -fsSL -H "$AUTH" "$API/contents/$repo_path?ref=arkime" | \
-        grep -o '"download_url":"[^"]*"\|"type":"dir","name":"[^"]*","path":"[^"]*"' | \
-        while IFS= read -r line; do
-            if echo "$line" | grep -q '"download_url"'; then
-                url=$(echo "$line" | cut -d'"' -f4)
-                fname=$(basename "$url" | cut -d'?' -f1)
-                curl -fsSL -H "$AUTH" "$url" -o "$local_path/$fname"
-            fi
-        done
-        # recurse into subdirectories
-        curl -fsSL -H "$AUTH" "$API/contents/$repo_path?ref=arkime" | \
-        python3 -c "
-import sys, json
-items = json.load(sys.stdin)
-for i in items:
-    if i['type'] == 'dir':
-        print(i['path'] + '|' + i['name'])
-" 2>/dev/null | while IFS='|' read -r subpath subname; do
-            _gh_download_dir "$subpath" "$local_path/$subname"
-        done
-    }
 
     echo "  Downloading docker-compose.yml..."
     curl -fsSL "$RAW/docker-compose.yml" -o "$INSTALL_DIR/docker-compose.yml"
@@ -61,15 +32,37 @@ for i in items:
     curl -fsSL "$RAW/install-customer.sh" -o "$INSTALL_DIR/install-customer.sh"
     chmod +x "$INSTALL_DIR/install-customer.sh"
 
-    echo "  Downloading config files..."
-    _gh_download_dir "config" "$INSTALL_DIR/config"
+    echo "  Downloading config, scripts and detection rules..."
+    GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
+import urllib.request, urllib.error, json, os, sys
 
-    echo "  Downloading scripts..."
-    _gh_download_dir "scripts" "$INSTALL_DIR/scripts"
+token      = os.environ["GH_TOKEN"]
+dest       = os.environ["INSTALL_DIR"]
+api_base   = "https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
+headers    = {"Authorization": f"token {token}"}
 
-    echo "  Downloading detection rules..."
-    mkdir -p "$INSTALL_DIR/rust/ndr-engine"
-    _gh_download_dir "rust/ndr-engine/rules" "$INSTALL_DIR/rust/ndr-engine/rules"
+def gh_get(url):
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as r:
+        return r.read()
+
+def download_dir(repo_path, local_path):
+    os.makedirs(local_path, exist_ok=True)
+    items = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
+    for item in items:
+        target = os.path.join(local_path, item["name"])
+        if item["type"] == "file":
+            data = gh_get(item["download_url"])
+            with open(target, "wb") as f:
+                f.write(data)
+            print(f"    {item['path']}")
+        elif item["type"] == "dir":
+            download_dir(item["path"], target)
+
+download_dir("config",                  f"{dest}/config")
+download_dir("scripts",                 f"{dest}/scripts")
+download_dir("rust/ndr-engine/rules",   f"{dest}/rust/ndr-engine/rules")
+PYEOF
 
     echo ""
     exec bash "$INSTALL_DIR/install-customer.sh"
