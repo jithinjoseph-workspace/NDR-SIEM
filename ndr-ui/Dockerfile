@@ -1,4 +1,4 @@
-FROM node:20 as build
+FROM node:20 AS build
 
 WORKDIR /app
 
@@ -6,7 +6,7 @@ COPY package*.json ./
 
 # Clean install (important)
 RUN rm -rf node_modules package-lock.json
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 COPY . .
 
