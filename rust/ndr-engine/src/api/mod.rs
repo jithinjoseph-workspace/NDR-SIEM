@@ -64,8 +64,10 @@ struct Claims {
 
 fn generate_jwt(username: &str, role: &str,
     tenant_id: &str, permissions: Vec<String>, sensor_ids: Vec<String>) -> String {
-    let secret = std::env::var("JWT_SECRET")
-        .expect("JWT_SECRET env var must be set");
+    let Ok(secret) = std::env::var("JWT_SECRET") else {
+        tracing::error!("JWT_SECRET not set — cannot issue token");
+        return String::new();
+    };
     let expiry = chrono::Utc::now()
         .timestamp() as usize + 86400; // 24 hours
     let claims = Claims {
@@ -223,8 +225,7 @@ pub struct AuthClaims {
 // Accepts token from Authorization header OR ?token= query param (needed for window.open downloads)
 #[allow(dead_code)]
 pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
-    let secret = std::env::var("JWT_SECRET")
-        .expect("JWT_SECRET env var must be set");
+    let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
     decode::<AuthClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -240,8 +241,7 @@ pub fn extract_claims(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))?;
 
-    let secret = std::env::var("JWT_SECRET")
-        .expect("JWT_SECRET env var must be set");
+    let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
 
     decode::<AuthClaims>(
         token,
@@ -4226,8 +4226,9 @@ pub async fn get_me(
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
 
-    let secret = std::env::var("JWT_SECRET")
-        .expect("JWT_SECRET env var must be set");
+    let Ok(secret) = std::env::var("JWT_SECRET") else {
+        return Json(json!({"status": "error", "message": "Server misconfiguration"}));
+    };
 
     match decode::<Claims>(
         token,

@@ -63,6 +63,14 @@ async fn main() {
     info!("NDR Engine starting");
 
     // ── Production credential warnings ────────────────────────────────────
+    // Fail fast if JWT_SECRET is absent — every auth call would panic otherwise.
+    if std::env::var("JWT_SECRET").is_err() {
+        tracing::error!(
+            "FATAL: JWT_SECRET env var is not set. \
+             Authentication cannot work without it. Set JWT_SECRET in .env and restart."
+        );
+        std::process::exit(1);
+    }
     let default_jwt = "1c14f97d4d12b77a471227ab268ae22b1765df18b188cdceb9c5d4668189e85c";
     if std::env::var("JWT_SECRET").as_deref() == Ok(default_jwt) {
         tracing::warn!("SECURITY: JWT_SECRET is still the default value — change it in .env before production!");
