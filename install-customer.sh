@@ -13,25 +13,66 @@ fi
 
 set -e
 
-# ── If running from a fresh machine (no repo yet), clone it first ──
-# When a customer downloads just this script and runs it, it clones
-# the full repo then re-executes itself from inside it.
+# ── Bootstrap: download only the required config files (no source code) ──
 if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     echo ""
-    echo "  NDR repo not found locally — cloning from GitHub..."
+    echo "  NDR installer — downloading required files..."
     echo ""
-    read -rp "  GitHub token (provided by your NDR vendor): " GH_TOKEN
-    CLONE_DIR="${1:-/opt/ndr}"
-    echo "  Installing to: $CLONE_DIR"
-    sudo git clone --no-checkout --filter=blob:none --branch arkime --single-branch \
-        "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
-    sudo chown -R "$USER:$USER" "$CLONE_DIR"
-    cd "$CLONE_DIR"
-    git sparse-checkout init --cone
-    git sparse-checkout set docker-compose.yml config scripts rust/ndr-engine/rules install-customer.sh
-    git checkout arkime
-    cd - > /dev/null
-    exec bash "$CLONE_DIR/install-customer.sh"
+    read -rp "  GitHub token (provided by Proma Secure): " GH_TOKEN
+    INSTALL_DIR="${1:-/opt/ndr}"
+    echo "  Installing to: $INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+
+    API="https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
+    AUTH="Authorization: token $GH_TOKEN"
+    RAW="https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime"
+
+    # Download a directory recursively from GitHub contents API
+    _gh_download_dir() {
+        local repo_path="$1"
+        local local_path="$2"
+        mkdir -p "$local_path"
+        curl -fsSL -H "$AUTH" "$API/contents/$repo_path?ref=arkime" | \
+        grep -o '"download_url":"[^"]*"\|"type":"dir","name":"[^"]*","path":"[^"]*"' | \
+        while IFS= read -r line; do
+            if echo "$line" | grep -q '"download_url"'; then
+                url=$(echo "$line" | cut -d'"' -f4)
+                fname=$(basename "$url" | cut -d'?' -f1)
+                curl -fsSL -H "$AUTH" "$url" -o "$local_path/$fname"
+            fi
+        done
+        # recurse into subdirectories
+        curl -fsSL -H "$AUTH" "$API/contents/$repo_path?ref=arkime" | \
+        python3 -c "
+import sys, json
+items = json.load(sys.stdin)
+for i in items:
+    if i['type'] == 'dir':
+        print(i['path'] + '|' + i['name'])
+" 2>/dev/null | while IFS='|' read -r subpath subname; do
+            _gh_download_dir "$subpath" "$local_path/$subname"
+        done
+    }
+
+    echo "  Downloading docker-compose.yml..."
+    curl -fsSL "$RAW/docker-compose.yml" -o "$INSTALL_DIR/docker-compose.yml"
+
+    echo "  Downloading install-customer.sh..."
+    curl -fsSL "$RAW/install-customer.sh" -o "$INSTALL_DIR/install-customer.sh"
+    chmod +x "$INSTALL_DIR/install-customer.sh"
+
+    echo "  Downloading config files..."
+    _gh_download_dir "config" "$INSTALL_DIR/config"
+
+    echo "  Downloading scripts..."
+    _gh_download_dir "scripts" "$INSTALL_DIR/scripts"
+
+    echo "  Downloading detection rules..."
+    mkdir -p "$INSTALL_DIR/rust/ndr-engine"
+    _gh_download_dir "rust/ndr-engine/rules" "$INSTALL_DIR/rust/ndr-engine/rules"
+
+    echo ""
+    exec bash "$INSTALL_DIR/install-customer.sh"
 fi
 
 # ── Fix DNS early — before any curl/apt/wget ──
