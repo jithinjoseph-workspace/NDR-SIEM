@@ -3040,12 +3040,12 @@ fn build_xlsx_report(
     }
 
     fn sev_colors(sev: &str) -> (Color, Color) {
-        match sev {
-            "critical" | "Critical" => (Color::RGB(0xDC2626), Color::RGB(0xFFFFFF)),
-            "high"     | "High"     => (Color::RGB(0xEA580C), Color::RGB(0xFFFFFF)),
-            "medium"   | "Medium"   => (Color::RGB(0xCA8A04), Color::RGB(0x1F2937)),
-            "low"      | "Low"      => (Color::RGB(0x16A34A), Color::RGB(0xFFFFFF)),
-            _                       => (Color::RGB(0x2563EB), Color::RGB(0xFFFFFF)),
+        match sev.to_lowercase().as_str() {
+            "critical" => (Color::RGB(0xDC2626), Color::RGB(0xFFFFFF)),
+            "high"     => (Color::RGB(0xEA580C), Color::RGB(0xFFFFFF)),
+            "medium"   => (Color::RGB(0xCA8A04), Color::RGB(0x1F2937)),
+            "low"      => (Color::RGB(0x16A34A), Color::RGB(0xFFFFFF)),
+            _          => (Color::RGB(0x2563EB), Color::RGB(0xFFFFFF)),
         }
     }
 
@@ -3252,12 +3252,33 @@ fn build_xlsx_report(
         ws.write_with_format(0, 0, "Rank",        &hdr_fmt).map_err(|e| e.to_string())?;
         ws.write_with_format(0, 1, "Source IP",   &hdr_fmt).map_err(|e| e.to_string())?;
         ws.write_with_format(0, 2, "Alert Count", &hdr_fmt).map_err(|e| e.to_string())?;
-        if let Some(ips) = report["top_source_ips"].as_array() {
-            for (i, ip) in ips.iter().enumerate() {
+        // Compute from hits so this sheet is populated even when live events are idle
+        let mut ip_counts: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+        if let Some(arr) = report["recent_hits"].as_array() {
+            for h in arr {
+                if let Some(ip) = h["src_ip"].as_str() {
+                    if !ip.is_empty() { *ip_counts.entry(ip).or_insert(0) += 1; }
+                }
+            }
+        }
+        // Also use pre-computed top_source_ips if hits didn't yield enough
+        if ip_counts.is_empty() {
+            if let Some(ips) = report["top_source_ips"].as_array() {
+                for (i, ip) in ips.iter().enumerate() {
+                    let row = (i + 1) as u32;
+                    ws.write(row, 0, (i + 1) as f64).map_err(|e| e.to_string())?;
+                    ws.write(row, 1, ip["ip"].as_str().unwrap_or("-")).map_err(|e| e.to_string())?;
+                    ws.write(row, 2, ip["count"].as_u64().unwrap_or(0) as f64).map_err(|e| e.to_string())?;
+                }
+            }
+        } else {
+            let mut sorted: Vec<(&&str, &u64)> = ip_counts.iter().collect();
+            sorted.sort_by(|a, b| b.1.cmp(a.1));
+            for (i, (ip, cnt)) in sorted.iter().take(10).enumerate() {
                 let row = (i + 1) as u32;
                 ws.write(row, 0, (i + 1) as f64).map_err(|e| e.to_string())?;
-                ws.write(row, 1, ip["ip"].as_str().unwrap_or("-")).map_err(|e| e.to_string())?;
-                ws.write(row, 2, ip["count"].as_u64().unwrap_or(0) as f64).map_err(|e| e.to_string())?;
+                ws.write(row, 1, **ip).map_err(|e| e.to_string())?;
+                ws.write(row, 2, **cnt as f64).map_err(|e| e.to_string())?;
             }
         }
     }
