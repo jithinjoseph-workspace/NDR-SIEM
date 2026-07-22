@@ -23,7 +23,7 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     read -rp "  GitHub token (provided by your NDR vendor): " GH_TOKEN
     CLONE_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $CLONE_DIR"
-    sudo git clone "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
+    sudo git clone --branch arkime --single-branch "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
     sudo chown -R "$USER:$USER" "$CLONE_DIR"
     exec bash "$CLONE_DIR/install-customer.sh"
 fi
