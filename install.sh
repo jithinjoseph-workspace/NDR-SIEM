@@ -13,6 +13,21 @@ fi
 
 set -e
 
+# ── If running from a fresh machine (no repo yet), clone it first ──
+# When a customer downloads just this script and runs it, it clones
+# the full repo then re-executes itself from inside it.
+if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
+    echo ""
+    echo "  NDR repo not found locally — cloning from GitHub..."
+    echo ""
+    read -rp "  GitHub token (provided by your NDR vendor): " GH_TOKEN
+    read -rp "  Install directory [default: /opt/ndr]: " CLONE_DIR
+    CLONE_DIR="${CLONE_DIR:-/opt/ndr}"
+    sudo git clone "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
+    sudo chown -R "$USER:$USER" "$CLONE_DIR"
+    exec bash "$CLONE_DIR/install.sh" "$@"
+fi
+
 # ── Fix DNS early — before any curl/apt/wget ──
 if ! curl -s --max-time 3 https://archive.ubuntu.com > /dev/null 2>&1; then
     echo "[NDR] Fixing DNS (switching to 8.8.8.8)..."
@@ -1125,32 +1140,39 @@ cat > "$INSTALL_DIR/ndr-ui/proxy.conf.json" << 'PROXYEOF'
 PROXYEOF
 log "Proxy config created"
 
-log "Starting Angular UI..."
+log "Building Angular UI (production build)..."
 cd "$INSTALL_DIR/ndr-ui"
-if curl -s http://localhost:4200 > /dev/null 2>&1; then
-    log "Angular UI already running at http://localhost:4200"
-else
-    if [ -f /tmp/ndr-ui.pid ]; then
-        OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
-        if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
-            warn "Existing Angular UI process found — restarting"
-            kill "$OLD_UI_PID" 2>/dev/null || true
-            sleep 2
-        fi
-        rm -f /tmp/ndr-ui.pid
+
+# Kill any old UI process
+if [ -f /tmp/ndr-ui.pid ]; then
+    OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
+    if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
+        kill "$OLD_UI_PID" 2>/dev/null || true
+        sleep 1
     fi
-    nohup npm start > /tmp/ndr-ui.log 2>&1 &
-    echo $! > /tmp/ndr-ui.pid
+    rm -f /tmp/ndr-ui.pid
 fi
 
+# Build once into static files — much lighter than ng serve
+npm run build -- --configuration production 2>&1 | tail -5
+
+# Install 'serve' if not present (tiny static file server)
+if ! command -v serve &>/dev/null; then
+    npm install -g serve 2>/dev/null || true
+fi
+
+log "Starting UI static server..."
+nohup serve -s dist/ndr-ui/browser -l 4200 > /tmp/ndr-ui.log 2>&1 &
+echo $! > /tmp/ndr-ui.pid
+
 log "Waiting for Angular UI..."
-for i in {1..60}; do
+for i in {1..20}; do
     if curl -s http://localhost:4200 > /dev/null 2>&1; then
         log "Angular UI ready"
         break
     fi
     echo -n "."
-    sleep 3
+    sleep 2
 done
 echo ""
 

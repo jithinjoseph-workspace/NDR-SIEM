@@ -1328,15 +1328,15 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         // Gate 1: drop suppressed hits before they reach the DB.
         // CRITICAL hits (score ≥ 90) bypass suppression — a real threat is never hidden.
         if hit.score < 90.0 {
-            let primary = hit.tags.first().map(String::as_str).unwrap_or("");
-            if self.is_group_suppressed(tenant_id, &hit.src_ip, primary).await {
-                return Ok(());
-            }
-            // Bug 9 fix: also check specific sigma rule names so suppressions
-            // created for individual rule titles (e.g. "DNS TOR Proxies") fire
-            // at Gate 1, not just the generic "sigma" tag.
-            for rule_name in &hit.sigma_hits {
-                if self.is_group_suppressed(tenant_id, &hit.src_ip, rule_name).await {
+            // Load ALL active group suppressions for this src_ip in one query, then
+            // check every tag in memory. Replaces the previous N+1 pattern (1 query
+            // per tag) which issued up to 11 round-trips for a hit with 10 Sigma rules.
+            let suppressed = self.get_active_group_suppressions(tenant_id, &hit.src_ip).await;
+            if !suppressed.is_empty() {
+                let primary = hit.tags.first().map(String::as_str).unwrap_or("");
+                if suppressed.contains(primary)
+                    || hit.sigma_hits.iter().any(|r| suppressed.contains(r.as_str()))
+                {
                     return Ok(());
                 }
             }
@@ -1399,48 +1399,31 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     // ── Query methods ─────────────────────────────────────────────────────
 
     pub async fn get_stats(&self) -> anyhow::Result<serde_json::Value> {
-        let events_total: u64 = self.client
-            .query("SELECT count() FROM ndr_events")
-            .fetch_one::<u64>()
+        // Two queries replace six: countIf collapses all per-table stats into one pass each.
+        let (events_total, events_1h, zeek_count, suricata_count) = self.client
+            .query("SELECT count(), \
+                    countIf(timestamp > now() - INTERVAL 1 HOUR), \
+                    countIf(source = 'agent-z'), \
+                    countIf(source = 'agent-s') \
+                    FROM ndr_events")
+            .fetch_one::<(u64, u64, u64, u64)>()
             .await
-            .unwrap_or(0);
+            .unwrap_or((0, 0, 0, 0));
 
-        let hits_total: u64 = self.client
-            .query("SELECT count() FROM ndr_hits")
-            .fetch_one::<u64>()
+        let (hits_total, hits_1h) = self.client
+            .query("SELECT count(), \
+                    countIf(timestamp > now() - INTERVAL 1 HOUR) \
+                    FROM ndr_hits")
+            .fetch_one::<(u64, u64)>()
             .await
-            .unwrap_or(0);
-
-        let events_1h: u64 = self.client
-            .query("SELECT count() FROM ndr_events WHERE timestamp > now() - INTERVAL 1 HOUR")
-            .fetch_one::<u64>()
-            .await
-            .unwrap_or(0);
-
-        let hits_1h: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE timestamp > now() - INTERVAL 1 HOUR")
-            .fetch_one::<u64>()
-            .await
-            .unwrap_or(0);
-
-        let zeek_count: u64 = self.client
-            .query("SELECT count() FROM ndr_events WHERE source = 'agent-z'")
-            .fetch_one::<u64>()
-            .await
-            .unwrap_or(0);
-
-        let suricata_count: u64 = self.client
-            .query("SELECT count() FROM ndr_events WHERE source = 'agent-s'")
-            .fetch_one::<u64>()
-            .await
-            .unwrap_or(0);
+            .unwrap_or((0, 0));
 
         Ok(serde_json::json!({
-            "events_total":    events_total,
-            "hits_total":      hits_total,
-            "events_1h":       events_1h,
-            "hits_1h":         hits_1h,
-            "agent_z_events":     zeek_count,
+            "events_total":   events_total,
+            "hits_total":     hits_total,
+            "events_1h":      events_1h,
+            "hits_1h":        hits_1h,
+            "agent_z_events": zeek_count,
             "agent_s_events": suricata_count,
         }))
     }
@@ -2142,29 +2125,45 @@ pub async fn get_beacon_candidates(
 
     if pairs.is_empty() { return Ok(vec![]); }
 
+    // Bulk-fetch timestamps for all pairs in one query instead of N individual queries.
+    // ClickHouse IN-tuple filter: (src_ip, dst_ip) IN ((a,b),(c,d),...)
+    let tuple_list = pairs.iter()
+        .map(|p| format!("('{}','{}')", sql_escape(&p.src_ip), sql_escape(&p.dst_ip)))
+        .collect::<Vec<_>>()
+        .join(",");
+
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct TsRow { src_ip: String, dst_ip: String, ts: i64 }
 
-    let mut result = Vec::new();
-    for pair in &pairs {
-        let timestamps = self.client.query(&format!(
-            "SELECT src_ip, dst_ip, toUnixTimestamp(timestamp) as ts
-             FROM {db}.ndr_events
-             WHERE timestamp > now() - INTERVAL {hours} HOUR
-               AND source = 'agent-z'
-               AND src_ip = '{src}' AND dst_ip = '{dst}'
-             ORDER BY timestamp ASC
-             LIMIT 500",
-            db = db, hours = hours,
-            src = sql_escape(&pair.src_ip),
-            dst = sql_escape(&pair.dst_ip),
-        )).fetch_all::<TsRow>().await.unwrap_or_default();
+    let all_ts = self.client.query(&format!(
+        "SELECT src_ip, dst_ip, toUnixTimestamp(timestamp) AS ts
+         FROM {db}.ndr_events
+         WHERE timestamp > now() - INTERVAL {hours} HOUR
+           AND source = 'agent-z'
+           AND (src_ip, dst_ip) IN ({tuples})
+         ORDER BY src_ip, dst_ip, timestamp ASC
+         LIMIT 100000",
+        db = db, hours = hours, tuples = tuple_list,
+    )).fetch_all::<TsRow>().await.unwrap_or_default();
 
-        let ts_vec: Vec<i64> = timestamps.into_iter().map(|r| r.ts).collect();
-        if ts_vec.len() >= min_conns as usize {
-            result.push((pair.src_ip.clone(), pair.dst_ip.clone(), ts_vec));
-        }
+    // Group timestamps by (src_ip, dst_ip) in memory
+    let mut ts_map: std::collections::HashMap<(String, String), Vec<i64>> =
+        std::collections::HashMap::new();
+    for r in all_ts {
+        ts_map.entry((r.src_ip, r.dst_ip)).or_default().push(r.ts);
     }
+
+    let result = pairs.into_iter()
+        .filter_map(|p| {
+            let key   = (p.src_ip.clone(), p.dst_ip.clone());
+            let ts_vec = ts_map.remove(&key).unwrap_or_default();
+            if ts_vec.len() >= min_conns as usize {
+                Some((p.src_ip, p.dst_ip, ts_vec))
+            } else {
+                None
+            }
+        })
+        .collect();
     Ok(result)
 }
 
@@ -2394,21 +2393,32 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 }
 
 
-    //severity breakdown
     pub async fn get_severity_breakdown(&self) -> anyhow::Result<serde_json::Value> {
-        let critical: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'critical'")
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let high: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'high'")
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let medium: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'medium'")
-            .fetch_one::<u64>().await.unwrap_or(0);
-        let low: u64 = self.client
-            .query("SELECT count() FROM ndr_hits WHERE lower(severity) = 'low'")
-            .fetch_one::<u64>().await.unwrap_or(0);
+        // Single GROUP BY with a 30-day time filter replaces 4 sequential full-table scans.
+        // The time predicate lets ClickHouse use the primary key for a range scan;
+        // GROUP BY severity returns all four buckets in one pass.
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { severity: String, cnt: u64 }
+        let rows = self.client
+            .query("SELECT severity, count() AS cnt \
+                    FROM ndr_hits \
+                    WHERE timestamp > now() - INTERVAL 30 DAY \
+                    GROUP BY severity")
+            .fetch_all::<Row>().await.unwrap_or_default();
 
+        let mut critical = 0u64;
+        let mut high     = 0u64;
+        let mut medium   = 0u64;
+        let mut low      = 0u64;
+        for r in rows {
+            match r.severity.to_lowercase().as_str() {
+                "critical" => critical = r.cnt,
+                "high"     => high     = r.cnt,
+                "medium"   => medium   = r.cnt,
+                "low"      => low      = r.cnt,
+                _          => {}
+            }
+        }
         Ok(serde_json::json!({
             "critical": critical,
             "high":     high,
@@ -2582,7 +2592,8 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 correlation_status, agent_s_rule_id, toUInt32(corroborated_at) AS corroborated_at, \
                 sensor_id \
              FROM {db}.ndr_hits FINAL \
-             WHERE 1=1 {sf} \
+             WHERE timestamp > now() - INTERVAL 30 DAY \
+               {sf} \
                AND community_id NOT IN ( \
                  SELECT community_id FROM ndr.ai_suppressions FINAL \
                  WHERE active = 1 AND community_id != '' \
@@ -2590,7 +2601,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                    AND (tenant_id = '{tid}' OR tenant_id = '') \
                ) \
                {gf} \
-             ORDER BY length(sigma_hits) DESC, score DESC, timestamp DESC LIMIT {lim}",
+             ORDER BY timestamp DESC, score DESC LIMIT {lim}",
             db  = db_name,
             sf  = sensor_filter,
             tid = sql_escape(tenant_id),
@@ -2755,6 +2766,27 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             sql_escape(ip), sql_escape(domain)
         );
         self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    /// Batch-insert multiple (ip, domain) passive DNS mappings in one HTTP request.
+    /// All five columns are set explicitly — passive_dns uses AggregatingMergeTree
+    /// with SimpleAggregateFunction columns whose DEFAULT may not apply in native INSERT.
+    pub async fn batch_insert_passive_dns(&self, entries: &[(String, String)]) -> anyhow::Result<()> {
+        if entries.is_empty() { return Ok(()); }
+        #[derive(clickhouse::Row, serde::Serialize)]
+        struct Row { ip: String, domain: String, hit_count: u64, first_seen: u32, last_seen: u32 }
+        let now = chrono::Utc::now().timestamp() as u32;
+        let mut insert = self.client.insert("ndr.passive_dns")?;
+        for (ip, domain) in entries {
+            if !ip.is_empty() && !domain.is_empty() {
+                insert.write(&Row {
+                    ip: ip.clone(), domain: domain.clone(),
+                    hit_count: 1, first_seen: now, last_seen: now,
+                }).await?;
+            }
+        }
+        insert.end().await?;
         Ok(())
     }
 
@@ -3739,6 +3771,32 @@ pub async fn clear_sensor_command(
 
     /// Returns true if src_ip has an active group suppression matching primary_tag.
     /// Used by Gate 1 in insert_hit_for_tenant to drop suppressed hits before DB write.
+    /// Load all active group-suppression signature names for a given src_ip in one query.
+    /// Called once per `insert_hit_for_tenant`; results are checked in-memory.
+    pub async fn get_active_group_suppressions(
+        &self,
+        tenant_id: &str,
+        src_ip:    &str,
+    ) -> std::collections::HashSet<String> {
+        if src_ip.is_empty() { return Default::default(); }
+        let db  = tenant_db(tenant_id);
+        let ip  = sql_escape(src_ip);
+        let tid = sql_escape(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { signature_name: String }
+        self.client.query(&format!(
+            "SELECT signature_name FROM {db}.ai_suppressions FINAL \
+             WHERE active = 1 AND community_id = '' AND suppress_ip = '{ip}' \
+               AND (expires_at IS NULL OR expires_at > now()) \
+               AND (tenant_id = '{tid}' OR tenant_id = '')",
+            db = db, ip = ip, tid = tid,
+        )).fetch_all::<Row>().await
+          .unwrap_or_default()
+          .into_iter()
+          .map(|r| r.signature_name)
+          .collect()
+    }
+
     pub async fn is_group_suppressed(&self, tenant_id: &str, src_ip: &str, primary_tag: &str) -> bool {
         if src_ip.is_empty() || primary_tag.is_empty() { return false; }
         let db = tenant_db(tenant_id);
@@ -5320,7 +5378,7 @@ pub async fn get_ioc_hits(
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
              ip_history, trusted, threat_flagged, \
              role, criticality, open_ports, subnet_role, ja3_os \
-             FROM {}.assets FINAL WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
+             FROM {}.assets WHERE tenant_id = '{}' AND mac = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(mac)
         );
         let result = self.client.query(&query).fetch_optional::<AssetRow>().await?;
@@ -5388,7 +5446,7 @@ pub async fn get_ioc_hits(
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
              ip_history, trusted, threat_flagged, \
              role, criticality, open_ports, subnet_role, ja3_os \
-             FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}' LIMIT 1",
+             FROM {}.assets WHERE tenant_id = '{}' AND ip = '{}' ORDER BY last_seen DESC LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(ip)
         );
         let asset = self.client.query(&query).fetch_optional::<AssetRow>().await?;

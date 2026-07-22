@@ -12,7 +12,7 @@ fn now_ms() -> u64 {
 
 /// Normalise a raw Zeek JSON event from Vector into our canonical model.
 /// Zeek conn.log TSV is pre-parsed by Vector into JSON fields.
-pub fn normalize_zeek(raw: Value) -> Option<NormalizedEvent> {
+pub fn normalize_zeek(raw: &Value) -> Option<NormalizedEvent> {
     // community_id preferred; uid fallback for http/dns/ssl/files logs that don't carry it
     let community_id = raw.get("community_id")
         .and_then(|v| v.as_str())
@@ -94,7 +94,7 @@ pub fn normalize_zeek(raw: Value) -> Option<NormalizedEvent> {
         conn_state,
         event_type: None,
         alert: None,
-        raw,
+        raw: raw.clone(),
         is_malicious: false,
         src_country_code: String::new(),
         dst_country_code: String::new(),

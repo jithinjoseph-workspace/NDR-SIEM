@@ -31,11 +31,23 @@ async fn run_refresh(ch: &Arc<ClickhouseStorage>, cache: &Arc<dashmap::DashMap<S
     info!("entity_scorer: refreshing");
     let tenant_ids = ch.get_all_tenants().await
         .unwrap_or_else(|_| vec!["default".to_string()]);
-    for tenant_id in &tenant_ids {
-        if let Err(e) = refresh_tenant(ch, tenant_id, cache).await {
-            warn!("entity_scorer: tenant {} failed — {}", tenant_id, e);
-        }
+
+    // Refresh all tenants concurrently (bounded to 4 in-flight) so a slow scan
+    // on one tenant doesn't push the total past the 5-minute refresh window.
+    let sem = Arc::new(tokio::sync::Semaphore::new(4));
+    let mut handles = Vec::with_capacity(tenant_ids.len());
+    for tenant_id in tenant_ids {
+        let ch2    = ch.clone();
+        let cache2 = cache.clone();
+        let sem2   = sem.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            if let Err(e) = refresh_tenant(&ch2, &tenant_id, &cache2).await {
+                warn!("entity_scorer: tenant {} failed — {}", tenant_id, e);
+            }
+        }));
     }
+    futures_util::future::join_all(handles).await;
 }
 
 async fn refresh_tenant(
@@ -91,40 +103,48 @@ async fn refresh_tenant(
 
     info!("entity_scorer: {} hosts for tenant {}", rows.len(), tenant_id);
 
-    for row in &rows {
-        // Normalize accumulated_score → 0-100 for the scorer.
-        // Dividing by 10 means a host needs ~800 accumulated points (≈12 HIGH
-        // hits in 24 h) to hit the "compromised-host" threshold (entity_score ≥ 80).
-        let normalized: f32 = (row.accumulated_score as f32 / 10.0).min(100.0);
-        cache.insert(format!("{}:{}", tenant_id, row.src_ip), normalized);
+    // Update in-memory cache and collect rows for a single batch INSERT.
+    // Previously issued one INSERT per host (up to 100 round-trips per tenant).
+    #[derive(clickhouse::Row, serde::Serialize)]
+    struct EntityScoreRow {
+        src_ip:            String,
+        tenant_id:         String,
+        accumulated_score: f64,
+        alert_count:       u64,
+        top_severity:      String,
+        top_tags:          Vec<String>,
+        last_seen:         u32,
+        updated_at:        u32,
+    }
 
-        let tags_literal = format!(
-            "[{}]",
-            row.top_tags
-                .iter()
-                .map(|t| format!("'{}'", sql_escape_pub(t)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+    let now_ts = chrono::Utc::now().timestamp() as u32;
+    let table  = format!("{}.entity_scores", db);
+    match ch.client.insert(&table) {
+        Err(e) => {
+            warn!("entity_scorer: failed to open insert for tenant {}: {}", tenant_id, e);
+        }
+        Ok(mut inserter) => {
+            for row in &rows {
+                let normalized: f32 = (row.accumulated_score as f32 / 10.0).min(100.0);
+                cache.insert(format!("{}:{}", tenant_id, row.src_ip), normalized);
 
-        let q = format!(
-            "INSERT INTO {db}.entity_scores \
-             (src_ip, tenant_id, accumulated_score, alert_count, top_severity, top_tags, last_seen, updated_at) \
-             VALUES \
-             ('{src}', '{tid}', {score:.2}, {cnt}, '{sev}', {tags}, \
-              toDateTime({ls}), now())",
-            db    = db,
-            src   = sql_escape_pub(&row.src_ip),
-            tid   = sql_escape_pub(tenant_id),
-            score = row.accumulated_score,
-            cnt   = row.alert_count,
-            sev   = sql_escape_pub(&row.top_severity),
-            tags  = tags_literal,
-            ls    = row.last_seen,
-        );
-
-        if let Err(e) = ch.client.query(&q).execute().await {
-            warn!("entity_scorer: upsert failed for {}: {}", row.src_ip, e);
+                let r = EntityScoreRow {
+                    src_ip:            row.src_ip.clone(),
+                    tenant_id:         tenant_id.to_string(),
+                    accumulated_score: row.accumulated_score,
+                    alert_count:       row.alert_count,
+                    top_severity:      row.top_severity.clone(),
+                    top_tags:          row.top_tags.clone(),
+                    last_seen:         row.last_seen,
+                    updated_at:        now_ts,
+                };
+                if let Err(e) = inserter.write(&r).await {
+                    warn!("entity_scorer: write failed for {}: {}", row.src_ip, e);
+                }
+            }
+            if let Err(e) = inserter.end().await {
+                warn!("entity_scorer: batch commit failed for tenant {}: {}", tenant_id, e);
+            }
         }
     }
 

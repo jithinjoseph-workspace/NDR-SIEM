@@ -292,6 +292,24 @@ async fn main() {
         ch_storage_arc.clone(),
     );
 
+    // ── Kafka health: background poll every 30s (avoids blocking Tokio threads) ──
+    let kafka_healthy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let flag     = kafka_healthy.clone();
+        let producer = kafka_producer.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                let prod = producer.clone();
+                let ok = tokio::task::spawn_blocking(move || {
+                    api::kafka_health_probe(&prod)
+                }).await.unwrap_or(false);
+                flag.store(ok, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+    }
+
     let state = AppState {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
         enrichment: Arc::new(EnrichmentPipeline {
@@ -334,6 +352,7 @@ async fn main() {
                 })
                 .collect()
         }),
+        kafka_healthy,
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────

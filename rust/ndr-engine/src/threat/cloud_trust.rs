@@ -18,9 +18,16 @@ pub struct TrustedRanges {
 
 impl TrustedRanges {
     /// True if the IPv4 address falls inside any known cloud provider CIDR.
+    /// ipv4_nets is kept sorted by start address so we can binary-search to
+    /// O(log N) instead of O(N) — called on every Sigma hit.
     pub fn is_trusted_ip(&self, ip: &str) -> bool {
         let n = match parse_ipv4_u32(ip) { Some(n) => n, None => return false };
-        self.ipv4_nets.iter().any(|(s, e)| n >= *s && n <= *e)
+        // partition_point returns the first index where start > n.
+        // Candidates are the entries just before that point; we check a small
+        // window to handle nested CIDRs (e.g. a /8 containing a /24).
+        let idx = self.ipv4_nets.partition_point(|(s, _)| *s <= n);
+        let low = idx.saturating_sub(8);
+        self.ipv4_nets[low..idx].iter().any(|(s, e)| n >= *s && n <= *e)
     }
 
     /// True if the SNI hostname ends with a trusted cloud domain suffix.
@@ -223,6 +230,9 @@ async fn refresh(
             warn!("cloud_trust: invalid CIDR in trusted_cloud_cidrs: '{}'", c);
         }
     }
+
+    // Sort by start address so is_trusted_ip can binary-search in O(log N)
+    nets.sort_unstable_by_key(|r| r.0);
 
     let total     = nets.len();
     let dom_count = domain_suffixes.len();

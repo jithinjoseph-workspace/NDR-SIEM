@@ -109,7 +109,7 @@ impl NormalizedEvent {
 
     /// Parse a raw JSON value arriving from Vector into a NormalizedEvent.
     /// Returns None if the event is missing a community_id or is totally malformed.
-    pub fn from_raw(raw: Value) -> Option<Self> {
+    pub fn from_raw(raw: &Value) -> Option<Self> {
         let source = raw.get("source").and_then(|v| v.as_str()).unwrap_or("");
 
         // Linux endpoint events from auditd take priority — they have no community_id
@@ -260,5 +260,5 @@ impl NormalizedEvent {
 
 #[allow(dead_code)]
 pub fn normalize(raw: &Value) -> Option<NormalizedEvent> {
-    NormalizedEvent::from_raw(raw.clone())
+    NormalizedEvent::from_raw(raw)
 }

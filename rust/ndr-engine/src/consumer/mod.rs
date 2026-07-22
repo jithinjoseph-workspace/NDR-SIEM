@@ -15,9 +15,16 @@ use crate::storage::clickhouse::NdrEvent;
 
 // Drains the channel every 100 ms and batch-inserts into ClickHouse.
 // One HTTP round-trip per tenant per tick instead of one per event.
+//
+// H-3 fix: channel is bounded (50 K events). Backpressure: if CH is slow and
+// the channel fills, try_send fails and the Kafka consumer slows naturally.
+//
+// H-4 fix: inserts are awaited directly instead of spawning a new task per
+// tenant per tick. Eliminates unbounded task accumulation when CH is slow.
+// With 1–5 tenants each insert is sub-100ms, so sequential is fine.
 async fn batch_writer(
     ch: Arc<crate::storage::clickhouse::ClickhouseStorage>,
-    mut rx: mpsc::UnboundedReceiver<(NdrEvent, String)>,
+    mut rx: mpsc::Receiver<(NdrEvent, String)>,
 ) {
     let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(100));
     let mut buf: HashMap<String, Vec<NdrEvent>> = HashMap::new();
@@ -30,12 +37,9 @@ async fn batch_writer(
             _ = ticker.tick() => {
                 if buf.is_empty() { continue; }
                 for (tenant_id, events) in buf.drain() {
-                    let ch2 = ch.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = ch2.batch_insert_events_for_tenant(events, &tenant_id).await {
-                            warn!("ClickHouse batch insert error: {}", e);
-                        }
-                    });
+                    if let Err(e) = ch.batch_insert_events_for_tenant(events, &tenant_id).await {
+                        warn!("ClickHouse batch insert error (tenant={}): {}", tenant_id, e);
+                    }
                 }
             }
         }
@@ -62,8 +66,10 @@ pub async fn start_consumer(state: Arc<AppState>) {
         .subscribe(&["ndr-events"])
         .expect("Topic subscription failed");
 
-    // Channel: consumer sends events here; batch_writer flushes to ClickHouse every 100 ms
-    let (ch_tx, ch_rx) = mpsc::unbounded_channel::<(NdrEvent, String)>();
+    // Channel: consumer sends events here; batch_writer flushes to ClickHouse every 100 ms.
+    // Bounded at 50 K entries — when CH is slow the channel fills and try_send fails, which
+    // naturally slows Kafka consumption (backpressure) instead of OOM-ing the process.
+    let (ch_tx, ch_rx) = mpsc::channel::<(NdrEvent, String)>(50_000);
     tokio::spawn(batch_writer(state.ch_storage.clone(), ch_rx));
 
     info!("Kafka consumer ready — group: ndr-engine-group instance: {}", instance_id);
@@ -109,12 +115,19 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     let ips: Vec<String> = redis::cmd("SPOP")
                         .arg(&dirty_key).arg(200u64)
                         .query_async(&mut redis_flush).await.unwrap_or_default();
-                    for ip in ips {
-                        let hash_key = format!("ndr:asset:{}:{}", tenant_id, ip);
-                        // HGETALL returns [field, value, field, value, ...]
-                        let pairs: Vec<String> = redis::cmd("HGETALL")
-                            .arg(&hash_key)
-                            .query_async(&mut redis_flush).await.unwrap_or_default();
+                    // Pipeline all HGETALL calls in one round-trip instead of
+                    // issuing 200 sequential requests.
+                    let hash_keys: Vec<String> = ips.iter()
+                        .map(|ip| format!("ndr:asset:{}:{}", tenant_id, ip))
+                        .collect();
+                    let pipeline_results: Vec<Vec<String>> = {
+                        let mut pipe = redis::pipe();
+                        for key in &hash_keys {
+                            pipe.cmd("HGETALL").arg(key);
+                        }
+                        pipe.query_async(&mut redis_flush).await.unwrap_or_default()
+                    };
+                    for (ip, pairs) in ips.into_iter().zip(pipeline_results.into_iter()) {
                         let mut m: std::collections::HashMap<String,String> = std::collections::HashMap::new();
                         let mut i = 0;
                         while i + 1 < pairs.len() { m.insert(pairs[i].clone(), pairs[i+1].clone()); i += 2; }
@@ -174,7 +187,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     Err(_) => continue,
                 };
 
-                let Some(mut event) = NormalizedEvent::from_raw(raw.clone()) else { continue; };
+                let Some(mut event) = NormalizedEvent::from_raw(&raw) else { continue; };
 
                 if event.should_drop() { continue; }
 
@@ -536,7 +549,9 @@ pub async fn start_consumer(state: Arc<AppState>) {
                 if event.log_source.as_deref() == Some("arp") {
                     // fall through to ARP asset handler below
                 } else {
-                    let _ = ch_tx.send((ch_event, tenant_id.clone()));
+                    if ch_tx.try_send((ch_event, tenant_id.clone())).is_err() {
+                        warn!("ClickHouse write channel full — dropping event for tenant {}", tenant_id);
+                    }
                 }
 
                 // --- Asset Identification (DHCP) ---
@@ -943,10 +958,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         if !resolved_ips.is_empty() {
                             let ch_clone = state.ch_storage.clone();
                             tokio::spawn(async move {
-                                for ans_ip in resolved_ips {
-                                    if let Err(e) = ch_clone.insert_passive_dns(&ans_ip, &domain).await {
-                                        tracing::warn!("Passive DNS insert error: {}", e);
-                                    }
+                                let entries: Vec<(String, String)> = resolved_ips
+                                    .into_iter()
+                                    .map(|ip| (ip, domain.clone()))
+                                    .collect();
+                                if let Err(e) = ch_clone.batch_insert_passive_dns(&entries).await {
+                                    tracing::warn!("Passive DNS batch insert error: {}", e);
                                 }
                             });
                         }

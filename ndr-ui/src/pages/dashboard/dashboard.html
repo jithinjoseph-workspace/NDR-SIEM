@@ -14,6 +14,7 @@
         </button>
 
         <div class="export-dropdown">
+          <button (click)="exportReport('xlsx')">Excel Export (Multi-Sheet)</button>
           <button (click)="exportReport('pdf')">PDF Report</button>
           <button (click)="exportReport('csv')">CSV Export</button>
           <button (click)="exportReport('json')">JSON Export</button>

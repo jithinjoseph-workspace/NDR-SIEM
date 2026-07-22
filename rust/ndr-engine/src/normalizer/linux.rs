@@ -5,7 +5,7 @@
 use super::{EventSource, NormalizedEvent};
 use serde_json::Value;
 
-pub fn normalize_linux(raw: Value) -> Option<NormalizedEvent> {
+pub fn normalize_linux(raw: &Value) -> Option<NormalizedEvent> {
     let record_type = raw.get("record_type")
         .and_then(|v| v.as_str())
         .unwrap_or("UNKNOWN")
@@ -45,7 +45,7 @@ pub fn normalize_linux(raw: Value) -> Option<NormalizedEvent> {
         conn_state:       None,
         event_type:       Some("endpoint".to_string()),
         alert:            None,
-        raw,
+        raw: raw.clone(),
         is_malicious: false,
         src_country_code: String::new(),
         dst_country_code: String::new(),

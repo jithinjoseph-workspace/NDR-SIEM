@@ -86,11 +86,13 @@ fn generate_jwt(username: &str, role: &str,
 
 use base64::Engine;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-// Jira dedup cache: key = "src_dst", value = timestamp
-static JIRA_DEDUP: std::sync::LazyLock<Mutex<HashMap<String, i64>>> = 
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+// Jira dedup cache: key = "src_dst", value = unix timestamp of last ticket.
+// Uses tokio::sync::Mutex so the lock doesn't block Tokio worker threads.
+// Entries older than 1 hour are evicted on each insert to bound memory.
+static JIRA_DEDUP: std::sync::LazyLock<tokio::sync::Mutex<HashMap<String, i64>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
@@ -135,17 +137,17 @@ fn percent_decode(s: &str) -> String {
     out
 }
 
-fn kafka_health_status(state: &AppState) -> &'static str {
-    match state
-        .kafka_producer
+/// Poll Kafka synchronously — only called from spawn_blocking in the background task.
+/// Never call this from an async context directly; it blocks for up to 2 seconds.
+pub fn kafka_health_probe(producer: &rdkafka::producer::FutureProducer) -> bool {
+    match producer
         .client()
         .fetch_metadata(None, Timeout::After(Duration::from_secs(2)))
     {
-        Ok(metadata) if metadata.brokers().iter().any(|broker| broker.id() >= 0) => "running",
-        Ok(_) => "stopped",
-        Err(error) => {
-            warn!("Kafka health check failed: {}", error);
-            "stopped"
+        Ok(metadata) => metadata.brokers().iter().any(|broker| broker.id() >= 0),
+        Err(e) => {
+            warn!("Kafka health check failed: {}", e);
+            false
         }
     }
 }
@@ -187,6 +189,9 @@ pub struct AppState {
     pub trusted_asset_cache: Arc<dashmap::DashMap<String, (bool, std::time::Instant)>>,
     // CIDR ranges whose source IPs are always treated as trusted assets (env TRUSTED_SOURCE_CIDRS)
     pub trusted_source_cidrs: Arc<Vec<ipnetwork::IpNetwork>>,
+    // Cached Kafka reachability — updated every 30s by a background spawn_blocking task.
+    // The health endpoint reads this instead of blocking a Tokio thread on fetch_metadata.
+    pub kafka_healthy: Arc<AtomicBool>,
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -1606,7 +1611,9 @@ for integration in &integrations {
         let dedup_key = format!("{}_{}", src, dst);
         let now = chrono::Utc::now().timestamp();
         let should_create = {
-            let mut cache = JIRA_DEDUP.lock().unwrap();
+            let mut cache = JIRA_DEDUP.lock().await;
+            // Evict stale entries on every insert to prevent unbounded growth
+            cache.retain(|_, ts| now - *ts < 3600);
             let last = cache.get(&dedup_key).copied().unwrap_or(0);
             if now - last > 3600 {
                 cache.insert(dedup_key.clone(), now);
@@ -1760,7 +1767,7 @@ pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMa
     } else {
         "stopped"
     };
-    let kafka_status = kafka_health_status(&state);
+    let kafka_status = if state.kafka_healthy.load(Ordering::Relaxed) { "running" } else { "stopped" };
 
     Json(json!({
         "status":          "ok",
@@ -2064,7 +2071,7 @@ pub async fn get_rule_by_id(
         .unwrap_or_else(|_| "rules".to_string());
     let file_path = format!("{}/{}.yml", rules_dir, rule_id);
 
-    match std::fs::read_to_string(&file_path) {
+    match tokio::fs::read_to_string(&file_path).await {
         Ok(content) => {
             let doc: std::collections::HashMap<String, serde_yaml::Value> =
                 serde_yaml::from_str(&content).unwrap_or_default();
@@ -3018,6 +3025,246 @@ pub async fn test_ai_provider(
     }
 }
 
+fn build_xlsx_report(
+    report: &serde_json::Value,
+    assets: &[crate::storage::clickhouse::AssetRow],
+) -> Result<Vec<u8>, String> {
+    use rust_xlsxwriter::{Color, Format, Workbook};
+
+    fn fmt_ts_xl(unix: u64) -> String {
+        use chrono::{TimeZone, Utc};
+        Utc.timestamp_opt(unix as i64, 0)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            .unwrap_or_else(|| unix.to_string())
+    }
+
+    fn sev_colors(sev: &str) -> (Color, Color) {
+        match sev {
+            "critical" | "Critical" => (Color::RGB(0xDC2626), Color::RGB(0xFFFFFF)),
+            "high"     | "High"     => (Color::RGB(0xEA580C), Color::RGB(0xFFFFFF)),
+            "medium"   | "Medium"   => (Color::RGB(0xCA8A04), Color::RGB(0x1F2937)),
+            "low"      | "Low"      => (Color::RGB(0x16A34A), Color::RGB(0xFFFFFF)),
+            _                       => (Color::RGB(0x2563EB), Color::RGB(0xFFFFFF)),
+        }
+    }
+
+    let mut wb = Workbook::new();
+
+    let hdr_fmt = Format::new()
+        .set_bold()
+        .set_background_color(Color::RGB(0x1E293B))
+        .set_font_color(Color::RGB(0xFFFFFF));
+
+    // ── Sheet 1: Summary ────────────────────────────────────────────────────
+    {
+        let ws = wb.add_worksheet();
+        ws.set_name("Summary").map_err(|e| e.to_string())?;
+        ws.set_column_width(0, 28.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(1, 18.0).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 0, "Metric", &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 1, "Value",  &hdr_fmt).map_err(|e| e.to_string())?;
+        let rows: &[(&str, u64)] = &[
+            ("Total Events",      report["summary"]["total_events"].as_u64().unwrap_or(0)),
+            ("Total Hits",        report["summary"]["total_hits"].as_u64().unwrap_or(0)),
+            ("Events Last Hour",  report["summary"]["events_1h"].as_u64().unwrap_or(0)),
+            ("Agent-Z Events",    report["summary"]["agent_z_events"].as_u64().unwrap_or(0)),
+            ("Agent-S Events",    report["summary"]["agent_s_events"].as_u64().unwrap_or(0)),
+            ("Active Rules",      report["summary"]["active_rules"].as_u64().unwrap_or(0)),
+        ];
+        for (i, (metric, value)) in rows.iter().enumerate() {
+            let row = (i + 1) as u32;
+            ws.write(row, 0, *metric).map_err(|e| e.to_string())?;
+            ws.write(row, 1, *value as f64).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // ── Sheet 2: Alerts ─────────────────────────────────────────────────────
+    {
+        let ws = wb.add_worksheet();
+        ws.set_name("Alerts").map_err(|e| e.to_string())?;
+        let col_widths: &[(u16, f64)] = &[
+            (0,20.0),(1,26.0),(2,15.0),(3,20.0),(4,10.0),
+            (5,15.0),(6,20.0),(7,28.0),(8,10.0),(9,12.0),
+            (10,7.0),(11,10.0),(12,12.0),(13,16.0),
+            (14,30.0),(15,30.0),(16,16.0),(17,14.0),
+        ];
+        for (col, w) in col_widths {
+            ws.set_column_width(*col, *w).map_err(|e| e.to_string())?;
+        }
+        let hdrs = [
+            "Timestamp","Community ID",
+            "Source IP","Source Hostname","Src Country",
+            "Dest IP","Dest Hostname","Dest Domain","Dst Country",
+            "Severity","Score","Threat Intel","Corroborated","Corr. Status",
+            "Tags","Sigma Rules","Agent-S Rule","Sensor ID",
+        ];
+        for (c, h) in hdrs.iter().enumerate() {
+            ws.write_with_format(0, c as u16, *h, &hdr_fmt).map_err(|e| e.to_string())?;
+        }
+        if let Some(arr) = report["recent_hits"].as_array() {
+            for (i, h) in arr.iter().enumerate() {
+                let row = (i + 1) as u32;
+                let sev = h["severity"].as_str().unwrap_or("info");
+                let (bg, fg) = sev_colors(sev);
+                let row_fmt = Format::new()
+                    .set_background_color(bg)
+                    .set_font_color(fg);
+                let dst_host = h["dst_asset"]["hostname"].as_str().unwrap_or("");
+                let vals: &[&str] = &[
+                    &fmt_ts_xl(h["timestamp"].as_u64().unwrap_or(0)),
+                    h["community_id"].as_str().unwrap_or("-"),
+                    h["src_ip"].as_str().unwrap_or("-"),
+                    h["src_asset"]["hostname"].as_str().unwrap_or("-"),
+                    h["src_country"].as_str().unwrap_or("-"),
+                    h["dst_ip"].as_str().unwrap_or("-"),
+                    if dst_host.is_empty() { "-" } else { dst_host },
+                    h["dst_domain"].as_str().unwrap_or("-"),
+                    h["dst_country"].as_str().unwrap_or("-"),
+                    sev,
+                    &format!("{:.1}", h["score"].as_f64().unwrap_or(0.0)),
+                    if h["threat_intel"].as_bool().unwrap_or(false) { "Yes" } else { "No" },
+                    if h["corroborated"].as_bool().unwrap_or(false)  { "Yes" } else { "No" },
+                    h["correlation_status"].as_str().unwrap_or("-"),
+                    &h["tags"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("; "))
+                        .unwrap_or_default(),
+                    &h["sigma_hits"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("; "))
+                        .unwrap_or_default(),
+                    h["agent_s_rule_id"].as_str().unwrap_or("-"),
+                    h["sensor_id"].as_str().unwrap_or("-"),
+                ];
+                for (c, val) in vals.iter().enumerate() {
+                    ws.write_with_format(row, c as u16, *val, &row_fmt)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+
+    // ── Sheet 3: Severity Breakdown ─────────────────────────────────────────
+    {
+        let ws = wb.add_worksheet();
+        ws.set_name("Severity Breakdown").map_err(|e| e.to_string())?;
+        ws.set_column_width(0, 16.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(1, 12.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(2, 14.0).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 0, "Severity",   &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 1, "Count",      &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 2, "% of Total", &hdr_fmt).map_err(|e| e.to_string())?;
+        let total = report["summary"]["total_hits"].as_u64().unwrap_or(1).max(1) as f64;
+        let mut row = 1u32;
+        for sev in &["critical", "high", "medium", "low", "info"] {
+            let cnt = report["severity_breakdown"][sev].as_u64()
+                .or_else(|| {
+                    let cap = format!("{}{}", &sev[..1].to_uppercase(), &sev[1..]);
+                    report["severity_breakdown"][cap.as_str()].as_u64()
+                })
+                .unwrap_or(0);
+            if cnt == 0 { continue; }
+            let pct = format!("{:.0}%", cnt as f64 / total * 100.0);
+            let (bg, fg) = sev_colors(sev);
+            let fmt = Format::new()
+                .set_bold()
+                .set_background_color(bg)
+                .set_font_color(fg);
+            ws.write_with_format(row, 0, *sev,         &fmt).map_err(|e| e.to_string())?;
+            ws.write_with_format(row, 1, cnt as f64,   &fmt).map_err(|e| e.to_string())?;
+            ws.write_with_format(row, 2, pct.as_str(), &fmt).map_err(|e| e.to_string())?;
+            row += 1;
+        }
+    }
+
+    // ── Sheet 4: Assets ─────────────────────────────────────────────────────
+    {
+        let ws = wb.add_worksheet();
+        ws.set_name("Assets").map_err(|e| e.to_string())?;
+        let asset_cols: &[(u16, f64)] = &[
+            (0,15.0),(1,20.0),(2,18.0),(3,20.0),(4,14.0),
+            (5,14.0),(6,20.0),(7,10.0),(8,14.0),(9,22.0),(10,22.0),
+        ];
+        for (col, w) in asset_cols {
+            ws.set_column_width(*col, *w).map_err(|e| e.to_string())?;
+        }
+        let asset_hdr = [
+            "IP","Hostname","MAC","Vendor","OS Guess",
+            "Device Type","Custom Name","Trusted","Threat Flagged",
+            "First Seen","Last Seen",
+        ];
+        for (c, h) in asset_hdr.iter().enumerate() {
+            ws.write_with_format(0, c as u16, *h, &hdr_fmt).map_err(|e| e.to_string())?;
+        }
+        let threat_fmt  = Format::new().set_background_color(Color::RGB(0xFEE2E2));
+        let trusted_fmt = Format::new().set_background_color(Color::RGB(0xDCFCE7));
+        let plain_fmt   = Format::new();
+        for (i, a) in assets.iter().enumerate() {
+            let row = (i + 1) as u32;
+            let row_fmt = if a.threat_flagged != 0 { &threat_fmt }
+                          else if a.trusted != 0   { &trusted_fmt }
+                          else                      { &plain_fmt };
+            let str_cols: &[&str] = &[
+                &a.ip, &a.hostname, &a.mac, &a.vendor,
+                &a.os_guess, &a.device_type, &a.custom_name,
+            ];
+            for (c, val) in str_cols.iter().enumerate() {
+                ws.write_with_format(row, c as u16, *val, row_fmt)
+                    .map_err(|e| e.to_string())?;
+            }
+            ws.write_with_format(row, 7,  if a.trusted != 0 { "Yes" } else { "No" },        row_fmt).map_err(|e| e.to_string())?;
+            ws.write_with_format(row, 8,  if a.threat_flagged != 0 { "Yes" } else { "No" }, row_fmt).map_err(|e| e.to_string())?;
+            ws.write_with_format(row, 9,  fmt_ts_xl(a.first_seen as u64).as_str(),           row_fmt).map_err(|e| e.to_string())?;
+            ws.write_with_format(row, 10, fmt_ts_xl(a.last_seen as u64).as_str(),            row_fmt).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // ── Sheet 5: Threat Intel ────────────────────────────────────────────────
+    {
+        let ws = wb.add_worksheet();
+        ws.set_name("Threat Intel").map_err(|e| e.to_string())?;
+        ws.set_column_width(0, 15.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(1, 15.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(2, 12.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(3, 22.0).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 0, "Source IP",  &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 1, "Dest IP",    &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 2, "Hit Count",  &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 3, "Last Seen",  &hdr_fmt).map_err(|e| e.to_string())?;
+        let ti_fmt = Format::new().set_background_color(Color::RGB(0xFEF2F2));
+        if let Some(arr) = report["threat_intel_hits"].as_array() {
+            for (i, t) in arr.iter().enumerate() {
+                let row = (i + 1) as u32;
+                ws.write_with_format(row, 0, t["src_ip"].as_str().unwrap_or("-"),                        &ti_fmt).map_err(|e| e.to_string())?;
+                ws.write_with_format(row, 1, t["dst_ip"].as_str().unwrap_or("-"),                        &ti_fmt).map_err(|e| e.to_string())?;
+                ws.write_with_format(row, 2, t["hits"].as_u64().unwrap_or(0) as f64,                     &ti_fmt).map_err(|e| e.to_string())?;
+                ws.write_with_format(row, 3, fmt_ts_xl(t["last_seen"].as_u64().unwrap_or(0)).as_str(),   &ti_fmt).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    // ── Sheet 6: Top Source IPs ──────────────────────────────────────────────
+    {
+        let ws = wb.add_worksheet();
+        ws.set_name("Top Source IPs").map_err(|e| e.to_string())?;
+        ws.set_column_width(0, 6.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(1, 15.0).map_err(|e| e.to_string())?;
+        ws.set_column_width(2, 14.0).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 0, "Rank",        &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 1, "Source IP",   &hdr_fmt).map_err(|e| e.to_string())?;
+        ws.write_with_format(0, 2, "Alert Count", &hdr_fmt).map_err(|e| e.to_string())?;
+        if let Some(ips) = report["top_source_ips"].as_array() {
+            for (i, ip) in ips.iter().enumerate() {
+                let row = (i + 1) as u32;
+                ws.write(row, 0, (i + 1) as f64).map_err(|e| e.to_string())?;
+                ws.write(row, 1, ip["ip"].as_str().unwrap_or("-")).map_err(|e| e.to_string())?;
+                ws.write(row, 2, ip["count"].as_u64().unwrap_or(0) as f64).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    wb.save_to_buffer().map_err(|e| e.to_string())
+}
+
 pub async fn export_report(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -3065,59 +3312,118 @@ let rules = state.detection.read().await.get_rules();
 
     match format {
         "csv" => {
+            // Helper: quote a CSV field — wraps in double-quotes and escapes any
+            // internal double-quotes so values with commas/newlines are safe.
+            fn csv_field(s: &str) -> String {
+                if s.contains([',', '"', '\n', '\r']) {
+                    format!("\"{}\"", s.replace('"', "\"\""))
+                } else {
+                    s.to_string()
+                }
+            }
+
+            // Helper: format a unix timestamp as a readable UTC datetime string.
+            fn fmt_ts(unix: u64) -> String {
+                use chrono::{TimeZone, Utc};
+                Utc.timestamp_opt(unix as i64, 0)
+                    .single()
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| unix.to_string())
+            }
+
             let mut csv = String::new();
             csv.push_str("NDR Security Report\n");
-            csv.push_str(&format!("Generated,{}\n",
-                chrono::Utc::now().to_rfc3339()));
+            csv.push_str(&format!("Generated,{}\n", chrono::Utc::now().to_rfc3339()));
             csv.push_str(&format!("Time Range,Last {} hours\n\n", hours));
 
             csv.push_str("SUMMARY\n");
             csv.push_str("Metric,Value\n");
-            csv.push_str(&format!("Total Events,{}\n",
-                report["summary"]["total_events"]));
-            csv.push_str(&format!("Total Hits,{}\n",
-                report["summary"]["total_hits"]));
-            csv.push_str(&format!("Events Last Hour,{}\n",
-                report["summary"]["events_1h"]));
-            csv.push_str(&format!("Agent-Z Events,{}\n",
-                report["summary"]["agent_z_events"]));
-            csv.push_str(&format!("Agent-S Events,{}\n",
-                report["summary"]["agent_s_events"]));
-            csv.push_str(&format!("Active Rules,{}\n\n",
-                report["summary"]["active_rules"]));
+            csv.push_str(&format!("Total Events,{}\n",   report["summary"]["total_events"]));
+            csv.push_str(&format!("Total Hits,{}\n",     report["summary"]["total_hits"]));
+            csv.push_str(&format!("Events Last Hour,{}\n", report["summary"]["events_1h"]));
+            csv.push_str(&format!("Agent-Z Events,{}\n", report["summary"]["agent_z_events"]));
+            csv.push_str(&format!("Agent-S Events,{}\n", report["summary"]["agent_s_events"]));
+            csv.push_str(&format!("Active Rules,{}\n\n", report["summary"]["active_rules"]));
 
             csv.push_str("CORRELATION HITS\n");
-            csv.push_str("Timestamp,Source IP,Dest IP,Severity,Score,Sigma Hits\n");
+            csv.push_str("Timestamp,Community ID,\
+                Source IP,Source Hostname,Source Country,\
+                Dest IP,Dest Hostname,Dest Domain,Dest Country,\
+                Severity,Score,Threat Intel,Corroborated,Correlation Status,\
+                Tags,Sigma Rules,Agent-S Rule,Sensor ID\n");
             if let Some(arr) = report["recent_hits"].as_array() {
                 for h in arr {
-                    csv.push_str(&format!("{},{},{},{},{:.0},{}\n",
-                        h["timestamp"].as_u64().unwrap_or(0),
-                        h["src_ip"].as_str().unwrap_or("-"),
-                        h["dst_ip"].as_str().unwrap_or("-"),
-                        h["severity"].as_str().unwrap_or("-"),
-                        h["score"].as_f64().unwrap_or(0.0),
-                        h["sigma_hits"].as_array()
-                            .map(|a| a.iter()
-                                .filter_map(|v| v.as_str())
-                                .collect::<Vec<_>>().join(";"))
-                            .unwrap_or_default(),
+                    let ts         = h["timestamp"].as_u64().unwrap_or(0);
+                    let cid        = h["community_id"].as_str().unwrap_or("-");
+                    let src_ip     = h["src_ip"].as_str().unwrap_or("-");
+                    let dst_ip     = h["dst_ip"].as_str().unwrap_or("-");
+                    let src_host   = h["src_asset"]["hostname"].as_str().unwrap_or("-");
+                    let dst_host   = h["dst_asset"]["hostname"].as_str()
+                                       .filter(|s| !s.is_empty()).unwrap_or("-");
+                    let dst_domain = h["dst_domain"].as_str().unwrap_or("-");
+                    let src_ctry   = h["src_country"].as_str().unwrap_or("-");
+                    let dst_ctry   = h["dst_country"].as_str().unwrap_or("-");
+                    let severity   = h["severity"].as_str().unwrap_or("-");
+                    let score      = h["score"].as_f64().unwrap_or(0.0);
+                    let threat     = if h["threat_intel"].as_bool().unwrap_or(false) { "Yes" } else { "No" };
+                    let corroborate= if h["corroborated"].as_bool().unwrap_or(false) { "Yes" } else { "No" };
+                    let cor_status = h["correlation_status"].as_str().unwrap_or("-");
+                    let tags       = h["tags"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(";"))
+                        .unwrap_or_default();
+                    let sigma      = h["sigma_hits"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(";"))
+                        .unwrap_or_default();
+                    let agent_s    = h["agent_s_rule_id"].as_str().unwrap_or("-");
+                    let sensor     = h["sensor_id"].as_str().unwrap_or("-");
+
+                    csv.push_str(&format!("{},{},{},{},{},{},{},{},{},{},{:.1},{},{},{},{},{},{},{}\n",
+                        csv_field(&fmt_ts(ts)),
+                        csv_field(cid),
+                        csv_field(src_ip),
+                        csv_field(src_host),
+                        csv_field(src_ctry),
+                        csv_field(dst_ip),
+                        csv_field(dst_host),
+                        csv_field(dst_domain),
+                        csv_field(dst_ctry),
+                        csv_field(severity),
+                        score,
+                        threat,
+                        corroborate,
+                        csv_field(cor_status),
+                        csv_field(&tags),
+                        csv_field(&sigma),
+                        csv_field(agent_s),
+                        csv_field(sensor),
                     ));
                 }
             }
 
             csv.push_str("\nTOP SOURCE IPs\n");
-            csv.push_str("IP,Events\n");
+            csv.push_str("IP,Alert Count\n");
             if let Some(ips) = report["top_source_ips"].as_array() {
                 for ip in ips {
                     csv.push_str(&format!("{},{}\n",
-                        ip["ip"].as_str().unwrap_or("-"),
+                        csv_field(ip["ip"].as_str().unwrap_or("-")),
                         ip["count"].as_u64().unwrap_or(0),
                     ));
                 }
             }
 
+            csv.push_str("\nSEVERITY BREAKDOWN\n");
+            csv.push_str("Severity,Count\n");
+            if let Some(obj) = report["severity_breakdown"].as_object() {
+                for (sev, cnt) in obj {
+                    csv.push_str(&format!("{},{}\n",
+                        csv_field(sev),
+                        cnt.as_u64().unwrap_or(0),
+                    ));
+                }
+            }
+
             axum::response::Response::builder()
-                .header("content-type", "text/csv")
+                .header("content-type", "text/csv; charset=utf-8")
                 .header("content-disposition",
                     "attachment; filename=\"ndr-report.csv\"")
                 .body(axum::body::Body::from(csv))
@@ -3238,6 +3544,26 @@ tr:nth-child(even){{background:#f9f9f9}}
                     "attachment; filename=\"ndr-report.html\"")
                 .body(axum::body::Body::from(html))
                 .unwrap()
+        }
+
+        "xlsx" => {
+            let assets = state.ch_storage.get_assets_by_tenant(&tenant_id).await.unwrap_or_default();
+            match build_xlsx_report(&report, &assets) {
+                Ok(bytes) => axum::response::Response::builder()
+                    .header("content-type",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    .header("content-disposition",
+                        "attachment; filename=\"ndr-report.xlsx\"")
+                    .body(axum::body::Body::from(bytes))
+                    .unwrap(),
+                Err(e) => {
+                    warn!("XLSX export failed: {e}");
+                    axum::response::Response::builder()
+                        .status(500)
+                        .body(axum::body::Body::from(format!("XLSX error: {e}")))
+                        .unwrap()
+                }
+            }
         }
 
         _ => {
@@ -5481,7 +5807,7 @@ pub async fn install_sensor_script() -> axum::response::Response {
     let path = std::env::var("SENSOR_INSTALL_SCRIPT_PATH")
         .unwrap_or_else(|_| "/scripts/install-sensor.sh".to_string());
 
-    match std::fs::read_to_string(&path) {
+    match tokio::fs::read_to_string(&path).await {
         Ok(script) => axum::response::Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/x-shellscript; charset=utf-8")
@@ -5501,7 +5827,7 @@ pub async fn install_sensor_script() -> axum::response::Response {
 pub async fn uninstall_sensor_script() -> axum::response::Response {
     let path = "/scripts/uninstall-sensor.sh".to_string();
 
-    match std::fs::read_to_string(&path) {
+    match tokio::fs::read_to_string(&path).await {
         Ok(script) => axum::response::Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/x-shellscript; charset=utf-8")
@@ -5755,7 +6081,7 @@ async fn handle_linux_endpoint_event(state: &AppState, raw: Value, tenant_id: &s
     use crate::normalizer::NormalizedEvent;
     use crate::storage::clickhouse::NdrHit;
 
-    let event = match NormalizedEvent::from_raw(raw.clone()) {
+    let event = match NormalizedEvent::from_raw(&raw) {
         Some(e) => e,
         None    => return,
     };
