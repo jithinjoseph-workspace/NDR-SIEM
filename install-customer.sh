@@ -23,8 +23,14 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     read -rp "  GitHub token (provided by your NDR vendor): " GH_TOKEN
     CLONE_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $CLONE_DIR"
-    sudo git clone --branch arkime --single-branch "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
+    sudo git clone --no-checkout --filter=blob:none --branch arkime --single-branch \
+        "https://${GH_TOKEN}@github.com/jithinjoseph-workspace/NDR-Demo.git" "$CLONE_DIR"
     sudo chown -R "$USER:$USER" "$CLONE_DIR"
+    cd "$CLONE_DIR"
+    git sparse-checkout init --cone
+    git sparse-checkout set docker-compose.yml config scripts rust/ndr-engine/rules install-customer.sh
+    git checkout arkime
+    cd - > /dev/null
     exec bash "$CLONE_DIR/install-customer.sh"
 fi
 
