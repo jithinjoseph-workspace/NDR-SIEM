@@ -45,6 +45,8 @@ export class Settings implements OnInit {
         soar_threshold:     75
     };
 
+    sensitiveCountries = 'AM,AZ,BY,CN,CU,DZ,GE,HK,IL,IN,IQ,IR,KG,KP,KZ,LY,MD,MO,PK,RU,SD,SS,SY,TJ,TM,TW,UA,UZ';
+
     // Legacy single-provider config (kept for backwards compat)
     aiConfig = {
         ai_provider:      'custom',
@@ -95,6 +97,9 @@ export class Settings implements OnInit {
                     critical_threshold: s.critical_threshold ?? 90,
                     soar_threshold:     s.soar_threshold     ?? 75,
                 };
+                if (s.sensitive_countries) {
+                    this.sensitiveCountries = s.sensitive_countries;
+                }
                 this.loading = false;
                 this.cdr.detectChanges();
             },
@@ -109,7 +114,10 @@ export class Settings implements OnInit {
         this.saving = true;
         this.message = '';
         this.error = '';
-        this.api.updateSettings(this.thresholds).subscribe({
+        this.api.updateSettings({
+            ...this.thresholds,
+            sensitive_countries: this.sensitiveCountries.trim()
+        }).subscribe({
             next: () => {
                 this.saving = false;
                 this.message = 'Settings saved';

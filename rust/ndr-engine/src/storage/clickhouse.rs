@@ -2661,6 +2661,42 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             }
         }
 
+        // rDNS fallback — for public dst IPs still missing a domain, use
+        // `getent hosts <ip>` (system resolver PTR lookup) in a blocking task.
+        {
+            let missing: Vec<String> = rows.iter()
+                .map(|r| r.dst_ip.clone())
+                .filter(|ip| !ip.is_empty() && !pdns_map.contains_key(ip))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+
+            if !missing.is_empty() {
+                let rdns_results = tokio::task::spawn_blocking(move || {
+                    let mut out: Vec<(String, String)> = Vec::new();
+                    for ip_str in &missing {
+                        if let Ok(result) = std::process::Command::new("getent")
+                            .args(["hosts", ip_str])
+                            .output()
+                        {
+                            let text = String::from_utf8_lossy(&result.stdout);
+                            // getent hosts output: "IP   hostname  aliases..."
+                            if let Some(name) = text.split_whitespace().nth(1) {
+                                out.push((ip_str.clone(), name.to_string()));
+                            }
+                        }
+                    }
+                    out
+                })
+                .await
+                .unwrap_or_default();
+
+                for (ip, name) in rdns_results {
+                    pdns_map.entry(ip).or_insert(name);
+                }
+            }
+        }
+
         Ok(rows.iter().map(|r| {
             let src_asset  = asset_map.get(&r.src_ip).cloned().unwrap_or(serde_json::Value::Null);
             let dst_asset  = asset_map.get(&r.dst_ip).cloned().unwrap_or(serde_json::Value::Null);

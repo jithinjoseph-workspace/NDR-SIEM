@@ -246,6 +246,12 @@ WHERE NOT EXISTS (
     SELECT 1 FROM ndr.settings FINAL WHERE key = 'ai_msg_format'
 );
 
+INSERT INTO ndr.settings (key, value)
+SELECT 'sensitive_countries', 'AM,AZ,BY,CN,CU,DZ,GE,HK,IL,IN,IQ,IR,KG,KP,KZ,LY,MD,MO,PK,RU,SD,SS,SY,TJ,TM,TW,UA,UZ'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ndr.settings FINAL WHERE key = 'sensitive_countries'
+);
+
 CREATE TABLE IF NOT EXISTS ndr.soar_config ON CLUSTER ndr_cluster
 (
     key        String,
@@ -301,15 +307,17 @@ CREATE TABLE IF NOT EXISTS ndr.users ON CLUSTER ndr_cluster
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/users', '{replica}', created_at)
 ORDER BY username;
 
--- Insert default super_admin — internal NDR team only, never given to customer
+-- Seed default users — INSERT is idempotent because ndr.users uses ReplacingMergeTree
+-- which deduplicates on ORDER BY (username). Running this multiple times is safe.
 -- Password: ndr@admin123
 INSERT INTO ndr.users (username, password_hash, role, tenant_id)
-VALUES ('admin', '$2b$12$qB5uFqakHidExby4EbdH6.tFvW34sj7CAQFZdUCzk5YSi/kV3S09.', 'super_admin', 'default');
+SELECT 'admin', '$2b$12$qB5uFqakHidExby4EbdH6.tFvW34sj7CAQFZdUCzk5YSi/kV3S09.', 'super_admin', 'default'
+WHERE (SELECT count() FROM ndr.users FINAL WHERE username = 'admin') = 0;
 
--- Insert default tenant_admin for the default tenant — this is what the customer gets
 -- Password: ndr@tenant123  (customer must change on first login)
 INSERT INTO ndr.users (username, password_hash, role, tenant_id, permissions)
-VALUES ('tenant-admin', '$2b$12$wi15kWc0KGLG6FEtIysJHuqRfT7PDvOoW2IC3oT3hfoQmtmygZ5h6', 'tenant_admin', 'default', 'dashboard,alerts,sensors,users,soar');
+SELECT 'tenant-admin', '$2b$12$wi15kWc0KGLG6FEtIysJHuqRfT7PDvOoW2IC3oT3hfoQmtmygZ5h6', 'tenant_admin', 'default', 'dashboard,alerts,sensors,users,soar'
+WHERE (SELECT count() FROM ndr.users FINAL WHERE username = 'tenant-admin') = 0;
 
 CREATE TABLE IF NOT EXISTS ndr.tenants ON CLUSTER ndr_cluster
 (

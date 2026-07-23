@@ -87,14 +87,13 @@ fn generate_jwt(username: &str, role: &str,
 
 
 use base64::Engine;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-// Jira dedup cache: key = "src_dst", value = unix timestamp of last ticket.
-// Uses tokio::sync::Mutex so the lock doesn't block Tokio worker threads.
-// Entries older than 1 hour are evicted on each insert to bound memory.
-static JIRA_DEDUP: std::sync::LazyLock<tokio::sync::Mutex<HashMap<String, i64>>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+// Shared HTTP client for outbound webhook / integration calls.
+// reqwest::Client is internally Arc-based — cloning is cheap.
+// Standalone handlers that don't carry AppState use this module-level instance.
+static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(reqwest::Client::new);
 
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
@@ -353,7 +352,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/auth/check-username", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh", "/api/pcap/pending", "/api/pcap/upload"];
+    let public = ["/api/auth/login", "/api/auth/check-username", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -1376,8 +1375,9 @@ for pb in &playbooks {
                     )
                 });
                 let url = url.to_string();
+                let http_c = state.http_client.clone();
                 tokio::spawn(async move {
-                    let _ = reqwest::Client::new()
+                    let _ = http_c
                         .post(&url)
                         .json(&msg)
                         .timeout(
@@ -1386,7 +1386,7 @@ for pb in &playbooks {
                         )
                         .send().await;
                 });
-                info!("✅ Slack playbook fired: {}", 
+                info!("✅ Slack playbook fired: {}",
                     pb_name);
             }
         }
@@ -1409,8 +1409,9 @@ for pb in &playbooks {
                         .to_rfc3339()
                 });
                 let url = url.to_string();
+                let http_c = state.http_client.clone();
                 tokio::spawn(async move {
-                    let _ = reqwest::Client::new()
+                    let _ = http_c
                         .post(&url)
                         .json(&payload)
                         .timeout(
@@ -1459,8 +1460,9 @@ for integration in &integrations {
                     )
                 });
                 let url = url.to_string();
+                let http_c = state.http_client.clone();
                 tokio::spawn(async move {
-                    let _ = reqwest::Client::new()
+                    let _ = http_c
                         .post(&url)
                         .json(&msg)
                         .timeout(Duration::from_secs(5))
@@ -1492,8 +1494,9 @@ for integration in &integrations {
                     }]
                 });
                 let url = url.to_string();
+                let http_c = state.http_client.clone();
                 tokio::spawn(async move {
-                    let _ = reqwest::Client::new()
+                    let _ = http_c
                         .post(&url)
                         .json(&msg)
                         .timeout(Duration::from_secs(5))
@@ -1522,8 +1525,9 @@ for integration in &integrations {
                     ),
                     "parse_mode": "HTML"
                 });
+                let http_c = state.http_client.clone();
                 tokio::spawn(async move {
-                    let _ = reqwest::Client::new()
+                    let _ = http_c
                         .post(&url)
                         .json(&msg)
                         .timeout(Duration::from_secs(5))
@@ -1559,8 +1563,9 @@ for integration in &integrations {
                         }
                     }
                 });
+                let http_c = state.http_client.clone();
                 tokio::spawn(async move {
-                    let _ = reqwest::Client::new()
+                    let _ = http_c
                         .post(
                             "https://events.pagerduty.com/v2/enqueue"
                         )
@@ -1591,8 +1596,9 @@ for integration in &integrations {
                 });
                 let url = url.to_string();
                 let _int_name_c = int_name.clone();
+                let http_c = state.http_client.clone();
                 tokio::spawn(async move {
-                    let _ = reqwest::Client::new()
+                    let _ = http_c
                         .post(&url)
                         .json(&payload)
                         .timeout(Duration::from_secs(5))
@@ -1609,20 +1615,20 @@ for integration in &integrations {
         config["token"].as_str(),
         config["project_key"].as_str()
     ) {
-        // Dedup: only one ticket per IP pair per hour
-        let dedup_key = format!("{}_{}", src, dst);
-        let now = chrono::Utc::now().timestamp();
-        let should_create = {
-            let mut cache = JIRA_DEDUP.lock().await;
-            // Evict stale entries on every insert to prevent unbounded growth
-            cache.retain(|_, ts| now - *ts < 3600);
-            let last = cache.get(&dedup_key).copied().unwrap_or(0);
-            if now - last > 3600 {
-                cache.insert(dedup_key.clone(), now);
-                true
-            } else {
-                false
-            }
+        // Dedup via Redis SET NX EX — one ticket per IP pair per hour, cross-instance safe.
+        let redis_dedup_key = format!("ndr:jira_dedup:{}:{}", src, dst);
+        let should_create: bool = {
+            let mut rc = state.redis_mux.clone();
+            let set: Option<String> = redis::cmd("SET")
+                .arg(&redis_dedup_key)
+                .arg("1")
+                .arg("NX")
+                .arg("EX")
+                .arg(3600u64)
+                .query_async(&mut rc)
+                .await
+                .unwrap_or(None);
+            set.is_some()
         };
         if !should_create {
             info!("⏭️ Jira dedup: skipping {} → {}", src, dst);
@@ -1676,8 +1682,9 @@ for integration in &integrations {
         let issue_url = issue_url.to_string();
         let creds = creds.to_string();
         let int_name_j = int_name.clone();
+        let http_c = state.http_client.clone();
         tokio::spawn(async move {
-            match reqwest::Client::new()
+            match http_c
                 .post(&issue_url)
                 .header("Authorization",
                     format!("Basic {}", creds))
@@ -1794,7 +1801,7 @@ pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMa
 
 pub async fn get_interfaces() -> Json<Value> {
     let url = format!("{}/agent/interfaces", agent_url());
-    match add_agent_auth(reqwest::Client::new().get(&url)).send().await {
+    match add_agent_auth(HTTP_CLIENT.get(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!([]));
             Json(data)
@@ -1805,7 +1812,7 @@ pub async fn get_interfaces() -> Json<Value> {
 
 pub async fn get_interface() -> Json<Value> {
     let url = format!("{}/agent/status", agent_url());
-    match add_agent_auth(reqwest::Client::new().get(&url)).send().await {
+    match add_agent_auth(HTTP_CLIENT.get(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!({ "interface": "eth0" }));
             Json(json!({ "interface": data.get("interface").and_then(|v| v.as_str()).unwrap_or("eth0") }))
@@ -1816,7 +1823,7 @@ pub async fn get_interface() -> Json<Value> {
 
 pub async fn set_interface(Json(payload): Json<Value>) -> StatusCode {
     let url = format!("{}/agent/interface", agent_url());
-    match add_agent_auth(reqwest::Client::new().post(&url).json(&payload)).send().await {
+    match add_agent_auth(HTTP_CLIENT.post(&url).json(&payload)).send().await {
         Ok(_) => StatusCode::OK,
         Err(_) => StatusCode::BAD_GATEWAY,
     }
@@ -1826,7 +1833,7 @@ pub async fn set_interface(Json(payload): Json<Value>) -> StatusCode {
 
 pub async fn start_services() -> Json<Value> {
     let url = format!("{}/agent/start", agent_url());
-    match add_agent_auth(reqwest::Client::new().post(&url)).send().await {
+    match add_agent_auth(HTTP_CLIENT.post(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await
                 .unwrap_or(json!({"status": "started"}));
@@ -1838,7 +1845,7 @@ pub async fn start_services() -> Json<Value> {
 
 pub async fn stop_services() -> Json<Value> {
     let url = format!("{}/agent/stop", agent_url());
-    match add_agent_auth(reqwest::Client::new().post(&url)).send().await {
+    match add_agent_auth(HTTP_CLIENT.post(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await
                 .unwrap_or(json!({"status": "stopped"}));
@@ -1850,7 +1857,7 @@ pub async fn stop_services() -> Json<Value> {
 
 pub async fn get_agent_status() -> Json<Value> {
     let url = format!("{}/agent/status", agent_url());
-    match add_agent_auth(reqwest::Client::new().get(&url)).send().await {
+    match add_agent_auth(HTTP_CLIENT.get(&url)).send().await {
         Ok(resp) => {
             let data: Value = resp.json().await.unwrap_or(json!({
                 "agent-z": "stopped",
@@ -2826,7 +2833,8 @@ pub async fn update_settings(
     Json(payload): Json<Value>,
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    let settings = vec![
+    // Numeric threshold keys
+    let numeric_keys = vec![
         "store_threshold",
         "alert_threshold",
         "critical_threshold",
@@ -2834,11 +2842,20 @@ pub async fn update_settings(
         "low_threshold",
         "soar_threshold",
     ];
-
-    for key in &settings {
+    for key in &numeric_keys {
         if let Some(val) = payload[key].as_f64() {
             let _ = state.ch_storage
                 .save_setting_by_tenant(key, &val.to_string(), &tenant_id)
+                .await;
+        }
+    }
+
+    // String keys — saved as-is
+    let string_keys = vec!["sensitive_countries"];
+    for key in &string_keys {
+        if let Some(val) = payload[key].as_str() {
+            let _ = state.ch_storage
+                .save_setting_by_tenant(key, val, &tenant_id)
                 .await;
         }
     }
@@ -3778,7 +3795,7 @@ async fn test_integration(
             let test_msg = json!({
                 "text": "✅ NDR Stack test message"
             });
-            match reqwest::Client::new()
+            match HTTP_CLIENT
                 .post(url)
                 .json(&test_msg)
                 .timeout(std::time::Duration::from_secs(5))
@@ -3811,7 +3828,7 @@ async fn test_integration(
                 "chat_id": chat_id,
                 "text": "✅ NDR Stack connected!"
             });
-            match reqwest::Client::new()
+            match HTTP_CLIENT
                 .post(&url)
                 .json(&msg)
                 .timeout(std::time::Duration::from_secs(5))
@@ -3830,7 +3847,7 @@ async fn test_integration(
     }
     let test_url = format!("{}/rest/api/3/project/{}", url, project);
     let creds = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", email, token));
-    match reqwest::Client::new()
+    match HTTP_CLIENT
         .get(&test_url)
         .header("Authorization", format!("Basic {}", creds))
         .header("Accept", "application/json")
@@ -5455,7 +5472,7 @@ pub async fn get_jira_tickets(
         url, project
     );
 
-    match reqwest::Client::new()
+    match HTTP_CLIENT
         .get(&jql_url)
         .header("Authorization", format!("Basic {}", creds))
         .header("Accept", "application/json")
@@ -6579,7 +6596,7 @@ pub async fn arkime_sessions(
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .unwrap_or_else(|_| HTTP_CLIENT.clone());
 
         match client
             .post(&format!("{}/arkime_sessions3-*/_search", es_url))
@@ -6678,7 +6695,7 @@ pub async fn arkime_pcap_download(
         Err(r) => return r,
     };
     let target = format!("{}/api/session/{}/pcap", arkime_url, session_id);
-    match reqwest::Client::new()
+    match state.http_client
         .get(&target)
         .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
         .timeout(Duration::from_secs(60))
@@ -6716,7 +6733,7 @@ pub async fn arkime_status(
         Err(r) => return r,
     };
     let target = format!("{}/api/stats", arkime_url);
-    match reqwest::Client::new()
+    match state.http_client
         .get(&target)
         .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
         .timeout(Duration::from_secs(10))
@@ -6985,7 +7002,7 @@ pub async fn pcap_download_stored(
     }
 
     let target = format!("{}/api/session/{}/pcap", arkime_url, session_id);
-    match reqwest::Client::new()
+    match state.http_client
         .get(&target)
         .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
         .timeout(Duration::from_secs(60))
@@ -7084,8 +7101,15 @@ pub async fn get_assets(
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
     let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
     match state.ch_storage.get_assets_with_counts_by_tenant(&tenant_id, &sensor_ids).await {
-        Ok(assets) => axum::Json(json!(assets)),
-        Err(e)     => axum::Json(json!({"error": e.to_string()})),
+        Ok(assets) => {
+            // Filter out link-local and APIPA addresses — not useful in the UI
+            let filtered: Vec<_> = assets.into_iter().filter(|a| {
+                let ip = a["ip"].as_str().unwrap_or("");
+                !ip.starts_with("fe80") && !ip.starts_with("169.254.")
+            }).collect();
+            axum::Json(json!(filtered))
+        },
+        Err(e) => axum::Json(json!({"error": e.to_string()})),
     }
 }
 
@@ -8393,8 +8417,7 @@ pub async fn get_evidence_timeline(
     let session_info = if claims.tenant_id == "default" {
         let opensearch_url = std::env::var("OPENSEARCH_URL")
             .unwrap_or_else(|_| "http://localhost:9200".to_string());
-        let http = reqwest::Client::new();
-        match http.post(format!(
+        match state.http_client.post(format!(
             "{}/arkime_sessions3-*/_search", opensearch_url
         ))
         .json(&json!({
@@ -9441,7 +9464,7 @@ pub async fn revoke_active_block(
             // Call agent unblock (RST cleanup)
             let agent_url = std::env::var("NDR_AGENT_URL")
                 .unwrap_or_else(|_| "http://host.docker.internal:3001".to_string());
-            let _ = add_agent_auth(reqwest::Client::new()
+            let _ = add_agent_auth(state.http_client
                 .post(format!("{}/agent/unblock", agent_url))
                 .json(&json!({"ip": block.src_ip}))
                 .timeout(std::time::Duration::from_secs(5)))
@@ -9501,7 +9524,7 @@ pub async fn manual_block(
             "dst_ip": "", "dst_port": 0,
             "community_id": "", "duration_hours": duration,
         });
-        if let Ok(r) = add_agent_auth(reqwest::Client::new()
+        if let Ok(r) = add_agent_auth(state.http_client
             .post(format!("{}/agent/block", agent_url))
             .json(&rst_payload).timeout(std::time::Duration::from_secs(10))).send().await
         {
@@ -9651,7 +9674,7 @@ pub async fn isolate_device_handler(
         "arp" => {
             // Call ndr-agent ARP isolation
             let payload = json!({"target_ip": body.target_ip, "gateway_ip": gateway_ip});
-            let resp = add_agent_auth(reqwest::Client::new()
+            let resp = add_agent_auth(state.http_client
                 .post(format!("{}/agent/isolate", agent_url))
                 .json(&payload)
                 .timeout(std::time::Duration::from_secs(10)))
@@ -9738,7 +9761,7 @@ pub async fn unisolate_device_handler(
     // Call the appropriate unisolation method based on enforcement type
     match iso.enforcement.as_str() {
         "arp" => {
-            let _ = add_agent_auth(reqwest::Client::new()
+            let _ = add_agent_auth(state.http_client
                 .post(format!("{}/agent/unisolate", agent_url))
                 .json(&json!({"target_ip": iso.target_ip}))
                 .timeout(std::time::Duration::from_secs(10)))

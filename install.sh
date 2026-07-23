@@ -31,10 +31,21 @@ fi
 # ── Fix DNS early — before any curl/apt/wget ──
 if ! curl -s --max-time 3 https://archive.ubuntu.com > /dev/null 2>&1; then
     echo "[NDR] Fixing DNS (switching to 8.8.8.8)..."
-    sudo systemctl stop systemd-resolved 2>/dev/null || true
-    sudo rm -f /etc/resolv.conf
-    printf "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" | sudo tee /etc/resolv.conf > /dev/null
+    if systemctl is-active systemd-resolved > /dev/null 2>&1; then
+        # Configure resolved properly — stopping it breaks DNS on reboot
+        sudo mkdir -p /etc/systemd/resolved.conf.d/
+        printf "[Resolve]\nDNS=8.8.8.8 8.8.4.4\nFallbackDNS=1.1.1.1\n" \
+            | sudo tee /etc/systemd/resolved.conf.d/ndr-dns.conf > /dev/null
+        sudo systemctl restart systemd-resolved 2>/dev/null || true
+    else
+        printf "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" | sudo tee /etc/resolv.conf > /dev/null
+    fi
 fi
+
+# ── Force apt to use IPv4 — many hosts have no real IPv6 route, only
+# link-local, which makes apt fail against dual-stack mirrors (e.g.
+# archive.ubuntu.com) instead of falling back to IPv4 cleanly ──
+echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 > /dev/null
 
 # ── Colors ────────────────────────────────────
 RED='\033[0;31m'
@@ -91,8 +102,9 @@ step() {
 }
 
 # ── Fix APT sources ───────────────────────────
-UBUNTU_CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-$(lsb_release -cs 2>/dev/null)}")
-UBUNTU_CODENAME=${UBUNTU_CODENAME:-noble}
+UBUNTU_CODENAME=$(. /etc/os-release 2>/dev/null && echo "$VERSION_CODENAME")
+UBUNTU_CODENAME=${UBUNTU_CODENAME:-$(lsb_release -cs 2>/dev/null)}
+UBUNTU_CODENAME=${UBUNTU_CODENAME:-$(grep -oP "(?<=UBUNTU_CODENAME=).+" /etc/os-release 2>/dev/null)}
 UBUNTU_MAJOR_VER=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID}" | cut -d. -f1)
 log "Ubuntu ${UBUNTU_CODENAME} (${UBUNTU_MAJOR_VER}.x) detected"
 
@@ -117,8 +129,34 @@ EOF
 
 sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 log "APT cache cleared"
+
+# Fresh Ubuntu installs run unattended-upgrades on first boot and hold the apt lock.
+# Stop it and wait for any existing lock to clear before proceeding.
+sudo systemctl stop unattended-upgrades 2>/dev/null || true
+sudo systemctl stop apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+log "Waiting for apt lock..."
+for _apt_i in {1..24}; do
+    if ! fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+               /var/cache/apt/archives/lock >/dev/null 2>&1; then
+        break
+    fi
+    echo -n "."
+    sleep 5
+done
+echo ""
+
 log "Updating package lists..."
-sudo apt-get update 2>&1 | grep -E "^Get|^Hit|^Err" | head -15 || true
+_APT_LOG=$(mktemp /tmp/ndr-apt.XXXXXX)
+sudo timeout 120 apt-get update 2>&1 \
+    | tee "$_APT_LOG" \
+    | grep --line-buffered -E "^Get|^Hit|^Err|^W:" || true
+if grep -q "^Err" "$_APT_LOG" 2>/dev/null; then
+    warn "apt-get update had errors — retrying once..."
+    sudo timeout 120 apt-get update 2>&1 \
+        | tee "$_APT_LOG" \
+        | grep --line-buffered -E "^Get|^Hit|^Err|^W:" || true
+fi
+rm -f "$_APT_LOG"
 log "Network ready"
 
 # ── Deployment Mode ───────────────────────────
@@ -234,8 +272,6 @@ progress() {
 # ══════════════════════════════════════════════
 step "System Dependencies"
 
-log "Updating package lists..."
-sudo apt-get update 2>&1 | grep -E "^Get|^Hit|^Err|^W:" || true
 log "Installing packages..."
 sudo apt-get install -y \
     curl wget git jq python3 python3-pip \
@@ -303,7 +339,7 @@ else
 fi
 
 # ══════════════════════════════════════════════
-step "Agent-S  (Suricata)"
+step "Agent-S"
 
 if ! command -v suricata &>/dev/null; then
     log "Installing Agent-S..."
@@ -415,12 +451,16 @@ else
 fi
 
 # ══════════════════════════════════════════════
-step "Agent-Z  (Zeek)"
+step "Agent-Z"
 
 if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     log "Installing Agent-Z..."
+    # Probe Zeek OBS repo dynamically — no hardcoded version fallbacks
     ZEEK_UBUNTU_VER="$OS_VERSION"
-    for TRY_VER in "$OS_VERSION" "24.04" "22.04"; do
+    ZEEK_VERSIONS=$(curl -fsSL --max-time 10 \
+        "https://download.opensuse.org/repositories/security:zeek/" 2>/dev/null \
+        | grep -oP 'xUbuntu_[\d.]+' | grep -oP '[\d.]+' | sort -rV)
+    for TRY_VER in "$OS_VERSION" $ZEEK_VERSIONS; do
         ZEEK_KEY_URL="https://download.opensuse.org/repositories/security:zeek/xUbuntu_${TRY_VER}/Release.key"
         if curl -fsSL --max-time 10 "$ZEEK_KEY_URL" -o /dev/null 2>/dev/null; then
             ZEEK_UBUNTU_VER="$TRY_VER"
@@ -952,38 +992,108 @@ cd "$INSTALL_DIR"
 # ══════════════════════════════════════════════
 step "Container Runtime  (Docker)"
 
+if command -v docker >/dev/null 2>&1; then
+    log "Docker already installed: $(docker --version)"
+else
+
 log "Installing Docker..."
+# Remove any old Docker packages and stale repo files from previous installs
 sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
-sudo apt-get update -qq
+sudo rm -f /etc/apt/sources.list.d/docker.list \
+           /etc/apt/sources.list.d/docker.list.bak \
+           /etc/apt/keyrings/docker.gpg \
+           /etc/apt/trusted.gpg.d/docker.gpg 2>/dev/null || true
+sudo timeout 60 apt-get update -qq 2>/dev/null || true
 sudo apt-get install -y ca-certificates curl gnupg lsb-release
 
 sudo mkdir -p /etc/apt/keyrings
-sudo rm -f /etc/apt/keyrings/docker.gpg
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
     | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-DOCKER_CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
-case "$DOCKER_CODENAME" in
-    resolute|oracular|*)
-        if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
-               --max-time 5 -o /dev/null 2>/dev/null; then
-            log "Docker repo not available for '${DOCKER_CODENAME}' — falling back to noble"
-            DOCKER_CODENAME="noble"
-        fi
-        ;;
-esac
+# Detect current Ubuntu codename — prefer /etc/os-release over lsb_release
+# which can return stale/wrong values on new or upgraded systems.
+DOCKER_CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-$UBUNTU_CODENAME}")
+DOCKER_CODENAME=${DOCKER_CODENAME:-$(lsb_release -cs 2>/dev/null)}
+log "Detected Ubuntu codename for Docker repo: ${DOCKER_CODENAME}"
 
-echo \
-    "deb [arch=$(dpkg --print-architecture) \
-    signed-by=/etc/apt/keyrings/docker.gpg] \
-    https://download.docker.com/linux/ubuntu \
-    ${DOCKER_CODENAME} stable" \
+# Verify Docker repo actually has packages for this codename (InRelease can exist
+# with no packages for brand-new Ubuntu releases). Probe and fall back if needed.
+_DOCKER_ARCH=$(dpkg --print-architecture)
+_docker_has_packages() {
+    local _cn="$1"
+    local _count
+    _count=$(curl -fsSL --max-time 15 \
+        "https://download.docker.com/linux/ubuntu/dists/${_cn}/stable/binary-${_DOCKER_ARCH}/Packages.gz" \
+        2>/dev/null | gzip -d 2>/dev/null | grep -c "^Package:" 2>/dev/null || echo 0)
+    [ "${_count:-0}" -gt 0 ] 2>/dev/null
+}
+
+if ! _docker_has_packages "$DOCKER_CODENAME"; then
+    warn "Docker packages not available for '${DOCKER_CODENAME}' — probing repo for a working codename..."
+    _DOCKER_PROBE=$(curl -fsSL --max-time 10 \
+        "https://download.docker.com/linux/ubuntu/dists/" 2>/dev/null \
+        | grep -oP '(?<=href=")[a-z]{4,}(?=/)' | sort -r)
+    for _dc in $_DOCKER_PROBE; do
+        [ "$_dc" = "$DOCKER_CODENAME" ] && continue
+        if _docker_has_packages "$_dc"; then
+            log "Using Docker repo codename '${_dc}' instead of '${DOCKER_CODENAME}'"
+            DOCKER_CODENAME="$_dc"
+            break
+        fi
+    done
+fi
+
+echo "deb [arch=${_DOCKER_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu ${DOCKER_CODENAME} stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update -qq
+log "Docker repo configured for codename: ${DOCKER_CODENAME}"
+sudo timeout 60 apt-get update -qq 2>/dev/null || true
+log "Downloading and installing Docker packages (this may take a few minutes)..."
 sudo apt-get install -y docker-ce docker-ce-cli \
     containerd.io docker-buildx-plugin docker-compose-plugin
+
+# InRelease may exist for a new Ubuntu release before the packages land.
+# Detect that case and retry with a codename whose packages are confirmed present.
+if ! command -v docker >/dev/null 2>&1; then
+    warn "Docker packages not found for '${DOCKER_CODENAME}' — probing for a compatible repo codename..."
+    _DOCKER_ARCH=$(dpkg --print-architecture)
+    _DOCKER_FOUND=""
+    _DOCKER_PROBE=$(curl -fsSL --max-time 10 \
+        "https://download.docker.com/linux/ubuntu/dists/" 2>/dev/null \
+        | grep -oP '(?<=href=")[a-z]{4,}(?=/)' | sort -r)
+    for _dc in $_DOCKER_PROBE; do
+        [ "$_dc" = "$DOCKER_CODENAME" ] && continue
+        _PKG_COUNT=$(curl -fsSL --max-time 15 \
+            "https://download.docker.com/linux/ubuntu/dists/${_dc}/stable/binary-${_DOCKER_ARCH}/Packages.gz" \
+            2>/dev/null | gzip -d 2>/dev/null | grep -c "^Package:" 2>/dev/null || echo 0)
+        if [ "${_PKG_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+            _DOCKER_FOUND="$_dc"
+            break
+        fi
+    done
+    if [ -n "$_DOCKER_FOUND" ]; then
+        log "Retrying Docker install using repo codename '${_DOCKER_FOUND}'..."
+        echo "deb [arch=${_DOCKER_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu ${_DOCKER_FOUND} stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        sudo apt-get update -qq
+        log "Downloading and installing Docker packages (fallback codename: ${_DOCKER_FOUND})..."
+        sudo apt-get install -y docker-ce docker-ce-cli \
+            containerd.io docker-buildx-plugin docker-compose-plugin
+    fi
+fi
+
+# Last resort: snap (works on any Ubuntu release, packages ship ahead of apt)
+if ! command -v docker >/dev/null 2>&1; then
+    warn "Docker apt install unavailable — falling back to snap..."
+    sudo snap install docker 2>/dev/null || true
+fi
+
+command -v docker >/dev/null 2>&1 || err "Docker could not be installed"
 log "Docker installed"
+
+fi
 
 sudo mkdir -p /etc/docker
 sudo tee /etc/docker/daemon.json > /dev/null << 'DOCKEREOF'
@@ -1124,51 +1234,26 @@ step "Response Automation  (SOAR)"
 log "Native SOAR is built into the NDR engine — no extra services needed"
 info "Configure playbooks, cases and integrations from the UI → SOAR page"
 
-cat > "$INSTALL_DIR/ndr-ui/proxy.conf.json" << 'PROXYEOF'
-{
-  "/api": {
-    "target": "https://localhost:3000",
-    "secure": false,
-    "changeOrigin": true
-  },
-  "/ws": {
-    "target": "wss://localhost:3000",
-    "secure": false,
-    "ws": true
-  }
-}
-PROXYEOF
-log "Proxy config created"
-
 log "Building Angular UI (production build)..."
 cd "$INSTALL_DIR/ndr-ui"
 
-# Kill any old UI process
+# Kill any stale serve process left over from a previous install run
 if [ -f /tmp/ndr-ui.pid ]; then
     OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
     if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
         kill "$OLD_UI_PID" 2>/dev/null || true
-        sleep 1
     fi
     rm -f /tmp/ndr-ui.pid
 fi
 
-# Build once into static files — much lighter than ng serve
 npm run build -- --configuration production 2>&1 | tail -5
 
-# Install 'serve' if not present (tiny static file server)
-if ! command -v serve &>/dev/null; then
-    npm install -g serve 2>/dev/null || true
-fi
-
-log "Starting UI static server..."
-nohup serve -s dist/ndr-ui/browser -l 4200 > /tmp/ndr-ui.log 2>&1 &
-echo $! > /tmp/ndr-ui.pid
-
-log "Waiting for Angular UI..."
+# Nginx serves the Angular build via the bind-mount in docker-compose.yml.
+# No separate static server needed — wait for nginx HTTPS to confirm UI is live.
+log "Waiting for Angular UI (served by nginx)..."
 for i in {1..20}; do
-    if curl -s http://localhost:4200 > /dev/null 2>&1; then
-        log "Angular UI ready"
+    if curl -sk https://localhost:3000/ > /dev/null 2>&1; then
+        log "Angular UI ready at https://localhost:3000"
         break
     fi
     echo -n "."
@@ -1179,8 +1264,8 @@ echo ""
 if grep -qi microsoft /proc/version 2>/dev/null; then
     warn "WSL2 detected — run in Windows PowerShell as Admin:"
     printf "\n"
-    echo "  netsh interface portproxy add v4tov4 listenport=4200 listenaddress=0.0.0.0 connectport=4200 connectaddress=$HOST_IP"
     echo "  netsh interface portproxy add v4tov4 listenport=3000 listenaddress=0.0.0.0 connectport=3000 connectaddress=$HOST_IP"
+    echo "  netsh interface portproxy add v4tov4 listenport=3080 listenaddress=0.0.0.0 connectport=3080 connectaddress=$HOST_IP"
     echo "  netsh interface portproxy add v4tov4 listenport=9092 listenaddress=0.0.0.0 connectport=9092 connectaddress=$HOST_IP"
     printf "\n"
 fi
@@ -1218,8 +1303,7 @@ printf "  ${CYAN}║${NC}  $(_pad "Interface:  ${IFACE}  (${HOST_IP})")${CYAN}�
 printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
 printf "  ${CYAN}║${NC}  ${BOLD}$(_pad "Service         Access Point")${NC}  ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  ${DIM}$(_pad "─────────────── ────────────────────────")${NC}  ${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}  $(_pad "Dashboard       http://${HOST_IP}:4200")${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}  $(_pad "API Gateway     https://${HOST_IP}:3000")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Dashboard       https://${HOST_IP}:3000")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "NDR Agent       http://localhost:3001")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "Packet Recorder http://localhost:8005")${CYAN}║${NC}\n"
 printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"

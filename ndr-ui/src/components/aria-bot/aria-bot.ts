@@ -199,6 +199,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     const canvas = this.lottieCanvasRef?.nativeElement;
     if (!canvas) return;
 
+    DotLottie.setWasmUrl('/assets/dotlottie-player.wasm');
     this.dotLottie = new DotLottie({
       canvas,
       src: '/assets/lottie/robot.json',

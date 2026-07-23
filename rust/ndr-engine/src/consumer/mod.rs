@@ -568,7 +568,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         .unwrap_or("");
 
                     if !mac.is_empty() && !ip.is_empty() {
-                        let is_gateway = ip.ends_with(".1") || ip.ends_with(".254");
+                        let is_gateway = (ip.ends_with(".1") || ip.ends_with(".254"))
+                            && !ip.starts_with("169.254.");
                         let vendor = state.enrichment.asset_id.lookup_vendor(mac);
                         // Queue for vendor backfill if OUI not resolved
                         if vendor == "Unknown" {
@@ -738,7 +739,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         let ip_s       = ip.to_string();
                         let mac_s      = mac.to_string();
                         let tid        = tenant_id.clone();
-                        let is_gateway = ip.ends_with(".1") || ip.ends_with(".254");
+                        let is_gateway = (ip.ends_with(".1") || ip.ends_with(".254"))
+                            && !ip.starts_with("169.254.");
                         let vendor     = state.enrichment.asset_id.lookup_vendor(mac);
                         let device_type = state.enrichment.asset_id.guess_device_type("", &vendor, is_gateway);
                         let conflict_ch = state.ch_storage.clone();
@@ -970,11 +972,27 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     }
 
                     if !ip.is_empty() && query.ends_with(".local") {
-                        let hostname = query.strip_suffix(".local").unwrap_or(&query).to_string();
+                        let raw_label = query.strip_suffix(".local").unwrap_or(&query);
+                        // mDNS service labels sometimes encode JSON: '{"nm":"boult",...}._svc._udp'
+                        // Extract the device name from the JSON prefix if present.
+                        let hostname = if raw_label.starts_with('{') {
+                            if let Some(json_end) = raw_label.find('}') {
+                                let json_part = &raw_label[..=json_end];
+                                serde_json::from_str::<serde_json::Value>(json_part)
+                                    .ok()
+                                    .and_then(|v| v["nm"].as_str().map(|s| s.to_string()))
+                                    .unwrap_or_else(|| raw_label.to_string())
+                            } else {
+                                raw_label.to_string()
+                            }
+                        } else {
+                            raw_label.to_string()
+                        };
                         let ch_clone = state.ch_storage.clone();
                         let ip_clone = ip.clone();
                         let tenant_clone = tenant_id.clone();
-                        let is_gateway = ip.ends_with(".1") || ip.ends_with(".254");
+                        let is_gateway = (ip.ends_with(".1") || ip.ends_with(".254"))
+                            && !ip.starts_with("169.254.");
                         tokio::spawn(async move {
                             if let Ok(Some(mut updated_asset)) = ch_clone.get_asset_by_ip(&tenant_clone, &ip_clone).await {
                                 if updated_asset.hostname.is_empty() {
@@ -1031,7 +1049,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 // Asset not yet in DB — create a minimal stub from IP alone.
                                 // MAC/vendor/hostname will be filled later when ARP/DHCP arrives.
                                 _ => {
-                                    let is_gateway = ip_clone.ends_with(".1") || ip_clone.ends_with(".254");
+                                    let is_gateway = (ip_clone.ends_with(".1") || ip_clone.ends_with(".254"))
+                                        && !ip_clone.starts_with("169.254.");
                                     let asset = crate::storage::clickhouse::AssetRow {
                                         ip:             ip_clone.clone(),
                                         mac:            String::new(),
@@ -1072,6 +1091,124 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     crate::api::broadcast_raw_event(&state, &event);
                 }
 
+                // ── Standalone Suricata alert → direct hit ───────────────────
+                // Suricata severity 1 (Critical) and 2 (High) alerts are promoted
+                // directly to ndr_hits without requiring a Zeek corroboration.
+                // This covers cases where Zeek has no matching SIGMA rule (e.g.
+                // ET MALWARE / ET TROJAN / exploit rules).
+                if event.event_source == EventSource::Suricata {
+                    if let Some(alert) = &event.alert {
+                        if alert.severity <= 2 {
+                            let src = event.source_ip.clone().unwrap_or_default();
+                            let dst = event.dest_ip.clone().unwrap_or_default();
+                            let mut enrich = state.enrichment.enrich(&src, &dst);
+                            let now_ts = chrono::Utc::now().timestamp() as u32;
+                            let cid = event.community_id.clone()
+                                .unwrap_or_else(|| format!("suricata-{}-{}", alert.signature_id, now_ts));
+
+                            // Load tenant settings for thresholds + sensitive country list
+                            let settings = state.ch_storage
+                                .get_settings_by_tenant(&tenant_id).await
+                                .unwrap_or(serde_json::json!({}));
+                            let critical_score = settings["critical_threshold"].as_f64().unwrap_or(90.0) as f32;
+                            let high_score     = settings["alert_threshold"].as_f64().unwrap_or(75.0) as f32;
+
+                            // Override sensitive_country with tenant-configured list
+                            if let Some(sc) = settings["sensitive_countries"].as_str() {
+                                let list: Vec<&str> = sc.split(',').map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
+                                let src_cc = enrich.src_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
+                                let dst_cc = enrich.dst_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
+                                enrich.sensitive_country = list.iter().any(|&c| c == src_cc || c == dst_cc);
+                            }
+
+                            let (score, severity) = match alert.severity {
+                                1 => (critical_score, "CRITICAL"),
+                                _ => (high_score,     "HIGH"),
+                            };
+
+                            let tags = {
+                                let mut t = vec![
+                                    format!("suricata:{}", alert.signature_id),
+                                    alert.category.to_lowercase().replace(' ', "-"),
+                                ];
+                                t.extend(alert.mitre_tactics.iter().map(|m| format!("t:{}", m)));
+                                t
+                            };
+
+                            let ch_hit = crate::storage::clickhouse::NdrHit {
+                                timestamp:          now_ts,
+                                community_id:       cid.clone(),
+                                src_ip:             src.clone(),
+                                dst_ip:             dst.clone(),
+                                score,
+                                severity:           severity.to_string(),
+                                tags:               tags.clone(),
+                                sigma_hits:         vec![alert.signature.clone()],
+                                threat_intel:       if enrich.is_malicious { 1 } else { 0 },
+                                src_country:        enrich.src_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default(),
+                                dst_country:        enrich.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default(),
+                                tenant_id:          tenant_id.clone(),
+                                correlation_status: "agent_s_only".to_string(),
+                                agent_z_details:    "{}".to_string(),
+                                agent_s_details:    serde_json::to_string(&event.raw).unwrap_or_else(|_| "{}".to_string()),
+                                corroborated_at:    0,
+                                agent_s_rule_id:    alert.signature_id.to_string(),
+                                agent_s_category:   alert.category.clone(),
+                                updated_at:         now_ts,
+                                sensor_id:          event.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            };
+
+                            let ch_cl      = state.ch_storage.clone();
+                            let state_soar = Arc::clone(&state);
+                            let tid_cl     = tenant_id.clone();
+                            let hit_soar   = crate::correlator::session::CorrelationHit {
+                                community_id: cid.clone(),
+                                agent_z:      crate::normalizer::NormalizedEvent::blank(),
+                                agent_s:      event.clone(),
+                                hit_time:     now_ts as u64,
+                                source:       "agent-s".to_string(),
+                            };
+                            let risk_soar = crate::scoring::RiskResult {
+                                score,
+                                severity: if alert.severity == 1 {
+                                    crate::scoring::Severity::Critical
+                                } else {
+                                    crate::scoring::Severity::High
+                                },
+                                tags:    tags.clone(),
+                                reasons: vec![format!("Suricata: {} ({})", alert.signature, alert.category)],
+                            };
+                            let enrich_soar = enrich.clone();
+                            let src_ws = src.clone();
+                            let dst_ws = dst.clone();
+                            let sev_ws = severity.to_string();
+                            tokio::spawn(async move {
+                                if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
+                                    tracing::warn!("suricata-alert hit insert error: {}", e);
+                                    return;
+                                }
+                                tracing::info!(
+                                    src = %src_ws, dst = %dst_ws, sig = %hit_soar.agent_s.alert.as_ref().map(|a| a.signature.as_str()).unwrap_or(""),
+                                    "Suricata alert promoted to hit"
+                                );
+                                crate::soar::execute_native_playbooks(
+                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                ).await;
+                                let ws_msg = serde_json::json!({
+                                    "type": "hit",
+                                    "community_id": cid,
+                                    "src_ip": src_ws,
+                                    "dst_ip": dst_ws,
+                                    "severity": sev_ws,
+                                    "score": score,
+                                    "tenant_id": tid_cl,
+                                });
+                                crate::api::publish_event(&state_soar, &tid_cl, &ws_msg.to_string());
+                            });
+                        }
+                    }
+                }
+
                 // Inline SIGMA for all Zeek events — Suricata can't always corroborate
                 // (DNS alerts have empty IPs; SMB/Kerberos/SSL often have no ET rule).
                 // Store as zeek_only; corroborated hits will overwrite via ReplacingMergeTree.
@@ -1082,13 +1219,23 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     // ── GAP 1: Enrich BEFORE Sigma so rules can test geo/threat-intel ──
                     let src = event.source_ip.clone().unwrap_or_default();
                     let dst = event.dest_ip.clone().unwrap_or_default();
-                    let enrich = state.enrichment.enrich(&src, &dst);
+                    let mut enrich = state.enrichment.enrich(&src, &dst);
                     event.is_malicious     = enrich.is_malicious;
                     event.src_country_code = enrich.src_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
                     event.dst_country_code = enrich.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
                     event.src_asn_org      = enrich.src_asn.as_ref().map(|a| a.org.clone()).unwrap_or_default();
                     event.dst_asn_org      = enrich.dst_asn.as_ref().map(|a| a.org.clone()).unwrap_or_default();
                     event.direction        = enrich.direction.clone();
+
+                    // Override sensitive_country with tenant-configured list (admin-editable per tenant)
+                    if let Ok(settings) = state.ch_storage.get_settings_by_tenant(&tenant_id).await {
+                        if let Some(sc) = settings["sensitive_countries"].as_str() {
+                            let list: Vec<&str> = sc.split(',').map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
+                            let src_cc = enrich.src_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
+                            let dst_cc = enrich.dst_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
+                            enrich.sensitive_country = list.iter().any(|&c| c == src_cc || c == dst_cc);
+                        }
+                    }
 
                     let detections = {
                         let engine = state.detection.read().await;

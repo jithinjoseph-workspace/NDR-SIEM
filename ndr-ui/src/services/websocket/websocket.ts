@@ -68,11 +68,16 @@ export class Websocket {
         console.warn('No token found, aborting WebSocket connection');
         return;
       }
-      
+
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${location.host}/ws?token=${token}`;
+      const wsUrl = `${wsProtocol}//${location.host}/ws`;
 
       this.socket = new WebSocket(wsUrl);
+
+      // Send token as first message so it never appears in nginx logs or browser history
+      this.socket.onopen = () => this.zone.run(() => {
+        this.socket?.send(JSON.stringify({ type: 'auth', token }));
+      });
 
       this.socket.onmessage = (event) => {
         // Run inside Angular zone so UI updates instantly
@@ -111,9 +116,6 @@ export class Websocket {
           }
         });
       };
-
-      this.socket.onopen = () =>
-        this.zone.run(() => {});
 
       this.socket.onerror = (e) => console.error('WebSocket Error:', e);
 

@@ -1,7 +1,6 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{State, Query};
+use axum::extract::State;
 use crate::api::AppState;
-use std::collections::HashMap;
 use futures_util::StreamExt;
 
 /// Interval between periodic user/tenant active checks (Layer 2).
@@ -25,76 +24,72 @@ struct WsAuthContext {
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
 ) -> axum::response::Response {
-    // ── Extract and validate JWT from query string ────────────────────────
-    let claims = match params.get("token").and_then(|token| {
-        crate::api::extract_claims_with_token(token)
-    }) {
+    // Token is sent as the first WebSocket message after connect (not in the URL)
+    // so it never appears in nginx access logs or browser history.
+    ws.on_upgrade(move |socket| authenticate_then_handle(socket, state))
+}
+
+async fn authenticate_then_handle(mut socket: WebSocket, state: AppState) {
+    // Wait up to 10 seconds for the client to send {"type":"auth","token":"..."}
+    let claims = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        async {
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if msg["type"] == "auth" {
+                        if let Some(token) = msg["token"].as_str() {
+                            return crate::api::extract_claims_with_token(token);
+                        }
+                    }
+                }
+            }
+            None
+        }
+    ).await.unwrap_or(None);
+
+    let claims = match claims {
         Some(c) => c,
         None => {
-            return axum::response::Response::builder()
-                .status(axum::http::StatusCode::UNAUTHORIZED)
-                .body(axum::body::Body::from("Unauthorized"))
-                .unwrap();
+            let _ = socket.send(Message::Text(
+                r#"{"type":"error","message":"Unauthorized"}"#.to_string()
+            )).await;
+            return;
         }
     };
 
     // ── Layer 1: Gate check — reject blocked users at connection time ─────
     if claims.role != "super_admin" {
-        // Tenant-level gate
         match state.ch_storage.is_tenant_active(&claims.tenant_id).await {
             Ok(false) => {
-                tracing::info!(
-                    "🚫 WebSocket rejected: tenant '{}' is deactivated",
-                    claims.tenant_id
-                );
-                return axum::response::Response::builder()
-                    .status(axum::http::StatusCode::FORBIDDEN)
-                    .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(
-                        r#"{"status":"error","message":"Tenant has been deactivated"}"#
-                    ))
-                    .unwrap();
+                tracing::info!("🚫 WebSocket rejected: tenant '{}' is deactivated", claims.tenant_id);
+                let _ = socket.send(Message::Text(
+                    r#"{"type":"error","message":"Tenant has been deactivated"}"#.to_string()
+                )).await;
+                return;
             }
             Err(e) => {
-                tracing::warn!(
-                    "WebSocket tenant check failed for '{}': {}",
-                    claims.tenant_id, e
-                );
-                return axum::response::Response::builder()
-                    .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
-                    .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(
-                        r#"{"status":"error","message":"Unable to verify tenant status"}"#
-                    ))
-                    .unwrap();
+                tracing::warn!("WebSocket tenant check failed for '{}': {}", claims.tenant_id, e);
+                let _ = socket.send(Message::Text(
+                    r#"{"type":"error","message":"Unable to verify tenant status"}"#.to_string()
+                )).await;
+                return;
             }
             Ok(true) => {}
         }
 
-        // Per-user gate
         let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
         if blockable_roles.contains(&claims.role.as_str()) {
             match state.ch_storage.is_user_active(&claims.sub).await {
                 Ok(false) => {
-                    tracing::info!(
-                        "🚫 WebSocket rejected: user '{}' is disabled",
-                        claims.sub
-                    );
-                    return axum::response::Response::builder()
-                        .status(axum::http::StatusCode::FORBIDDEN)
-                        .header("Content-Type", "application/json")
-                        .body(axum::body::Body::from(
-                            r#"{"status":"error","message":"Your account has been disabled by your administrator.","code":"USER_DISABLED"}"#
-                        ))
-                        .unwrap();
+                    tracing::info!("🚫 WebSocket rejected: user '{}' is disabled", claims.sub);
+                    let _ = socket.send(Message::Text(
+                        r#"{"type":"error","message":"Your account has been disabled by your administrator.","code":"USER_DISABLED"}"#.to_string()
+                    )).await;
+                    return;
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "WebSocket user active check failed for '{}': {}",
-                        claims.sub, e
-                    );
+                    tracing::warn!("WebSocket user active check failed for '{}': {}", claims.sub, e);
                 }
                 Ok(true) => {}
             }
@@ -108,7 +103,7 @@ pub async fn ws_handler(
         sensor_ids: claims.sensor_ids,
     };
 
-    ws.on_upgrade(move |socket| handle_ws(socket, state, auth_ctx))
+    handle_ws(socket, state, auth_ctx).await;
 }
 
 async fn handle_ws(

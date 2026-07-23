@@ -15,8 +15,11 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
 
   return next(authReq).pipe(
     catchError(err => {
-      // Session expired or token invalid → standard logout
-      if (err.status === 401) {
+      // Session expired or token invalid → standard logout.
+      // Skip logout for the login endpoint itself — a 401 there means wrong
+      // password, not an expired session; the login component shows the error.
+      const isLoginRequest = req.url.includes('/auth/login');
+      if (err.status === 401 && !isLoginRequest) {
         auth.logout();
         router.navigate(['/login']);
       }
