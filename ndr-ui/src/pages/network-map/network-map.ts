@@ -668,7 +668,7 @@ export class NetworkMap implements OnInit, OnDestroy {
             .style('display', (d: any) => (this.hasFavicon(d) ? 'none' : 'block'));
 
           nodeEnter.append('image')
-            .attr('href', (d: any) => this.hasFavicon(d) ? `https://www.google.com/s2/favicons?domain=${this.getDomain(d)}&sz=64` : '')
+            .attr('href', (d: any) => this.hasFavicon(d) ? `/favicon-proxy?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${this.getDomain(d)}&size=64` : '')
             .attr('width', 20)
             .attr('height', 20)
             .attr('x', -10)
@@ -750,7 +750,7 @@ export class NetworkMap implements OnInit, OnDestroy {
             .style('display', (d: any) => (this.hasFavicon(d) ? 'none' : 'block'));
 
           update.select('image')
-            .attr('href', (d: any) => this.hasFavicon(d) ? `https://www.google.com/s2/favicons?domain=${this.getDomain(d)}&sz=64` : '')
+            .attr('href', (d: any) => this.hasFavicon(d) ? `/favicon-proxy?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${this.getDomain(d)}&size=64` : '')
             .style('display', (d: any) => (this.hasFavicon(d) ? 'block' : 'none'));
 
           update.select('.connection-count')
