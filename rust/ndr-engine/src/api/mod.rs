@@ -60,14 +60,17 @@ struct Claims {
     permissions: Vec<String>,
     exp: usize,
     sensor_ids: Vec<String>,
+    jti: String,
 }
 
+// Returns (token, jti) so the caller can track the session in Redis.
 fn generate_jwt(username: &str, role: &str,
-    tenant_id: &str, permissions: Vec<String>, sensor_ids: Vec<String>) -> String {
+    tenant_id: &str, permissions: Vec<String>, sensor_ids: Vec<String>) -> (String, String) {
     let Ok(secret) = std::env::var("JWT_SECRET") else {
         tracing::error!("JWT_SECRET not set — cannot issue token");
-        return String::new();
+        return (String::new(), String::new());
     };
+    let jti = uuid::Uuid::new_v4().to_string();
     let expiry = chrono::Utc::now()
         .timestamp() as usize + 86400; // 24 hours
     let claims = Claims {
@@ -77,12 +80,14 @@ fn generate_jwt(username: &str, role: &str,
         permissions,
         exp: expiry,
         sensor_ids,
+        jti: jti.clone(),
     };
-    encode(
+    let token = encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(secret.as_bytes())
-    ).unwrap_or_default()
+    ).unwrap_or_default();
+    (token, jti)
 }
 
 
@@ -261,6 +266,8 @@ pub struct AuthClaims {
     pub tenant_id: String,
     pub permissions: Vec<String>,
     pub exp: usize,
+    #[serde(default)]
+    pub jti: Option<String>,
     #[serde(default)]
     pub sensor_ids: Vec<String>,
 }
@@ -4136,9 +4143,35 @@ pub async fn check_username(
     }
 }
 
+fn parse_device_from_ua(ua: &str) -> String {
+    let u = ua.to_lowercase();
+    let os = if u.contains("iphone")                        { "iPhone" }
+        else if u.contains("ipad")                          { "iPad" }
+        else if u.contains("android")                       { "Android" }
+        else if u.contains("windows")                       { "Windows" }
+        else if u.contains("mac os") || u.contains("macintosh") { "macOS" }
+        else if u.contains("linux")                         { "Linux" }
+        else                                                { "Unknown" };
+    let browser = if u.contains("edg/")   { "Edge" }
+        else if u.contains("chrome")      { "Chrome" }
+        else if u.contains("firefox")     { "Firefox" }
+        else if u.contains("safari")      { "Safari" }
+        else                              { "Browser" };
+    format!("{} / {}", browser, os)
+}
+
+fn get_client_ip(headers: &axum::http::HeaderMap) -> String {
+    headers.get("X-Forwarded-For")
+        .or_else(|| headers.get("X-Real-IP"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 // POST /api/auth/login
 pub async fn login(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
@@ -4234,13 +4267,42 @@ pub async fn login(
             } else {
                 state.ch_storage.get_user_sensor_ids(&user_uuid, tenant_id).await.unwrap_or_default()
             };
-            let token = generate_jwt(
+            let (token, jti) = generate_jwt(
                 &username,
                 role,
                 tenant_id,
                 permissions_vec.clone(),
                 sensor_ids.clone(),
             );
+
+            // Track active session in Redis for session management.
+            {
+                let ip     = get_client_ip(&headers);
+                let device = parse_device_from_ua(
+                    headers.get("User-Agent")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                );
+                let login_ts = chrono::Utc::now().timestamp().to_string();
+                let session_key    = format!("ndr:session:{}", jti);
+                let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, username);
+                let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+                let mut mux = state.redis_mux.clone();
+                use redis::AsyncCommands;
+                let _ = mux.hset_multiple::<_, _, _, ()>(&session_key, &[
+                    ("username",   username.as_str()),
+                    ("role",       role),
+                    ("tenant_id",  tenant_id),
+                    ("ip",         ip.as_str()),
+                    ("device",     device.as_str()),
+                    ("login_time", login_ts.as_str()),
+                ]).await;
+                let _: redis::RedisResult<bool> = mux.expire(&session_key, 86400usize).await;
+                let _: redis::RedisResult<i64>  = mux.sadd(&user_set_key, &jti).await;
+                let _: redis::RedisResult<bool> = mux.expire(&user_set_key, 86400usize).await;
+                let _: redis::RedisResult<i64>  = mux.sadd(&tenant_set_key, &jti).await;
+            }
+
             let ai_enabled = if role == "super_admin" {
                 true
             } else {
@@ -9899,6 +9961,90 @@ pub async fn delete_doh_provider(
         *state.doh_ips.write().await = set;
     }
     Json(json!({"status":"ok","removed":ip}))
+}
+
+// GET /api/admin/active-sessions — returns all active sessions for the caller's tenant
+pub async fn get_active_sessions(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    if !matches!(claims.role.as_str(), "admin" | "super_admin" | "tenant_admin") {
+        return Json(json!({"status":"error","message":"Forbidden"}));
+    }
+    let tenant_id = &claims.tenant_id;
+
+    use redis::AsyncCommands;
+    let mut mux = state.redis_mux.clone();
+    let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+    let jtis: Vec<String> = mux.smembers(&tenant_set_key).await.unwrap_or_default();
+
+    let mut sessions: Vec<Value> = Vec::new();
+    for jti in &jtis {
+        let session_key = format!("ndr:session:{}", jti);
+        let fields: std::collections::HashMap<String, String> =
+            mux.hgetall(&session_key).await.unwrap_or_default();
+        if fields.is_empty() {
+            // Session expired — clean up the stale JTI from the tenant set
+            let _: redis::RedisResult<()> = mux.srem(&tenant_set_key, jti).await;
+            continue;
+        }
+        sessions.push(json!({
+            "jti":        jti,
+            "username":   fields.get("username").cloned().unwrap_or_default(),
+            "role":       fields.get("role").cloned().unwrap_or_default(),
+            "ip":         fields.get("ip").cloned().unwrap_or_default(),
+            "device":     fields.get("device").cloned().unwrap_or_default(),
+            "login_time": fields.get("login_time").cloned().unwrap_or_default(),
+        }));
+    }
+    Json(json!({"status":"ok","sessions":sessions}))
+}
+
+// DELETE /api/admin/sessions/:username — force logout all sessions for a user
+pub async fn force_logout_user(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(target_username): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    if !matches!(claims.role.as_str(), "admin" | "super_admin" | "tenant_admin") {
+        return Json(json!({"status":"error","message":"Forbidden"}));
+    }
+    let tenant_id = &claims.tenant_id;
+
+    use redis::AsyncCommands;
+    let mut mux = state.redis_mux.clone();
+    let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, target_username);
+    let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+
+    let jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
+    let count = jtis.len();
+    for jti in &jtis {
+        let _: redis::RedisResult<i64> = mux.del(format!("ndr:session:{}", jti)).await;
+        let _: redis::RedisResult<i64> = mux.srem(&tenant_set_key, jti).await;
+    }
+    let _: redis::RedisResult<i64> = mux.del(&user_set_key).await;
+
+    // Push force_logout WS message — Angular filters by target_username
+    let msg = serde_json::to_string(&json!({
+        "type":            "force_logout",
+        "target_username": target_username,
+        "reason":          "Session terminated by administrator"
+    })).unwrap_or_default();
+    publish_event(&state, tenant_id, &msg);
+
+    tracing::info!(
+        "Admin '{}' force-logged-out '{}' ({} sessions terminated)",
+        claims.sub, target_username, count
+    );
+    Json(json!({"status":"ok","sessions_terminated":count}))
 }
 
 // GET /api/admin/version — returns current + latest version info (on-prem only)

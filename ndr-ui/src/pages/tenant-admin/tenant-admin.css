@@ -2011,3 +2011,31 @@ input.field-invalid { border-color: var(--rose) !important; }
 .update-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Active Sessions ── */
+.session-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.1rem; height: 1.1rem; padding: 0 0.25rem; background: rgba(99,102,241,0.35); border-radius: 0.25rem; font-size: 0.65rem; font-weight: 700; color: #a5b4fc; margin-left: 0.35rem; }
+.sessions-panel { display: flex; flex-direction: column; gap: 1rem; }
+.sessions-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 0.25rem; }
+.sessions-header h3 { font-size: 0.95rem; font-weight: 700; color: var(--tx1); margin: 0 0 0.2rem; }
+.sessions-header p  { font-size: 0.78rem; color: var(--tx3); margin: 0; }
+.sessions-loading, .sessions-empty { display: flex; align-items: center; gap: 0.65rem; padding: 1.5rem; background: rgba(110,117,136,0.05); border: 1px dashed var(--b1); border-radius: 0.5rem; color: var(--tx3); font-size: 0.82rem; }
+.session-user-group { background: var(--surface, rgba(255,255,255,0.02)); border: 1px solid var(--b1); border-radius: 0.55rem; overflow: hidden; }
+.session-user-header { display: flex; align-items: center; gap: 0.85rem; padding: 0.75rem 1rem; background: rgba(110,117,136,0.06); }
+.session-user-identity { display: flex; align-items: center; gap: 0.65rem; flex: 1; }
+.session-avatar { width: 2rem; height: 2rem; border-radius: 0.35rem; background: rgba(99,102,241,0.2); border: 1px solid rgba(99,102,241,0.3); display: flex; align-items: center; justify-content: center; font-size: 0.85rem; font-weight: 700; color: #a5b4fc; flex-shrink: 0; }
+.session-user-identity strong { font-size: 0.85rem; color: var(--tx1); display: block; }
+.session-role { font-size: 0.7rem; color: var(--tx3); text-transform: capitalize; }
+.session-device-count { font-size: 0.76rem; color: var(--tx3); white-space: nowrap; }
+.force-logout-btn { display: flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.75rem; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: 0.35rem; color: #f87171; font-size: 0.74rem; font-weight: 600; cursor: pointer; transition: background 0.15s; white-space: nowrap; }
+.force-logout-btn:hover:not(:disabled) { background: rgba(239,68,68,0.2); }
+.force-logout-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.session-device-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 1rem 0.5rem 1.1rem; border-top: 1px solid var(--b1); font-size: 0.78rem; }
+.session-device-icon { color: var(--tx3); flex-shrink: 0; }
+.session-device-name { color: var(--tx1); flex: 1; }
+.session-device-ip   { font-family: monospace; color: var(--tx3); font-size: 0.73rem; }
+.session-device-time { color: var(--tx3); font-size: 0.72rem; white-space: nowrap; }
+.force-logout-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; padding: 0.65rem 1rem; border-top: 1px solid rgba(239,68,68,0.25); background: rgba(239,68,68,0.06); font-size: 0.8rem; color: var(--tx2); }
+.force-logout-confirm strong { color: var(--tx1); }
+.force-logout-confirm-actions { display: flex; gap: 0.5rem; margin-left: auto; }
+.force-logout-confirm-btn { padding: 0.3rem 0.85rem; background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.4); border-radius: 0.35rem; color: #f87171; font-size: 0.76rem; font-weight: 600; cursor: pointer; }
+.force-logout-confirm-btn:hover { background: rgba(239,68,68,0.35); }

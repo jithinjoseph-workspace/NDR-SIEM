@@ -108,11 +108,15 @@ export class Websocket {
             if (data.type === 'interfaces')  this.lastInterfaces$.next(data);
             if (data.type === 'telemetry')   this.lastTelemetry$.next(data);
             if (data.type === 'force_logout') {
-              this.disconnect();
-              localStorage.removeItem('ndr_token');
-              localStorage.removeItem('ndr_user');
-              sessionStorage.clear();
-              window.location.href = '/login';
+              const me = JSON.parse(localStorage.getItem('ndr_user') || '{}')?.username;
+              // Respect target_username if present — only kick the right user
+              if (!data.target_username || data.target_username === me) {
+                this.disconnect();
+                localStorage.removeItem('ndr_token');
+                localStorage.removeItem('ndr_user');
+                sessionStorage.clear();
+                window.location.href = '/login';
+              }
             }
           });
         } catch (e) {

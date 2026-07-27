@@ -138,7 +138,13 @@ export class TenantAdmin implements OnInit, OnDestroy {
   // Bulk Selection
   selectedUserIds: Set<string> = new Set();
 
-  activeTab: 'users' | 'trusted-domains' = 'users';
+  activeTab: 'users' | 'trusted-domains' | 'sessions' = 'users';
+
+  // Active Sessions
+  activeSessions: any[] = [];
+  sessionsLoading = false;
+  sessionsGrouped: Record<string, any[]> = {};
+  forceLogoutConfirmUser = '';
 
   // Trusted Domains (tenant-specific)
   trustedDomains: any[] = [];
@@ -1207,9 +1213,62 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.tdAiSuggestions = this.tdAiSuggestions.filter(s => s.domain !== domain);
   }
 
-  switchTab(tab: 'users' | 'trusted-domains') {
+  switchTab(tab: 'users' | 'trusted-domains' | 'sessions') {
     this.activeTab = tab;
     if (tab === 'trusted-domains') this.loadTrustedDomains();
+    if (tab === 'sessions') this.loadActiveSessions();
+  }
+
+  loadActiveSessions() {
+    this.sessionsLoading = true;
+    this.api.getActiveSessions().subscribe({
+      next: (data: any) => {
+        this.activeSessions = data.sessions || [];
+        this.sessionsGrouped = {};
+        for (const s of this.activeSessions) {
+          if (!this.sessionsGrouped[s.username]) this.sessionsGrouped[s.username] = [];
+          this.sessionsGrouped[s.username].push(s);
+        }
+        this.sessionsLoading = false;
+        this.cdr.markForCheck();
+      },
+      error: () => { this.sessionsLoading = false; }
+    });
+  }
+
+  sessionUsernames(): string[] {
+    return Object.keys(this.sessionsGrouped).sort();
+  }
+
+  promptForceLogout(username: string) {
+    this.forceLogoutConfirmUser = username;
+  }
+
+  cancelForceLogout() {
+    this.forceLogoutConfirmUser = '';
+  }
+
+  confirmForceLogout(username: string) {
+    this.api.forceLogoutUser(username).subscribe({
+      next: (data: any) => {
+        this.forceLogoutConfirmUser = '';
+        this.showMessage(
+          `${username} signed out from ${data.sessions_terminated} device(s)`,
+          'success'
+        );
+        this.loadActiveSessions();
+      },
+      error: () => {
+        this.showMessage('Failed to sign out user', 'error');
+        this.forceLogoutConfirmUser = '';
+      }
+    });
+  }
+
+  formatLoginTime(ts: string): string {
+    if (!ts) return '—';
+    const d = new Date(parseInt(ts, 10) * 1000);
+    return d.toLocaleString();
   }
 
   get tenantOwnDomains() { return this.trustedDomains.filter(d => d.scope === 'tenant'); }

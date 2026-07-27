@@ -813,6 +813,8 @@ async fn main() {
 .route("/api/admin/leader-status",        get(api::get_leader_status))
 .route("/api/admin/version",              get(api::get_version_status))
 .route("/api/admin/apply-update",         post(api::apply_update))
+.route("/api/admin/active-sessions",      get(api::get_active_sessions))
+.route("/api/admin/sessions/:username",   delete(api::force_logout_user))
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))

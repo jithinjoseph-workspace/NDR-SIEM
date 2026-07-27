@@ -726,4 +726,12 @@ export class Api {
   applyUpdate(): Observable<any> {
     return this.http.post(`${this.baseUrl}/admin/apply-update`, {});
   }
+
+  getActiveSessions(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/active-sessions`);
+  }
+
+  forceLogoutUser(username: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/admin/sessions/${encodeURIComponent(username)}`);
+  }
 }

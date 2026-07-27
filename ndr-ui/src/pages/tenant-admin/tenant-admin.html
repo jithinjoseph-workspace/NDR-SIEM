@@ -119,6 +119,12 @@
       <lucide-icon [name]="GlobeIcon" class="w-4 h-4"></lucide-icon>
       Trusted Domains
     </button>
+    <button class="section-tab" [class.active]="activeTab === 'sessions'"
+            (click)="switchTab('sessions')">
+      <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
+      Active Sessions
+      <span *ngIf="activeSessions.length" class="session-badge">{{ activeSessions.length }}</span>
+    </button>
   </div>
 
   <ng-container *ngIf="activeTab === 'users'">
@@ -679,6 +685,78 @@
       </div>
     </div>
 
+  </ng-container>
+
+  <!-- ── ACTIVE SESSIONS TAB ── -->
+  <ng-container *ngIf="activeTab === 'sessions'">
+    <div class="sessions-panel">
+
+      <div class="sessions-header">
+        <div>
+          <h3>Active Sessions</h3>
+          <p>Analysts and admins currently logged in to this tenant.</p>
+        </div>
+        <button class="secondary-action" type="button" (click)="loadActiveSessions()">
+          <lucide-icon [name]="RefreshCwIcon" class="w-4 h-4"></lucide-icon>
+          Refresh
+        </button>
+      </div>
+
+      <div *ngIf="sessionsLoading" class="sessions-loading">
+        <lucide-icon [name]="LoaderIcon" class="w-5 h-5 spin"></lucide-icon>
+        Loading sessions…
+      </div>
+
+      <div *ngIf="!sessionsLoading && activeSessions.length === 0" class="sessions-empty">
+        <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+        No active sessions found.
+      </div>
+
+      <div *ngFor="let username of sessionUsernames()" class="session-user-group">
+
+        <!-- User Header Row -->
+        <div class="session-user-header">
+          <div class="session-user-identity">
+            <div class="session-avatar">{{ username[0]?.toUpperCase() }}</div>
+            <div>
+              <strong>{{ username }}</strong>
+              <span class="session-role">{{ sessionsGrouped[username][0]?.role }}</span>
+            </div>
+          </div>
+          <div class="session-device-count">
+            {{ sessionsGrouped[username].length }}
+            {{ sessionsGrouped[username].length === 1 ? 'device' : 'devices' }}
+          </div>
+          <button class="force-logout-btn" type="button"
+                  (click)="promptForceLogout(username)"
+                  [disabled]="forceLogoutConfirmUser !== ''">
+            <lucide-icon [name]="XCircleIcon" class="w-4 h-4"></lucide-icon>
+            Sign Out All
+          </button>
+        </div>
+
+        <!-- Per-device rows -->
+        <div class="session-device-row" *ngFor="let s of sessionsGrouped[username]">
+          <lucide-icon [name]="ServerIcon" class="w-4 h-4 session-device-icon"></lucide-icon>
+          <span class="session-device-name">{{ s.device }}</span>
+          <span class="session-device-ip">{{ s.ip }}</span>
+          <span class="session-device-time">{{ formatLoginTime(s.login_time) }}</span>
+        </div>
+
+        <!-- Confirm force-logout inline -->
+        <div *ngIf="forceLogoutConfirmUser === username" class="force-logout-confirm">
+          <lucide-icon [name]="AlertCircleIcon" class="w-4 h-4"></lucide-icon>
+          Sign out <strong>{{ username }}</strong> from all {{ sessionsGrouped[username].length }} device(s)?
+          <div class="force-logout-confirm-actions">
+            <button class="secondary-action" type="button" (click)="cancelForceLogout()">Cancel</button>
+            <button class="force-logout-confirm-btn" type="button" (click)="confirmForceLogout(username)">
+              Confirm Sign Out
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
   </ng-container>
 
   <!-- ── MODAL ── -->
