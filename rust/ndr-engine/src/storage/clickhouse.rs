@@ -2679,27 +2679,27 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 .collect();
 
             if !missing.is_empty() {
-                let rdns_results = tokio::task::spawn_blocking(move || {
-                    let mut out: Vec<(String, String)> = Vec::new();
-                    for ip_str in &missing {
+                // Run each getent lookup concurrently instead of sequentially
+                // to avoid holding a blocking thread for O(N * DNS_timeout).
+                let handles: Vec<_> = missing.into_iter().map(|ip_str| {
+                    tokio::task::spawn_blocking(move || {
                         if let Ok(result) = std::process::Command::new("getent")
-                            .args(["hosts", ip_str])
+                            .args(["hosts", &ip_str])
                             .output()
                         {
                             let text = String::from_utf8_lossy(&result.stdout);
-                            // getent hosts output: "IP   hostname  aliases..."
                             if let Some(name) = text.split_whitespace().nth(1) {
-                                out.push((ip_str.clone(), name.to_string()));
+                                return Some((ip_str, name.to_string()));
                             }
                         }
-                    }
-                    out
-                })
-                .await
-                .unwrap_or_default();
+                        None
+                    })
+                }).collect();
 
-                for (ip, name) in rdns_results {
-                    pdns_map.entry(ip).or_insert(name);
+                for handle in handles {
+                    if let Ok(Some((ip, name))) = handle.await {
+                        pdns_map.entry(ip).or_insert(name);
+                    }
                 }
             }
         }
@@ -5506,7 +5506,7 @@ pub async fn get_ioc_hits(
              toUnixTimestamp(first_seen) as first_seen, toUnixTimestamp(last_seen) as last_seen, \
              ip_history, trusted, threat_flagged, \
              role, criticality, open_ports, subnet_role, ja3_os \
-             FROM {}.assets WHERE tenant_id = '{}' AND ip = '{}' ORDER BY last_seen DESC LIMIT 1",
+             FROM {}.assets FINAL WHERE tenant_id = '{}' AND ip = '{}' LIMIT 1",
             db, sql_escape(tenant_id), sql_escape(ip)
         );
         let asset = self.client.query(&query).fetch_optional::<AssetRow>().await?;

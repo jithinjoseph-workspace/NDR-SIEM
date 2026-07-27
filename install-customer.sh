@@ -949,9 +949,7 @@ log "Vector configured"
 # ══════════════════════════════════════════════
 step "Dashboard UI  (Angular)"
 
-log "Pulling UI Docker image..."
-sudo docker pull "${REGISTRY}/ndr-ui:latest"
-log "UI image ready"
+log "UI image will be pulled after container runtime is ready"
 
 # ══════════════════════════════════════════════
 step "Container Runtime  (Docker)"
@@ -1097,7 +1095,7 @@ http {
     server {
         listen 80;
         server_name _;
-        return 301 https://$host:3000$request_uri;
+        return 301 https://$host$request_uri;
     }
 
     server {
@@ -1115,6 +1113,7 @@ http {
         add_header X-Frame-Options        "SAMEORIGIN"  always;
         add_header X-Content-Type-Options "nosniff"     always;
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws: https:; worker-src 'self' blob:;" always;
 
         location /ws {
             proxy_pass         http://ws_engines;
@@ -1155,8 +1154,9 @@ log "Customer nginx config written"
 sudo docker compose --profile onpremise down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
-log "Pulling pre-built engine image..."
+log "Pulling pre-built images..."
 sudo docker pull "${REGISTRY}/ndr-engine:latest"
+sudo docker pull "${REGISTRY}/ndr-ui:latest"
 
 # Write a compose override that replaces build: with the pre-built image
 cat > "$INSTALL_DIR/docker-compose.customer.yml" << OVERRIDE
@@ -1310,7 +1310,7 @@ printf "  ${CYAN}║${NC}  $(_pad "Interface:  ${IFACE}  (${HOST_IP})")${CYAN}�
 printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
 printf "  ${CYAN}║${NC}  ${BOLD}$(_pad "Service         Access Point")${NC}  ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  ${DIM}$(_pad "─────────────── ────────────────────────")${NC}  ${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}  $(_pad "Dashboard       http://${HOST_IP}:4200")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Dashboard       https://${HOST_IP}:3000")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "API Gateway     https://${HOST_IP}:3000")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "NDR Agent       http://localhost:3001")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "Packet Recorder http://localhost:8005")${CYAN}║${NC}\n"

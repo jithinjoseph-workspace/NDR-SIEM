@@ -60,12 +60,22 @@ log "Detected OS: $NAME $VERSION_ID"
 [[ "$ID" != "ubuntu" ]] && warn "Only Ubuntu tested. Proceed with caution."
 
 # ── Fix APT sources ───────────────────────────
-sudo tee /etc/apt/sources.list > /dev/null << 'EOF'
-deb https://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-deb https://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-deb https://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
-deb https://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+UBUNTU_CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-$(lsb_release -cs 2>/dev/null)}")
+UBUNTU_CODENAME=${UBUNTU_CODENAME:-noble}
+log "Ubuntu codename: ${UBUNTU_CODENAME}"
+
+if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+    log "ubuntu.sources found — clearing sources.list to avoid duplicates"
+    sudo truncate -s 0 /etc/apt/sources.list
+else
+    log "Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
+    sudo tee /etc/apt/sources.list > /dev/null << EOF
+deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME} main restricted universe multiverse
+deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-updates main restricted universe multiverse
+deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-backports main restricted universe multiverse
+deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse
 EOF
+fi
 
 sudo tee /etc/apt/apt.conf.d/99timeout > /dev/null << 'EOF'
 Acquire::http::Timeout "15";
@@ -94,8 +104,15 @@ if ! command -v docker &>/dev/null; then
     log "Installing Docker..."
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    DOCKER_CODENAME="${UBUNTU_CODENAME}"
+    # Fall back to noble if Docker repo doesn't exist for this codename yet
+    if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
+               --max-time 5 -o /dev/null 2>/dev/null; then
+        log "Docker repo not yet available for '${DOCKER_CODENAME}' — falling back to noble"
+        DOCKER_CODENAME="noble"
+    fi
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
-        https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+        https://download.docker.com/linux/ubuntu ${DOCKER_CODENAME} stable" \
         | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \

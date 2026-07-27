@@ -876,6 +876,27 @@ async fn main() {
         });
     }
 
+    // ── Background: periodic in-memory cache eviction ────────────────────
+    {
+        let ws_dedup         = state.ws_dedup.clone();
+        let trusted_cache    = state.trusted_asset_cache.clone();
+        let entity_cache_evict = state.entity_cache.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                // Remove ws_dedup entries older than 30s (they've served their purpose)
+                ws_dedup.retain(|_, v: &mut std::time::Instant| v.elapsed().as_secs() < 30);
+                // Remove trusted_asset_cache entries older than 300s (their TTL)
+                trusted_cache.retain(|_, v: &mut (bool, std::time::Instant)| v.1.elapsed().as_secs() < 300);
+                // Cap entity_cache at 50k entries — drop all when over limit (rebuilt quickly)
+                if entity_cache_evict.len() > 50_000 {
+                    entity_cache_evict.clear();
+                }
+            }
+        });
+    }
+
     // ── Start server + graceful shutdown with leader release ─────────────
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     let server   = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>());
