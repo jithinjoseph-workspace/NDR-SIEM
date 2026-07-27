@@ -399,6 +399,7 @@ async fn main() {
         doh_ips,
         siem,
         trusted_asset_cache: Arc::new(dashmap::DashMap::new()),
+        ws_dedup: Arc::new(dashmap::DashMap::new()),
         trusted_source_cidrs: Arc::new({
             std::env::var("TRUSTED_SOURCE_CIDRS").unwrap_or_default()
                 .split(',')

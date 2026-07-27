@@ -157,7 +157,14 @@ export class NetworkMap implements OnInit, OnDestroy {
   }
 
   hasFavicon(node: any): boolean {
-    // Return true if it's an external domain group
+    const d = this.getDomain(node);
+    if (!d) return false;
+    // Skip mDNS service names, reverse DNS zones, and bare TLDs
+    if (d.startsWith('_')) return false;
+    if (d.endsWith('.arpa') || d.endsWith('.local')) return false;
+    if (d.includes('._tcp') || d.includes('._udp') || d.includes('._sub')) return false;
+    // Must look like a real domain (contains at least one dot and no spaces)
+    if (!d.includes('.') || d.includes(' ')) return false;
     return node.type === 'domain' || (!node.is_internal && node.type !== 'cluster' && node.label && node.label !== node.id);
   }
 

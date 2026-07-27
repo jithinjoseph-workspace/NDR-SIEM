@@ -1203,7 +1203,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     "score": score,
                                     "tenant_id": tid_cl,
                                 });
-                                crate::api::publish_event(&state_soar, &tid_cl, &ws_msg.to_string());
+                                crate::api::publish_event_deduped(&state_soar, &tid_cl, &ws_msg.to_string(), &src_ws, &sev_ws);
                             });
                         }
                     }
@@ -1364,7 +1364,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 "severity": sev_clone, "score": score_soar,
                                 "tenant_id": tid_clone,
                             });
-                            crate::api::publish_event(&state_soar, &tid_clone, &ws_msg.to_string());
+                            crate::api::publish_event_deduped(&state_soar, &tid_clone, &ws_msg.to_string(), &src_clone, &sev_clone);
                             if !do_evidence { return; }
 
                             let opensearch_url = std::env::var("OPENSEARCH_URL")

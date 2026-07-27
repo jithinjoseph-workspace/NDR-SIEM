@@ -558,6 +558,46 @@
   border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
+.actions-cell {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.btn-deactivate, .btn-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.btn-deactivate {
+  background: rgba(255, 170, 0, 0.12);
+  color: #ffaa00;
+  border-color: rgba(255, 170, 0, 0.3);
+}
+.btn-deactivate:hover {
+  background: rgba(255, 170, 0, 0.22);
+  border-color: rgba(255, 170, 0, 0.6);
+}
+
+.btn-delete {
+  background: rgba(255, 60, 60, 0.12);
+  color: #ff4d4d;
+  border-color: rgba(255, 60, 60, 0.3);
+}
+.btn-delete:hover {
+  background: rgba(255, 60, 60, 0.22);
+  border-color: rgba(255, 60, 60, 0.6);
+}
+
 /* Animations */
 .tabs, .analysis-list, .predictions-grid, .suppression-table-wrap {
   animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;

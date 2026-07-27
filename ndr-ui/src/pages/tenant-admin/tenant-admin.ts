@@ -210,6 +210,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
     { key: 'evidence', label: 'Evidence', description: 'Evidence and artifact locker', icon: this.FolderSearchIcon },
     { key: 'soar', label: 'SOAR View', description: 'Read-only automation visibility', icon: this.SettingsIcon },
     { key: 'ai-activity', label: 'AI Activity', description: 'Aria analyst interactions', icon: this.BotIcon },
+    { key: 'ai-report',   label: 'AI Report',   description: 'AI-generated security reports', icon: this.BotIcon },
   ];
 
   permissionCategories = [
@@ -243,6 +244,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
         this.permissionOptions.find(p => p.key === 'health')!,
         this.permissionOptions.find(p => p.key === 'soar')!,
         this.permissionOptions.find(p => p.key === 'ai-activity')!,
+        this.permissionOptions.find(p => p.key === 'ai-report')!,
       ]
     }
   ];

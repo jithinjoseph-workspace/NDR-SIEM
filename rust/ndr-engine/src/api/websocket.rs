@@ -179,7 +179,7 @@ async fn handle_ws(
                         // Push live stats + supporting data alongside the keepalive ping
                         let (stats, severity, top_src, top_dst, protocols) = tokio::join!(
                             state.ch_storage.get_stats_by_tenant(&auth.tenant_id, &auth.sensor_ids),
-                            state.ch_storage.get_severity_by_tenant(&auth.tenant_id, &auth.sensor_ids),
+                            state.ch_storage.get_severity_by_tenant(&auth.tenant_id, &auth.sensor_ids, 0),
                             state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
                             state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
                             state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
@@ -304,7 +304,7 @@ async fn handle_ws(
             _ = ping_interval_fb.tick() => {
                 let (stats, severity, top_src, top_dst, protocols) = tokio::join!(
                     state.ch_storage.get_stats_by_tenant(&auth.tenant_id, &auth.sensor_ids),
-                    state.ch_storage.get_severity_by_tenant(&auth.tenant_id, &auth.sensor_ids),
+                    state.ch_storage.get_severity_by_tenant(&auth.tenant_id, &auth.sensor_ids, 0),
                     state.ch_storage.get_top_src_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
                     state.ch_storage.get_top_dst_ips_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),
                     state.ch_storage.get_top_protocols_by_tenant(10, &auth.tenant_id, &auth.sensor_ids),

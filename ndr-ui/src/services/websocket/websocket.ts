@@ -1,6 +1,9 @@
 import { Injectable, NgZone } from '@angular/core';
 import { Subject, BehaviorSubject, filter } from 'rxjs';
 
+const HIGH_VOLUME_TYPES = new Set(['hit', 'agent-s', 'agent-z']);
+const FLUSH_INTERVAL_MS = 300;
+
 @Injectable({
   providedIn: 'root'
 })
@@ -25,7 +28,11 @@ export class Websocket {
   private hitsHistory: any[] = [];
   public continuousHits$ = new BehaviorSubject<any[]>([]);
 
-  constructor(private zone: NgZone) { 
+  // Buffer for high-volume events; flushed into zone every FLUSH_INTERVAL_MS
+  private pendingBatch: any[] = [];
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(private zone: NgZone) {
     try {
       const stored = sessionStorage.getItem('ndr_live_hits');
       if (stored) {
@@ -56,10 +63,15 @@ export class Websocket {
     // ── Cleanly close the old socket so its onclose cannot fire ──────────
     if (this.socket) {
       const stale = this.socket;
-      stale.onclose = null; // prevent the stale handler from scheduling a reconnect
+      stale.onclose = null;
       stale.onerror = null;
       stale.close();
       this.socket = null;
+    }
+
+    // ── Start batch flush timer outside Angular zone ──────────────────────
+    if (!this.flushTimer) {
+      this.flushTimer = setInterval(() => this.flushBatch(), FLUSH_INTERVAL_MS);
     }
 
     try {
@@ -74,16 +86,23 @@ export class Websocket {
 
       this.socket = new WebSocket(wsUrl);
 
-      // Send token as first message so it never appears in nginx logs or browser history
       this.socket.onopen = () => this.zone.run(() => {
         this.socket?.send(JSON.stringify({ type: 'auth', token }));
       });
 
+      // Message handler runs OUTSIDE zone; only critical events enter zone immediately
       this.socket.onmessage = (event) => {
-        // Run inside Angular zone so UI updates instantly
-        this.zone.run(() => {
-          try {
-            const data = JSON.parse(event.data);
+        try {
+          const data = JSON.parse(event.data);
+
+          if (HIGH_VOLUME_TYPES.has(data.type)) {
+            // Queue for batched zone entry
+            this.pendingBatch.push(data);
+            return;
+          }
+
+          // Critical events enter zone immediately
+          this.zone.run(() => {
             this.messages$.next(data);
             if (data.type === 'agent_status') this.lastAgentStatus$.next(data);
             if (data.type === 'interfaces')  this.lastInterfaces$.next(data);
@@ -94,34 +113,18 @@ export class Websocket {
               localStorage.removeItem('ndr_user');
               sessionStorage.clear();
               window.location.href = '/login';
-              return;
             }
-            if (data.type === 'hit') {
-              this.hitsHistory.unshift(data);
-              if (this.hitsHistory.length > 100) this.hitsHistory.pop();
-
-              // Throttle updates to BehaviorSubject and sessionStorage to prevent browser freeze
-              if (!this.updateTimeout) {
-                this.updateTimeout = setTimeout(() => {
-                  this.updateTimeout = null;
-                  this.continuousHits$.next([...this.hitsHistory]);
-                  try {
-                    sessionStorage.setItem('ndr_live_hits', JSON.stringify(this.hitsHistory));
-                  } catch (e) {}
-                }, 250);
-              }
-            }
-          } catch (e) {
-            console.warn('Invalid WS message:', event.data);
-          }
-        });
+          });
+        } catch (e) {
+          console.warn('Invalid WS message:', event.data);
+        }
       };
 
       this.socket.onerror = (e) => console.error('WebSocket Error:', e);
 
       this.socket.onclose = () => {
         console.warn('WebSocket closed, reconnecting in 3s...');
-        this.socket = null; // clear reference so the guard lets us reconnect
+        this.socket = null;
         this.reconnectTimer = setTimeout(() => {
           this.reconnectTimer = null;
           this.connect();
@@ -136,6 +139,31 @@ export class Websocket {
     }
   }
 
+  private flushBatch() {
+    if (this.pendingBatch.length === 0) return;
+    const batch = this.pendingBatch.splice(0);
+    this.zone.run(() => {
+      for (const data of batch) {
+        this.messages$.next(data);
+        if (data.type === 'hit') {
+          this.hitsHistory.unshift(data);
+          if (this.hitsHistory.length > 100) this.hitsHistory.pop();
+        }
+      }
+      if (batch.some(d => d.type === 'hit')) {
+        this.continuousHits$.next([...this.hitsHistory]);
+        if (!this.updateTimeout) {
+          this.updateTimeout = setTimeout(() => {
+            this.updateTimeout = null;
+            try {
+              sessionStorage.setItem('ndr_live_hits', JSON.stringify(this.hitsHistory));
+            } catch (e) {}
+          }, 250);
+        }
+      }
+    });
+  }
+
   disconnect() {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
@@ -145,6 +173,11 @@ export class Websocket {
       clearTimeout(this.updateTimeout);
       this.updateTimeout = null;
     }
+    if (this.flushTimer !== null) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.pendingBatch = [];
     if (this.socket) {
       this.socket.onclose = null;
       this.socket.onerror = null;

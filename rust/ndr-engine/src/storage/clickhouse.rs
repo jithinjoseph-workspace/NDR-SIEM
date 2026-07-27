@@ -2550,9 +2550,14 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_recent_hits_by_tenant(
-        &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String], hours: u32,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
+        let time_filter = if hours == 0 {
+            "AND timestamp > now() - INTERVAL 30 DAY".to_string()
+        } else {
+            format!("AND timestamp > now() - INTERVAL {} HOUR", hours)
+        };
         let sensor_filter = if sensor_ids.is_empty() {
             String::new()
         } else {
@@ -2592,7 +2597,8 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                 correlation_status, agent_s_rule_id, toUInt32(corroborated_at) AS corroborated_at, \
                 sensor_id \
              FROM {db}.ndr_hits FINAL \
-             WHERE timestamp > now() - INTERVAL 30 DAY \
+             WHERE 1=1 \
+               {tf} \
                {sf} \
                AND community_id NOT IN ( \
                  SELECT community_id FROM ndr.ai_suppressions FINAL \
@@ -2603,6 +2609,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                {gf} \
              ORDER BY timestamp DESC, score DESC LIMIT {lim}",
             db  = db_name,
+            tf  = time_filter,
             sf  = sensor_filter,
             tid = sql_escape(tenant_id),
             gf  = group_filter,
@@ -2775,18 +2782,35 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_severity_by_tenant(
-        &self, tenant_id: &str, sensor_ids: &[String]
+        &self, tenant_id: &str, sensor_ids: &[String], hours: u32,
     ) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let sf = Self::sensor_filter(sensor_ids);
+        // When hours > 0 (report mode): use FINAL, apply time window, exclude suppressed hits.
+        // When hours == 0 (dashboard/WS): fast all-time count without FINAL.
+        let (table, time_filter, sup_filter) = if hours > 0 {
+            let tf = format!("AND timestamp > now() - INTERVAL {} HOUR", hours);
+            let sf_sup = format!(
+                "AND community_id NOT IN ( \
+                   SELECT community_id FROM ndr.ai_suppressions FINAL \
+                   WHERE active = 1 AND community_id != '' \
+                     AND (expires_at IS NULL OR expires_at > now()) \
+                     AND (tenant_id = '{tid}' OR tenant_id = '') \
+                 )",
+                tid = sql_escape(tenant_id)
+            );
+            (format!("{db}.ndr_hits FINAL", db = db_name), tf, sf_sup)
+        } else {
+            (format!("{db}.ndr_hits", db = db_name), String::new(), String::new())
+        };
         let row = self.client.query(&format!(
             "SELECT \
              countIf(lower(severity)='critical') as critical, \
              countIf(lower(severity)='high') as high, \
              countIf(lower(severity)='medium') as medium, \
              countIf(lower(severity)='low') as low \
-             FROM {db}.ndr_hits WHERE 1=1{sf}",
-            db = db_name, sf = sf))
+             FROM {tbl} WHERE 1=1{sf}{tf}{supf}",
+            tbl = table, sf = sf, tf = time_filter, supf = sup_filter))
             .fetch_one::<(u64, u64, u64, u64)>()
             .await.unwrap_or((0, 0, 0, 0));
         Ok(serde_json::json!({

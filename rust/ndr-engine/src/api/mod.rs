@@ -187,6 +187,10 @@ pub struct AppState {
     pub trusted: Arc<tokio::sync::RwLock<crate::threat::cloud_trust::TrustedRanges>>,
     pub sensor_ip: Option<std::net::IpAddr>,
     pub entity_cache: Arc<dashmap::DashMap<String, f32>>,
+    // WS flood dedup: key = "tenant:src_ip:severity", value = last-published Instant.
+    // First event in a 30-second window is pushed to the browser; duplicates are dropped.
+    // ClickHouse storage is unaffected — every event is still stored.
+    pub ws_dedup: Arc<dashmap::DashMap<String, std::time::Instant>>,
     pub doh_ips: Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>,
     pub siem: Option<Arc<crate::siem::SiemForwarder>>,
     // (bool trusted, Instant expires) — 5-min TTL avoids a ClickHouse round-trip per hit
@@ -204,6 +208,35 @@ pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
     // Falls back to in-process broadcast only when the channel is full (rare).
     if state.publish_tx.try_send((channel, msg.to_string())).is_err() {
         let _ = state.tx.send(msg.to_string());
+    }
+}
+
+/// Like publish_event but deduplicates WS pushes by (tenant, src_ip, severity).
+/// The first event in a 30-second window is pushed; subsequent identical events
+/// are silently dropped from the live feed. ClickHouse storage is never affected.
+/// This prevents browser flooding during nmap scans or high-rate detection bursts.
+pub fn publish_event_deduped(
+    state: &AppState,
+    tenant_id: &str,
+    msg: &str,
+    src_ip: &str,
+    severity: &str,
+) {
+    let key = format!("{}:{}:{}", tenant_id, src_ip, severity);
+    let now = std::time::Instant::now();
+    let should_publish = if let Some(mut t) = state.ws_dedup.get_mut(&key) {
+        if t.elapsed().as_secs() >= 30 {
+            *t = now;
+            true
+        } else {
+            false
+        }
+    } else {
+        state.ws_dedup.insert(key, now);
+        true
+    };
+    if should_publish {
+        publish_event(state, tenant_id, msg);
     }
 }
 
@@ -1968,7 +2001,7 @@ pub async fn get_hits(State(state): State<AppState>, headers: axum::http::Header
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
     let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
-    match state.ch_storage.get_recent_hits_by_tenant(200, &tenant_id, &sensor_ids).await {
+    match state.ch_storage.get_recent_hits_by_tenant(200, &tenant_id, &sensor_ids, 0).await {
         Ok(hits) => Json(json!(hits)),
         Err(e) => {
             tracing::warn!("Hits query error: {}", e);
@@ -3080,9 +3113,14 @@ fn build_xlsx_report(
     ws_summary.set_column_width(1, 18.0).map_err(|e| e.to_string())?;
     ws_summary.write_with_format(0, 0, "Metric", &hdr_fmt).map_err(|e| e.to_string())?;
     ws_summary.write_with_format(0, 1, "Value",  &hdr_fmt).map_err(|e| e.to_string())?;
+    // "Total Hits" = scoped count (same window + suppression as Alerts sheet)
+    let scoped_hits_total: u64 = ["critical", "high", "medium", "low", "info"]
+        .iter()
+        .map(|s| report["severity_breakdown"][s].as_u64().unwrap_or(0))
+        .sum();
     let summary_rows: &[(&str, u64)] = &[
         ("Total Events",      report["summary"]["total_events"].as_u64().unwrap_or(0)),
-        ("Total Hits",        report["summary"]["total_hits"].as_u64().unwrap_or(0)),
+        ("Total Hits",        scoped_hits_total),
         ("Events Last Hour",  report["summary"]["events_1h"].as_u64().unwrap_or(0)),
         ("Agent-Z Events",    report["summary"]["agent_z_events"].as_u64().unwrap_or(0)),
         ("Agent-S Events",    report["summary"]["agent_s_events"].as_u64().unwrap_or(0)),
@@ -3165,7 +3203,13 @@ fn build_xlsx_report(
     ws_sev.write_with_format(0, 0, "Severity",   &hdr_fmt).map_err(|e| e.to_string())?;
     ws_sev.write_with_format(0, 1, "Count",      &hdr_fmt).map_err(|e| e.to_string())?;
     ws_sev.write_with_format(0, 2, "% of Total", &hdr_fmt).map_err(|e| e.to_string())?;
-    let sev_total = report["summary"]["total_hits"].as_u64().unwrap_or(1).max(1) as f64;
+    // Use the sum of scoped severity counts as denominator — these are filtered to the
+    // same time window and suppression rules as the Alerts sheet, so percentages are accurate.
+    let sev_total = ["critical", "high", "medium", "low", "info"]
+        .iter()
+        .map(|s| report["severity_breakdown"][s].as_u64().unwrap_or(0))
+        .sum::<u64>()
+        .max(1) as f64;
     let mut sev_row = 1u32;
     for sev_name in ["critical", "high", "medium", "low", "info"] {
         let cnt = report["severity_breakdown"][sev_name].as_u64().unwrap_or(0);
@@ -3306,11 +3350,11 @@ pub async fn export_report(
 
     let stats    = state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or(json!({}));
-    let hits     = state.ch_storage.get_recent_hits_by_tenant(100, &tenant_id, &sensor_ids).await
+    let hits     = state.ch_storage.get_recent_hits_by_tenant(500, &tenant_id, &sensor_ids, hours).await
         .unwrap_or_default();
     let top_ips  = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id, &sensor_ids).await
         .unwrap_or_default();
-    let severity = state.ch_storage.get_severity_by_tenant(&tenant_id, &sensor_ids).await
+    let severity = state.ch_storage.get_severity_by_tenant(&tenant_id, &sensor_ids, hours).await
         .unwrap_or(json!({}));
     let threat   = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or_default();
@@ -4051,7 +4095,7 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
     let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
-    match state.ch_storage.get_severity_by_tenant(&tenant_id, &sensor_ids).await {
+    match state.ch_storage.get_severity_by_tenant(&tenant_id, &sensor_ids, 0).await {
         Ok(data) => Json(data),
         Err(e) => {
             tracing::warn!("Severity query error: {}", e);

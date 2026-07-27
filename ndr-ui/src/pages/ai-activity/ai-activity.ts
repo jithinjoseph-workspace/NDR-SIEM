@@ -2,7 +2,7 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { interval, of } from 'rxjs';
+import { interval, merge, of, Subject } from 'rxjs';
 import { catchError, map, startWith, switchMap } from 'rxjs/operators';
 import { Api } from '../../services/api/api';
 import { LucideAngularModule, Bot, ShieldOff, FileText, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, Shield, AlertTriangle, Activity } from 'lucide-angular';
@@ -40,8 +40,10 @@ export class AiActivity {
   expandedAnalyses  = new Set<string>();
   expandedPrediction = signal<string | null>(null);
 
+  private refresh$ = new Subject<void>();
+
   private data = toSignal(
-    interval(15_000).pipe(
+    merge(interval(15_000), this.refresh$).pipe(
       startWith(0),
       switchMap(() =>
         this.api.getAiActivity().pipe(
@@ -127,12 +129,16 @@ export class AiActivity {
   }
 
   deactivateSuppression(id: string) {
-    this.api.deactivateAiSuppression(id).subscribe();
+    this.api.deactivateAiSuppression(id).subscribe({
+      next: () => this.refresh$.next(),
+    });
   }
 
   deleteSuppression(id: string) {
     if (!confirm('Delete this suppression rule permanently?')) return;
-    this.api.deleteAiSuppression(id).subscribe();
+    this.api.deleteAiSuppression(id).subscribe({
+      next: () => this.refresh$.next(),
+    });
   }
 
   openAiReport() {
