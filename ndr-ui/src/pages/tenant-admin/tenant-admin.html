@@ -60,6 +60,46 @@
     </div>
   </div>
 
+  <!-- ── SOFTWARE UPDATE BANNER ── -->
+  <div *ngIf="updateAvailable" class="update-banner">
+    <lucide-icon [name]="ArrowUpCircleIcon" class="w-5 h-5"></lucide-icon>
+    <span>
+      Update available — <strong>v{{ latestVersion }}</strong>
+      <span class="update-current">(current: v{{ currentVersion }})</span>
+    </span>
+    <button class="update-btn" type="button" (click)="openUpdateDialog()">
+      <lucide-icon [name]="RefreshCwIcon" class="w-4 h-4"></lucide-icon>
+      Update Now
+    </button>
+  </div>
+
+  <!-- ── UPDATE CONFIRMATION DIALOG ── -->
+  <div *ngIf="showUpdateDialog" class="dialog-overlay" (click)="closeUpdateDialog()">
+    <div class="dialog-box" (click)="$event.stopPropagation()">
+      <div class="dialog-header">
+        <lucide-icon [name]="ArrowUpCircleIcon" class="w-5 h-5"></lucide-icon>
+        <h3>Apply System Update</h3>
+      </div>
+      <div class="dialog-body">
+        <p>This will update the NDR platform from <strong>v{{ currentVersion }}</strong> to <strong>v{{ latestVersion }}</strong>.</p>
+        <ul class="update-notes">
+          <li>Services will restart — active sessions may disconnect briefly</li>
+          <li>All stored data and configuration are preserved</li>
+          <li>The dashboard will reconnect automatically</li>
+        </ul>
+        <div *ngIf="updateMessage" class="update-status-msg">{{ updateMessage }}</div>
+      </div>
+      <div class="dialog-actions">
+        <button class="secondary-action" type="button" (click)="closeUpdateDialog()" [disabled]="updateApplying">Cancel</button>
+        <button class="update-confirm-btn" type="button" (click)="confirmApplyUpdate()" [disabled]="updateApplying">
+          <lucide-icon *ngIf="!updateApplying" [name]="ArrowUpCircleIcon" class="w-4 h-4"></lucide-icon>
+          <lucide-icon *ngIf="updateApplying"  [name]="LoaderIcon"        class="w-4 h-4 spin"></lucide-icon>
+          {{ updateApplying ? 'Applying…' : 'Confirm Update' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── NOTIFICATION ── -->
   <div *ngIf="message" [class]="'tenant-message ' + messageType">
     <lucide-icon *ngIf="messageType === 'success'" [name]="ShieldIcon" class="w-4 h-4"></lucide-icon>

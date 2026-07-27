@@ -40,7 +40,10 @@ import {
   CheckCircle2,
   XCircle,
   ChevronDown,
-  Check
+  Check,
+  ArrowUpCircle,
+  RefreshCw,
+  Loader
 } from 'lucide-angular';
 import { Api, SensorKey, SensorAssignment } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
@@ -109,6 +112,17 @@ export class TenantAdmin implements OnInit, OnDestroy {
   XCircleIcon = XCircle;
   ChevronDownIcon = ChevronDown;
   CheckIcon = Check;
+  ArrowUpCircleIcon = ArrowUpCircle;
+  RefreshCwIcon = RefreshCw;
+  LoaderIcon = Loader;
+
+  // Software update state
+  updateAvailable = false;
+  currentVersion = '';
+  latestVersion = '';
+  showUpdateDialog = false;
+  updateApplying = false;
+  updateMessage = '';
 
   // Sensor Assignment
   sensorKeys: SensorKey[] = [];
@@ -296,6 +310,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
     this.loadUsers();
     this.loadSensorData();
+    this.checkForUpdates();
   }
 
   ngOnDestroy(): void {
@@ -1199,4 +1214,61 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   get tenantOwnDomains() { return this.trustedDomains.filter(d => d.scope === 'tenant'); }
   get globalDomains() { return this.trustedDomains.filter(d => d.scope === 'global'); }
+
+  checkForUpdates() {
+    this.api.getVersionStatus().subscribe({
+      next: (data: any) => {
+        this.currentVersion  = data.current_version || '';
+        this.latestVersion   = data.latest_version  || '';
+        this.updateAvailable = !!data.update_available;
+        this.cdr.markForCheck();
+      },
+      error: () => {}  // cloud deployments return 403/404 — silently ignore
+    });
+  }
+
+  openUpdateDialog() {
+    this.showUpdateDialog = true;
+    this.updateMessage = '';
+  }
+
+  closeUpdateDialog() {
+    this.showUpdateDialog = false;
+  }
+
+  confirmApplyUpdate() {
+    this.updateApplying = true;
+    this.updateMessage  = '';
+    this.api.applyUpdate().subscribe({
+      next: (data: any) => {
+        this.updateMessage  = data.message || 'Update triggered. Services restarting…';
+        this.updateApplying = false;
+        this.updateAvailable = false;
+        this.cdr.markForCheck();
+        // Poll until engine comes back (up to 3 min)
+        let attempts = 0;
+        const poll = setInterval(() => {
+          this.api.getVersionStatus().subscribe({
+            next: (v: any) => {
+              if (v.current_version === this.latestVersion || ++attempts > 36) {
+                clearInterval(poll);
+                this.currentVersion = v.current_version;
+                this.latestVersion  = v.latest_version || '';
+                this.updateAvailable = !!v.update_available;
+                this.showUpdateDialog = false;
+                this.showMessage(`Updated to v${this.currentVersion}`, 'success');
+                this.cdr.markForCheck();
+              }
+            },
+            error: () => { attempts++; }
+          });
+        }, 5000);
+      },
+      error: (err: any) => {
+        this.updateMessage  = err?.error?.message || 'Update request failed';
+        this.updateApplying = false;
+        this.cdr.markForCheck();
+      }
+    });
+  }
 }

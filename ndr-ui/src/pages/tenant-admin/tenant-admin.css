@@ -1986,3 +1986,28 @@ input.field-invalid { border-color: var(--rose) !important; }
 .tc-chip-cat { font-weight: 400; font-size: 0.65rem; opacity: 0.6; }
 .tc-chip-remove { background: none; border: none; cursor: pointer; color: var(--tx3); font-size: 0.82rem; line-height: 1; padding: 0; }
 .tc-chip-remove:hover { color: #ef4444; }
+
+/* ── Update Banner ── */
+.update-banner { display: flex; align-items: center; gap: 0.75rem; background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.35); border-radius: 0.5rem; padding: 0.65rem 1rem; margin-bottom: 1rem; color: var(--tx1); font-size: 0.82rem; }
+.update-banner strong { color: #a5b4fc; }
+.update-current { color: var(--tx3); margin-left: 0.25rem; }
+.update-btn { margin-left: auto; display: flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.85rem; background: rgba(99,102,241,0.2); border: 1px solid rgba(99,102,241,0.5); border-radius: 0.35rem; color: #a5b4fc; font-size: 0.76rem; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+.update-btn:hover { background: rgba(99,102,241,0.35); }
+
+/* ── Update Dialog ── */
+.dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(3px); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.dialog-box { background: var(--surface, #1a1d2e); border: 1px solid var(--b1); border-radius: 0.75rem; width: 100%; max-width: 460px; padding: 1.5rem; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+.dialog-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; color: #a5b4fc; }
+.dialog-header h3 { font-size: 1rem; font-weight: 700; color: var(--tx1); }
+.dialog-body { font-size: 0.82rem; color: var(--tx2); line-height: 1.6; }
+.dialog-body p { margin-bottom: 0.75rem; }
+.dialog-body strong { color: var(--tx1); }
+.update-notes { padding-left: 1.2rem; margin-bottom: 0.85rem; list-style: disc; }
+.update-notes li { margin-bottom: 0.3rem; }
+.update-status-msg { margin-top: 0.75rem; padding: 0.6rem 0.85rem; background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.25); border-radius: 0.4rem; font-size: 0.78rem; color: #a5b4fc; }
+.dialog-actions { display: flex; gap: 0.65rem; justify-content: flex-end; margin-top: 1.25rem; }
+.update-confirm-btn { display: flex; align-items: center; gap: 0.4rem; padding: 0.45rem 1.1rem; background: rgba(99,102,241,0.25); border: 1px solid rgba(99,102,241,0.55); border-radius: 0.4rem; color: #a5b4fc; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+.update-confirm-btn:hover:not(:disabled) { background: rgba(99,102,241,0.45); }
+.update-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

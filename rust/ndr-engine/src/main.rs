@@ -413,6 +413,10 @@ async fn main() {
                 .collect()
         }),
         kafka_healthy,
+        update_status: Arc::new(tokio::sync::RwLock::new(api::UpdateStatus {
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            ..Default::default()
+        })),
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
@@ -807,6 +811,8 @@ async fn main() {
 .route("/api/threat/exposure",            get(api::get_threat_exposure))
 .route("/api/threat/patterns",            get(api::get_threat_patterns))
 .route("/api/admin/leader-status",        get(api::get_leader_status))
+.route("/api/admin/version",              get(api::get_version_status))
+.route("/api/admin/apply-update",         post(api::apply_update))
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
@@ -895,6 +901,49 @@ async fn main() {
                 }
             }
         });
+    }
+
+    // ── Background: version update checker (on-prem only, every 6h) ─────
+    {
+        let update_status = state.update_status.clone();
+        let http = state.http_client.clone();
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        // Only check for updates when running on-prem (DEPLOY_MODE=local or unset)
+        if std::env::var("DEPLOY_MODE").as_deref() != Ok("cloud") {
+            tokio::spawn(async move {
+                const VERSION_URL: &str =
+                    "https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime/VERSION";
+                let mut interval = tokio::time::interval(
+                    std::time::Duration::from_secs(6 * 3600)
+                );
+                loop {
+                    interval.tick().await;
+                    match http.get(VERSION_URL).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            if let Ok(body) = resp.text().await {
+                                let latest = body.trim().to_string();
+                                let available = latest != current && !latest.is_empty();
+                                let mut s = update_status.write().await;
+                                s.latest_version   = Some(latest);
+                                s.update_available = available;
+                                s.last_checked_secs = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default().as_secs();
+                                if available {
+                                    tracing::info!(
+                                        "Update available: {} → {}",
+                                        s.current_version,
+                                        s.latest_version.as_deref().unwrap_or("")
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => tracing::warn!("Version check failed: {}", e),
+                        _ => {}
+                    }
+                }
+            });
+        }
     }
 
     // ── Start server + graceful shutdown with leader release ─────────────

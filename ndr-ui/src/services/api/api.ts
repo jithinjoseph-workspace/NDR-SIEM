@@ -718,4 +718,12 @@ export class Api {
   updateIncidentStatus(id: string, status: string): Observable<any> {
     return this.http.post(`${this.baseUrl}/incidents/${id}/status/${status}`, {});
   }
+
+  getVersionStatus(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/version`);
+  }
+
+  applyUpdate(): Observable<any> {
+    return this.http.post(`${this.baseUrl}/admin/apply-update`, {});
+  }
 }

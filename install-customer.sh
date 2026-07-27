@@ -1277,6 +1277,55 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
     printf "\n"
 fi
 
+# ── NDR Updater: host-side watcher that applies engine/UI updates ─────
+log "Installing NDR update watcher..."
+
+cat > "$INSTALL_DIR/scripts/update-watcher.sh" << 'WATCHEREOF'
+#!/bin/bash
+# Host-side update watcher. Runs as a systemd service.
+# The ndr-engine container writes /scripts/.update-requested (same path as
+# ${INSTALL_DIR}/scripts/.update-requested on the host) to trigger an update.
+REGISTRY="ghcr.io/jithinjoseph-workspace"
+INSTALL_DIR="$(dirname "$(dirname "$(realpath "$0")")")"
+FLAG="$INSTALL_DIR/scripts/.update-requested"
+
+while true; do
+    if [ -f "$FLAG" ]; then
+        TARGET_VERSION=$(cat "$FLAG" 2>/dev/null || echo "")
+        rm -f "$FLAG"
+        logger -t ndr-updater "Update triggered → pulling ${TARGET_VERSION:-latest}"
+        cd "$INSTALL_DIR" || exit 1
+        docker pull "${REGISTRY}/ndr-engine:latest" 2>&1 | logger -t ndr-updater
+        docker pull "${REGISTRY}/ndr-ui:latest"     2>&1 | logger -t ndr-updater
+        docker compose -f docker-compose.yml -f docker-compose.customer.yml \
+            --profile onpremise up -d --no-build    2>&1 | logger -t ndr-updater
+        logger -t ndr-updater "Update complete"
+    fi
+    sleep 30
+done
+WATCHEREOF
+chmod +x "$INSTALL_DIR/scripts/update-watcher.sh"
+
+sudo tee /etc/systemd/system/ndr-updater.service > /dev/null << EOF
+[Unit]
+Description=NDR Update Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/scripts/update-watcher.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now ndr-updater.service
+log "NDR update watcher installed and running"
+
 # ══════════════════════════════════════════════
 step "Verification"
 

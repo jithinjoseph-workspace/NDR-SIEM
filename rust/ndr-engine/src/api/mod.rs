@@ -200,6 +200,17 @@ pub struct AppState {
     // Cached Kafka reachability — updated every 30s by a background spawn_blocking task.
     // The health endpoint reads this instead of blocking a Tokio thread on fetch_metadata.
     pub kafka_healthy: Arc<AtomicBool>,
+    // Update availability, refreshed every 6h from the GitHub VERSION file.
+    // None when running in cloud mode (DEPLOY_MODE=cloud) or before first check.
+    pub update_status: Arc<tokio::sync::RwLock<UpdateStatus>>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct UpdateStatus {
+    pub current_version:   String,
+    pub latest_version:    Option<String>,
+    pub update_available:  bool,
+    pub last_checked_secs: u64, // unix timestamp of last successful check
 }
 
 pub fn publish_event(state: &AppState, tenant_id: &str, msg: &str) {
@@ -9888,4 +9899,67 @@ pub async fn delete_doh_provider(
         *state.doh_ips.write().await = set;
     }
     Json(json!({"status":"ok","removed":ip}))
+}
+
+// GET /api/admin/version — returns current + latest version info (on-prem only)
+pub async fn get_version_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    let role = claims.role.as_str();
+    if !matches!(role, "admin" | "super_admin" | "tenant_admin") {
+        return Json(json!({"status":"error","message":"Forbidden"}));
+    }
+    let status = state.update_status.read().await.clone();
+    Json(json!({
+        "current_version":  status.current_version,
+        "latest_version":   status.latest_version,
+        "update_available": status.update_available,
+        "last_checked_secs": status.last_checked_secs,
+    }))
+}
+
+// POST /api/admin/apply-update — admin only; writes flag file picked up by host watcher
+pub async fn apply_update(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    let role = claims.role.as_str();
+    if !matches!(role, "admin" | "super_admin" | "tenant_admin") {
+        return (axum::http::StatusCode::FORBIDDEN,
+                Json(json!({"status":"error","message":"Forbidden"})));
+    }
+    let status = state.update_status.read().await.clone();
+    if !status.update_available {
+        return (axum::http::StatusCode::BAD_REQUEST, Json(json!({
+            "status": "error",
+            "message": "No update available"
+        })));
+    }
+    // Flag file is at /scripts/.update-requested inside the container,
+    // which maps to ${INSTALL_DIR}/scripts/.update-requested on the host.
+    // The ndr-updater systemd service on the host watches this path.
+    let flag = "/scripts/.update-requested";
+    if let Err(e) = std::fs::write(flag, status.latest_version.as_deref().unwrap_or("")) {
+        tracing::error!("Failed to write update flag {}: {}", flag, e);
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+            "status": "error",
+            "message": format!("Could not write update flag: {}", e)
+        })));
+    }
+    tracing::info!("Update requested → flag written to {}", flag);
+    (axum::http::StatusCode::ACCEPTED, Json(json!({
+        "status": "accepted",
+        "message": "Update triggered. Services will restart in ~30 seconds.",
+        "target_version": status.latest_version
+    })))
 }
