@@ -234,7 +234,10 @@ log "Deploy mode:    $DEPLOY_MODE"
 
 # Write a minimal .env immediately so docker compose never sees blank variables.
 # The network step overwrites this with full values once HOST_IP/JWT_SECRET are known.
-IFACE_EARLY=$(ip -o -4 addr show 2>/dev/null | grep -v "127.0.0.1\|docker\|br-\|veth" | awk '{print $2}' | head -1)
+IFACE_EARLY=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+if [ -z "$IFACE_EARLY" ]; then
+    IFACE_EARLY=$(ip -o -4 addr show 2>/dev/null | grep -v "127.0.0.1\|docker\|br-\|veth\| lo " | awk '{print $2}' | head -1)
+fi
 IFACE_EARLY=${IFACE_EARLY:-eth0}
 HOST_IP_EARLY=$(ip -o -4 addr show "$IFACE_EARLY" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
 HOST_IP_EARLY=${HOST_IP_EARLY:-$(hostname -I | awk '{print $1}')}
@@ -559,9 +562,12 @@ log "ClickHouse configured"
 step "Network & Sensor Configuration"
 
 log "Detecting network interface..."
-IFACE=$(ip -o -4 addr show 2>/dev/null | \
-    grep -v "127.0.0.1\|docker\|br-\|veth" | \
-    awk '{print $2}' | head -1)
+IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+if [ -z "$IFACE" ]; then
+    IFACE=$(ip -o -4 addr show 2>/dev/null | \
+        grep -v "127.0.0.1\|docker\|br-\|veth\| lo " | \
+        awk '{print $2}' | head -1)
+fi
 [ -z "$IFACE" ] && IFACE="eth0"
 log "Using interface: $IFACE"
 mkdir -p "$RUNTIME_DIR"
