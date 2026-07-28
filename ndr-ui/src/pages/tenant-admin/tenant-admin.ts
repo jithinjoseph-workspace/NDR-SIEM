@@ -412,6 +412,26 @@ export class TenantAdmin implements OnInit, OnDestroy {
     return this.validatePassword(this.userForm.password, this.userForm.username, !this.editingUser());
   }
 
+  passwordStrength(): number {
+    const p = this.userForm.password || '';
+    let score = 0;
+    if (p.length >= 8) score++;
+    if (/[A-Z]/.test(p)) score++;
+    if (/[0-9]/.test(p)) score++;
+    if (/[!@#$%^&*()\-_=+\[\]{}|;':",.\/<>?]/.test(p)) score++;
+    return score;
+  }
+
+  passwordStrengthLabel(): string {
+    const labels = ['', 'Weak', 'Fair', 'Good', 'Strong'];
+    return labels[this.passwordStrength()] || '';
+  }
+
+  passwordStrengthColor(): string {
+    const colors = ['', '#ef4444', '#f59e0b', '#3b82f6', '#22c55e'];
+    return colors[this.passwordStrength()] || '';
+  }
+
   get canSaveUser() {
     return (
       !this.saving() &&

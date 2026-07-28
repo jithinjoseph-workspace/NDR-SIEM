@@ -4196,6 +4196,22 @@ pub async fn check_username(
     }
 }
 
+fn validate_password_strength(password: &str) -> Result<(), &'static str> {
+    if password.len() < 8 {
+        return Err("Password must be at least 8 characters.");
+    }
+    if !password.chars().any(|c| c.is_uppercase()) {
+        return Err("Password must contain at least one uppercase letter.");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Err("Password must contain at least one number.");
+    }
+    if !password.chars().any(|c| "!@#$%^&*()_+-=[]{}|;':\",./<>?".contains(c)) {
+        return Err("Password must contain at least one special character.");
+    }
+    Ok(())
+}
+
 fn parse_device_from_ua(ua: &str) -> String {
     let u = ua.to_lowercase();
     let os = if u.contains("iphone")                        { "iPhone" }
@@ -4242,6 +4258,29 @@ pub async fn login(
                 "message": "Username and password required"
             }))
         ).into_response();
+    }
+
+    // ── Brute-force protection ────────────────────────────────────────────
+    {
+        use redis::AsyncCommands;
+        let mut mux = state.redis_mux.clone();
+        let lock_key    = format!("ndr:login_locked:{}", username);
+        let attempt_key = format!("ndr:login_attempts:{}", username);
+
+        // Check if account is locked
+        let locked: bool = mux.exists(&lock_key).await.unwrap_or(false);
+        if locked {
+            let ttl: i64 = mux.ttl(&lock_key).await.unwrap_or(0);
+            let mins = (ttl / 60).max(1);
+            tracing::warn!("🔒 Login blocked — account locked: '{}'", username);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({
+                    "status": "error",
+                    "message": format!("Account locked due to too many failed attempts. Try again in {} minute(s).", mins)
+                }))
+            ).into_response();
+        }
     }
 
     tracing::info!("🔐 Login attempt: username='{}'", username);
@@ -4403,6 +4442,12 @@ pub async fn login(
             } else {
                 state.ch_storage.get_tenant_ai_enabled(tenant_id).await
             };
+            // Clear failed-attempt counter on successful login
+            {
+                use redis::AsyncCommands;
+                let mut mux = state.redis_mux.clone();
+                let _: redis::RedisResult<()> = mux.del(format!("ndr:login_attempts:{}", username)).await;
+            }
             tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
             (
                 StatusCode::OK,
@@ -4424,13 +4469,35 @@ pub async fn login(
         }
         Ok(None) => {
             tracing::warn!("❌ Login FAILED (wrong credentials): username='{}'", username);
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "status": "error",
-                    "message": "Invalid username or password"
-                }))
-            ).into_response()
+            // Increment failed attempt counter; lock after 5 failures for 15 minutes
+            {
+                use redis::AsyncCommands;
+                let mut mux = state.redis_mux.clone();
+                let attempt_key = format!("ndr:login_attempts:{}", username);
+                let lock_key    = format!("ndr:login_locked:{}", username);
+                let attempts: i64 = mux.incr(&attempt_key, 1i64).await.unwrap_or(1);
+                let _: redis::RedisResult<bool> = mux.expire(&attempt_key, 900usize).await;
+                if attempts >= 5 {
+                    let _: redis::RedisResult<String> = mux.set_ex(&lock_key, "1", 900usize).await;
+                    let _: redis::RedisResult<()> = mux.del(&attempt_key).await;
+                    tracing::warn!("🔒 Account locked after {} failures: '{}'", attempts, username);
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(json!({
+                            "status": "error",
+                            "message": "Too many failed attempts. Account locked for 15 minutes."
+                        }))
+                    ).into_response();
+                }
+                let remaining = 5 - attempts;
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "status": "error",
+                        "message": format!("Invalid username or password. {} attempt(s) remaining before lockout.", remaining)
+                    }))
+                ).into_response();
+            }
         }
         Err(e) => {
             tracing::error!("💥 Login DB error for '{}': {}", username, e);
@@ -4707,6 +4774,9 @@ pub async fn forgot_reset_password(
     if username.is_empty() || otp.is_empty() || new_password.is_empty() {
         return Json(json!({"status": "error", "message": "Username, OTP, and new password are required"}));
     }
+    if let Err(msg) = validate_password_strength(&new_password) {
+        return Json(json!({"status": "error", "message": msg}));
+    }
 
     // Check OTP in Redis
     let redis_key = format!("otp_reset:{}", username);
@@ -4846,6 +4916,9 @@ pub async fn create_user(
             "status": "error",
             "message": "Username and password required"
         }));
+    }
+    if let Err(msg) = validate_password_strength(&password) {
+        return Json(json!({"status": "error", "message": msg}));
     }
 
     // Gmail (optional but strongly encouraged for tenant_admin, for password recovery)
@@ -5182,6 +5255,9 @@ pub async fn reset_user_password_api(
             "message": "Password is required"
         })),
     };
+    if let Err(msg) = validate_password_strength(password) {
+        return Json(json!({"status": "error", "message": msg}));
+    }
 
     // Hash the new password using bcrypt
     let password_hash = bcrypt::hash(password, 12).unwrap_or_default();

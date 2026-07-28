@@ -928,6 +928,22 @@
                     [placeholder]="editingUser() ? 'Leave blank to keep current' : 'Temporary password'"
                   />
                 </div>
+                <!-- Password strength meter -->
+                <div *ngIf="userForm.password && userForm.password.length > 0" style="margin-top:8px;">
+                  <div style="display:flex;gap:4px;margin-bottom:4px;">
+                    <div style="height:4px;flex:1;border-radius:2px;transition:background 0.3s;"
+                         [style.background]="passwordStrength() >= 1 ? passwordStrengthColor() : 'rgba(255,255,255,0.1)'"></div>
+                    <div style="height:4px;flex:1;border-radius:2px;transition:background 0.3s;"
+                         [style.background]="passwordStrength() >= 2 ? passwordStrengthColor() : 'rgba(255,255,255,0.1)'"></div>
+                    <div style="height:4px;flex:1;border-radius:2px;transition:background 0.3s;"
+                         [style.background]="passwordStrength() >= 3 ? passwordStrengthColor() : 'rgba(255,255,255,0.1)'"></div>
+                    <div style="height:4px;flex:1;border-radius:2px;transition:background 0.3s;"
+                         [style.background]="passwordStrength() >= 4 ? passwordStrengthColor() : 'rgba(255,255,255,0.1)'"></div>
+                  </div>
+                  <small [style.color]="passwordStrengthColor()" style="font-size:0.75rem;font-weight:600;">
+                    {{ passwordStrengthLabel() }}
+                  </small>
+                </div>
                 <div class="field-feedback-group">
                   <small *ngIf="passwordErrors.length > 0 && passwordTouched()" class="field-feedback error">
                     <div *ngFor="let err of passwordErrors">{{ err }}</div>
