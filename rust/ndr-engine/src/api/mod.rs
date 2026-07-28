@@ -10311,6 +10311,17 @@ pub async fn get_active_sessions(
             let _: redis::RedisResult<()> = mux.srem(&tenant_set_key, jti).await;
             continue;
         }
+        // Verify the session actually belongs to this tenant (guards against stale keys)
+        let session_tenant = fields.get("tenant_id").cloned().unwrap_or_default();
+        if !session_tenant.is_empty() && session_tenant != *tenant_id {
+            let _: redis::RedisResult<()> = mux.srem(&tenant_set_key, jti).await;
+            continue;
+        }
+        // tenant_admin must not see super_admin sessions
+        let session_role = fields.get("role").cloned().unwrap_or_default();
+        if claims.role == "tenant_admin" && session_role == "super_admin" {
+            continue;
+        }
         sessions.push(json!({
             "jti":        jti,
             "username":   fields.get("username").cloned().unwrap_or_default(),
