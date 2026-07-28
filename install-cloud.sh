@@ -69,11 +69,19 @@ if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
     sudo truncate -s 0 /etc/apt/sources.list
 else
     log "Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
+    SECURITY_REPO_LINE=""
+    if curl -fsSL --max-time 8 \
+        "https://security.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-security/InRelease" \
+        -o /dev/null 2>/dev/null; then
+        SECURITY_REPO_LINE="deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse"
+    else
+        warn "security.ubuntu.com/${UBUNTU_CODENAME}-security not yet available — skipping"
+    fi
     sudo tee /etc/apt/sources.list > /dev/null << EOF
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME} main restricted universe multiverse
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-updates main restricted universe multiverse
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-backports main restricted universe multiverse
-deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse
+${SECURITY_REPO_LINE}
 EOF
 fi
 

@@ -113,11 +113,22 @@ if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
     sudo truncate -s 0 /etc/apt/sources.list
 else
     log "Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
+    # Probe the security repo first — new Ubuntu releases (e.g. 26.04 "resolute")
+    # often lack it for weeks after launch, and adding a missing repo makes every
+    # subsequent apt-get update/install exit non-zero, killing the script via set -e.
+    SECURITY_REPO_LINE=""
+    if curl -fsSL --max-time 8 \
+        "https://security.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-security/InRelease" \
+        -o /dev/null 2>/dev/null; then
+        SECURITY_REPO_LINE="deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse"
+    else
+        warn "security.ubuntu.com/${UBUNTU_CODENAME}-security not yet available — skipping (non-fatal)"
+    fi
     sudo tee /etc/apt/sources.list > /dev/null << EOF
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME} main restricted universe multiverse
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-updates main restricted universe multiverse
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-backports main restricted universe multiverse
-deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse
+${SECURITY_REPO_LINE}
 EOF
 fi
 
@@ -473,9 +484,12 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
         | gpg --dearmor \
         | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
-    sudo apt-get update -qq
-    sudo apt-get install -y zeek
-    log "Agent-Z installed"
+    sudo apt-get update -qq 2>/dev/null || true
+    if sudo apt-get install -y zeek 2>/dev/null; then
+        log "Agent-Z installed"
+    else
+        warn "Agent-Z install failed — check repo availability for Ubuntu ${ZEEK_UBUNTU_VER}"
+    fi
 else
     log "Agent-Z already installed"
 fi
@@ -1077,7 +1091,7 @@ if ! command -v docker >/dev/null 2>&1; then
         echo "deb [arch=${_DOCKER_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] \
 https://download.docker.com/linux/ubuntu ${_DOCKER_FOUND} stable" \
             | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-        sudo apt-get update -qq
+        sudo apt-get update -qq 2>/dev/null || true
         log "Downloading and installing Docker packages (fallback codename: ${_DOCKER_FOUND})..."
         sudo apt-get install -y docker-ce docker-ce-cli \
             containerd.io docker-buildx-plugin docker-compose-plugin

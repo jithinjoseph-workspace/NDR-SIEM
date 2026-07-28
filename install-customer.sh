@@ -143,11 +143,19 @@ if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
     sudo truncate -s 0 /etc/apt/sources.list
 else
     log "Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
+    SECURITY_REPO_LINE=""
+    if curl -fsSL --max-time 8 \
+        "https://security.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-security/InRelease" \
+        -o /dev/null 2>/dev/null; then
+        SECURITY_REPO_LINE="deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse"
+    else
+        warn "security.ubuntu.com/${UBUNTU_CODENAME}-security not yet available — skipping"
+    fi
     sudo tee /etc/apt/sources.list > /dev/null << EOF
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME} main restricted universe multiverse
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-updates main restricted universe multiverse
 deb https://archive.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-backports main restricted universe multiverse
-deb https://security.ubuntu.com/ubuntu ${UBUNTU_CODENAME}-security main restricted universe multiverse
+${SECURITY_REPO_LINE}
 EOF
 fi
 
@@ -455,9 +463,12 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
         | gpg --dearmor \
         | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
-    sudo apt-get update -qq
-    sudo apt-get install -y zeek
-    log "Agent-Z installed"
+    sudo apt-get update -qq 2>/dev/null || true
+    if sudo apt-get install -y zeek 2>/dev/null; then
+        log "Agent-Z installed"
+    else
+        warn "Agent-Z install failed — check repo availability for Ubuntu ${ZEEK_UBUNTU_VER}"
+    fi
 else
     log "Agent-Z already installed"
 fi
@@ -956,7 +967,7 @@ step "Container Runtime  (Docker)"
 
 log "Installing Docker..."
 sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
-sudo apt-get update -qq
+sudo apt-get update -qq 2>/dev/null || true
 sudo apt-get install -y ca-certificates curl gnupg lsb-release
 
 sudo mkdir -p /etc/apt/keyrings
@@ -982,7 +993,7 @@ echo \
     https://download.docker.com/linux/ubuntu \
     ${DOCKER_CODENAME} stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update -qq
+sudo apt-get update -qq 2>/dev/null || true
 sudo apt-get install -y docker-ce docker-ce-cli \
     containerd.io docker-buildx-plugin docker-compose-plugin
 log "Docker installed"
