@@ -298,6 +298,13 @@ step "System Dependencies"
 
 log "Updating package lists..."
 sudo apt-get update 2>&1 | grep -E "^Get|^Hit|^Err|^W:" || true
+
+# Remove packages that fail to configure in VMs lacking kernel audit support.
+# auditd requires CAP_AUDIT_CONTROL which many hypervisors deny; leaving it
+# half-installed causes every subsequent dpkg/apt call to abort.
+sudo dpkg --remove --force-remove-reinstreq auditd audispd-plugins 2>/dev/null || true
+sudo dpkg --configure -a 2>/dev/null || true
+
 log "Installing packages..."
 sudo apt-get install -y \
     curl wget git jq python3 python3-pip \
