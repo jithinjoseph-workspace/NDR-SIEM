@@ -812,7 +812,7 @@
           </div>
           <div class="session-device-count">
             {{ sessionsGrouped()[username].length }}
-            {{ sessionsGrouped()[username].length === 1 ? 'device' : 'devices' }}
+            {{ sessionsGrouped()[username].length === 1 ? 'session' : 'sessions' }}
           </div>
           <button class="force-logout-btn" type="button"
                   (click)="promptForceLogout(username)"
@@ -833,7 +833,7 @@
         <!-- Confirm force-logout inline -->
         <div *ngIf="forceLogoutConfirmUser() === username" class="force-logout-confirm">
           <lucide-icon [name]="AlertCircleIcon" class="w-4 h-4"></lucide-icon>
-          Sign out <strong>{{ username }}</strong> from all {{ sessionsGrouped()[username].length }} device(s)?
+          Sign out <strong>{{ username }}</strong> from all {{ sessionsGrouped()[username].length }} session(s)?
           <div class="force-logout-confirm-actions">
             <button class="secondary-action" type="button" (click)="cancelForceLogout()">Cancel</button>
             <button class="force-logout-confirm-btn" type="button" (click)="confirmForceLogout(username)">
