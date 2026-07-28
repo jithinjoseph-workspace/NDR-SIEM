@@ -24,8 +24,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates libssl3 libsasl2-2 libcurl4 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+WORKDIR /app/ndr-engine
 
 COPY --from=builder /app/ndr-engine/target/release/ndr-engine .
 
-CMD ["./ndr-engine"]
+CMD ["/app/ndr-engine/ndr-engine"]
