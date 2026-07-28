@@ -21,7 +21,8 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     read -rp "  GitHub token (provided by Proma Secure): " GH_TOKEN
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
-    mkdir -p "$INSTALL_DIR"
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo chown "$USER:$USER" "$INSTALL_DIR"
 
     RAW="https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime"
 
@@ -67,7 +68,7 @@ download_dir("rust/ndr-engine/rules", f"{dest}/rust/ndr-engine/rules")
 PYEOF
 
     echo ""
-    exec bash "$INSTALL_DIR/install-customer.sh"
+    exec bash "$INSTALL_DIR/install-customer.sh" "$INSTALL_DIR"
 fi
 
 # ── Fix DNS early — before any curl/apt/wget ──

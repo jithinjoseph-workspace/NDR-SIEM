@@ -1177,6 +1177,57 @@ else
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ══════════════════════════════════════════════
+step "Update Watcher  (Auto-Update Service)"
+
+cat > "$INSTALL_DIR/scripts/update-watcher.sh" << WATCHER_EOF
+#!/bin/bash
+# Host-side watcher: picks up .update-requested flag written by the engine container
+# and pulls new Docker images then restarts the engine containers.
+FLAG="${INSTALL_DIR}/scripts/.update-requested"
+INSTALL_DIR_="${INSTALL_DIR}"
+
+logger -t ndr-updater "NDR update watcher started — watching \$FLAG"
+
+while true; do
+    if [ -f "\$FLAG" ]; then
+        TARGET=\$(cat "\$FLAG" 2>/dev/null | tr -d '[:space:]')
+        logger -t ndr-updater "Update flag detected — target: \${TARGET:-latest}"
+        rm -f "\$FLAG"
+        cd "\$INSTALL_DIR_"
+        docker pull ghcr.io/jithinjoseph-workspace/ndr-engine:latest 2>&1 | logger -t ndr-updater || true
+        docker pull ghcr.io/jithinjoseph-workspace/ndr-ui:latest     2>&1 | logger -t ndr-updater || true
+        docker compose up -d --no-deps ndr-engine-1 ndr-engine-2 ndr-engine-3 2>&1 | logger -t ndr-updater || true
+        logger -t ndr-updater "Update complete"
+    fi
+    sleep 30
+done
+WATCHER_EOF
+chmod +x "$INSTALL_DIR/scripts/update-watcher.sh"
+
+sudo tee /etc/systemd/system/ndr-updater.service > /dev/null << EOF
+[Unit]
+Description=NDR Auto-Update Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash ${INSTALL_DIR}/scripts/update-watcher.sh
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable ndr-updater 2>/dev/null || true
+sudo systemctl restart ndr-updater 2>/dev/null || true
+log "✅ Update watcher service installed and started"
+
 sudo docker compose --profile onpremise down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
