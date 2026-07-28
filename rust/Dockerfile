@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y \
 RUN cargo build --release
 
 # ── Runtime stage ──────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates libssl3 libsasl2-2 libcurl4 \
