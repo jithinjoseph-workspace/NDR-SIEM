@@ -302,10 +302,16 @@ CREATE TABLE IF NOT EXISTS ndr.users ON CLUSTER ndr_cluster
     permissions   String DEFAULT 'dashboard,alerts',
     active        UInt8 DEFAULT 1,
     created_at    DateTime DEFAULT now(),
-    last_login    DateTime DEFAULT now()
+    last_login    DateTime DEFAULT now(),
+    gmail         String DEFAULT '',
+    secret_code   String DEFAULT ''
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/users', '{replica}', created_at)
 ORDER BY username;
+
+-- Migration: add gmail + secret_code columns for existing deployments (idempotent)
+ALTER TABLE ndr.users ON CLUSTER ndr_cluster ADD COLUMN IF NOT EXISTS gmail       String DEFAULT '';
+ALTER TABLE ndr.users ON CLUSTER ndr_cluster ADD COLUMN IF NOT EXISTS secret_code String DEFAULT '';
 
 -- Seed default users — INSERT is idempotent because ndr.users uses ReplacingMergeTree
 -- which deduplicates on ORDER BY (username). Running this multiple times is safe.

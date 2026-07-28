@@ -23,12 +23,12 @@ import {
 
 import { DeviceDrawer } from '../../components/device-drawer/device-drawer';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 @Component({
   selector: 'app-assets',
   standalone: true,
-  imports: [CommonModule, FormsModule, LucideAngularModule, DeviceDrawer, SensorScopeBanner],
+  imports: [CommonModule, FormsModule, LucideAngularModule, DeviceDrawer],
   templateUrl: './assets.html',
   styleUrl: './assets.css',
 })

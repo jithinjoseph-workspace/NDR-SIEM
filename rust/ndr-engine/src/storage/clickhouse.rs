@@ -327,13 +327,13 @@ pub async fn verify_user(
 
     let rows = self.client
         .query(&format!(
-            "SELECT id, username, password_hash, role, tenant_id, permissions, active \
+            "SELECT id, username, password_hash, role, tenant_id, permissions, active, gmail, secret_code \
              FROM ndr.users \
              WHERE username = '{}' \
              ORDER BY created_at DESC LIMIT 1",
             esc
         ))
-        .fetch_all::<(String, String, String, String, String, String, u8)>()
+        .fetch_all::<(String, String, String, String, String, String, u8, String, String)>()
         .await?;
 
     let Some(row) = rows.first() else {
@@ -356,6 +356,8 @@ pub async fn verify_user(
         "role":        row.3,
         "tenant_id":   row.4,
         "permissions": row.5,
+        "gmail":       row.7,
+        "secret_code": row.8,
     })))
 }
 
@@ -457,7 +459,8 @@ pub async fn get_user_by_username(
 ) -> anyhow::Result<Option<serde_json::Value>> {
     let username = sql_escape(username);
     let query = format!(
-        "SELECT id, username, role, tenant_id, permissions, toString(created_at)
+        "SELECT id, username, role, tenant_id, permissions, toString(created_at), \
+                gmail, secret_code
          FROM ndr.users
          WHERE username = '{}'
          ORDER BY created_at DESC LIMIT 1",
@@ -465,16 +468,18 @@ pub async fn get_user_by_username(
     );
     let result = self.client
         .query(&query)
-        .fetch_all::<(String, String, String, String, String, String)>()
+        .fetch_all::<(String, String, String, String, String, String, String, String)>()
         .await?;
 
     Ok(result.first().map(|r| json!({
-        "id": r.0,
-        "username": r.1,
-        "role": r.2,
-        "tenant_id": r.3,
+        "id":          r.0,
+        "username":    r.1,
+        "role":        r.2,
+        "tenant_id":   r.3,
         "permissions": r.4,
-        "created_at": r.5
+        "created_at":  r.5,
+        "gmail":       r.6,
+        "secret_code": r.7
     })))
 }
 
@@ -485,17 +490,21 @@ pub async fn create_user(
     role: &str,
     tenant_id: &str,
     permissions: &str,
+    gmail: &str,
+    secret_code: &str,
 ) -> anyhow::Result<()> {
-    let username = sql_escape(username);
+    let username     = sql_escape(username);
     let password_hash = sql_escape(password_hash);
-    let role = sql_escape(role);
-    let tenant_id = sql_escape(tenant_id);
-    let permissions = sql_escape(permissions);
+    let role         = sql_escape(role);
+    let tenant_id    = sql_escape(tenant_id);
+    let permissions  = sql_escape(permissions);
+    let gmail        = sql_escape(gmail);
+    let secret_code  = sql_escape(secret_code);
     let query = format!(
         "INSERT INTO ndr.users \
-         (username, password_hash, role, tenant_id, permissions, active) \
-         VALUES ('{}','{}','{}','{}','{}',1)",
-        username, password_hash, role, tenant_id, permissions
+         (username, password_hash, role, tenant_id, permissions, active, gmail, secret_code) \
+         VALUES ('{}','{}','{}','{}','{}',1,'{}','{}')",
+        username, password_hash, role, tenant_id, permissions, gmail, secret_code
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -619,6 +628,7 @@ pub async fn set_user_password(
     Ok(())
 }
 
+
 pub async fn delete_user(
     &self, id: &str
 ) -> anyhow::Result<()> {
@@ -630,6 +640,87 @@ pub async fn delete_user(
     self.client.query(&query).execute().await?;
     Ok(())
 }
+
+// ── Password-reset recovery helpers ─────────────────────────────────────────
+
+/// Validate a tenant admin's secret code.
+/// Returns Some(gmail) if the username exists, role = tenant_admin, and the
+/// secret_code matches; returns None otherwise.
+pub async fn verify_tenant_admin_secret(
+    &self,
+    username: &str,
+    secret_code: &str,
+) -> anyhow::Result<Option<String>> {
+    let esc_user   = sql_escape(username);
+    let esc_code   = sql_escape(secret_code);
+    let rows = self.client
+        .query(&format!(
+            "SELECT gmail FROM ndr.users \
+             WHERE username = '{}' AND role = 'tenant_admin' \
+             AND secret_code = '{}' AND active = 1 \
+             ORDER BY created_at DESC LIMIT 1",
+            esc_user, esc_code
+        ))
+        .fetch_all::<String>()
+        .await?;
+    Ok(rows.into_iter().next())
+}
+
+/// Return the stored gmail for a tenant admin (used to cross-check OTP step).
+pub async fn get_gmail_for_user(
+    &self,
+    username: &str,
+) -> anyhow::Result<Option<String>> {
+    let esc = sql_escape(username);
+    let rows = self.client
+        .query(&format!(
+            "SELECT gmail FROM ndr.users \
+             WHERE username = '{}' AND role = 'tenant_admin' AND active = 1 \
+             ORDER BY created_at DESC LIMIT 1",
+            esc
+        ))
+        .fetch_all::<String>()
+        .await?;
+    Ok(rows.into_iter().next())
+}
+
+/// Update the password hash for a user identified by username.
+/// Used by the forgot-password reset endpoint.
+pub async fn reset_password_by_username_direct(
+    &self,
+    username: &str,
+    new_hash: &str,
+) -> anyhow::Result<()> {
+    let esc_user = sql_escape(username);
+    let esc_hash = sql_escape(new_hash);
+    self.client.query(&format!(
+        "ALTER TABLE ndr.users \
+         UPDATE password_hash = '{}' \
+         WHERE username = '{}' \
+         SETTINGS mutations_sync=1",
+        esc_hash, esc_user
+    )).execute().await?;
+    Ok(())
+}
+
+/// Update the gmail address for a user by id.
+pub async fn update_user_gmail(
+    &self,
+    id: &str,
+    gmail: &str,
+) -> anyhow::Result<()> {
+    let esc_id    = sql_escape(id);
+    let esc_gmail = sql_escape(gmail);
+    self.client.query(&format!(
+        "ALTER TABLE ndr.users \
+         UPDATE gmail = '{}' \
+         WHERE id = '{}' \
+         SETTINGS mutations_sync=1",
+        esc_gmail, esc_id
+    )).execute().await?;
+    Ok(())
+}
+
 
 pub async fn get_tenants(
     &self
@@ -645,6 +736,7 @@ pub async fn get_tenants(
         "ai_enabled": r.3 == 1
     })).collect())
 }
+
 
 pub async fn get_tenant_ai_enabled(&self, tenant_id: &str) -> bool {
     let id = sql_escape(tenant_id);
@@ -1190,6 +1282,8 @@ pub async fn delete_announcement(
                  (ip String, provider_name String DEFAULT '', enabled UInt8 DEFAULT 1, \
                   created_at DateTime DEFAULT now()) \
                  ENGINE = ReplacingMergeTree(created_at) ORDER BY ip",
+                "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS gmail String DEFAULT ''",
+                "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS secret_code String DEFAULT ''",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -2280,6 +2374,15 @@ pub async fn save_setting(
     &self, key: &str, value: &str
 ) -> anyhow::Result<()> {
     self.save_setting_by_tenant(key, value, "default").await
+}
+
+pub async fn get_global_smtp_settings(&self) -> anyhow::Result<(String, String, String, String)> {
+    let settings = self.get_settings_by_tenant("default").await.unwrap_or_else(|_| serde_json::json!({}));
+    let host = settings["global_smtp_host"].as_str().unwrap_or("smtp.gmail.com").to_string();
+    let port = settings["global_smtp_port"].as_str().unwrap_or("587").to_string();
+    let user = settings["global_smtp_user"].as_str().unwrap_or("").to_string();
+    let password = settings["global_smtp_password"].as_str().unwrap_or("").to_string();
+    Ok((host, port, user, password))
 }
 
 

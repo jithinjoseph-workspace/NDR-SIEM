@@ -408,3 +408,148 @@
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+/* ── Forgot Password Modal ───────────────────────────────────────────── */
+
+.login-forgot-link {
+  text-align: center;
+  margin-top: 1.5rem;
+}
+.login-forgot-link a {
+  color: #69f6b8;
+  font-size: 0.85rem;
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+.login-forgot-link a:hover {
+  color: #ffffff;
+  text-shadow: 0 0 8px rgba(105, 246, 184, 0.4);
+}
+
+.forgot-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 12, 26, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  animation: fade-in 0.2s ease-out;
+}
+
+.forgot-modal {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  background: rgba(22, 30, 44, 0.6);
+  border: 1px solid rgba(105, 246, 184, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+  padding: 2.5rem;
+  color: #fff;
+}
+
+.forgot-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: transparent;
+  border: none;
+  color: #8b94ab;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.forgot-close:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+.forgot-close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.forgot-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2rem;
+  gap: 12px;
+}
+
+.forgot-steps .step {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #8b94ab;
+  transition: all 0.3s;
+}
+
+.forgot-steps .step.active {
+  background: rgba(105, 246, 184, 0.15);
+  border-color: rgba(105, 246, 184, 0.4);
+  color: #69f6b8;
+  box-shadow: 0 0 12px rgba(105, 246, 184, 0.2);
+}
+
+.forgot-steps .step-line {
+  flex: 1;
+  max-width: 40px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  transition: all 0.3s;
+}
+
+.forgot-steps .step-line.active {
+  background: rgba(105, 246, 184, 0.4);
+}
+
+.forgot-step-content {
+  animation: fade-in 0.3s ease-out;
+}
+
+.forgot-step-content h3 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.4rem;
+  margin: 0 0 0.75rem;
+  color: #fff;
+}
+
+.forgot-step-content p {
+  font-size: 0.9rem;
+  color: #a4adc2;
+  margin: 0 0 1.5rem;
+  line-height: 1.5;
+}
+
+.forgot-step-content strong {
+  color: #69f6b8;
+  font-weight: 600;
+}
+
+.success-step {
+  text-align: center;
+}
+
+.success-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 1.25rem;
+  display: block;
+}

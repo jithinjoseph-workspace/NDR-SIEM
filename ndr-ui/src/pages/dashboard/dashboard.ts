@@ -12,12 +12,12 @@ import {
 } from 'lucide-angular';
 import { Router } from '@angular/router';
 import * as d3 from 'd3';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, SensorScopeBanner],
+  imports: [CommonModule, LucideAngularModule],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })

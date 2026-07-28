@@ -403,7 +403,7 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     
     // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/auth/check-username", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh"];
+    let public = ["/api/auth/login", "/api/auth/check-username", "/api/auth/forgot", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -2917,6 +2917,59 @@ pub async fn update_settings(
     }))
 }
 
+// GET /api/settings/smtp — super_admin only
+pub async fn get_global_smtp(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) {
+        return e;
+    }
+    let (host, port_str, user, password) = state.ch_storage.get_global_smtp_settings().await.unwrap_or_else(|_| ("smtp.gmail.com".to_string(), "587".to_string(), "".to_string(), "".to_string()));
+    let port = port_str.parse::<u16>().unwrap_or(587);
+    
+    let masked_password = if password.is_empty() { "".to_string() } else { "****".to_string() };
+
+    Json(json!({
+        "status": "ok",
+        "config": {
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": masked_password
+        }
+    }))
+}
+
+// POST /api/settings/smtp — super_admin only
+pub async fn update_global_smtp(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(e) = require_super_admin(&headers) {
+        return e;
+    }
+    
+    let host = payload["host"].as_str().unwrap_or("smtp.gmail.com");
+    let port = payload["port"].as_u64().unwrap_or(587) as u16;
+    let user = payload["user"].as_str().unwrap_or("");
+    let password = payload["password"].as_str().unwrap_or("");
+
+    let _ = state.ch_storage.save_setting("global_smtp_host", host).await;
+    let _ = state.ch_storage.save_setting("global_smtp_port", &port.to_string()).await;
+    let _ = state.ch_storage.save_setting("global_smtp_user", user).await;
+    
+    if !password.is_empty() && password != "****" {
+        let _ = state.ch_storage.save_setting("global_smtp_password", password).await;
+    }
+
+    Json(json!({
+        "status": "ok",
+        "message": "SMTP configuration saved successfully"
+    }))
+}
+
 // GET /api/settings/ai — super_admin only
 pub async fn get_ai_config(
     State(state): State<AppState>,
@@ -4320,7 +4373,9 @@ pub async fn login(
                         "role": role,
                         "tenant_id": tenant_id,
                         "permissions": permissions_vec,
-                        "ai_enabled": ai_enabled
+                        "ai_enabled": ai_enabled,
+                        "gmail": user["gmail"].as_str().unwrap_or(""),
+                        "secret_code": user["secret_code"].as_str().unwrap_or("")
                     }
                 }))
             ).into_response()
@@ -4423,7 +4478,9 @@ pub async fn get_me(
                             "username": username,
                             "role": role,
                             "tenant_id": user["tenant_id"].as_str().unwrap_or("default"),
-                            "permissions": permissions
+                            "permissions": permissions,
+                            "secret_code": user["secret_code"].as_str().unwrap_or(""),
+                            "gmail": user["gmail"].as_str().unwrap_or("")
                         }
                     }))
                 }
@@ -4444,6 +4501,56 @@ pub async fn get_me(
     }
 }
 
+// PUT /api/auth/me/gmail
+pub async fn update_me_gmail(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    let Ok(secret) = std::env::var("JWT_SECRET") else {
+        return Json(json!({"status": "error", "message": "Server misconfiguration"}));
+    };
+
+    match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default()
+    ) {
+        Ok(data) => {
+            let username = data.claims.sub;
+            match state.ch_storage.get_user_by_username(&username).await {
+                Ok(Some(user)) => {
+                    let id = user["id"].as_str().unwrap_or("");
+                    let gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
+                    
+                    if gmail.is_empty() {
+                        return Json(json!({"status": "error", "message": "Email address cannot be empty"}));
+                    }
+                    if !gmail.contains('@') {
+                        return Json(json!({"status": "error", "message": "Invalid email address format"}));
+                    }
+
+                    match state.ch_storage.update_user_gmail(id, &gmail).await {
+                        Ok(_) => Json(json!({"status": "ok", "message": "Recovery email updated successfully"})),
+                        Err(e) => {
+                            tracing::error!("Failed to update recovery email for user '{}': {}", username, e);
+                            Json(json!({"status": "error", "message": "Failed to update recovery email"}))
+                        }
+                    }
+                },
+                _ => Json(json!({"status": "error", "message": "User not found"}))
+            }
+        },
+        Err(_) => Json(json!({"status": "error", "message": "Invalid token"}))
+    }
+}
+
 // POST /api/auth/logout
 pub async fn logout() -> Json<Value> {
     Json(json!({
@@ -4452,7 +4559,141 @@ pub async fn logout() -> Json<Value> {
     }))
 }
 
+// ── Password Reset Flow (Tenant Admins) ─────────────────────────────────────
 
+// POST /api/auth/forgot/verify-secret
+pub async fn forgot_verify_secret(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let username = payload["username"].as_str().unwrap_or("").trim().to_string();
+    let secret_code = payload["secret_code"].as_str().unwrap_or("").trim().to_string();
+
+    if username.is_empty() || secret_code.is_empty() {
+        return Json(json!({"status": "error", "message": "Username and secret code are required"}));
+    }
+
+    match state.ch_storage.verify_tenant_admin_secret(&username, &secret_code).await {
+        Ok(Some(gmail)) => {
+            if gmail.is_empty() {
+                return Json(json!({"status": "error", "message": "No recovery email is configured for this account. Please contact the platform admin."}));
+            }
+            // Mask the gmail: j***@gmail.com
+            let parts: Vec<&str> = gmail.split('@').collect();
+            let hint = if parts.len() == 2 {
+                let name = parts[0];
+                let domain = parts[1];
+                if name.len() > 1 {
+                    format!("{}***@{}", &name[0..1], domain)
+                } else {
+                    format!("***@{}", domain)
+                }
+            } else {
+                "***".to_string()
+            };
+            Json(json!({"status": "ok", "gmail_hint": hint}))
+        }
+        Ok(None) => Json(json!({"status": "error", "message": "Invalid username or secret code"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+// POST /api/auth/forgot/send-otp
+pub async fn forgot_send_otp(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let username = payload["username"].as_str().unwrap_or("").trim().to_string();
+    let input_gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
+
+    if username.is_empty() || input_gmail.is_empty() {
+        return Json(json!({"status": "error", "message": "Username and email are required"}));
+    }
+
+    // Cross-check DB
+    match state.ch_storage.get_gmail_for_user(&username).await {
+        Ok(Some(db_gmail)) => {
+            if db_gmail.to_lowercase() != input_gmail.to_lowercase() {
+                return Json(json!({"status": "error", "message": "Invalid email address"}));
+            }
+
+            // Generate OTP
+            use rand::Rng;
+            let otp: String = (0..6).map(|_| {
+                let digit = rand::thread_rng().gen_range(0..10);
+                (b'0' + digit as u8) as char
+            }).collect();
+
+            // Store in Redis (10 min TTL)
+            let redis_key = format!("otp_reset:{}", username);
+            let mut redis_conn = state.redis_mux.clone();
+            use redis::AsyncCommands;
+            if let Err(e) = redis_conn.set_ex::<_, _, ()>(&redis_key, &otp, 600).await {
+                tracing::error!("Failed to set OTP in redis: {}", e);
+                return Json(json!({"status": "error", "message": "Internal error (Redis)"}));
+            }
+
+            // Send Email using lettre
+            let subject = "NDR Password Reset OTP";
+            let body = format!("Your password reset OTP is: {}\n\nThis code will expire in 10 minutes.\nIf you did not request this, please ignore this email.", otp);
+            
+            if let Err(e) = send_system_email(&state, &input_gmail, subject, &body).await {
+                if e == "SMTP credentials not configured" {
+                    return Json(json!({"status": "error", "message": "Email delivery is not configured on this server. Please contact the administrator."}));
+                } else {
+                    tracing::error!("Failed to send OTP email: {}", e);
+                    return Json(json!({"status": "error", "message": e}));
+                }
+            }
+            
+            Json(json!({"status": "ok", "message": "OTP sent successfully"}))
+        },
+        Ok(None) => Json(json!({"status": "error", "message": "Invalid request"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+// POST /api/auth/forgot/reset-password
+pub async fn forgot_reset_password(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let username = payload["username"].as_str().unwrap_or("").trim().to_string();
+    let otp = payload["otp"].as_str().unwrap_or("").trim().to_string();
+    let new_password = payload["new_password"].as_str().unwrap_or("").trim().to_string();
+
+    if username.is_empty() || otp.is_empty() || new_password.is_empty() {
+        return Json(json!({"status": "error", "message": "Username, OTP, and new password are required"}));
+    }
+
+    // Check OTP in Redis
+    let redis_key = format!("otp_reset:{}", username);
+    let mut redis_conn = state.redis_mux.clone();
+    use redis::AsyncCommands;
+    let stored_otp: Option<String> = match redis_conn.get(&redis_key).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("Failed to get OTP from redis: {}", e);
+            return Json(json!({"status": "error", "message": "Internal error (Redis)"}));
+        }
+    };
+
+    match stored_otp {
+        Some(val) if val == otp => {
+            // OTP is correct, hash and update password
+            let hash = bcrypt::hash(&new_password, 12).unwrap_or_default();
+            match state.ch_storage.reset_password_by_username_direct(&username, &hash).await {
+                Ok(_) => {
+                    // Delete OTP
+                    let _: () = redis_conn.del(&redis_key).await.unwrap_or_default();
+                    Json(json!({"status": "ok", "message": "Password reset successfully"}))
+                }
+                Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+            }
+        }
+        _ => Json(json!({"status": "error", "message": "Invalid or expired OTP"}))
+    }
+}
 // GET /api/auth/users
 pub async fn get_users(
     State(state): State<AppState>,
@@ -4565,22 +4806,59 @@ pub async fn create_user(
         }));
     }
 
+    // Gmail (optional but strongly encouraged for tenant_admin, for password recovery)
+    let gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
+
+    // Auto-generate a 6-char uppercase alphanumeric secret_code for tenant_admin
+    let secret_code = if role == "tenant_admin" {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        (0..6)
+            .map(|_| {
+                let idx = rng.gen_range(0..36usize);
+                if idx < 10 {
+                    (b'0' + idx as u8) as char
+                } else {
+                    (b'A' + (idx - 10) as u8) as char
+                }
+            })
+            .collect::<String>()
+    } else {
+        String::new()
+    };
+
     let hash = bcrypt::hash(&password, 12)
         .unwrap_or_default();
 
     match state.ch_storage.create_user(
-        &username, &hash, &role, &tenant_id, &permissions
+        &username, &hash, &role, &tenant_id, &permissions, &gmail, &secret_code
     ).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": format!("User {} created!", username)
-        })),
+        Ok(_) => {
+            if role == "tenant_admin" && !gmail.is_empty() {
+                let state_clone = state.clone();
+                let to_email = gmail.clone();
+                let username_clone = username.clone();
+                let secret_code_clone = secret_code.clone();
+                tokio::spawn(async move {
+                    let subject = "Your NDR Tenant Admin Secret Code";
+                    let body = format!("Hello {},\n\nYour secret code is: {}\n\nPLEASE DO NOT DELETE THIS MESSAGE.\nYou will need this secret code to reset your password if you ever forget it.\n\nThank you,\nNDR Security Team", username_clone, secret_code_clone);
+                    if let Err(e) = send_system_email(&state_clone, &to_email, subject, &body).await {
+                        tracing::error!("Failed to send secret code email to {}: {}", to_email, e);
+                    }
+                });
+            }
+            Json(json!({
+                "status": "ok",
+                "message": format!("User {} created!", username)
+            }))
+        },
         Err(e) => Json(json!({
             "status": "error",
             "message": e.to_string()
         }))
     }
 }
+
 
 // PUT /api/auth/users/:id
 pub async fn update_user_api(
@@ -9961,6 +10239,47 @@ pub async fn delete_doh_provider(
         *state.doh_ips.write().await = set;
     }
     Json(json!({"status":"ok","removed":ip}))
+}
+
+pub async fn send_system_email(state: &AppState, to_email: &str, subject: &str, body: &str) -> Result<(), String> {
+    let (smtp_host, port_str, smtp_user, smtp_pass) = state.ch_storage.get_global_smtp_settings().await.unwrap_or_else(|_| ("smtp.gmail.com".to_string(), "587".to_string(), "".to_string(), "".to_string()));
+    let smtp_port = port_str.parse::<u16>().unwrap_or(587);
+    
+    if smtp_user.is_empty() || smtp_pass.is_empty() {
+        return Err("SMTP credentials not configured".to_string());
+    }
+
+    use lettre::{Message, SmtpTransport, Transport};
+    use lettre::transport::smtp::authentication::Credentials;
+
+    let email = Message::builder()
+        .from(format!("NDR Security <{}>", smtp_user).parse().map_err(|e| format!("Invalid from address: {}", e))?)
+        .to(to_email.parse().map_err(|e| format!("Invalid to address: {}", e))?)
+        .subject(subject)
+        .body(body.to_string())
+        .map_err(|e| format!("Failed to build email: {}", e))?;
+
+    let creds = Credentials::new(smtp_user.clone(), smtp_pass.clone());
+    
+    let result = tokio::task::spawn_blocking(move || {
+        let builder = if smtp_port == 465 {
+            SmtpTransport::relay(&smtp_host).unwrap()
+        } else {
+            SmtpTransport::starttls_relay(&smtp_host).unwrap()
+        };
+
+        let mailer = builder
+            .port(smtp_port)
+            .credentials(creds)
+            .build();
+        mailer.send(&email)
+    }).await;
+
+    match result {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(format!("Failed to send email: {}", e)),
+        Err(_) => Err("Internal thread error".to_string()),
+    }
 }
 
 // GET /api/admin/active-sessions — returns all active sessions for the caller's tenant

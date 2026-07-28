@@ -1,11 +1,10 @@
-FROM node:20 AS build
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
 COPY package*.json ./
 
-# Clean install (important)
-RUN rm -rf node_modules package-lock.json
+# Clean install
 RUN npm install --legacy-peer-deps
 
 COPY . .
@@ -13,42 +12,31 @@ COPY . .
 # Fix permission issue
 RUN chmod -R 755 node_modules/.bin
 
-# Use direct node execution (no ng permission issue)
+# Build the Angular SPA
 RUN node ./node_modules/@angular/cli/bin/ng build
 
+# ── Production stage: serve the built SPA via nginx ──
 FROM nginx:alpine
 
 COPY --from=build /app/dist/ndr-ui/browser /usr/share/nginx/html
+RUN chmod -R 755 /usr/share/nginx/html
 
-# Nginx config: serve Angular SPA + proxy /api → ndr-engine upstream
+# Minimal nginx config: serve the Angular SPA on port 80.
+# All /api and /ws proxying is handled by the outer ndr-nginx container.
+# Only serve static files here — no upstream needed.
 RUN printf 'events { worker_connections 1024; }\n\
 http {\n\
   include       /etc/nginx/mime.types;\n\
   default_type  application/octet-stream;\n\
-\n\
-  upstream ndr_api {\n\
-    server ndr-engine-1:8080;\n\
-    server ndr-engine-2:8080;\n\
-    server ndr-engine-3:8080;\n\
-  }\n\
+  sendfile      on;\n\
 \n\
   server {\n\
     listen 80;\n\
+    root  /usr/share/nginx/html;\n\
+    index index.html;\n\
 \n\
-    # Proxy all /api calls to the engine cluster\n\
-    location /api/ {\n\
-      proxy_pass         http://ndr_api/;\n\
-      proxy_http_version 1.1;\n\
-      proxy_set_header   Upgrade $http_upgrade;\n\
-      proxy_set_header   Connection "upgrade";\n\
-      proxy_set_header   Host $host;\n\
-      proxy_read_timeout 300s;\n\
-    }\n\
-\n\
-    # Serve Angular SPA — unknown routes fall back to index.html\n\
+    # Angular SPA — all routes fall back to index.html\n\
     location / {\n\
-      root  /usr/share/nginx/html;\n\
-      index index.html;\n\
       try_files $uri $uri/ /index.html;\n\
     }\n\
   }\n\

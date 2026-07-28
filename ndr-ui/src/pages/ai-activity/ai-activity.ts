@@ -7,12 +7,12 @@ import { catchError, map, startWith, switchMap } from 'rxjs/operators';
 import { Api } from '../../services/api/api';
 import { LucideAngularModule, Bot, ShieldOff, FileText, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, Shield, AlertTriangle, Activity } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 @Component({
   selector: 'app-ai-activity',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, SensorScopeBanner],
+  imports: [CommonModule, LucideAngularModule],
   templateUrl: './ai-activity.html',
   styleUrl: './ai-activity.css',
 })

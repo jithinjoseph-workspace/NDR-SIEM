@@ -21,7 +21,7 @@ export class AriaService {
 
   private headers(): HttpHeaders {
     return new HttpHeaders({
-      Authorization: `Bearer ${localStorage.getItem('token') || ''}`
+      Authorization: `Bearer ${localStorage.getItem('ndr_token') || ''}`
     });
   }
 

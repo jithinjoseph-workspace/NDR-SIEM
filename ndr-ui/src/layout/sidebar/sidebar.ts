@@ -73,6 +73,7 @@ export class Sidebar implements OnInit, OnDestroy {
         { label: 'Trusted Cloud',   route: '/admin', queryParams: { tab: 'trusted-cloud' },    icon: ShieldCheck },
         { label: 'Trusted Domains', route: '/admin', queryParams: { tab: 'trusted-domains' }, icon: Globe },
         { label: 'AI Providers',    route: '/admin', queryParams: { tab: 'ai-providers' },    icon: Bot },
+        { label: 'SMTP Config',     route: '/admin', queryParams: { tab: 'smtp-config' },     icon: Settings },
       ];
     } else if (user?.role === 'tenant_admin') {
       this.navItems = [

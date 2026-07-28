@@ -908,6 +908,7 @@ BEACON_WINDOW_HOURS=1
 INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
+TRUSTED_SOURCE_CIDRS=
 ENVEOF
 log ".env generated"
 
@@ -1311,9 +1312,29 @@ step "Response Automation  (SOAR)"
 log "Native SOAR is built into the NDR engine — no extra services needed"
 info "Configure playbooks, cases and integrations from the UI → SOAR page"
 
-# Angular was already built in the Dashboard UI step (before docker compose started).
-# Nginx serves dist/ndr-ui/browser via the bind-mount in docker-compose.yml.
-# No rebuild needed here — wait for nginx HTTPS to confirm UI is live.
+log "Angular UI — built inside the ndr-ui Docker container (no host build needed)"
+
+# Kill any stale npm serve process left over from a previous install run
+if [ -f /tmp/ndr-ui.pid ]; then
+    OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
+    if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
+        kill "$OLD_UI_PID" 2>/dev/null || true
+    fi
+    rm -f /tmp/ndr-ui.pid
+fi
+
+# Wait for ndr-ui container and then nginx to confirm UI is live
+log "Waiting for ndr-ui container to be ready..."
+for i in {1..30}; do
+    if sudo docker exec ndr-ui curl -s http://localhost:80 > /dev/null 2>&1; then
+        log "ndr-ui container ready"
+        break
+    fi
+    echo -n "."
+    sleep 3
+done
+echo ""
+
 log "Waiting for Angular UI (served by nginx)..."
 for i in {1..20}; do
     if curl -sk https://localhost:3000/ > /dev/null 2>&1; then
@@ -1343,7 +1364,7 @@ info "Interface:  $IFACE  ($HOST_IP)"
 info "Agent-Z:    $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
 info "Agent-S:    $(suricata --version 2>&1 | head -1)"
 info "Docker:     $(sudo docker --version)"
-info "Node.js:    $(node --version)  |  npm: $(npm --version)"
+info "ndr-ui:     $(sudo docker inspect --format='{{.State.Status}}' ndr-ui 2>/dev/null || echo 'not started')"
 if [ "$DEPLOY_MODE" = "local" ]; then
     info "ClickHouse: $(curl -s http://localhost:8123/ping 2>/dev/null || echo 'starting...')"
 else

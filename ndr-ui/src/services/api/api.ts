@@ -273,6 +273,14 @@ export class Api {
     return this.http.post(`${this.baseUrl}/settings`, data);
   }
 
+  getGlobalSmtp(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/settings/smtp`);
+  }
+
+  updateGlobalSmtp(data: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/settings/smtp`, data);
+  }
+
   getAiConfig(): Observable<any> {
     return this.http.get(`${this.baseUrl}/settings/ai`);
   }
@@ -405,6 +413,10 @@ export class Api {
     return this.http.put(`${this.baseUrl}/auth/users/${id}`, data);
   }
 
+  updateProfileGmail(gmail: string): Observable<any> {
+    return this.http.put(`${this.baseUrl}/auth/me/gmail`, { gmail });
+  }
+
   setUserStatus(id: string, active: boolean): Observable<any> {
     return this.http.post(`${this.baseUrl}/auth/users/${id}/status`, { active });
   }
@@ -416,6 +428,20 @@ export class Api {
   resetUserPassword(id: string, password: string): Observable<any> {
     return this.http.post(`${this.baseUrl}/auth/users/${id}/password`, { password });
   }
+
+  // Forgot password flow
+  forgotVerifySecret(username: string, secret_code: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/forgot/verify-secret`, { username, secret_code });
+  }
+
+  forgotSendOtp(username: string, gmail: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/forgot/send-otp`, { username, gmail });
+  }
+
+  forgotResetPassword(username: string, otp: string, new_password: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/forgot/reset-password`, { username, otp, new_password });
+  }
+
 
   deleteUser(id: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/auth/users/${id}`);

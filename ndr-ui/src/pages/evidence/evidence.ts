@@ -4,14 +4,14 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
 import { EvidenceService } from '../../services/evidence/evidence';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 const SEV_ORDER: Record<string, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 
 @Component({
   selector: 'app-evidence',
   standalone: true,
-  imports: [CommonModule, FormsModule, SensorScopeBanner],
+  imports: [CommonModule, FormsModule],
   templateUrl: './evidence.html',
   styleUrl: './evidence.css'
 })

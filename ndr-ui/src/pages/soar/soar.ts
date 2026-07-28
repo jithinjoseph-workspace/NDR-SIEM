@@ -12,12 +12,12 @@ import {
     Ban, ShieldOff, WifiOff, Wifi, AlertCircle
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 @Component({
     selector: 'app-soar',
     standalone: true,
-    imports: [CommonModule, LucideAngularModule, FormsModule, SensorScopeBanner],
+    imports: [CommonModule, LucideAngularModule, FormsModule],
     templateUrl: './soar.html',
     styleUrl: './soar.css'
 })

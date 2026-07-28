@@ -105,6 +105,7 @@ export class Admin implements OnInit, OnDestroy {
   MemoryStickIcon = MemoryStick;
   DownloadIcon = Download;
   GlobeIcon = Globe;
+  ErrorIcon = AlertTriangle;
 
   // Community rules sync state
   syncingRules = false;
@@ -196,6 +197,7 @@ export class Admin implements OnInit, OnDestroy {
     password: '',
     role: 'tenant_admin',
     tenant_id: '',
+    gmail: '',
   };
   userForm = {
     role: 'tenant_admin',
@@ -267,6 +269,17 @@ export class Admin implements OnInit, OnDestroy {
   announcementSearch = '';
   announcementAudience = 'all_audiences';
   announcements: Announcement[] = [];
+
+  // SMTP Config state
+  smtpConfig = {
+    host: 'smtp.gmail.com',
+    port: 587,
+    user: '',
+    password: ''
+  };
+  savingSmtp = false;
+  smtpMessage = '';
+  smtpError = '';
 
   // Friendly date/time picker state
   announcementStartDate = '';
@@ -464,6 +477,9 @@ export class Admin implements OnInit, OnDestroy {
     if (tab === 'ai-providers') {
       this.loadProviders();
     }
+    if (tab === 'smtp-config') {
+      this.loadSmtpConfig();
+    }
   }
 
   startOverviewTelemetryPolling() {
@@ -572,6 +588,41 @@ export class Admin implements OnInit, OnDestroy {
         this.trustedCloud.suggestions = this.trustedCloud.suggestions.filter(s => s.org !== org);
       },
       error: () => { },
+    });
+  }
+
+  // ── SMTP Config ────────────────────────────────────────────────────────
+  loadSmtpConfig() {
+    this.api.getGlobalSmtp().subscribe({
+        next: (data: any) => {
+            if (data.status === 'ok' && data.config) {
+                this.smtpConfig = data.config;
+            }
+            this.cdr.detectChanges();
+        },
+        error: (err) => {
+            console.error('Failed to load SMTP config', err);
+        }
+    });
+  }
+
+  saveSmtpConfig() {
+    this.savingSmtp = true;
+    this.smtpMessage = '';
+    this.smtpError = '';
+    this.api.updateGlobalSmtp(this.smtpConfig).subscribe({
+        next: () => {
+            this.savingSmtp = false;
+            this.smtpMessage = 'SMTP configuration saved';
+            this.smtpConfig.password = ''; // clear password field after saving, backend keeps it if we send empty string
+            this.loadSmtpConfig(); // reload to get the masked password again
+            setTimeout(() => { this.smtpMessage = ''; this.cdr.detectChanges(); }, 3000);
+        },
+        error: () => {
+            this.savingSmtp = false;
+            this.smtpError = 'Failed to save SMTP configuration';
+            this.cdr.detectChanges();
+        }
     });
   }
 
@@ -909,6 +960,7 @@ export class Admin implements OnInit, OnDestroy {
               password: '',
               role: 'tenant_admin',
               tenant_id: '',
+              gmail: '',
             };
             this.loadUsers();
             this.showMsg('Tenant admin created', 'success');

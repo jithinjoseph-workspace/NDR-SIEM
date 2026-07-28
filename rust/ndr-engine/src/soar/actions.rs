@@ -370,7 +370,7 @@ pub async fn execute_action(
                         let fw_type = fw["type"].as_str().unwrap_or("none").to_string();
                         let fw_cfg  = &fw["config"];
                         let host    = fw_cfg["host"].as_str().unwrap_or("");
-                        let api_key = fw_cfg["api_key"].as_str().unwrap_or("");
+                        let _api_key = fw_cfg["api_key"].as_str().unwrap_or("");
                         let result  = crate::soar::firewall::push_block(
                             &fw_type, fw_cfg, src_ip, duration_hours).await;
                         info!("FIREWALL [{}@{}] block {}: {} — {}",

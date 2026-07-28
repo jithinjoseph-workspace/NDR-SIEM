@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../services/auth/auth';
 import { Websocket } from '../../services/websocket/websocket';
+import { Api } from '../../services/api/api';
 import { Subscription } from 'rxjs';
 
 @Component({
@@ -25,8 +26,25 @@ export class Login implements OnDestroy {
   private usernameTimer: any = null;
   private usernameCheckSub: Subscription | null = null;
 
+  // ── Forgot Password Modal ────────────────────────────────────────────────
+  showForgotModal = false;
+  forgotStep = 1; // 1: Secret, 2: Gmail, 3: OTP, 4: Success
+  forgotLoading = false;
+  forgotError = '';
+
+  forgotData = {
+    username: '',
+    secretCode: '',
+    gmailHint: '',
+    gmail: '',
+    otp: '',
+    newPassword: '',
+    confirmPassword: ''
+  };
+
   constructor(
     private auth: AuthService,
+    private api: Api,
     private router: Router,
     private cdr: ChangeDetectorRef,
     private ws: Websocket
@@ -39,6 +57,111 @@ export class Login implements OnDestroy {
   ngOnDestroy(): void {
     clearTimeout(this.usernameTimer);
     this.usernameCheckSub?.unsubscribe();
+  }
+
+  // ── Forgot Password Methods ──────────────────────────────────────────────
+
+  openForgotModal() {
+    this.showForgotModal = true;
+    this.forgotStep = 1;
+    this.forgotError = '';
+    this.forgotData = {
+      username: this.username,
+      secretCode: '',
+      gmailHint: '',
+      gmail: '',
+      otp: '',
+      newPassword: '',
+      confirmPassword: ''
+    };
+  }
+
+  closeForgotModal() {
+    this.showForgotModal = false;
+  }
+
+  submitSecretCode() {
+    if (!this.forgotData.username || !this.forgotData.secretCode) {
+      this.forgotError = 'Username and Secret Code are required';
+      return;
+    }
+    this.forgotLoading = true;
+    this.forgotError = '';
+    this.api.forgotVerifySecret(this.forgotData.username, this.forgotData.secretCode).subscribe({
+      next: (res: any) => {
+        this.forgotLoading = false;
+        if (res.status === 'ok') {
+          this.forgotData.gmailHint = res.gmail_hint;
+          this.forgotStep = 2;
+        } else {
+          this.forgotError = res.message || 'Verification failed';
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err: any) => {
+        this.forgotLoading = false;
+        this.forgotError = err.error?.message || 'Verification failed';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  submitGmail() {
+    if (!this.forgotData.gmail) {
+      this.forgotError = 'Email address is required';
+      return;
+    }
+    this.forgotLoading = true;
+    this.forgotError = '';
+    this.api.forgotSendOtp(this.forgotData.username, this.forgotData.gmail).subscribe({
+      next: (res: any) => {
+        this.forgotLoading = false;
+        if (res.status === 'ok') {
+          this.forgotStep = 3;
+        } else {
+          this.forgotError = res.message || 'Failed to send OTP';
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err: any) => {
+        this.forgotLoading = false;
+        this.forgotError = err.error?.message || 'Failed to send OTP';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  submitOtp() {
+    if (!this.forgotData.otp || !this.forgotData.newPassword) {
+      this.forgotError = 'All fields are required';
+      return;
+    }
+    if (this.forgotData.newPassword !== this.forgotData.confirmPassword) {
+      this.forgotError = 'Passwords do not match';
+      return;
+    }
+    this.forgotLoading = true;
+    this.forgotError = '';
+    this.api.forgotResetPassword(
+      this.forgotData.username,
+      this.forgotData.otp,
+      this.forgotData.newPassword
+    ).subscribe({
+      next: (res: any) => {
+        this.forgotLoading = false;
+        if (res.status === 'ok') {
+          this.forgotStep = 4;
+        } else {
+          this.forgotError = res.message || 'Password reset failed';
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err: any) => {
+        this.forgotLoading = false;
+        this.forgotError = err.error?.message || 'Password reset failed';
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   /** Called on every keystroke in the username field. Debounces 400ms. */

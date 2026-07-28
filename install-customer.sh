@@ -1194,9 +1194,7 @@ services:
     image: ${REGISTRY}/ndr-engine:latest
   ndr-ui:
     image: ${REGISTRY}/ndr-ui:latest
-    restart: unless-stopped
-    networks:
-      - ndr-internal
+    build: !reset null
 OVERRIDE
 
 if [ "$DEPLOY_MODE" = "hybrid" ]; then

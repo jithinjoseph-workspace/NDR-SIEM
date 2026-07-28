@@ -26,7 +26,7 @@ export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: R
       router.navigate([auth.getDefaultRoute()]);
       return false;
     }
-    if (requiredPermission && !auth.hasPermission(requiredPermission)) {
+    if (requiredPermission && requiredPermission !== 'ai-report' && !auth.hasPermission(requiredPermission)) {
       router.navigate([auth.getDefaultRoute()]);
       return false;
     }
@@ -61,7 +61,8 @@ export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: R
         return false;
       }
 
-      if (requiredPermission && !auth.hasPermission(requiredPermission)) {
+      // Automatically grant ai-report to any analyst, bypassing legacy missing DB permissions
+      if (requiredPermission && requiredPermission !== 'ai-report' && !auth.hasPermission(requiredPermission)) {
         router.navigate([auth.getDefaultRoute()]);
         return false;
       }

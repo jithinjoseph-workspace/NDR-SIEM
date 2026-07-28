@@ -8,12 +8,12 @@ import { LucideAngularModule, Search, Terminal, RefreshCw, FileText, Activity, D
 import { ActivatedRoute } from '@angular/router';
 import { Live } from '../live/live';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 @Component({
   selector: 'app-logs',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, FormsModule, Live, SensorScopeBanner],
+  imports: [CommonModule, LucideAngularModule, FormsModule, Live],
   templateUrl: './logs.html',
   styleUrl: './logs.css'
 })

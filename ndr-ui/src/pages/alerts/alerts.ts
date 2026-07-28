@@ -14,7 +14,7 @@ import {
   Copy, ShieldCheck, Layers, GitBranch, ShieldX,
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 // Detection tags that are meaningful for grouping — must match Rust tag strings exactly
 const DETECTION_TAGS = new Set([
@@ -49,7 +49,7 @@ export interface AlertGroup {
 @Component({
   selector: 'app-alerts',
   standalone: true,
-  imports: [CommonModule, FormsModule, LucideAngularModule, SensorScopeBanner],
+  imports: [CommonModule, FormsModule, LucideAngularModule],
   templateUrl: './alerts.html',
   styleUrl: './alerts.css',
 })

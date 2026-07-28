@@ -31,7 +31,7 @@ import {
   ArrowLeft
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 const DEVICE_PATHS: Record<string, string> = {
   laptop: 'M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16',
@@ -56,7 +56,7 @@ import { DeviceDrawer } from '../../components/device-drawer/device-drawer';
 @Component({
   selector: 'app-network-map',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, DeviceDrawer, SensorScopeBanner],
+  imports: [CommonModule, LucideAngularModule, DeviceDrawer],
   templateUrl: './network-map.html',
   styleUrl: './network-map.css',
 })

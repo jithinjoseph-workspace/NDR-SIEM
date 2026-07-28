@@ -45,6 +45,12 @@ import {
   RefreshCw,
   Loader,
   Sparkles,
+  User,
+  Copy,
+  Eye,
+  EyeOff,
+  Mail,
+  Pencil,
 } from 'lucide-angular';
 import { Api, SensorKey, SensorAssignment } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
@@ -118,6 +124,12 @@ export class TenantAdmin implements OnInit, OnDestroy {
   RefreshCwIcon = RefreshCw;
   LoaderIcon = Loader;
   SparklesIcon = Sparkles;
+  UserIcon = User;
+  CopyIcon = Copy;
+  EyeIcon = Eye;
+  EyeOffIcon = EyeOff;
+  MailIcon = Mail;
+  Edit2Icon = Pencil;
 
   // ── Signals ───────────────────────────────────────────────────────────────
 
@@ -142,13 +154,19 @@ export class TenantAdmin implements OnInit, OnDestroy {
   readonly selectedUserIds = signal(new Set<string>());
 
   // Tab navigation
-  readonly activeTab = signal<'users' | 'trusted-domains' | 'sessions'>('users');
+  readonly activeTab = signal<'users' | 'trusted-domains' | 'sessions' | 'profile'>('users');
 
   // Active sessions
   readonly activeSessions       = signal<any[]>([]);
   readonly sessionsLoading      = signal(false);
   readonly sessionsGrouped      = signal<Record<string, any[]>>({});
   readonly forceLogoutConfirmUser = signal('');
+
+  // Profile
+  showSecretCode = false;
+  isEditingEmail = false;
+  editingEmailValue = '';
+  emailUpdateLoading = false;
 
   // Trusted domains
   readonly trustedDomains      = signal<any[]>([]);
@@ -990,7 +1008,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   // ── Tab navigation ────────────────────────────────────────────────────────
 
-  switchTab(tab: 'users' | 'trusted-domains' | 'sessions') {
+  switchTab(tab: 'users' | 'trusted-domains' | 'sessions' | 'profile') {
     this.activeTab.set(tab);
     if (tab === 'trusted-domains') this.loadTrustedDomains();
     if (tab === 'sessions')        this.loadActiveSessions();
@@ -1048,6 +1066,48 @@ export class TenantAdmin implements OnInit, OnDestroy {
   formatLoginTime(ts: string): string {
     if (!ts) return '—';
     return new Date(parseInt(ts, 10) * 1000).toLocaleString();
+  }
+
+  // ── Profile ───────────────────────────────────────────────────────────────
+
+  copySecretCode() {
+    if (this.currentUser()?.secret_code) {
+      navigator.clipboard.writeText(this.currentUser().secret_code);
+    }
+  }
+
+  startEmailEdit() {
+    this.isEditingEmail = true;
+    this.editingEmailValue = this.currentUser()?.gmail || '';
+  }
+
+  cancelEmailEdit() {
+    this.isEditingEmail = false;
+    this.editingEmailValue = '';
+  }
+
+  saveRecoveryEmail() {
+    const val = this.editingEmailValue.trim();
+    if (!val) { this.showMessage('Email address cannot be empty', 'error'); return; }
+    if (!val.includes('@')) { this.showMessage('Invalid email address format', 'error'); return; }
+    this.emailUpdateLoading = true;
+    this.api.updateProfileGmail(val).subscribe({
+      next: (res: any) => {
+        this.emailUpdateLoading = false;
+        if (res.status === 'ok') {
+          this.showMessage('Recovery email updated successfully', 'success');
+          this.isEditingEmail = false;
+          const current = this.currentUser();
+          if (current) this.currentUser.set({ ...current, gmail: val });
+        } else {
+          this.showMessage(res.message || 'Failed to update email', 'error');
+        }
+      },
+      error: (err: any) => {
+        this.emailUpdateLoading = false;
+        this.showMessage(err.error?.message || 'Failed to update email', 'error');
+      }
+    });
   }
 
   // ── Software update ───────────────────────────────────────────────────────

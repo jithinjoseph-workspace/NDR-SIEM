@@ -6,12 +6,12 @@ import { Notifications, ThreatNotification } from '../../services/notifications/
 import { Subscription } from 'rxjs';
 import { LucideAngularModule, Search, ShieldCheck, CircleAlert, RefreshCw, Hash, Bell, Plus } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
-import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
+
 
 @Component({
   selector: 'app-intel',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, FormsModule, SensorScopeBanner],
+  imports: [CommonModule, LucideAngularModule, FormsModule],
   templateUrl: './intel.html',
   styleUrl: './intel.css'
 })
