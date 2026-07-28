@@ -4354,6 +4354,48 @@ pub async fn login(
                 let _: redis::RedisResult<i64>  = mux.sadd(&user_set_key, &jti).await;
                 let _: redis::RedisResult<bool> = mux.expire(&user_set_key, 86400usize).await;
                 let _: redis::RedisResult<i64>  = mux.sadd(&tenant_set_key, &jti).await;
+
+                // New-device detection: check previous sessions for this user.
+                // If no existing session matches the current device string → new device → alert tenant admin.
+                let prev_jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
+                let mut seen_before = false;
+                for prev_jti in &prev_jtis {
+                    if prev_jti == &jti { continue; } // skip the one we just added
+                    let prev_key = format!("ndr:session:{}", prev_jti);
+                    let prev_device: Option<String> = mux.hget(&prev_key, "device").await.unwrap_or(None);
+                    if prev_device.as_deref() == Some(device.as_str()) {
+                        seen_before = true;
+                        break;
+                    }
+                }
+                if !seen_before {
+                    let state_clone = state.clone();
+                    let username_clone  = username.clone();
+                    let tenant_clone    = tenant_id.to_string();
+                    let device_clone    = device.clone();
+                    let ip_clone        = ip.clone();
+                    let login_ts_clone  = login_ts.clone();
+                    tokio::spawn(async move {
+                        if let Ok(Some(admin_gmail)) = state_clone.ch_storage
+                            .get_tenant_admin_gmail(&tenant_clone).await
+                        {
+                            let subject = format!("New device login — {}", username_clone);
+                            let body = format!(
+                                "Hello,\n\n\
+                                A new device just signed in to your NDR tenant.\n\n\
+                                User:    {}\n\
+                                Device:  {}\n\
+                                IP:      {}\n\
+                                Time:    {}\n\n\
+                                If this was you, no action is needed.\n\
+                                If this was not you, please contact your administrator immediately.\n\n\
+                                — Proma Secure NDR",
+                                username_clone, device_clone, ip_clone, login_ts_clone
+                            );
+                            let _ = send_system_email(&state_clone, &admin_gmail, &subject, &body).await;
+                        }
+                    });
+                }
             }
 
             let ai_enabled = if role == "super_admin" {

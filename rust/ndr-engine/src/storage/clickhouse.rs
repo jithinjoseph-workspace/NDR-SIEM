@@ -684,6 +684,25 @@ pub async fn get_gmail_for_user(
     Ok(rows.into_iter().next())
 }
 
+/// Get the gmail of the tenant_admin for a given tenant so we can notify them of new logins.
+pub async fn get_tenant_admin_gmail(
+    &self,
+    tenant_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let esc = sql_escape(tenant_id);
+    let rows = self.client
+        .query(&format!(
+            "SELECT gmail FROM ndr.users \
+             WHERE tenant_id = '{}' AND role = 'tenant_admin' AND active = 1 \
+             AND gmail != '' \
+             ORDER BY created_at DESC LIMIT 1",
+            esc
+        ))
+        .fetch_all::<String>()
+        .await?;
+    Ok(rows.into_iter().next())
+}
+
 /// Update the password hash for a user identified by username.
 /// Used by the forgot-password reset endpoint.
 pub async fn reset_password_by_username_direct(
