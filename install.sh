@@ -985,7 +985,7 @@ log "Installing Angular UI dependencies..."
 cd "$INSTALL_DIR/ndr-ui"
 
 if [ -d "node_modules/@angular/build" ]; then
-    log "Angular dependencies already installed — skipping"
+    log "Angular dependencies already installed — skipping npm install"
 else
     log "First-time install..."
     sudo chmod -R 777 "$INSTALL_DIR/ndr-ui" 2>/dev/null || true
@@ -999,6 +999,18 @@ else
     else
         warn "npm install had issues — check output above"
     fi
+fi
+
+# Build now — BEFORE docker compose starts nginx.
+# nginx bind-mounts dist/ndr-ui/browser from the host (docker-compose.yml line ~342).
+# If dist doesn't exist when nginx starts, it serves an empty directory and the
+# browser gets "site can't be reached". Building here ensures the files are ready
+# before any container touches them.
+log "Building Angular UI (production)..."
+if npm run build -- --configuration production 2>&1 | tail -8; then
+    log "Angular UI built → dist/ndr-ui/browser/"
+else
+    warn "Angular build had errors — UI may not load correctly after install"
 fi
 
 cd "$INSTALL_DIR"
@@ -1248,22 +1260,9 @@ step "Response Automation  (SOAR)"
 log "Native SOAR is built into the NDR engine — no extra services needed"
 info "Configure playbooks, cases and integrations from the UI → SOAR page"
 
-log "Building Angular UI (production build)..."
-cd "$INSTALL_DIR/ndr-ui"
-
-# Kill any stale serve process left over from a previous install run
-if [ -f /tmp/ndr-ui.pid ]; then
-    OLD_UI_PID=$(cat /tmp/ndr-ui.pid 2>/dev/null || true)
-    if [ -n "$OLD_UI_PID" ] && kill -0 "$OLD_UI_PID" 2>/dev/null; then
-        kill "$OLD_UI_PID" 2>/dev/null || true
-    fi
-    rm -f /tmp/ndr-ui.pid
-fi
-
-npm run build -- --configuration production 2>&1 | tail -5
-
-# Nginx serves the Angular build via the bind-mount in docker-compose.yml.
-# No separate static server needed — wait for nginx HTTPS to confirm UI is live.
+# Angular was already built in the Dashboard UI step (before docker compose started).
+# Nginx serves dist/ndr-ui/browser via the bind-mount in docker-compose.yml.
+# No rebuild needed here — wait for nginx HTTPS to confirm UI is live.
 log "Waiting for Angular UI (served by nginx)..."
 for i in {1..20}; do
     if curl -sk https://localhost:3000/ > /dev/null 2>&1; then
