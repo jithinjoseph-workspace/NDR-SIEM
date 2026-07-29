@@ -140,16 +140,16 @@
           </div>
         </div>
         <div class="dropdown-divider"></div>
-        <button *ngIf="canViewSettings" (click)="goToSettings()" class="dropdown-item">
+        <button *ngIf="canViewSettings" (click)="$event.stopPropagation(); goToSettings()" class="dropdown-item">
           <lucide-icon [name]="SettingsIcon" class="w-4 h-4"></lucide-icon>
           <span>Settings</span>
         </button>
-        <button (click)="goToSupport()" class="dropdown-item">
+        <button (click)="$event.stopPropagation(); goToSupport()" class="dropdown-item">
           <lucide-icon [name]="HelpCircleIcon" class="w-4 h-4"></lucide-icon>
           <span>Support</span>
         </button>
         <div class="dropdown-divider"></div>
-        <button (click)="logout()" class="dropdown-item logout-item">
+        <button (click)="$event.stopPropagation(); logout()" class="dropdown-item logout-item">
           <lucide-icon [name]="LogOutIcon" class="w-4 h-4"></lucide-icon>
           <span>Logout</span>
         </button>

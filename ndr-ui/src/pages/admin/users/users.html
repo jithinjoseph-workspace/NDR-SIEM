@@ -83,7 +83,7 @@
               <span>{{ user.created_at | date:'short' }}</span>
             </div>
           </div>
-          <span class="role-pill">{{ roleLabel(user.role) }}</span>
+          <span [class]="'role-pill ' + getRolePillClass(user.role)">{{ roleLabel(user.role) }}</span>
           <span [class]="'status-pill ' + userStatusClass(user)">{{ userStatusLabel(user) }}</span>
           <div class="row-actions action-row">
             <button class="icon-button" type="button" title="Edit user" (click)="openEditUser(user)">

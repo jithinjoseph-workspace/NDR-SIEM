@@ -290,12 +290,20 @@ export class Navbar implements OnInit, OnDestroy {
 
   goToSettings() {
     this.showUserMenu = false;
-    this.router.navigate(['/settings']);
+    if (this.auth.isTenantAdmin()) {
+      this.router.navigate(['/tenant-admin/settings']);
+    } else {
+      this.router.navigate(['/settings']);
+    }
   }
 
   goToSupport() {
     this.showUserMenu = false;
-    this.router.navigate(['/support']);
+    if (this.auth.isTenantAdmin()) {
+      this.router.navigate(['/tenant-admin/support']);
+    } else {
+      this.router.navigate(['/support']);
+    }
   }
 
   logout() {

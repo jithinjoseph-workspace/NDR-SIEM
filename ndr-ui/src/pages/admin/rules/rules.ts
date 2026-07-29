@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../../../services/api/api';
 import {
   LucideAngularModule,
-  Gavel, Plus, Edit, Trash2, Power, RefreshCcw, X, Info, Download, ChevronDown,
+  Gavel, Plus, Edit, Trash2, Power, RefreshCcw, X, Info, Download, ChevronDown, Search,
 } from 'lucide-angular';
 
 @Component({
@@ -17,18 +17,26 @@ import {
   styleUrl: './rules.css',
 })
 export class AdminRules implements OnInit {
-  rules: any[]    = [];
-  loading         = true;
-  saving          = false;
-  syncing         = false;
-  showForm        = false;
-  isEditing       = false;
-  editingId       = '';
-  totalHits       = 0;
-  message         = '';
-  messageType     = '';
-  showFieldInfo   = false;
-  showConnHelp    = false;
+  rules: any[]         = [];
+  filteredRules: any[] = [];
+  displayCount         = 20;
+  loading              = true;
+  saving               = false;
+  syncing              = false;
+  isSearching          = false;
+  showForm             = false;
+  isEditing            = false;
+  editingId            = '';
+  totalHits            = 0;
+  searchQuery          = '';
+  message              = '';
+  messageType          = '';
+  showFieldInfo        = false;
+  showConnHelp         = false;
+
+  get displayedRules() { return this.filteredRules.slice(0, this.displayCount); }
+  get hasMore()        { return this.displayCount < this.filteredRules.length; }
+  get shownCount()     { return Math.min(this.displayCount, this.filteredRules.length); }
 
   ruleForm = {
     title: '', severity: 'medium', description: '',
@@ -92,6 +100,7 @@ export class AdminRules implements OnInit {
   ];
 
   GavelIcon   = Gavel;
+  SearchIcon  = Search;
   PlusIcon    = Plus;
   EditIcon    = Edit;
   TrashIcon   = Trash2;
@@ -109,27 +118,36 @@ export class AdminRules implements OnInit {
 
   ngOnInit() { this.loadRules(); }
 
+  private mapRule(r: any) {
+    return {
+      name:        r.title || 'Unknown',
+      type:        'SIGMA',
+      severity:    (r.severity || 'medium').toUpperCase(),
+      status:      r.enabled ? 'ACTIVE' : 'INACTIVE',
+      id:          r.id,
+      description: r.description || '',
+      tags:        r.tags || [],
+      conditions:  r.conditions || 0,
+      hits:        0,
+    };
+  }
+
   loadRules() {
     this.loading = true;
+    this.searchQuery = '';
     this.api.getRules().subscribe({
       next: (data: any[]) => {
-        this.rules = data.map(r => ({
-          name:        r.title || 'Unknown',
-          type:        'SIGMA',
-          severity:    (r.severity || 'medium').toUpperCase(),
-          status:      r.enabled ? 'ACTIVE' : 'INACTIVE',
-          id:          r.id,
-          description: r.description || '',
-          tags:        r.tags || [],
-          conditions:  r.conditions || 0,
-          hits:        0,
-        }));
+        // Newest first (reverse backend order which is typically oldest-first)
+        this.rules = data.map(r => this.mapRule(r)).reverse();
+        this.filteredRules = [...this.rules];
+        this.displayCount = 20;
         this.loading = false;
         this.cdr.detectChanges();
         this.api.getRuleHitCounts().subscribe({
           next: (hitCounts: { [k: string]: number }) => {
             this.totalHits = Object.values(hitCounts).reduce((a, b) => a + b, 0);
             this.rules = this.rules.map(r => ({ ...r, hits: hitCounts[r.name] || 0 }));
+            this.filteredRules = this.filteredRules.map(r => ({ ...r, hits: hitCounts[r.name] || 0 }));
             this.cdr.detectChanges();
           },
           error: () => {},
@@ -137,6 +155,50 @@ export class AdminRules implements OnInit {
       },
       error: () => { this.loading = false; this.cdr.detectChanges(); },
     });
+  }
+
+  onSearch() {
+    const q = this.searchQuery.trim().toLowerCase();
+    if (!q) {
+      this.filteredRules = [...this.rules];
+      this.displayCount = 20;
+      this.cdr.detectChanges();
+      return;
+    }
+    const local = this.rules.filter(r =>
+      r.name.toLowerCase().includes(q) ||
+      (r.description || '').toLowerCase().includes(q) ||
+      r.severity.toLowerCase().includes(q) ||
+      (r.tags || []).some((t: string) => t.toLowerCase().includes(q))
+    );
+    if (local.length > 0) {
+      this.filteredRules = local;
+      this.displayCount = 20;
+      this.cdr.detectChanges();
+      return;
+    }
+    // No local match — query backend
+    this.isSearching = true;
+    this.filteredRules = [];
+    this.cdr.detectChanges();
+    this.api.searchRules(q).subscribe({
+      next: (data: any[]) => {
+        this.filteredRules = data.map(r => this.mapRule(r));
+        this.isSearching = false;
+        this.displayCount = 20;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.isSearching = false;
+        this.filteredRules = [];
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  loadMore() {
+    this.displayCount = Math.min(this.displayCount + 20, this.filteredRules.length);
+    this.cdr.detectChanges();
   }
 
   syncCommunityRules() {

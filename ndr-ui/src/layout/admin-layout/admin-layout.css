@@ -58,24 +58,26 @@
   gap: 7px;
   padding: 9px 18px;
   border-radius: 9px;
-  border: 1px solid rgba(79,140,255,0.35);
-  background: linear-gradient(135deg, rgba(79,140,255,0.22) 0%, rgba(59,100,220,0.18) 100%);
-  color: #a0caff;
+  border: 1px solid rgba(96,165,250,0.50);
+  background: linear-gradient(135deg, rgba(59,130,246,0.52) 0%, rgba(37,99,235,0.42) 100%);
+  color: #dbeafe;
   font-size: 14.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.18s;
   white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(59,130,246,0.12);
 }
 
 .primary-action:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(79,140,255,0.32) 0%, rgba(59,100,220,0.26) 100%);
-  border-color: rgba(79,140,255,0.55);
-  color: #c0daff;
+  background: linear-gradient(135deg, rgba(59,130,246,0.70) 0%, rgba(37,99,235,0.58) 100%);
+  border-color: rgba(96,165,250,0.72);
+  color: #eff6ff;
+  box-shadow: 0 0 18px rgba(59,130,246,0.28);
 }
 
 .primary-action:disabled {
-  opacity: 0.45;
+  opacity: 0.40;
   cursor: not-allowed;
 }
 
@@ -85,24 +87,25 @@
   gap: 6px;
   padding: 8px 14px;
   border-radius: 8px;
-  border: 1px solid rgba(79,140,255,0.20);
-  background: rgba(79,140,255,0.06);
-  color: #6B8FC0;
+  border: 1px solid rgba(79,140,255,0.28);
+  background: rgba(79,140,255,0.09);
+  color: #7FB1FF;
   font-size: 14.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.16s;
   white-space: nowrap;
 }
 
 .secondary-action:hover:not(:disabled) {
-  background: rgba(79,140,255,0.12);
-  border-color: rgba(79,140,255,0.34);
-  color: #9bb8e8;
+  background: rgba(79,140,255,0.16);
+  border-color: rgba(79,140,255,0.45);
+  color: #a8c8ff;
+  box-shadow: 0 0 12px rgba(79,140,255,0.12);
 }
 
 .secondary-action:disabled {
-  opacity: 0.45;
+  opacity: 0.40;
   cursor: not-allowed;
 }
 
@@ -118,18 +121,23 @@
   width: 32px;
   height: 32px;
   border-radius: 7px;
-  border: 1px solid rgba(79,140,255,0.14);
-  background: rgba(79,140,255,0.05);
-  color: #5A7090;
+  border: 1px solid rgba(79,140,255,0.18);
+  background: rgba(79,140,255,0.06);
+  color: #6B90C0;
   cursor: pointer;
   transition: all 0.15s;
   padding: 0;
 }
 
 .icon-button:hover {
-  background: rgba(79,140,255,0.12);
-  border-color: rgba(79,140,255,0.28);
-  color: #7FB1FF;
+  background: rgba(79,140,255,0.14);
+  border-color: rgba(79,140,255,0.35);
+  color: #93c5fd;
+}
+
+.icon-button:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
 }
 
 .danger-action {
@@ -138,28 +146,30 @@
   gap: 6px;
   padding: 8px 14px;
   border-radius: 8px;
-  border: 1px solid rgba(239,68,68,0.28);
-  background: rgba(239,68,68,0.08);
-  color: #f87171;
+  border: 1px solid rgba(239,68,68,0.36);
+  background: rgba(239,68,68,0.10);
+  color: #fca5a5;
   font-size: 14.5px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.16s;
+  white-space: nowrap;
 }
 
 .danger-action:hover:not(:disabled) {
-  background: rgba(239,68,68,0.14);
-  border-color: rgba(239,68,68,0.42);
+  background: rgba(239,68,68,0.18);
+  border-color: rgba(239,68,68,0.55);
+  color: #fecaca;
+  box-shadow: 0 0 14px rgba(239,68,68,0.18);
 }
 
 .danger-action.solid {
-  background: rgba(239,68,68,0.18);
-  border-color: rgba(239,68,68,0.40);
-  color: #fca5a5;
-  font-weight: 600;
+  background: rgba(239,68,68,0.22);
+  border-color: rgba(239,68,68,0.50);
+  color: #fecaca;
 }
 
-.danger-action:disabled { opacity: 0.45; cursor: not-allowed; }
+.danger-action:disabled { opacity: 0.40; cursor: not-allowed; }
 
 .danger-icon {
   display: inline-flex;
@@ -170,14 +180,95 @@
   border-radius: 7px;
   border: none;
   background: none;
-  color: #5E7A9A;
+  color: #6B7FA8;
   cursor: pointer;
   transition: all 0.15s;
   padding: 0;
 }
 
 .danger-icon:hover {
-  background: rgba(239,68,68,0.10);
+  background: rgba(239,68,68,0.12);
+  color: #f87171;
+}
+
+/* ── SCOPED BUTTON OVERRIDES (specificity wins) ─────────────────── */
+/* .sa-shell wraps all admin page content — this beats any other bare-class override */
+
+.sa-shell .primary-action,
+.modal-panel .primary-action {
+  background: linear-gradient(135deg, #3b8ef8 0%, #2260e8 100%) !important;
+  border: 1px solid rgba(147,197,253,0.50) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  box-shadow: 0 2px 18px rgba(59,142,248,0.50), inset 0 1px 0 rgba(255,255,255,0.12) !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.20);
+}
+
+.sa-shell .primary-action:hover:not(:disabled),
+.modal-panel .primary-action:hover:not(:disabled) {
+  background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%) !important;
+  border-color: rgba(147,197,253,0.75) !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 28px rgba(59,130,246,0.65), inset 0 1px 0 rgba(255,255,255,0.16) !important;
+}
+
+.sa-shell .primary-action:disabled,
+.modal-panel .primary-action:disabled {
+  opacity: 0.40;
+}
+
+.sa-shell .secondary-action,
+.modal-panel .secondary-action {
+  background: rgba(79,140,255,0.10);
+  border: 1px solid rgba(79,140,255,0.30);
+  color: #93c5fd;
+}
+
+.sa-shell .secondary-action:hover:not(:disabled),
+.modal-panel .secondary-action:hover:not(:disabled) {
+  background: rgba(79,140,255,0.18);
+  border-color: rgba(79,140,255,0.48);
+  color: #bfdbfe;
+  box-shadow: 0 0 14px rgba(79,140,255,0.14);
+}
+
+.sa-shell .danger-action,
+.modal-panel .danger-action {
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.38);
+  color: #fca5a5;
+}
+
+.sa-shell .danger-action:hover:not(:disabled),
+.modal-panel .danger-action:hover:not(:disabled) {
+  background: rgba(239,68,68,0.20);
+  border-color: rgba(239,68,68,0.58);
+  color: #fecaca;
+  box-shadow: 0 0 16px rgba(239,68,68,0.20);
+}
+
+.sa-shell .danger-action.solid,
+.modal-panel .danger-action.solid {
+  background: rgba(239,68,68,0.25);
+  border-color: rgba(239,68,68,0.55);
+  color: #fecaca;
+}
+
+.sa-shell .icon-button {
+  background: rgba(79,140,255,0.07);
+  border: 1px solid rgba(79,140,255,0.20);
+  color: #6B90C0;
+}
+
+.sa-shell .icon-button:hover {
+  background: rgba(79,140,255,0.16);
+  border-color: rgba(79,140,255,0.40);
+  color: #93c5fd;
+}
+
+.sa-shell .danger-icon { color: #6B7FA8; }
+.sa-shell .danger-icon:hover {
+  background: rgba(239,68,68,0.12);
   color: #f87171;
 }
 

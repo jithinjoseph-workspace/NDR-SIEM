@@ -1,39 +1,99 @@
 /* ── SMTP Config ─────────────────────────────────────────────────── */
 
+/* Card wrapper — override inline vars */
 .admin-panel .threshold-list {
   background: linear-gradient(145deg, #0D1422 0%, #090D18 100%) !important;
   border: 1px solid rgba(79,140,255,0.14) !important;
-  border-radius: 12px !important;
+  border-radius: 14px !important;
+  padding: 24px !important;
+  position: relative;
+  overflow: hidden;
 }
 
-/* Override inline style inputs inside smtp form */
-.admin-panel input[type="text"],
-.admin-panel input[type="number"],
-.admin-panel input[type="email"],
-.admin-panel input[type="password"] {
-  padding: 9px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(79,140,255,0.16);
-  background: rgba(9,13,24,0.80);
-  color: #c8d8f0;
-  font-size: 14.5px;
-  font-family: inherit;
-  box-sizing: border-box;
-  outline: none;
-  transition: border-color 0.15s;
-  appearance: none;
-  -webkit-appearance: none;
+/* Top accent bar */
+.admin-panel .threshold-list::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 220px; height: 2px;
+  background: linear-gradient(90deg, rgba(79,140,255,0.55), transparent);
+  pointer-events: none;
 }
 
-.admin-panel input:focus {
-  border-color: rgba(79,140,255,0.42) !important;
-  background: rgba(9,13,24,0.95);
+/* Form groups */
+.admin-panel .form-group {
+  display: flex;
+  gap: 14px;
 }
 
-.admin-panel label > span {
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #7090A8;
+/* Override inline-styled inputs — !important needed to beat style="" */
+.admin-panel .threshold-list input[type="text"],
+.admin-panel .threshold-list input[type="number"],
+.admin-panel .threshold-list input[type="email"],
+.admin-panel .threshold-list input[type="password"] {
+  padding: 10px 13px !important;
+  border-radius: 9px !important;
+  border: 1px solid rgba(79,140,255,0.18) !important;
+  background: rgba(9,13,24,0.85) !important;
+  color: #c8d8f0 !important;
+  font-size: 14.5px !important;
+  font-family: inherit !important;
+  outline: none !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  transition: border-color 0.15s, box-shadow 0.15s !important;
+}
+
+.admin-panel .threshold-list input:focus {
+  border-color: rgba(79,140,255,0.44) !important;
+  box-shadow: 0 0 0 3px rgba(79,140,255,0.08) !important;
+  background: rgba(9,13,24,0.95) !important;
+}
+
+/* Label spans — override inline styles */
+.admin-panel .threshold-list label > span {
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase !important;
+  color: #7090A8 !important;
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* Labels as flex columns */
+.admin-panel .threshold-list label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Save row */
+.admin-panel .threshold-list > div:last-child {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(79,140,255,0.08);
+}
+
+/* Feedback messages */
+.admin-panel .threshold-list .feedback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  margin: 0;
+}
+
+.admin-panel .threshold-list .feedback.success { color: #4ade80; }
+.admin-panel .threshold-list .feedback.error   { color: #f87171; }
+
+/* Save button — override inline width/padding but keep primary-action styles */
+.admin-panel .threshold-list .primary-action {
+  width: auto !important;
+  padding: 9px 22px !important;
 }

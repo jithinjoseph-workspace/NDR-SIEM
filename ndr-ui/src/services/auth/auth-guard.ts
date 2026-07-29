@@ -13,6 +13,12 @@ export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: R
     return false;
   }
 
+  // tenant_admin is confined to /tenant-admin/* — block all other routes
+  if (auth.isTenantAdmin() && !state.url.startsWith('/tenant-admin')) {
+    router.navigate(['/tenant-admin'], { replaceUrl: true });
+    return false;
+  }
+
   // Skip the /api/auth/me round-trip when we just set fresh user data (e.g. right
   // after login). The login response already returned up-to-date user/permissions.
   if (auth.isUserDataFresh()) {

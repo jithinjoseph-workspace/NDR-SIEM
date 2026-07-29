@@ -142,6 +142,7 @@ export class Users implements OnInit {
   }
 
   roleLabel(role: string) { return this.roleOptions.find(o => o.value === role)?.label || role; }
+  getRolePillClass(role: string): string { return 'role-' + (role || '').replace(/_/g, '-'); }
 
   isCurrentSuperAdmin(user: any) { return user?.role === 'super_admin' && user?.username === this.currentUser?.username; }
   usernameExists(username: string) { return this.users.some(u => u.username?.trim().toLowerCase() === username.trim().toLowerCase()); }

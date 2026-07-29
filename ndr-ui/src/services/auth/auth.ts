@@ -153,6 +153,10 @@ export class AuthService implements OnDestroy {
     return role === 'admin' || role === 'super_admin';
   }
 
+  isTenantAdmin(): boolean {
+    return this.getUser()?.role === 'tenant_admin';
+  }
+
   /**
    * Returns the sensor IDs the current user is scoped to.
    * Reads directly from the JWT payload since sensor_ids are baked in at login.

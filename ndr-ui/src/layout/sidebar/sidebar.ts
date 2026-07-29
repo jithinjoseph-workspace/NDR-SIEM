@@ -77,8 +77,7 @@ export class Sidebar implements OnInit, OnDestroy {
       ];
     } else if (user?.role === 'tenant_admin') {
       this.navItems = [
-        { label: 'Tenant Users', route: '/tenant-admin', icon: Users },
-        { label: 'Sensor Setup', route: '/setup',        icon: Settings },
+        { label: 'Tenant Admin', route: '/tenant-admin', icon: Users },
       ];
     } else {
       this.navItems = [

@@ -1,0 +1,134 @@
+<div class="flex w-full h-full overflow-hidden">
+
+  <!-- ── INNER SIDEBAR ── -->
+  <aside class="sidebar-shell">
+    <div class="brand-block" style="flex-direction:column;align-items:flex-start;padding:18px 20px;">
+      <h1 style="margin:0;color:var(--color-on-surface-variant,#f7f9ff);font-family:var(--font-display);font-size:22px;font-weight:700;letter-spacing:0.02em;">PromaAlpha</h1>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:8px;background:#fff;padding:4px 10px;border-radius:20px;width:fit-content;box-shadow:0 2px 6px rgba(0,0,0,.1);">
+        <span style="font-size:10px;color:#000;font-weight:800;letter-spacing:.05em;text-transform:uppercase;">powered by</span>
+        <img src="/assets/images/promasecure.png" alt="PromaSecure" style="height:18px;object-fit:contain;" />
+      </div>
+    </div>
+
+    <nav class="nav-list">
+      <a routerLink="/tenant-admin/users" routerLinkActive="active" class="nav-link">
+        <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
+        <span>Users &amp; Sensors</span>
+      </a>
+      <a routerLink="/tenant-admin/trusted-domains" routerLinkActive="active" class="nav-link">
+        <lucide-icon [name]="GlobeIcon" class="w-5 h-5"></lucide-icon>
+        <span>Trusted Domains</span>
+      </a>
+      <a routerLink="/tenant-admin/sessions" routerLinkActive="active" class="nav-link">
+        <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+        <span>Active Sessions</span>
+      </a>
+      <a routerLink="/tenant-admin/profile" routerLinkActive="active" class="nav-link">
+        <lucide-icon [name]="UserIcon" class="w-5 h-5"></lucide-icon>
+        <span>My Profile</span>
+      </a>
+      <a routerLink="/tenant-admin/setup" routerLinkActive="active" class="nav-link">
+        <lucide-icon [name]="SettingsIcon" class="w-5 h-5"></lucide-icon>
+        <span>Sensor Setup</span>
+      </a>
+    </nav>
+  </aside>
+
+  <!-- ── MAIN CONTENT ── -->
+  <div class="flex-1 overflow-auto relative">
+    <section class="tenant-admin-shell">
+
+      <!-- ── TENANT IDENTITY BANNER ── -->
+      <div class="tenant-hero-banner tenant-hero-banner--compact">
+        <div class="hero-bg-glow"></div>
+        <div class="hero-bg-grid"></div>
+
+        <div class="hero-left">
+          <div class="hero-icon-box">
+            <lucide-icon [name]="BuildingIcon" class="w-6 h-6"></lucide-icon>
+            <div class="hero-icon-ring"></div>
+            <div class="hero-icon-ring outer"></div>
+          </div>
+          <div class="hero-text">
+            <span class="hero-label">CURRENT ORGANIZATION</span>
+            <h3 class="hero-title">{{ tenantName() }}</h3>
+          </div>
+        </div>
+
+        <div class="hero-right">
+          <div class="status-indicator-complex">
+            <div class="status-text-block">
+              <span class="status-eyebrow">SYSTEM STATUS</span>
+              <div class="status-value">
+                <div class="pulse-dot" [class.degraded]="tenantSystemStatus() === 'DEGRADED'"></div>
+                <strong [class.degraded]="tenantSystemStatus() === 'DEGRADED'">{{ tenantSystemStatus() }}</strong>
+              </div>
+            </div>
+            <div class="spark-bars" [class.degraded-bars]="tenantSystemStatus() === 'DEGRADED'">
+              <div class="spark-bar"></div>
+              <div class="spark-bar"></div>
+              <div class="spark-bar"></div>
+              <div class="spark-bar"></div>
+              <div class="spark-bar"></div>
+              <div class="spark-bar"></div>
+              <div class="spark-bar"></div>
+              <div class="spark-bar"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── SOFTWARE UPDATE BANNER ── -->
+      <div *ngIf="updateAvailable()" class="update-banner">
+        <lucide-icon [name]="ArrowUpCircleIcon" class="w-5 h-5"></lucide-icon>
+        <span>
+          Update available — <strong>v{{ latestVersion() }}</strong>
+          <span class="update-current">(current: v{{ currentVersion() }})</span>
+        </span>
+        <button class="update-btn" type="button" (click)="openUpdateDialog()">
+          <lucide-icon [name]="RefreshCwIcon" class="w-4 h-4"></lucide-icon>
+          Update Now
+        </button>
+      </div>
+
+      <!-- ── UPDATE CONFIRMATION DIALOG ── -->
+      <div *ngIf="showUpdateDialog()" class="dialog-overlay" (click)="closeUpdateDialog()">
+        <div class="dialog-box" (click)="$event.stopPropagation()">
+          <div class="dialog-header">
+            <lucide-icon [name]="ArrowUpCircleIcon" class="w-5 h-5"></lucide-icon>
+            <h3>Apply System Update</h3>
+          </div>
+          <div class="dialog-body">
+            <p>This will update the NDR platform from <strong>v{{ currentVersion() }}</strong> to <strong>v{{ latestVersion() }}</strong>.</p>
+            <ul class="update-notes">
+              <li>Services will restart — active sessions may disconnect briefly</li>
+              <li>All stored data and configuration are preserved</li>
+              <li>The dashboard will reconnect automatically</li>
+            </ul>
+            <div *ngIf="updateMessage()" class="update-status-msg">{{ updateMessage() }}</div>
+          </div>
+          <div class="dialog-actions">
+            <button class="secondary-action" type="button" (click)="closeUpdateDialog()" [disabled]="updateApplying()">Cancel</button>
+            <button class="update-confirm-btn" type="button" (click)="confirmApplyUpdate()" [disabled]="updateApplying()">
+              <lucide-icon *ngIf="!updateApplying()" [name]="ArrowUpCircleIcon" class="w-4 h-4"></lucide-icon>
+              <lucide-icon *ngIf="updateApplying()"  [name]="LoaderIcon"        class="w-4 h-4 spin"></lucide-icon>
+              {{ updateApplying() ? 'Applying…' : 'Confirm Update' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── NOTIFICATION ── -->
+      <div *ngIf="message()" [class]="'tenant-message ' + messageType()">
+        <lucide-icon *ngIf="messageType() === 'success'" [name]="ShieldIcon" class="w-4 h-4"></lucide-icon>
+        <lucide-icon *ngIf="messageType() === 'error'"   [name]="XIcon"     class="w-4 h-4"></lucide-icon>
+        {{ message() }}
+      </div>
+
+      <!-- ── CHILD PAGE ── -->
+      <router-outlet></router-outlet>
+
+    </section>
+  </div>
+
+</div>

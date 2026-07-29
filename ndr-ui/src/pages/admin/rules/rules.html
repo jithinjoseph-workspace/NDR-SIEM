@@ -25,6 +25,32 @@
     {{ message }}
   </div>
 
+  <!-- Search bar -->
+  <div class="rules-search-wrap">
+    <div class="rules-search-field">
+      <lucide-icon [name]="SearchIcon" class="w-4 h-4 rules-search-icon"></lucide-icon>
+      <input
+        type="text"
+        [(ngModel)]="searchQuery"
+        (input)="onSearch()"
+        placeholder="Search rules by name, tag, severity…"
+        class="rules-search-input"
+      />
+      <button *ngIf="searchQuery" class="rules-search-clear" (click)="searchQuery=''; onSearch()">
+        <lucide-icon [name]="XIcon" class="w-3.5 h-3.5"></lucide-icon>
+      </button>
+    </div>
+    <span *ngIf="!loading" class="rules-count-badge">
+      <ng-container *ngIf="isSearching">Searching…</ng-container>
+      <ng-container *ngIf="!isSearching && searchQuery">
+        {{ filteredRules.length }} result{{ filteredRules.length !== 1 ? 's' : '' }}
+      </ng-container>
+      <ng-container *ngIf="!isSearching && !searchQuery">
+        {{ shownCount }} / {{ rules.length }} rules
+      </ng-container>
+    </span>
+  </div>
+
   <!-- Stats -->
   <div class="rules-stats">
     <div class="rules-stat-card rules-stat--blue">
@@ -171,7 +197,7 @@
   <div *ngIf="loading" class="loading-state">Loading rules…</div>
 
   <!-- Table -->
-  <div *ngIf="!loading && rules.length > 0" class="rules-table-wrap">
+  <div *ngIf="!loading && !isSearching && filteredRules.length > 0" class="rules-table-wrap">
     <!-- Table header -->
     <div class="rules-thead">
       <span>Rule</span>
@@ -184,9 +210,9 @@
     </div>
 
     <!-- Rows -->
-    <div *ngFor="let rule of rules; let i = index"
+    <div *ngFor="let rule of displayedRules; let i = index"
       class="rules-trow"
-      [style.animation-delay]="(i * 35) + 'ms'">
+      [style.animation-delay]="(i * 30) + 'ms'">
 
       <!-- Rule name -->
       <div class="rules-name-cell">
@@ -241,8 +267,28 @@
     </div>
   </div>
 
-  <!-- Empty -->
-  <div *ngIf="!loading && rules.length === 0" class="empty-state">
+  <!-- Load more -->
+  <div *ngIf="!loading && !isSearching && hasMore" class="rules-load-more">
+    <button class="rules-load-more-btn" (click)="loadMore()">
+      Load more <span class="rules-load-more-count">+{{ filteredRules.length - shownCount }} remaining</span>
+    </button>
+  </div>
+
+  <!-- Searching spinner -->
+  <div *ngIf="isSearching" class="loading-state">
+    <lucide-icon [name]="SearchIcon" class="w-5 h-5 spinning" style="display:inline-block;margin-right:8px;"></lucide-icon>
+    Searching rules…
+  </div>
+
+  <!-- Empty search -->
+  <div *ngIf="!loading && !isSearching && filteredRules.length === 0 && searchQuery" class="empty-state">
+    <lucide-icon [name]="SearchIcon" class="w-8 h-8"></lucide-icon>
+    <strong>No rules match "{{ searchQuery }}"</strong>
+    <span>Try a different name, tag, or severity level.</span>
+  </div>
+
+  <!-- Empty (no rules at all) -->
+  <div *ngIf="!loading && rules.length === 0 && !searchQuery" class="empty-state">
     <lucide-icon [name]="GavelIcon" class="w-10 h-10"></lucide-icon>
     <strong>No SIGMA rules loaded</strong>
     <span>Click "New Rule" to create one, or sync community rules.</span>

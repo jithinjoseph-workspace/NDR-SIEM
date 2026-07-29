@@ -178,6 +178,10 @@ export class Api {
     return this.http.get<any[]>(`${this.baseUrl}/rules`);
   }
 
+  searchRules(q: string): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/rules?q=${encodeURIComponent(q)}`);
+  }
+
 
 
   createRule(rule: any): Observable<any> {

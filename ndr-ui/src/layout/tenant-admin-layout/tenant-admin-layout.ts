@@ -3,59 +3,48 @@ import {
   signal, ViewEncapsulation,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterModule } from '@angular/router';
 import {
   LucideAngularModule,
-  Users, Globe, Activity, User, Building2, ArrowUpCircle, RefreshCw, Loader, ShieldCheck, X,
+  Users, Globe, Activity, User, Settings, HelpCircle,
+  Building2, ArrowUpCircle, RefreshCw, Loader, ShieldCheck, X,
 } from 'lucide-angular';
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
-import { UsersSection }    from './users/users';
-import { TrustedDomains }  from './trusted-domains/trusted-domains';
-import { Sessions }        from './sessions/sessions';
-import { Profile }         from './profile/profile';
-
 @Component({
-  selector: 'app-tenant-admin',
+  selector: 'app-tenant-admin-layout',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  imports: [
-    CommonModule,
-    LucideAngularModule,
-    UsersSection,
-    TrustedDomains,
-    Sessions,
-    Profile,
+  imports: [CommonModule, RouterModule, LucideAngularModule],
+  templateUrl: './tenant-admin-layout.html',
+  styleUrls: [
+    '../sidebar/sidebar.css',
+    '../../pages/tenant-admin/tenant-admin.css',
   ],
-  templateUrl: './tenant-admin.html',
-  styleUrl: './tenant-admin.css',
 })
-export class TenantAdmin implements OnInit, OnDestroy {
-  UsersIcon        = Users;
-  GlobeIcon        = Globe;
-  ActivityIcon     = Activity;
-  UserIcon         = User;
-  BuildingIcon     = Building2;
+export class TenantAdminLayout implements OnInit, OnDestroy {
+  UsersIcon         = Users;
+  GlobeIcon         = Globe;
+  ActivityIcon      = Activity;
+  UserIcon          = User;
+  SettingsIcon      = Settings;
+  HelpCircleIcon    = HelpCircle;
+  BuildingIcon      = Building2;
   ArrowUpCircleIcon = ArrowUpCircle;
-  RefreshCwIcon    = RefreshCw;
-  LoaderIcon       = Loader;
-  ShieldIcon       = ShieldCheck;
-  XIcon            = X;
+  RefreshCwIcon     = RefreshCw;
+  LoaderIcon        = Loader;
+  ShieldIcon        = ShieldCheck;
+  XIcon             = X;
 
-  // ── Shell signals ──────────────────────────────────────────────────────────
+  readonly tenantId   = signal('');
+  readonly tenantName = signal('Organization');
 
-  readonly activeTab     = signal<'users' | 'trusted-domains' | 'sessions' | 'profile'>('users');
-  readonly tenantId      = signal('');
-  readonly tenantName    = signal('Organization');
-  readonly currentUser   = signal<any>({});
-
-  // System status
   readonly tenantSystemStatus = signal<'OPERATIONAL' | 'DEGRADED' | 'CHECKING...'>('CHECKING...');
 
-  // Software update
   readonly updateAvailable  = signal(false);
   readonly currentVersion   = signal('');
   readonly latestVersion    = signal('');
@@ -64,9 +53,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
   readonly updateMessage    = signal('');
   readonly message          = signal('');
   readonly messageType      = signal<'success' | 'error'>('success');
-
-  readonly pageTitle    = () => 'Tenant Administration';
-  readonly pageSubtitle = () => `Manage analysts and page access for ${this.tenantName()}.`;
 
   private statusInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -78,7 +64,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   ngOnInit() {
     const user = this.auth.getUser() || {};
-    this.currentUser.set(user);
     this.tenantId.set(user.tenant_id || 'default');
     this.tenantName.set(this.formatTenantName(user.tenant_id || 'default'));
 
@@ -95,12 +80,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
   ngOnDestroy() {
     if (this.statusInterval) clearInterval(this.statusInterval);
   }
-
-  switchTab(tab: 'users' | 'trusted-domains' | 'sessions' | 'profile') {
-    this.activeTab.set(tab);
-  }
-
-  // ── Software update ───────────────────────────────────────────────────────
 
   checkForUpdates() {
     this.api.getVersionStatus().subscribe({
@@ -159,8 +138,6 @@ export class TenantAdmin implements OnInit, OnDestroy {
       }
     });
   }
-
-  // ── System status ─────────────────────────────────────────────────────────
 
   private refreshTenantSystemStatus() {
     this.api.getSensorKeys().subscribe({

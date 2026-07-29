@@ -5,7 +5,7 @@
 
 
 /* ── DESIGN TOKENS ──────────────────────────────────────────────── */
-:host {
+:root {
   /* Surfaces — 5 distinct z-levels */
   --s0: #06090f;   /* page / base               */
   --s1: #0b1120;   /* card fill                 */
@@ -74,8 +74,8 @@
 
 /* ── BASE SHELL ─────────────────────────────────────────────────── */
 .tenant-admin-shell {
-  min-height: 100vh;
-  padding: 32px 60px 120px;
+  min-height: calc(100vh + 240px);
+  padding: 24px 48px 80px;
   background-color: #020408; /* Deeper base black for premium feel */
   background-image:
     radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.12) 0%, transparent 45%),
@@ -228,15 +228,32 @@ h2 {
   align-items: center;
   margin-bottom: 32px;
   padding: 24px 32px;
-  background: linear-gradient(135deg, rgba(18,24,39,0.5) 0%, rgba(9,14,23,0.3) 100%);
+  background: linear-gradient(135deg, rgba(8,12,24,0.94) 0%, rgba(5,9,18,0.92) 100%);
   backdrop-filter: blur(32px) saturate(200%);
   -webkit-backdrop-filter: blur(32px) saturate(200%);
-  border: 1px solid rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.07);
   border-radius: var(--r-xl);
-  box-shadow: 0 16px 48px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.06);
-  position: relative;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
+  position: sticky;
+  top: 0;
+  z-index: 50;
   overflow: hidden;
 }
+
+/* Compact variant — no big page header above it */
+.tenant-hero-banner--compact {
+  padding: 14px 24px;
+  margin-bottom: 24px;
+  border-radius: var(--r-lg);
+}
+.tenant-hero-banner--compact .hero-icon-box {
+  width: 40px; height: 40px; border-radius: 12px;
+}
+.tenant-hero-banner--compact .hero-icon-box lucide-icon { width: 20px; height: 20px; }
+.tenant-hero-banner--compact .hero-title { font-size: 20px; }
+.tenant-hero-banner--compact .hero-left  { gap: 14px; }
+.tenant-hero-banner--compact .hero-icon-ring,
+.tenant-hero-banner--compact .hero-icon-ring.outer { display: none; }
 
 /* Background elements */
 .tenant-hero-banner::before {
@@ -989,6 +1006,7 @@ input[type="checkbox"]:checked::after {
 
 .input-wrap {
   position: relative; display: flex; align-items: center;
+  gap: 6px; padding-left: 10px;
   background: #030712;
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 6px;
@@ -998,11 +1016,21 @@ input[type="checkbox"]:checked::after {
 .input-wrap:focus-within { border-color: rgba(96,165,250,0.50); }
 .input-wrap.is-error { border-color: rgba(255,255,255,0.08); }
 
-.input-icon { position: absolute; left: 10px; color: #475569; pointer-events: none; }
-.input-wrap input {
-  flex: 1; height: 28px; padding: 0 8px 0 30px;
-  background: transparent; border: none; outline: none;
-  color: #FFFFFF; font-size: 12px; width: 100%;
+.input-icon { flex-shrink: 0; color: #475569; pointer-events: none; }
+.input-wrap input,
+.input-wrap input[type="text"],
+.input-wrap input[type="password"] {
+  flex: 1 !important;
+  height: 28px !important;
+  padding: 0 8px !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: none;
+  color: #FFFFFF;
+  font-size: 12px;
+  width: 100%;
 }
 .input-wrap input::placeholder { color: #475569; }
 .input-wrap input:disabled { color: #475569; }

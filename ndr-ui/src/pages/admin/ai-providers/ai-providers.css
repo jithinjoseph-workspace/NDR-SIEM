@@ -1,7 +1,79 @@
 /* ── AI Providers ────────────────────────────────────────────────── */
 
-.ai-providers-section .admin-table .table-row {
-  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr;
+@keyframes aip-row-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 
-/* Test result message color helpers handled by .admin-message modifier classes */
+/* Table — columns set inline by template (2fr 1fr 1fr 1fr 1fr 1fr 1fr) */
+.ai-providers-section .table-row:not(.table-head) {
+  animation: aip-row-in 0.28s ease both;
+  min-height: 58px;
+}
+
+.ai-providers-section .table-row:nth-child(2)  { animation-delay: 0ms;   }
+.ai-providers-section .table-row:nth-child(3)  { animation-delay: 50ms;  }
+.ai-providers-section .table-row:nth-child(4)  { animation-delay: 100ms; }
+.ai-providers-section .table-row:nth-child(5)  { animation-delay: 150ms; }
+.ai-providers-section .table-row:nth-child(6)  { animation-delay: 200ms; }
+
+/* Provider name */
+.ai-providers-section .table-row strong {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #d4e8ff;
+}
+
+/* Provider type */
+.ai-providers-section .table-row > span:nth-child(2) {
+  font-size: 12.5px;
+  font-family: 'Courier New', monospace;
+  color: #7FB1FF;
+  background: rgba(79,140,255,0.07);
+  border: 1px solid rgba(79,140,255,0.14);
+  padding: 2px 8px;
+  border-radius: 5px;
+  display: inline-block;
+  justify-self: start;
+}
+
+/* Model — muted monospace */
+.ai-providers-section .table-row > span:nth-child(3) {
+  font-size: 12.5px;
+  font-family: 'Courier New', monospace;
+  color: #5E7A9A;
+}
+
+/* Priority — bright number */
+.ai-providers-section .table-row > span:nth-child(5) {
+  font-size: 14px;
+  font-weight: 700;
+  color: #a0c4e8;
+  font-family: 'Courier New', monospace;
+}
+
+/* Fix grid-cell stretching for pills and actions */
+.ai-providers-section .table-row .status-pill {
+  justify-self: start;
+  align-self: center;
+}
+
+.ai-providers-section .table-row .action-row {
+  justify-self: start;
+  align-self: center;
+}
+
+/* Status/use-case pill column (div containing 2 pills) */
+.ai-providers-section .table-row > div:not(.row-actions) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+/* "Key set" pill — distinct from active/inactive */
+.ai-providers-section .table-row .status-pill:not(.active):not(.inactive) {
+  background: rgba(34,211,238,0.08);
+  color: #67e8f9;
+  border-color: rgba(34,211,238,0.18);
+}

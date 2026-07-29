@@ -1,67 +1,15 @@
 /* ── Admin: Trusted Domains ─────────────────────────────────────── */
 
-.admin-panel {
-  max-width: 1200px;
+@keyframes td-card-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── PAGE HEADER ─────────────────────────────────────────────────── */
-.panel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 28px;
+@keyframes td-chip-in {
+  from { opacity: 0; transform: scale(0.88); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
-.panel-head h3 {
-  margin: 0 0 6px;
-  font-size: 22px;
-  font-weight: 700;
-  color: #e8f0ff;
-  letter-spacing: -0.01em;
-}
-
-.panel-head p {
-  margin: 0;
-  font-size: 14.5px;
-  color: #6B7FA8;
-  line-height: 1.5;
-  max-width: 620px;
-}
-
-.panel-head > div:last-child {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-/* ── ACTION BUTTONS ──────────────────────────────────────────────── */
-.secondary-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid rgba(79,140,255,0.25);
-  background: rgba(79,140,255,0.08);
-  color: #7FB1FF;
-  font-size: 14.5px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.secondary-action:hover:not(:disabled) {
-  background: rgba(79,140,255,0.15);
-  border-color: rgba(79,140,255,0.40);
-  color: #a8c8ff;
-}
-
-.secondary-action:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
 /* ── CARDS ───────────────────────────────────────────────────────── */
 .tc-card {
@@ -72,6 +20,7 @@
   padding: 22px 24px;
   margin-bottom: 16px;
   overflow: hidden;
+  animation: td-card-in 0.30s ease both;
 }
 
 .tc-card::before {
@@ -372,6 +321,7 @@ select.tc-input option {
   color: #8BBCFF;
   font-weight: 500;
   transition: border-color 0.15s;
+  animation: td-chip-in 0.22s ease both;
 }
 
 .tc-chip:hover {
