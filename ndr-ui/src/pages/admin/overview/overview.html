@@ -1,0 +1,148 @@
+<section class="admin-panel ov-panel">
+
+  <!-- ── Hero bar ───────────────────────────────────────────────── -->
+  <div class="ov-hero">
+    <div class="ov-hero-left">
+      <div class="ov-system-badge">
+        <span class="ov-system-dot"></span>
+        SYSTEM OPERATIONAL
+      </div>
+      <h2 class="ov-title">System Overview</h2>
+      <p class="ov-subtitle">PromaAlpha NDR Platform — Super Admin Control Center</p>
+    </div>
+    <div class="ov-hero-right">
+      <div class="ov-clock-wrap">
+        <lucide-icon [name]="ClockIcon" class="w-4 h-4 ov-clock-icon"></lucide-icon>
+        <div>
+          <div class="ov-clock">{{ currentTime }}</div>
+          <div class="ov-date">{{ currentDate }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Stat cards ─────────────────────────────────────────────── -->
+  <div class="ov-stats">
+
+    <div class="ov-stat ov-stat--cyan" style="animation-delay:0ms">
+      <div class="ov-stat-top">
+        <div class="ov-stat-icon-wrap ov-icon--cyan">
+          <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="ov-stat-trend ov-trend--up">+0.01%</span>
+      </div>
+      <strong class="ov-stat-num">99.99%</strong>
+      <span class="ov-stat-label">Platform Availability</span>
+      <div class="ov-stat-progress">
+        <div class="ov-stat-bar ov-bar--cyan" style="width:99.9%"></div>
+      </div>
+    </div>
+
+    <div class="ov-stat ov-stat--violet" style="animation-delay:60ms">
+      <div class="ov-stat-top">
+        <div class="ov-stat-icon-wrap ov-icon--violet">
+          <lucide-icon [name]="BuildingIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="ov-stat-trend ov-trend--neutral">Active / Total</span>
+      </div>
+      <strong class="ov-stat-num">{{ activeTenantsCount }}<span class="ov-stat-denom">/{{ tenants.length }}</span></strong>
+      <span class="ov-stat-label">Tenant Capacity</span>
+      <div class="ov-stat-progress">
+        <div class="ov-stat-bar ov-bar--violet"
+          [style.width]="tenants.length ? ((activeTenantsCount / tenants.length) * 100) + '%' : '0%'"></div>
+      </div>
+    </div>
+
+    <div class="ov-stat ov-stat--green" style="animation-delay:120ms">
+      <div class="ov-stat-top">
+        <div class="ov-stat-icon-wrap ov-icon--green">
+          <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="ov-stat-trend ov-trend--up">+12% this week</span>
+      </div>
+      <strong class="ov-stat-num">{{ managedUsers.length }}</strong>
+      <span class="ov-stat-label">Managed Users</span>
+      <div class="ov-stat-progress">
+        <div class="ov-stat-bar ov-bar--green" style="width:72%"></div>
+      </div>
+    </div>
+
+    <div class="ov-stat ov-stat--amber" style="animation-delay:180ms">
+      <div class="ov-stat-top">
+        <div class="ov-stat-icon-wrap ov-icon--amber">
+          <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+        </div>
+        <span class="ov-stat-trend ov-trend--up">All healthy</span>
+      </div>
+      <strong class="ov-stat-num">{{ engines.length }}</strong>
+      <span class="ov-stat-label">Engine Nodes</span>
+      <div class="ov-stat-progress">
+        <div class="ov-stat-bar ov-bar--amber"
+          [style.width]="engines.length ? ((activeEngines / engines.length) * 100) + '%' : '0%'"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Charts grid ────────────────────────────────────────────── -->
+  <div class="overview-grid">
+
+    <!-- Live Utilization -->
+    <div class="ov-chart-card glass-card" style="animation-delay:80ms">
+      <div class="ov-chart-head">
+        <div class="ov-chart-accent ov-accent--cyan"></div>
+        <div class="ov-chart-meta">
+          <h4>Live Platform Utilization</h4>
+          <p>Real-time CPU &amp; memory across the engine cluster.</p>
+        </div>
+        <span class="live-badge"><span class="pulse-dot"></span> Live</span>
+      </div>
+      <div class="ov-chart-legend">
+        <span class="ov-legend-item ov-legend--cyan">CPU</span>
+        <span class="ov-legend-item ov-legend--violet">Memory</span>
+      </div>
+      <div id="resource-area-chart" class="chart-container"></div>
+    </div>
+
+    <!-- User Roles Donut -->
+    <div class="ov-chart-card glass-card" style="animation-delay:130ms">
+      <div class="ov-chart-head">
+        <div class="ov-chart-accent ov-accent--violet"></div>
+        <div class="ov-chart-meta">
+          <h4>Global User Role Distribution</h4>
+          <p>Privilege breakdown across the entire NDR platform.</p>
+        </div>
+      </div>
+      <div id="user-roles-donut-chart" class="chart-container"></div>
+    </div>
+
+    <!-- Top Tenants Bar -->
+    <div class="ov-chart-card glass-card" style="animation-delay:180ms">
+      <div class="ov-chart-head">
+        <div class="ov-chart-accent ov-accent--green"></div>
+        <div class="ov-chart-meta">
+          <h4>Top Tenants by User Count</h4>
+          <p>Organisations with the largest platform adoption.</p>
+        </div>
+      </div>
+      <div id="tenant-bar-chart" class="chart-container"></div>
+    </div>
+
+    <!-- Engine Health Donut -->
+    <div class="ov-chart-card glass-card" style="animation-delay:230ms">
+      <div class="ov-chart-head">
+        <div class="ov-chart-accent ov-accent--amber"></div>
+        <div class="ov-chart-meta">
+          <h4>Processing Engine Health</h4>
+          <p>Status of backend worker nodes ingesting event data.</p>
+        </div>
+        <div class="ov-engine-mini">
+          <span class="ov-engine-dot"></span>
+          <span>{{ activeEngines }}/{{ engines.length }} Up</span>
+        </div>
+      </div>
+      <div id="engines-donut-chart" class="chart-container"></div>
+    </div>
+
+  </div>
+</section>

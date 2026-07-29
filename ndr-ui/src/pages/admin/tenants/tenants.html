@@ -1,0 +1,124 @@
+<section class="admin-panel">
+  <div *ngIf="msg" [class]="'admin-message ' + (msgType === 'success' ? 'success' : 'error')">{{ msg }}</div>
+
+  <div class="panel-head">
+    <div>
+      <h3>Tenants</h3>
+      <p>Create the company first, then add a tenant admin for it.</p>
+    </div>
+    <button class="primary-action" type="button" (click)="showAddTenant=true">
+      <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+      Add Tenant
+    </button>
+  </div>
+
+  <div class="toolbar">
+    <label class="search-field">
+      <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
+      <input [(ngModel)]="tenantSearch" type="search" placeholder="Search tenants" />
+    </label>
+    <button class="secondary-action" type="button" (click)="loadTenants()">
+      <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+      Refresh
+    </button>
+  </div>
+
+  <div *ngIf="loadingTenants" class="loading-state">Loading tenants...</div>
+
+  <div *ngIf="!loadingTenants && filteredTenants.length === 0" class="empty-state">
+    <strong>No tenants found</strong>
+    <span>Create a tenant or adjust your search.</span>
+  </div>
+
+  <div *ngIf="!loadingTenants && filteredTenants.length > 0" class="tenant-list">
+    <div *ngFor="let tenant of filteredTenants" class="tenant-row">
+      <div class="tenant-main">
+        <div class="tenant-mark">{{ tenant.name.charAt(0).toUpperCase() }}</div>
+        <div>
+          <strong>{{ tenant.name }}</strong>
+          <code>{{ tenant.id }}</code>
+        </div>
+      </div>
+      <div class="tenant-meta">
+        <span>{{ tenantUserCount(tenant.id) }} users</span>
+        <span>{{ tenantAdminCount(tenant.id) }} admins</span>
+        <span [class]="'status-pill ' + (tenant.active ? 'active' : 'inactive')">
+          {{ tenant.active ? 'Active' : 'Inactive' }}
+        </span>
+        <button class="icon-button" type="button" title="Edit tenant" (click)="openEditTenant(tenant)">
+          <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+        <button *ngIf="currentUser?.role === 'super_admin'"
+          class="secondary-action compact-action ai-toggle-btn"
+          [class.ai-enabled]="tenant.ai_enabled"
+          type="button"
+          [title]="tenant.ai_enabled ? 'Disable AI features for this tenant' : 'Enable AI features for this tenant'"
+          (click)="toggleTenantAI(tenant, !tenant.ai_enabled)">
+          {{ tenant.ai_enabled ? 'AI On' : 'AI Off' }}
+        </button>
+        <button class="secondary-action compact-action" type="button" [disabled]="tenant.id === 'default'"
+          (click)="setTenantActive(tenant, !tenant.active)">
+          {{ tenant.active ? 'Deactivate' : 'Reactivate' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Add Tenant Modal -->
+<div *ngIf="showAddTenant" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <div>
+        <h3>Add Tenant</h3>
+        <p>Create a company namespace before assigning an admin.</p>
+      </div>
+      <button type="button" class="icon-button" (click)="showAddTenant=false">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <div *ngIf="tenantMsg" class="admin-message error">{{ tenantMsg }}</div>
+    <label class="form-field">
+      <span>Company Name</span>
+      <input [(ngModel)]="newTenant.name" (ngModelChange)="onTenantNameChange()" placeholder="Acme Corporation" />
+    </label>
+    <label class="form-field">
+      <span>Tenant ID</span>
+      <input [(ngModel)]="newTenant.id" (ngModelChange)="onTenantIdChange()" placeholder="acme-corporation" />
+      <small *ngIf="newTenant.id && tenantIdExists(newTenant.id)">This tenant ID already exists.</small>
+    </label>
+    <div class="modal-actions">
+      <button class="primary-action" type="button" [disabled]="savingTenant || !canCreateTenant" (click)="addTenant()">
+        {{ savingTenant ? 'Creating...' : 'Create Tenant' }}
+      </button>
+      <button class="secondary-action" type="button" (click)="showAddTenant=false">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Tenant Modal -->
+<div *ngIf="editingTenant" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <div>
+        <h3>Edit Tenant</h3>
+        <p>{{ editingTenant.id }}</p>
+      </div>
+      <button type="button" class="icon-button" (click)="closeEditTenant()">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <label class="form-field">
+      <span>Tenant Name</span>
+      <input [(ngModel)]="tenantForm.name" />
+    </label>
+    <label class="toggle-field">
+      <input [(ngModel)]="tenantForm.active" type="checkbox" [disabled]="editingTenant.id === 'default'" />
+      <span>Tenant is active</span>
+    </label>
+    <div class="modal-actions">
+      <button class="primary-action" type="button" (click)="saveTenantEdit()">Save Tenant</button>
+      <button class="secondary-action" type="button" (click)="closeEditTenant()">Cancel</button>
+    </div>
+  </div>
+</div>

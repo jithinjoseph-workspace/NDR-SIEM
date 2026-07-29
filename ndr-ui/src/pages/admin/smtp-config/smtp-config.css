@@ -1,0 +1,39 @@
+/* ── SMTP Config ─────────────────────────────────────────────────── */
+
+.admin-panel .threshold-list {
+  background: linear-gradient(145deg, #0D1422 0%, #090D18 100%) !important;
+  border: 1px solid rgba(79,140,255,0.14) !important;
+  border-radius: 12px !important;
+}
+
+/* Override inline style inputs inside smtp form */
+.admin-panel input[type="text"],
+.admin-panel input[type="number"],
+.admin-panel input[type="email"],
+.admin-panel input[type="password"] {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(79,140,255,0.16);
+  background: rgba(9,13,24,0.80);
+  color: #c8d8f0;
+  font-size: 14.5px;
+  font-family: inherit;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.admin-panel input:focus {
+  border-color: rgba(79,140,255,0.42) !important;
+  background: rgba(9,13,24,0.95);
+}
+
+.admin-panel label > span {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7090A8;
+}

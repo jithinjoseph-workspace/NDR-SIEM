@@ -88,14 +88,38 @@ export const routes: Routes = [
     path: 'admin',
     canActivate: [authGuard],
     data: { role: 'admin' },
-    loadComponent: () => import('../pages/admin/admin')
-      .then(m => m.Admin)
+    loadComponent: () => import('../layout/admin-layout/admin-layout').then(m => m.AdminLayout),
+    children: [
+      { path: '', redirectTo: 'overview', pathMatch: 'full' },
+      { path: 'overview',        loadComponent: () => import('../pages/admin/overview/overview').then(m => m.Overview) },
+      { path: 'tenants',         loadComponent: () => import('../pages/admin/tenants/tenants').then(m => m.Tenants) },
+      { path: 'users',           loadComponent: () => import('../pages/admin/users/users').then(m => m.Users) },
+      { path: 'engines',         loadComponent: () => import('../pages/admin/engines/engines').then(m => m.Engines) },
+      { path: 'sensors',         loadComponent: () => import('../pages/admin/sensors/sensors').then(m => m.Sensors) },
+      { path: 'announcements',   loadComponent: () => import('../pages/admin/announcements/announcements').then(m => m.Announcements) },
+      { path: 'rules',           loadComponent: () => import('../pages/admin/rules/rules').then(m => m.AdminRules) },
+      { path: 'telemetry',       loadComponent: () => import('../pages/admin/telemetry/telemetry').then(m => m.Telemetry) },
+      { path: 'ai-providers',    loadComponent: () => import('../pages/admin/ai-providers/ai-providers').then(m => m.AiProviders) },
+      { path: 'trusted-cloud',   loadComponent: () => import('../pages/admin/trusted-cloud/trusted-cloud').then(m => m.TrustedCloud) },
+      { path: 'trusted-domains', loadComponent: () => import('../pages/admin/trusted-domains/trusted-domains').then(m => m.TrustedDomains) },
+      { path: 'smtp-config',     loadComponent: () => import('../pages/admin/smtp-config/smtp-config').then(m => m.SmtpConfig) },
+    ]
   },
   {
     path: 'tenant-admin',
     canActivate: [authGuard],
-    loadComponent: () => import('../pages/tenant-admin/tenant-admin')
-      .then(m => m.TenantAdmin)
+    loadComponent: () => import('../layout/tenant-admin-layout/tenant-admin-layout')
+      .then(m => m.TenantAdminLayout),
+    children: [
+      { path: '',               redirectTo: 'users', pathMatch: 'full' },
+      { path: 'users',          loadComponent: () => import('../pages/tenant-admin/users/users').then(m => m.UsersSection) },
+      { path: 'trusted-domains',loadComponent: () => import('../pages/tenant-admin/trusted-domains/trusted-domains').then(m => m.TrustedDomains) },
+      { path: 'sessions',       loadComponent: () => import('../pages/tenant-admin/sessions/sessions').then(m => m.Sessions) },
+      { path: 'profile',        loadComponent: () => import('../pages/tenant-admin/profile/profile').then(m => m.Profile) },
+      { path: 'setup',          loadComponent: () => import('../pages/tenant-admin/setup/setup').then(m => m.Setup) },
+      { path: 'settings',       loadComponent: () => import('../pages/tenant-admin/settings/settings').then(m => m.TenantSettings) },
+      { path: 'support',        loadComponent: () => import('../pages/tenant-admin/support/support').then(m => m.TenantSupport) },
+    ]
   },
   {
     path: 'support',

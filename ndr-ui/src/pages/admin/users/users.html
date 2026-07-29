@@ -1,0 +1,219 @@
+<section class="admin-panel">
+  <div *ngIf="msg" [class]="'admin-message ' + (msgType === 'success' ? 'success' : 'error')">{{ msg }}</div>
+
+  <div class="panel-head">
+    <div>
+      <h3>Users</h3>
+      <p>Create, edit, deactivate, and delete platform or tenant users.</p>
+    </div>
+    <button class="primary-action" type="button" (click)="showAddUser=true">
+      <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
+      Add User
+    </button>
+  </div>
+
+  <div class="toolbar user-toolbar">
+    <label class="search-field">
+      <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
+      <input [(ngModel)]="userSearch" type="search" placeholder="Search users or roles" />
+    </label>
+    <select [(ngModel)]="selectedTenant" class="tenant-filter">
+      <option value="all">All tenants</option>
+      <option *ngFor="let tenant of tenants" [value]="tenant.id">
+        {{ tenant.name }} - {{ tenant.active ? 'Active' : 'Inactive' }}
+      </option>
+    </select>
+    <button class="secondary-action" type="button" (click)="loadUsers()">
+      <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+      Refresh
+    </button>
+  </div>
+
+  <div class="user-summary">
+    <div>
+      <strong>{{ selectedTenantName }}</strong>
+      <span *ngIf="selectedTenant === 'all'">{{ filteredTenantAdmins.length }} users shown</span>
+      <span *ngIf="selectedTenant !== 'all'">
+        {{ tenantUserCount(selectedTenant) }} users
+        <span *ngIf="blockedUserCount(selectedTenant)">
+          - {{ blockedUserCount(selectedTenant) }} blocked by tenant
+        </span>
+      </span>
+    </div>
+    <span *ngIf="selectedTenantIsInactive" class="status-pill inactive">Tenant inactive</span>
+  </div>
+
+  <div *ngIf="selectedTenantIsInactive" class="tenant-blocked-banner">
+    This tenant is inactive. Active users in this tenant are blocked from access.
+  </div>
+
+  <div *ngIf="loadingUsers" class="loading-state">Loading users...</div>
+
+  <div *ngIf="!loadingUsers && filteredTenantAdmins.length === 0" class="empty-state">
+    <strong>No users found</strong>
+    <span>Create a user or adjust your search.</span>
+  </div>
+
+  <div *ngIf="!loadingUsers && filteredTenantAdmins.length > 0" class="user-groups">
+    <div *ngFor="let group of usersByTenant" class="tenant-group">
+      <div class="tenant-group-header" (click)="toggleTenantGroup(group.tenantId)">
+        <div class="tenant-group-title">
+          <div class="tenant-mark">{{ group.tenantName.charAt(0).toUpperCase() }}</div>
+          <strong>{{ group.tenantName }}</strong>
+          <span class="group-count">{{ group.users.length }} user{{ group.users.length !== 1 ? 's' : '' }}</span>
+          <span [class]="'status-pill ' + (group.isActive ? 'active' : 'inactive')">
+            {{ group.isActive ? 'Active' : 'Inactive' }}
+          </span>
+        </div>
+        <lucide-icon [name]="isGroupCollapsed(group.tenantId) ? ChevronRightIcon : ChevronDownIcon" class="w-4 h-4 chevron-icon"></lucide-icon>
+      </div>
+
+      <div *ngIf="!isGroupCollapsed(group.tenantId)" class="tenant-group-body admin-table">
+        <div class="table-row table-head">
+          <span>User</span>
+          <span>Role</span>
+          <span>Status</span>
+          <span>Actions</span>
+        </div>
+        <div *ngFor="let user of group.users" class="table-row">
+          <div class="user-cell">
+            <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
+            <div>
+              <strong>{{ user.username }}</strong>
+              <span>{{ user.created_at | date:'short' }}</span>
+            </div>
+          </div>
+          <span class="role-pill">{{ roleLabel(user.role) }}</span>
+          <span [class]="'status-pill ' + userStatusClass(user)">{{ userStatusLabel(user) }}</span>
+          <div class="row-actions action-row">
+            <button class="icon-button" type="button" title="Edit user" (click)="openEditUser(user)">
+              <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+            </button>
+            <button *ngIf="user.username !== currentUser?.username" class="secondary-action compact-action" type="button"
+              (click)="setUserActive(user, user.active === false)">
+              {{ user.active === false ? 'Reactivate' : 'Deactivate' }}
+            </button>
+            <button *ngIf="user.username !== currentUser?.username" class="danger-icon" type="button" title="Delete user"
+              (click)="requestDeleteUser(user)">
+              <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+            </button>
+            <span *ngIf="user.username === currentUser?.username" class="muted-note">Current user</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Add User Modal -->
+<div *ngIf="showAddUser" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <div><h3>Add User</h3><p>Create a platform user or a tenant admin.</p></div>
+      <button type="button" class="icon-button" (click)="showAddUser=false">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <label class="form-field">
+      <span>Username</span>
+      <input [(ngModel)]="newUser.username" placeholder="admin username" maxlength="50" />
+      <small *ngIf="newUserUsernameError">{{ newUserUsernameError }}</small>
+    </label>
+    <label class="form-field">
+      <span>Password</span>
+      <input [(ngModel)]="newUser.password" type="password" placeholder="temporary password" />
+      <small *ngFor="let error of newUserPasswordErrors">{{ error }}</small>
+    </label>
+    <label class="form-field">
+      <span>Role</span>
+      <select [(ngModel)]="newUser.role" (ngModelChange)="onNewUserRoleChange()">
+        <option *ngFor="let option of createUserRoleOptions" [value]="option.value">{{ option.label }}</option>
+      </select>
+      <small *ngIf="newUserRoleError">{{ newUserRoleError }}</small>
+    </label>
+    <label class="form-field" *ngIf="newUser.role === 'tenant_admin'">
+      <span>Recovery Email (Gmail)</span>
+      <input [(ngModel)]="newUser.gmail" type="email" placeholder="Required for password reset (e.g. user@gmail.com)" />
+    </label>
+    <label class="form-field">
+      <span>Tenant</span>
+      <select [(ngModel)]="newUser.tenant_id" [disabled]="newUser.role === 'default_user'">
+        <option value="" [hidden]="newUser.role === 'default_user'">Select tenant</option>
+        <option *ngFor="let tenant of tenants" [value]="tenant.id"
+          [hidden]="(newUser.role === 'tenant_admin' && tenant.id === 'default') || (newUser.role === 'default_user' && tenant.id !== 'default')"
+          [disabled]="(newUser.role === 'tenant_admin' && tenant.id === 'default') || (newUser.role === 'default_user' && tenant.id !== 'default')">
+          {{ tenant.name }}
+        </option>
+      </select>
+      <small *ngIf="newUserTenantError">{{ newUserTenantError }}</small>
+    </label>
+    <div class="modal-actions">
+      <button class="primary-action" type="button" [disabled]="savingUser || !canCreateUser" (click)="addUser()">
+        {{ savingUser ? 'Creating...' : 'Create User' }}
+      </button>
+      <button class="secondary-action" type="button" (click)="showAddUser=false">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit User Modal -->
+<div *ngIf="editingUser" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <div><h3>Edit User</h3><p>{{ editingUser.username }}</p></div>
+      <button type="button" class="icon-button" (click)="closeEditUser()">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <label class="form-field">
+      <span>Role</span>
+      <select [(ngModel)]="userForm.role" (ngModelChange)="onEditUserRoleChange()">
+        <option *ngFor="let option of roleOptions" [value]="option.value">{{ option.label }}</option>
+      </select>
+      <small *ngIf="editUserRoleError">{{ editUserRoleError }}</small>
+    </label>
+    <label class="form-field">
+      <span>Tenant</span>
+      <select [(ngModel)]="userForm.tenant_id" [disabled]="userForm.role === 'default_user'">
+        <option *ngFor="let tenant of tenants" [value]="tenant.id"
+          [hidden]="(userForm.role === 'tenant_admin' && tenant.id === 'default') || (userForm.role === 'default_user' && tenant.id !== 'default')"
+          [disabled]="(userForm.role === 'tenant_admin' && tenant.id === 'default') || (userForm.role === 'default_user' && tenant.id !== 'default')">
+          {{ tenant.name }}
+        </option>
+      </select>
+      <small *ngIf="editUserTenantError">{{ editUserTenantError }}</small>
+    </label>
+    <label class="form-field">
+      <span>New Password</span>
+      <input [(ngModel)]="userForm.password" type="password" placeholder="Leave blank to keep current password" />
+      <small *ngFor="let error of editUserPasswordErrors">{{ error }}</small>
+    </label>
+    <label class="toggle-field">
+      <input [(ngModel)]="userForm.active" type="checkbox" />
+      <span>User is active</span>
+    </label>
+    <div class="modal-actions">
+      <button class="primary-action" type="button" [disabled]="!canSaveUserEdit" (click)="saveUserEdit()">Save User</button>
+      <button class="secondary-action" type="button" (click)="closeEditUser()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete User Modal -->
+<div *ngIf="pendingDeleteUser" class="modal-backdrop">
+  <div class="modal-panel compact">
+    <div class="modal-head">
+      <div><h3>Delete User</h3><p>This removes {{ pendingDeleteUser.username }} from the system.</p></div>
+      <button type="button" class="icon-button" (click)="cancelDeleteUser()">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <div class="warning-box">
+      Deactivation is safer for audit history. Delete only when this account should be removed permanently.
+    </div>
+    <div class="modal-actions">
+      <button class="danger-action solid" type="button" (click)="confirmDeleteUser()">Delete User</button>
+      <button class="secondary-action" type="button" (click)="cancelDeleteUser()">Cancel</button>
+    </div>
+  </div>
+</div>

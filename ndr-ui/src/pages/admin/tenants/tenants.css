@@ -1,0 +1,24 @@
+/* ── Tenants ─────────────────────────────────────────────────────── */
+/* Most styles are in admin-layout.css (shared).
+   Tenant-specific overrides and additions below. */
+
+.user-summary,
+.announcement-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 9px;
+  background: rgba(79,140,255,0.04);
+  border: 1px solid rgba(79,140,255,0.10);
+  margin-bottom: 16px;
+  font-size: 13.5px;
+  color: #7090A8;
+}
+
+.user-summary strong,
+.announcement-summary strong { color: #8BAED8; font-size: 14.5px; }
+
+.user-summary > div,
+.announcement-summary > div { display: flex; flex-direction: column; gap: 2px; }

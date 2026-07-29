@@ -1,0 +1,137 @@
+/* ── Engines ─────────────────────────────────────────────────────── */
+
+/* Engine list */
+.engine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.engine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #0E1520 0%, #0A1018 100%);
+  border: 1px solid rgba(79,140,255,0.10);
+  transition: border-color 0.15s;
+}
+
+.engine-row:hover { border-color: rgba(79,140,255,0.20); }
+
+.engine-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.engine-main strong { font-size: 14.5px; color: #c0cfe8; }
+.engine-main span   { font-size: 14.5px; color: #7090A8; margin-left: 6px; }
+
+/* Kafka */
+.kafka-broker-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.kafka-broker-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(79,140,255,0.12);
+  background: rgba(9,13,24,0.60);
+  flex: 1;
+  min-width: 180px;
+}
+
+.kafka-broker-card.broker-healthy { border-color: rgba(34,197,94,0.18); }
+.kafka-broker-card.broker-down    { border-color: rgba(239,68,68,0.18); }
+
+.broker-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7090A8;
+  flex-shrink: 0;
+}
+
+.broker-healthy .broker-dot { background: #4ade80; animation: pulse-green 1.8s ease-in-out infinite; }
+.broker-down    .broker-dot { background: #f87171; }
+
+.kafka-broker-card strong { font-size: 14.5px; color: #c0cfe8; display: block; }
+.broker-host { font-size: 12.5px; color: #7090A8; display: block; margin-top: 1px; }
+
+.broker-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.broker-healthy .broker-badge { background: rgba(34,197,94,0.10); color: #4ade80; }
+.broker-down    .broker-badge { background: rgba(239,68,68,0.10);  color: #f87171; }
+
+/* Kafka table */
+.kafka-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  margin-bottom: 12px;
+}
+
+.kafka-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7090A8;
+  background: rgba(79,140,255,0.05);
+  border-bottom: 1px solid rgba(79,140,255,0.08);
+}
+
+.kafka-table td {
+  padding: 10px 12px;
+  color: #8B9CB8;
+  border-bottom: 1px solid rgba(79,140,255,0.05);
+}
+
+.kafka-table tr:last-child td { border-bottom: none; }
+.kafka-table tr:hover td { background: rgba(79,140,255,0.03); }
+
+.partition-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  background: rgba(79,140,255,0.10);
+  color: #7FB1FF;
+  border: 1px solid rgba(79,140,255,0.16);
+}
+
+.sync-ok  { color: #4ade80; font-weight: 600; }
+.sync-warn { color: #fbbf24; font-weight: 600; }
+.lag-ok   { color: #4ade80; font-weight: 600; }
+.lag-warn  { color: #fbbf24; font-weight: 600; }
+
+.kafka-total-lag {
+  font-size: 13.5px;
+  color: #7090A8;
+  padding: 8px 12px;
+  text-align: right;
+}
+
+.kafka-total-lag strong { color: #c0cfe8; }

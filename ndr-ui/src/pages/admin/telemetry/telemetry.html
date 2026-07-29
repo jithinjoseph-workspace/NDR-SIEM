@@ -1,0 +1,66 @@
+<section class="admin-panel telemetry-panel">
+  <header class="panel-header">
+    <div>
+      <h2>Platform Health &amp; Telemetry</h2>
+      <p>Real-time backend hardware and performance metrics.</p>
+    </div>
+    <span class="live-badge"><span class="pulse-dot"></span> Live</span>
+  </header>
+
+  <div class="telemetry-grid" *ngIf="telemetryData">
+    <article class="glass-card telemetry-card radial">
+      <div class="telemetry-header">
+        <div class="stat-icon-wrapper info"><lucide-icon [name]="CpuIcon" class="w-5 h-5"></lucide-icon></div>
+        <div class="telemetry-title">
+          <h3>CPU Usage</h3>
+          <span class="telemetry-subtitle">Compute Load</span>
+        </div>
+      </div>
+      <div class="radial-gauge-container">
+        <svg viewBox="0 0 36 36" class="circular-chart">
+          <path class="circle-bg"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+          />
+          <path class="circle" [style.stroke-dasharray]="telemetryData.cpu_usage_percent + ', 100'"
+            [class.danger]="telemetryData.cpu_usage_percent > 90"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+          />
+          <text x="18" y="20.35" class="percentage" [class.danger]="telemetryData.cpu_usage_percent > 90">
+            {{ telemetryData.cpu_usage_percent | number:'1.0-0' }}%
+          </text>
+        </svg>
+      </div>
+    </article>
+
+    <article class="glass-card telemetry-card radial">
+      <div class="telemetry-header">
+        <div class="stat-icon-wrapper accent"><lucide-icon [name]="MemoryStickIcon" class="w-5 h-5"></lucide-icon></div>
+        <div class="telemetry-title">
+          <h3>Memory Usage</h3>
+          <span class="telemetry-subtitle">
+            {{ telemetryData.memory_used_gb | number:'1.1-2' }} GB / {{ telemetryData.memory_total_gb | number:'1.1-2' }} GB
+          </span>
+        </div>
+      </div>
+      <div class="radial-gauge-container">
+        <svg viewBox="0 0 36 36" class="circular-chart">
+          <path class="circle-bg"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+          />
+          <path class="circle" [style.stroke-dasharray]="telemetryData.memory_percent + ', 100'"
+            [class.danger]="telemetryData.memory_percent > 90"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+          />
+          <text x="18" y="20.35" class="percentage" [class.danger]="telemetryData.memory_percent > 90">
+            {{ telemetryData.memory_percent | number:'1.0-0' }}%
+          </text>
+        </svg>
+      </div>
+    </article>
+  </div>
+
+  <div class="empty-state" *ngIf="!telemetryData">
+    <lucide-icon [name]="RefreshIcon" class="w-8 h-8 spinning"></lucide-icon>
+    <p>Loading live telemetry data...</p>
+  </div>
+</section>

@@ -1,0 +1,103 @@
+<section class="admin-panel">
+  <div *ngIf="msg" [class]="'admin-message ' + (msgType === 'success' ? 'success' : 'error')">{{ msg }}</div>
+
+  <div class="panel-head">
+    <div>
+      <h3>Sensor Keys</h3>
+      <p>Create and revoke tenant sensor install keys.</p>
+    </div>
+    <button class="secondary-action" type="button" (click)="loadSensorKeys()">
+      <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+      Refresh
+    </button>
+  </div>
+
+  <form class="sensor-form" (ngSubmit)="createSensorKey()">
+    <label class="form-field">
+      <span>Tenant</span>
+      <select [(ngModel)]="newSensorKey.tenant_id" name="sensorTenant">
+        <option value="">Select tenant</option>
+        <option *ngFor="let tenant of tenants" [value]="tenant.id">
+          {{ tenant.name }} - {{ tenant.id }}
+        </option>
+      </select>
+    </label>
+    <label class="form-field">
+      <span>Sensor Name</span>
+      <input [(ngModel)]="newSensorKey.name" name="sensorName" placeholder="Office gateway sensor" />
+    </label>
+    <button class="primary-action" type="submit"
+      [disabled]="creatingSensorKey || !newSensorKey.tenant_id || !newSensorKey.name.trim()">
+      <lucide-icon [name]="KeyIcon" class="w-4 h-4"></lucide-icon>
+      {{ creatingSensorKey ? 'Creating...' : 'Create Key' }}
+    </button>
+  </form>
+
+  <div *ngIf="installCommand" class="command-strip">
+    <code>{{ installCommand }}</code>
+    <button class="secondary-action compact-action" type="button" (click)="copyInstallCommand()">
+      <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
+      Copy Command
+    </button>
+  </div>
+
+  <div *ngIf="loadingSensorKeys" class="loading-state">Loading sensor keys...</div>
+
+  <div *ngIf="!loadingSensorKeys && sensorKeys.length === 0" class="empty-state">
+    <strong>No sensor keys found</strong>
+    <span>Create a key to install a tenant sensor.</span>
+  </div>
+
+  <div *ngIf="!loadingSensorKeys && sensorKeys.length > 0" class="admin-table">
+    <div class="sensor-table-row table-head">
+      <span>Name</span>
+      <span>Tenant</span>
+      <span>Key Prefix</span>
+      <span>Status</span>
+      <span>Created At</span>
+      <span>Last Seen</span>
+      <span>Actions</span>
+    </div>
+    <div *ngFor="let key of sensorKeys" class="sensor-table-row">
+      <strong>{{ key.name }}</strong>
+      <span>{{ tenantName(key.tenant_id) }}</span>
+      <code>{{ key.key_prefix }}</code>
+      <span [class]="'status-pill ' + (key.active ? 'active' : 'inactive')">
+        {{ key.active ? 'Active' : 'Revoked' }}
+      </span>
+      <span>{{ key.created_at | date:'short' }}</span>
+      <span *ngIf="key.last_seen">{{ key.last_seen | date:'short' }}</span>
+      <span *ngIf="!key.last_seen">Never</span>
+      <div class="row-actions action-row">
+        <button *ngIf="key.active" class="danger-action compact-action" type="button" (click)="revokeSensorKey(key)">Revoke</button>
+        <button *ngIf="!key.active" class="secondary-action compact-action" type="button" (click)="reactivateSensorKey(key)">Reactivate</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Sensor Key Created Modal -->
+<div *ngIf="showSensorKeyModal && createdSensorKey" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <div>
+        <h3>Sensor Key Created</h3>
+        <p>{{ createdSensorKey.name }} for {{ tenantName(createdSensorKey.tenant_id) }}</p>
+      </div>
+      <button type="button" class="icon-button" (click)="closeSensorKeyModal()">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <div class="warning-box">Copy this key now! It will never be shown again!</div>
+    <div class="secret-block">
+      <code>{{ createdSensorKey.key }}</code>
+    </div>
+    <div class="modal-actions">
+      <button class="primary-action" type="button" (click)="copyCreatedSensorKey()">
+        <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
+        Copy Key
+      </button>
+      <button class="secondary-action" type="button" (click)="closeSensorKeyModal()">Close</button>
+    </div>
+  </div>
+</div>

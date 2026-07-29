@@ -1,0 +1,143 @@
+<section class="admin-panel">
+  <div class="panel-head">
+    <div>
+      <h3>Trusted Domains</h3>
+      <p>Domains in this list are excluded from DNS beaconing and threat intel alerts. Global entries apply to all tenants; tenant entries are scoped to a single organization.</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="secondary-action" type="button" (click)="runAiSuggest()" [disabled]="tdAiLoading">
+        <lucide-icon name="sparkles" class="w-4 h-4"></lucide-icon>
+        {{ tdAiLoading ? 'Analyzing…' : 'AI Suggest' }}
+      </button>
+      <button class="secondary-action" type="button" (click)="loadTrustedDomains()">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- AI not configured notice -->
+  <div *ngIf="tdAiAvailable === false" class="tc-empty-suggestions" style="margin-bottom:16px;">
+    <lucide-icon name="bot" class="w-5 h-5"></lucide-icon>
+    <div>
+      <strong>AI not configured</strong>
+      <span>Add an AI provider in the AI Providers tab to enable domain classification suggestions.</span>
+    </div>
+  </div>
+
+  <!-- AI Suggestions -->
+  <div class="tc-card tc-card-ai" *ngIf="tdAiSuggestions.length > 0">
+    <div class="tc-card-head">
+      <div class="tc-card-title">
+        <lucide-icon name="sparkles" class="w-4 h-4"></lucide-icon>
+        AI Classification
+      </div>
+      <span class="tc-badge tc-badge-amber">{{ tdAiSuggestions.length }} pending</span>
+    </div>
+    <p class="tc-card-desc">AI classified high-frequency domains from your network traffic. Approve to add globally, or dismiss to skip.</p>
+    <div class="tc-suggestion-list">
+      <div *ngFor="let s of tdAiSuggestions" class="tc-suggestion-card"
+           [style.opacity]="s.verdict === 'SUSPICIOUS' ? '0.6' : '1'">
+        <div class="tc-suggestion-left">
+          <div class="tc-org-avatar"
+            [style.background]="s.verdict === 'TRUSTED' ? '#16a34a22' : '#dc262622'">
+            <lucide-icon name="globe" class="w-4 h-4"
+              [style.color]="s.verdict === 'TRUSTED' ? '#16a34a' : '#dc2626'"></lucide-icon>
+          </div>
+          <div class="tc-suggestion-info">
+            <span class="tc-org-name">{{ s.domain }}</span>
+            <span class="tc-hits">{{ s.cnt | number }} queries — {{ s.reason }}</span>
+          </div>
+        </div>
+        <div class="tc-suggestion-actions">
+          <button class="tc-approve-btn" *ngIf="s.verdict === 'TRUSTED'" (click)="approveTdSuggestion(s)">Add Global</button>
+          <button class="tc-reject-btn" (click)="dismissTdSuggestion(s.domain)">Dismiss</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add new entry -->
+  <div class="tc-card">
+    <div class="tc-card-head">
+      <div class="tc-card-title">
+        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+        Add Domain
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 140px 160px 1fr auto;gap:8px;align-items:end;margin-top:12px;">
+      <div>
+        <label class="tc-label">Domain</label>
+        <input [(ngModel)]="tdNewDomain" class="tc-input" placeholder="e.g. example.com" (keydown.enter)="addTrustedDomain()" />
+      </div>
+      <div>
+        <label class="tc-label">Category</label>
+        <select [(ngModel)]="tdNewCategory" class="tc-input">
+          <option value="dns_beacon">DNS Beacon</option>
+          <option value="threat_intel">Threat Intel</option>
+          <option value="both">Both</option>
+        </select>
+      </div>
+      <div>
+        <label class="tc-label">Scope</label>
+        <select [(ngModel)]="tdNewScope" class="tc-input">
+          <option value="">Global (all tenants)</option>
+          <option *ngFor="let t of tenants" [value]="t.id">{{ t.name }}</option>
+        </select>
+      </div>
+      <div>
+        <label class="tc-label">Note (optional)</label>
+        <input [(ngModel)]="tdNewNote" class="tc-input" placeholder="Why this domain is trusted" />
+      </div>
+      <button class="tc-add-btn" (click)="addTrustedDomain()" [disabled]="tdSaving || !tdNewDomain.trim()">
+        {{ tdSaving ? '…' : 'Add' }}
+      </button>
+    </div>
+  </div>
+
+  <div *ngIf="loadingTrustedDomains" class="loading-state">Loading trusted domains…</div>
+
+  <!-- Global list -->
+  <div class="tc-card" *ngIf="!loadingTrustedDomains">
+    <div class="tc-card-head">
+      <div class="tc-card-title">
+        <lucide-icon [name]="GlobeIcon" class="w-4 h-4 tc-icon-blue"></lucide-icon>
+        Global (all tenants)
+      </div>
+      <span class="tc-badge tc-badge-blue">{{ globalDomains.length }}</span>
+    </div>
+    <div class="tc-chips" *ngIf="globalDomains.length > 0">
+      <span *ngFor="let d of globalDomains" class="tc-chip" [title]="d.note || d.added_by">
+        {{ d.domain }}
+        <span class="tc-chip-cat">{{ d.category }}</span>
+        <button class="tc-chip-remove" (click)="deleteTrustedDomain(d.domain, d.tenant_id)" title="Remove">×</button>
+      </span>
+    </div>
+    <p *ngIf="globalDomains.length === 0" class="tc-card-desc">No global entries yet.</p>
+  </div>
+
+  <!-- Tenant-scoped list -->
+  <div class="tc-card" *ngIf="!loadingTrustedDomains && tenantDomains.length > 0">
+    <div class="tc-card-head">
+      <div class="tc-card-title">
+        <lucide-icon [name]="ShieldIcon" class="w-4 h-4 tc-icon-green"></lucide-icon>
+        Tenant-specific entries
+      </div>
+      <span class="tc-badge tc-badge-green">{{ tenantDomains.length }}</span>
+    </div>
+    <div class="admin-table" style="margin-top:12px;">
+      <div class="table-row table-head" style="grid-template-columns:2fr 1fr 1fr 1fr auto;">
+        <span>Domain</span><span>Category</span><span>Tenant</span><span>Added by</span><span></span>
+      </div>
+      <div *ngFor="let d of tenantDomains" class="table-row" style="grid-template-columns:2fr 1fr 1fr 1fr auto;">
+        <span>{{ d.domain }}</span>
+        <span>{{ d.category }}</span>
+        <span>{{ d.tenant_id }}</span>
+        <span>{{ d.added_by }}</span>
+        <button class="danger-icon" (click)="deleteTrustedDomain(d.domain, d.tenant_id)" title="Remove">
+          <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+        </button>
+      </div>
+    </div>
+  </div>
+</section>

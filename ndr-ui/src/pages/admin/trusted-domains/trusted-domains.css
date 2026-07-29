@@ -1,0 +1,479 @@
+/* ── Admin: Trusted Domains ─────────────────────────────────────── */
+
+.admin-panel {
+  max-width: 1200px;
+}
+
+/* ── PAGE HEADER ─────────────────────────────────────────────────── */
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.panel-head h3 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #e8f0ff;
+  letter-spacing: -0.01em;
+}
+
+.panel-head p {
+  margin: 0;
+  font-size: 14.5px;
+  color: #6B7FA8;
+  line-height: 1.5;
+  max-width: 620px;
+}
+
+.panel-head > div:last-child {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* ── ACTION BUTTONS ──────────────────────────────────────────────── */
+.secondary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(79,140,255,0.25);
+  background: rgba(79,140,255,0.08);
+  color: #7FB1FF;
+  font-size: 14.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.secondary-action:hover:not(:disabled) {
+  background: rgba(79,140,255,0.15);
+  border-color: rgba(79,140,255,0.40);
+  color: #a8c8ff;
+}
+
+.secondary-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── CARDS ───────────────────────────────────────────────────────── */
+.tc-card {
+  position: relative;
+  background: linear-gradient(160deg, #0D1422 0%, #090D18 60%, #080C16 100%);
+  border: 1px solid rgba(79,140,255,0.14);
+  border-radius: 14px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.tc-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border-top: 1.5px solid rgba(79,140,255,0.22);
+  pointer-events: none;
+}
+
+.tc-card-ai {
+  border-color: rgba(245,158,11,0.20);
+}
+
+.tc-card-ai::before {
+  border-top-color: rgba(245,158,11,0.30);
+}
+
+/* ── CARD HEADER ─────────────────────────────────────────────────── */
+.tc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.tc-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #c8d8f0;
+  flex: 1;
+}
+
+.tc-card-desc {
+  font-size: 13.5px;
+  color: #7090A8;
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+
+/* ── BADGES ──────────────────────────────────────────────────────── */
+.tc-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.tc-badge-blue {
+  background: rgba(79,140,255,0.12);
+  color: #7FB1FF;
+  border: 1px solid rgba(79,140,255,0.22);
+}
+
+.tc-badge-green {
+  background: rgba(34,197,94,0.10);
+  color: #4ade80;
+  border: 1px solid rgba(34,197,94,0.20);
+}
+
+.tc-badge-amber {
+  background: rgba(245,158,11,0.10);
+  color: #fbbf24;
+  border: 1px solid rgba(245,158,11,0.20);
+}
+
+/* ── ICON COLORS ─────────────────────────────────────────────────── */
+.tc-icon-blue { color: #7FB1FF; }
+.tc-icon-green { color: #4ade80; }
+
+/* ── AI NOT CONFIGURED NOTICE ────────────────────────────────────── */
+.tc-empty-suggestions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: rgba(79,140,255,0.06);
+  border: 1px solid rgba(79,140,255,0.14);
+  color: #6B84AC;
+  font-size: 14.5px;
+  margin-bottom: 16px;
+}
+
+.tc-empty-suggestions strong {
+  color: #a0b8e0;
+  font-weight: 600;
+}
+
+.tc-empty-suggestions div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── AI SUGGESTION LIST ──────────────────────────────────────────── */
+.tc-suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tc-suggestion-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(245,158,11,0.05);
+  border: 1px solid rgba(245,158,11,0.12);
+  transition: background 0.15s;
+}
+
+.tc-suggestion-card:hover {
+  background: rgba(245,158,11,0.09);
+}
+
+.tc-suggestion-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tc-org-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tc-suggestion-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tc-org-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: #d0e0ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tc-hits {
+  font-size: 11.5px;
+  color: #7090A8;
+}
+
+.tc-suggestion-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tc-approve-btn {
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(34,197,94,0.28);
+  background: rgba(34,197,94,0.10);
+  color: #4ade80;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tc-approve-btn:hover {
+  background: rgba(34,197,94,0.18);
+  border-color: rgba(34,197,94,0.40);
+}
+
+.tc-reject-btn {
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(148,163,184,0.15);
+  background: rgba(148,163,184,0.05);
+  color: #7090A8;
+  font-size: 14.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tc-reject-btn:hover {
+  background: rgba(239,68,68,0.08);
+  border-color: rgba(239,68,68,0.20);
+  color: #f87171;
+}
+
+/* ── ADD DOMAIN FORM ─────────────────────────────────────────────── */
+.tc-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7090A8;
+  margin-bottom: 6px;
+}
+
+.tc-input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(79,140,255,0.16);
+  background: rgba(9,13,24,0.80);
+  color: #c8d8f0;
+  font-size: 14.5px;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.tc-input:focus {
+  border-color: rgba(79,140,255,0.45);
+  background: rgba(9,13,24,0.95);
+}
+
+.tc-input::placeholder { color: #3E5878; }
+
+select.tc-input {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%234F8CFF' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+select.tc-input option {
+  background: #0D1422;
+  color: #c8d8f0;
+}
+
+.tc-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid rgba(79,140,255,0.30);
+  background: linear-gradient(135deg, rgba(79,140,255,0.18) 0%, rgba(59,100,220,0.14) 100%);
+  color: #7FB1FF;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  align-self: flex-end;
+}
+
+.tc-add-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(79,140,255,0.28) 0%, rgba(59,100,220,0.22) 100%);
+  border-color: rgba(79,140,255,0.50);
+  color: #a8c8ff;
+}
+
+.tc-add-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── CHIPS ───────────────────────────────────────────────────────── */
+.tc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.tc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px 4px 10px;
+  border-radius: 20px;
+  background: rgba(79,140,255,0.08);
+  border: 1px solid rgba(79,140,255,0.18);
+  font-size: 14.5px;
+  color: #8BBCFF;
+  font-weight: 500;
+  transition: border-color 0.15s;
+}
+
+.tc-chip:hover {
+  border-color: rgba(79,140,255,0.32);
+}
+
+.tc-chip-cat {
+  font-size: 12.5px;
+  color: #7090A8;
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+.tc-chip-remove {
+  background: none;
+  border: none;
+  color: #5E7A9A;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  margin-left: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  transition: all 0.12s;
+}
+
+.tc-chip-remove:hover {
+  background: rgba(239,68,68,0.15);
+  color: #f87171;
+}
+
+/* ── TABLE ───────────────────────────────────────────────────────── */
+.admin-table {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(79,140,255,0.10);
+}
+
+.table-row {
+  display: grid;
+  align-items: center;
+  padding: 0 14px;
+  min-height: 44px;
+  gap: 12px;
+  border-bottom: 1px solid rgba(79,140,255,0.06);
+  font-size: 14.5px;
+  color: #8B9CB8;
+}
+
+.table-row:last-child {
+  border-bottom: none;
+}
+
+.table-head {
+  background: rgba(79,140,255,0.06);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7090A8;
+  min-height: 36px;
+}
+
+.table-row:not(.table-head):hover {
+  background: rgba(79,140,255,0.04);
+}
+
+.table-row span:first-child {
+  color: #c0cfe8;
+  font-weight: 500;
+}
+
+/* ── DANGER ICON BUTTON ──────────────────────────────────────────── */
+.danger-icon {
+  background: none;
+  border: none;
+  color: #5E7A9A;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  transition: all 0.15s;
+}
+
+.danger-icon:hover {
+  background: rgba(239,68,68,0.12);
+  color: #f87171;
+}
+
+/* ── LOADING STATE ───────────────────────────────────────────────── */
+.loading-state {
+  text-align: center;
+  color: #7090A8;
+  font-size: 14.5px;
+  padding: 32px;
+}

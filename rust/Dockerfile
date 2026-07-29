@@ -18,11 +18,15 @@ RUN apt-get update && apt-get install -y \
 RUN cargo build --release
 
 # ── Runtime stage ──────────────────────────────────────────────────
+FROM docker:cli AS docker-cli
+
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates libssl3 libsasl2-2 libcurl4 curl \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
 WORKDIR /app/ndr-engine
 

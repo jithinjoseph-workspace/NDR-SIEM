@@ -1,0 +1,119 @@
+<div class="flex w-full h-full overflow-hidden">
+
+  <!-- SIDEBAR -->
+  <aside class="sa-sidebar">
+    <div class="sa-brand">
+      <span class="sa-brand-title">PromaAlpha</span>
+      <div class="sa-brand-badge">
+        <lucide-icon [name]="ShieldIcon" class="w-3 h-3"></lucide-icon>
+        Super Admin
+      </div>
+    </div>
+
+    <nav class="sa-nav">
+
+      <!-- Standalone: Overview -->
+      <a routerLink="/admin/overview" routerLinkActive="active" class="sa-nav-link">
+        <lucide-icon [name]="OverviewIcon" class="w-4 h-4"></lucide-icon>
+        <span>Overview</span>
+      </a>
+
+      <!-- Group: Access Control (blue) -->
+      <div class="sa-group">
+        <button class="sa-group-header sa-group--blue" (click)="toggleGroup('access')">
+          <span class="sa-group-dot"></span>
+          <span class="sa-group-label">Access Control</span>
+          <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['access']"></lucide-icon>
+        </button>
+        <div class="sa-group-body" [class.open]="groups['access']">
+          <a routerLink="/admin/tenants" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="TenantsIcon" class="w-4 h-4"></lucide-icon>
+            <span>Tenants</span>
+          </a>
+          <a routerLink="/admin/users" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
+            <span>Users</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Group: Infrastructure (violet) -->
+      <div class="sa-group">
+        <button class="sa-group-header sa-group--violet" (click)="toggleGroup('infrastructure')">
+          <span class="sa-group-dot"></span>
+          <span class="sa-group-label">Infrastructure</span>
+          <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['infrastructure']"></lucide-icon>
+        </button>
+        <div class="sa-group-body" [class.open]="groups['infrastructure']">
+          <a routerLink="/admin/engines" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="EnginesIcon" class="w-4 h-4"></lucide-icon>
+            <span>Engines</span>
+          </a>
+          <a routerLink="/admin/sensors" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="SensorsIcon" class="w-4 h-4"></lucide-icon>
+            <span>Sensor Keys</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Group: Monitoring (emerald) -->
+      <div class="sa-group">
+        <button class="sa-group-header sa-group--emerald" (click)="toggleGroup('monitoring')">
+          <span class="sa-group-dot"></span>
+          <span class="sa-group-label">Monitoring</span>
+          <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['monitoring']"></lucide-icon>
+        </button>
+        <div class="sa-group-body" [class.open]="groups['monitoring']">
+          <a routerLink="/admin/rules" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="RulesIcon" class="w-4 h-4"></lucide-icon>
+            <span>Rules</span>
+          </a>
+          <a routerLink="/admin/telemetry" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="TelemetryIcon" class="w-4 h-4"></lucide-icon>
+            <span>Telemetry</span>
+          </a>
+          <a routerLink="/admin/announcements" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="AnnouncementsIcon" class="w-4 h-4"></lucide-icon>
+            <span>Announcements</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Group: Configuration (amber) -->
+      <div class="sa-group">
+        <button class="sa-group-header sa-group--amber" (click)="toggleGroup('config')">
+          <span class="sa-group-dot"></span>
+          <span class="sa-group-label">Configuration</span>
+          <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['config']"></lucide-icon>
+        </button>
+        <div class="sa-group-body" [class.open]="groups['config']">
+          <a routerLink="/admin/ai-providers" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="AiIcon" class="w-4 h-4"></lucide-icon>
+            <span>AI Providers</span>
+          </a>
+          <a routerLink="/admin/trusted-cloud" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="CloudIcon" class="w-4 h-4"></lucide-icon>
+            <span>Trusted Cloud</span>
+          </a>
+          <a routerLink="/admin/trusted-domains" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="DomainsIcon" class="w-4 h-4"></lucide-icon>
+            <span>Trusted Domains</span>
+          </a>
+          <a routerLink="/admin/smtp-config" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="SmtpIcon" class="w-4 h-4"></lucide-icon>
+            <span>SMTP Config</span>
+          </a>
+        </div>
+      </div>
+
+    </nav>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="flex-1 overflow-auto relative">
+    <div class="sa-shell">
+      <router-outlet></router-outlet>
+    </div>
+  </div>
+
+</div>

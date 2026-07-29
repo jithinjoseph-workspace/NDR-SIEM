@@ -1,0 +1,30 @@
+/* ── Users ───────────────────────────────────────────────────────── */
+
+.user-toolbar { gap: 10px; }
+
+.user-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 9px;
+  background: rgba(79,140,255,0.04);
+  border: 1px solid rgba(79,140,255,0.10);
+  margin-bottom: 14px;
+  font-size: 13.5px;
+  color: #7090A8;
+}
+
+.user-summary strong { color: #8BAED8; font-size: 14.5px; }
+.user-summary > div { display: flex; flex-direction: column; gap: 2px; }
+
+.tenant-blocked-banner {
+  padding: 10px 16px;
+  border-radius: 9px;
+  background: rgba(239,68,68,0.07);
+  border: 1px solid rgba(239,68,68,0.16);
+  color: #f87171;
+  font-size: 13.5px;
+  margin-bottom: 14px;
+}

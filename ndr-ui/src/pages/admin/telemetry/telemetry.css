@@ -1,0 +1,123 @@
+/* ── Telemetry ───────────────────────────────────────────────────── */
+
+.telemetry-panel .panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.telemetry-panel .panel-header h2 {
+  margin: 0 0 5px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #e8f0ff;
+  letter-spacing: -0.01em;
+}
+
+.telemetry-panel .panel-header p {
+  margin: 0;
+  font-size: 14.5px;
+  color: #7090A8;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.telemetry-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.telemetry-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.stat-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: rgba(79,140,255,0.10);
+  color: #7FB1FF;
+  border: 1px solid rgba(79,140,255,0.18);
+}
+
+.stat-icon-wrapper.info   { background: rgba(79,140,255,0.10);   color: #7FB1FF;  border-color: rgba(79,140,255,0.18); }
+.stat-icon-wrapper.accent { background: rgba(167,139,250,0.10);  color: #c4b5fd; border-color: rgba(167,139,250,0.18); }
+
+.telemetry-title h3 {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #c0cfe8;
+}
+
+.telemetry-subtitle {
+  font-size: 14.5px;
+  color: #7090A8;
+}
+
+/* Radial gauge */
+.radial-gauge-container {
+  width: 160px;
+  height: 160px;
+  margin: 0 auto;
+}
+
+.circular-chart {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.circle-bg {
+  fill: none;
+  stroke: rgba(79,140,255,0.08);
+  stroke-width: 2.8;
+}
+
+.circle {
+  fill: none;
+  stroke: #4F8CFF;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.6s ease;
+}
+
+.circle.danger { stroke: #f87171; }
+
+.percentage {
+  fill: #c0d4f0;
+  font-size: 6px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.percentage.danger { fill: #f87171; }
+
+/* Empty / loading */
+.telemetry-panel .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 60px 24px;
+  color: #7090A8;
+  font-size: 14.5px;
+}
+
+@media (max-width: 700px) {
+  .telemetry-grid { grid-template-columns: 1fr; }
+}

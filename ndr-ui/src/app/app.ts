@@ -19,6 +19,7 @@ import { AriaBot } from '../components/aria-bot/aria-bot';
 })
 export class App implements OnInit {
   showShell = false;
+  showGlobalSidebar = false;
 
   constructor(
     private wsService: Websocket,
@@ -34,6 +35,7 @@ export class App implements OnInit {
         const url: string = e.urlAfterRedirects || e.url;
         const isLoginPage = url === '/login' || url.startsWith('/login?');
         this.showShell = !isLoginPage && this.auth.isLoggedIn();
+        this.showGlobalSidebar = this.showShell && !url.startsWith('/tenant-admin') && !url.startsWith('/admin');
 
         // Stop polling when user reaches the login page (covers manual logout
         // or any other redirect that lands on /login)
@@ -46,6 +48,7 @@ export class App implements OnInit {
     const url = this.router.url;
     const isLoginPage = url === '/login' || url.startsWith('/login?');
     this.showShell = !isLoginPage && this.auth.isLoggedIn();
+    this.showGlobalSidebar = this.showShell && !url.startsWith('/tenant-admin') && !url.startsWith('/admin');
 
     // Connect WebSocket only when authenticated
     if (this.auth.isLoggedIn()) {

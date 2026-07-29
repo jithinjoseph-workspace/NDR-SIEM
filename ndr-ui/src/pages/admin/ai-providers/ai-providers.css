@@ -1,0 +1,7 @@
+/* ── AI Providers ────────────────────────────────────────────────── */
+
+.ai-providers-section .admin-table .table-row {
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr;
+}
+
+/* Test result message color helpers handled by .admin-message modifier classes */
