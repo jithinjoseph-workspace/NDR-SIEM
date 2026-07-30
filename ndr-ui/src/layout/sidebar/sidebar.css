@@ -9,8 +9,8 @@
   height: 100%;
   flex-direction: column;
   position: relative;
-  background: #081422;
-  border-right: 1px solid rgba(0, 229, 160, 0.1);
+  background: #0d1420;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
   overflow: hidden;
 }
 
@@ -21,8 +21,8 @@
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(0, 229, 160, 0.024) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 229, 160, 0.024) 1px, transparent 1px);
+    linear-gradient(rgba(34, 197, 94, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 197, 94, 0.018) 1px, transparent 1px);
   background-size: 28px 28px;
   mask-image: linear-gradient(180deg,
     transparent 0%,
@@ -43,8 +43,8 @@
   height: 150px;
   border-radius: 50%;
   background: radial-gradient(ellipse,
-    rgba(0, 229, 160, 0.12) 0%,
-    rgba(0, 229, 160, 0.03) 55%,
+    rgba(34, 197, 94, 0.12) 0%,
+    rgba(34, 197, 94, 0.03) 55%,
     transparent 75%);
   pointer-events: none;
   z-index: 0;
@@ -58,7 +58,7 @@
   flex-direction: column;
   gap: 10px;
   padding: 20px 18px 16px;
-  border-bottom: 1px solid rgba(0, 229, 160, 0.08);
+  border-bottom: 1px solid rgba(34, 197, 94, 0.08);
 }
 
 .brand-wordmark {
@@ -69,7 +69,10 @@
 
 .brand-name {
   display: block;
-  color: #dff0ff;
+  background: linear-gradient(110deg, #ffffff 0%, #86efac 58%, #22c55e 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   font-family: var(--font-display);
   font-size: 20px;
   font-weight: 800;
@@ -80,7 +83,7 @@
 
 .brand-tagline {
   display: block;
-  color: rgba(0, 229, 160, 0.55);
+  color: rgba(34, 197, 94, 0.55);
   font-family: var(--font-mono);
   font-size: 8.5px;
   font-weight: 700;
@@ -92,8 +95,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.2);
   border-radius: 3px;
   padding: 4px 9px;
   width: fit-content;
@@ -111,8 +114,9 @@
 .brand-badge-logo {
   height: 16px;
   object-fit: contain;
-  /* darken to fit dark bg */
-  filter: brightness(0.9) saturate(0.8);
+  /* dim the white logo to match dark theme */
+  filter: brightness(0.55) saturate(0.7);
+  opacity: 0.75;
 }
 
 /* ── Section labels ───────────────────────────────────────── */
@@ -125,7 +129,7 @@
 }
 
 .nav-section span {
-  color: rgba(0, 229, 160, 0.38);
+  color: rgba(34, 197, 94, 0.38);
   font-family: var(--font-mono);
   font-size: 8.5px;
   font-weight: 700;
@@ -138,7 +142,7 @@
   content: '';
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, rgba(0, 229, 160, 0.2), transparent);
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.3), transparent);
   margin-left: 4px;
 }
 
@@ -162,7 +166,7 @@
   padding: 0 12px;
   border-radius: 5px;
   border: 1px solid transparent;
-  color: #6898b8;
+  color: #8b9cb8;
   text-decoration: none;
   position: relative;
   transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
@@ -201,34 +205,50 @@
 
 /* ── Hover state ──────────────────────────────────────────── */
 .nav-link:hover {
-  color: #b0d8f0;
-  background: rgba(0, 229, 160, 0.05);
-  border-color: rgba(0, 229, 160, 0.1);
+  color: #e2e8f0;
+  background: rgba(34, 197, 94, 0.05);
+  border-color: rgba(34, 197, 94, 0.1);
 }
 
 .nav-link:hover::before {
-  background: rgba(0, 229, 160, 0.45);
+  background: rgba(34, 197, 94, 0.45);
   top: 28%;
   bottom: 28%;
 }
 
 /* ── Active state: indicator only, no block ───────────────── */
 .nav-link.active {
-  color: #00e5a0;
-  background: rgba(0, 229, 160, 0.07);
-  border-color: rgba(0, 229, 160, 0.15);
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.07);
+  border-color: rgba(34, 197, 94, 0.15);
 }
 
 .nav-link.active::before {
-  background: #00e5a0;
+  background: #22c55e;
   top: 15%;
   bottom: 15%;
   box-shadow:
-    0 0 6px rgba(0, 229, 160, 0.9),
-    0 0 18px rgba(0, 229, 160, 0.5),
-    0 0 36px rgba(0, 229, 160, 0.2);
+    0 0 6px rgba(34, 197, 94, 0.9),
+    0 0 18px rgba(34, 197, 94, 0.5),
+    0 0 36px rgba(34, 197, 94, 0.2);
+  animation: nav-bar-pulse 2.8s ease-in-out infinite;
+}
+
+@keyframes nav-bar-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 6px rgba(34, 197, 94, 0.9),
+      0 0 18px rgba(34, 197, 94, 0.5),
+      0 0 36px rgba(34, 197, 94, 0.2);
+  }
+  50% {
+    box-shadow:
+      0 0 8px rgba(34, 197, 94, 1),
+      0 0 24px rgba(34, 197, 94, 0.7),
+      0 0 48px rgba(34, 197, 94, 0.3);
+  }
 }
 
 .nav-link.active .nav-icon {
-  filter: drop-shadow(0 0 5px rgba(0, 229, 160, 0.7));
+  filter: drop-shadow(0 0 5px rgba(34, 197, 94, 0.7));
 }
