@@ -3,13 +3,13 @@
   padding: 26px;
   background:
     linear-gradient(180deg, rgba(2, 8, 18, 0.92), rgba(2, 8, 18, 1)),
-    radial-gradient(ellipse at 80% 0%, rgba(0, 255, 163, 0.07) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 0%, rgba(0, 229, 160, 0.07) 0%, transparent 50%),
     radial-gradient(ellipse at 20% 100%, rgba(0, 100, 255, 0.04) 0%, transparent 40%);
   background-image:
-    linear-gradient(rgba(0, 255, 163, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 255, 163, 0.018) 1px, transparent 1px),
+    linear-gradient(rgba(0, 229, 160, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 160, 0.018) 1px, transparent 1px),
     linear-gradient(180deg, rgba(2, 8, 18, 0.92), rgba(2, 8, 18, 1)),
-    radial-gradient(ellipse at 80% 0%, rgba(0, 255, 163, 0.07) 0%, transparent 50%);
+    radial-gradient(ellipse at 80% 0%, rgba(0, 229, 160, 0.07) 0%, transparent 50%);
   background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%;
 }
 
@@ -33,7 +33,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: rgba(0, 255, 163, 0.6);
+  color: rgba(0, 229, 160, 0.6);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
@@ -53,7 +53,7 @@
   font-weight: 800;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  background: linear-gradient(120deg, #ffffff 0%, #7be0ff 55%, #00ffa3 100%);
+  background: linear-gradient(120deg, #ffffff 0%, #7be0ff 55%, #00e5a0 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -88,22 +88,22 @@
 }
 
 .primary-action {
-  background: #00ffa3;
+  background: #00e5a0;
   color: #020c16;
   padding: 0 18px;
   font-family: var(--font-mono);
   letter-spacing: 0.04em;
-  box-shadow: 0 0 16px rgba(0, 255, 163, 0.35), 0 0 40px rgba(0, 255, 163, 0.1);
+  box-shadow: 0 0 16px rgba(0, 229, 160, 0.35), 0 0 40px rgba(0, 229, 160, 0.1);
 }
 
 .primary-action:hover {
   background: #33ffb8;
-  box-shadow: 0 0 24px rgba(0, 255, 163, 0.5), 0 0 60px rgba(0, 255, 163, 0.2);
+  box-shadow: 0 0 24px rgba(0, 229, 160, 0.5), 0 0 60px rgba(0, 229, 160, 0.2);
 }
 
 .secondary-action,
 .panel-link {
-  border: 1px solid rgba(0, 255, 163, 0.15);
+  border: 1px solid rgba(0, 229, 160, 0.15);
   background: rgba(0, 12, 26, 0.8);
   color: #8ab8d0;
   padding: 0 14px;
@@ -218,7 +218,7 @@
   gap: 10px 20px;
   margin-bottom: 20px;
   padding: 10px 16px;
-  border: 1px solid rgba(0, 255, 163, 0.1);
+  border: 1px solid rgba(0, 229, 160, 0.1);
   border-radius: 4px;
   background: rgba(0, 8, 18, 0.8);
   color: #7a9ab8;
@@ -238,11 +238,11 @@
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: #00ffa3;
+  background: #00e5a0;
   box-shadow:
-    0 0 0 3px rgba(0, 255, 163, 0.1),
-    0 0 8px rgba(0, 255, 163, 0.8),
-    0 0 18px rgba(0, 255, 163, 0.4);
+    0 0 0 3px rgba(0, 229, 160, 0.1),
+    0 0 8px rgba(0, 229, 160, 0.8),
+    0 0 18px rgba(0, 229, 160, 0.4);
   animation: status-pulse 2.4s ease-in-out infinite;
 }
 
@@ -255,7 +255,7 @@
 
 .metric-card,
 .panel {
-  border: 1px solid rgba(0, 255, 163, 0.08);
+  border: 1px solid rgba(0, 229, 160, 0.08);
   border-radius: 6px;
   background: #060e1c;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -267,7 +267,7 @@
   overflow: hidden;
   min-height: 178px;
   padding: 18px;
-  border: 1px solid rgba(0, 255, 163, 0.07);
+  border: 1px solid rgba(0, 229, 160, 0.07);
   border-radius: 6px;
   background: radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 10%, transparent) 0%, #060e1c 75%);
   background-color: #060e1c;
@@ -308,7 +308,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   width: 2px;
-  background: var(--accent, #00ffa3);
+  background: var(--accent, #00e5a0);
   box-shadow:
     0 0 8px var(--accent),
     0 0 20px color-mix(in srgb, var(--accent) 50%, transparent),
@@ -317,7 +317,7 @@
 }
 
 .metric-primary {
-  --accent: #00ffa3;
+  --accent: #00e5a0;
 }
 
 .metric-secondary {
@@ -380,7 +380,7 @@
 }
 
 .metric-card h3 {
-  color: rgba(0, 255, 163, 0.45);
+  color: rgba(0, 229, 160, 0.45);
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 700;
@@ -508,10 +508,10 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid rgba(0, 255, 163, 0.2);
+  border: 1px solid rgba(0, 229, 160, 0.2);
   border-radius: 3px;
-  background: rgba(0, 255, 163, 0.06);
-  color: #00ffa3;
+  background: rgba(0, 229, 160, 0.06);
+  color: #00e5a0;
   padding: 5px 10px;
   font-family: var(--font-mono);
   font-size: 10px;
@@ -522,7 +522,7 @@
 
 .chart-frame {
   height: 340px;
-  border: 1px solid rgba(0, 255, 163, 0.07);
+  border: 1px solid rgba(0, 229, 160, 0.07);
   border-radius: 5px;
   background: rgba(0, 6, 14, 0.6);
   padding: 16px;

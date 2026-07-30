@@ -9,8 +9,8 @@
   height: 100%;
   flex-direction: column;
   position: relative;
-  background: #030c18;
-  border-right: 1px solid rgba(0, 255, 163, 0.09);
+  background: #081422;
+  border-right: 1px solid rgba(0, 229, 160, 0.1);
   overflow: hidden;
 }
 
@@ -21,8 +21,8 @@
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(0, 255, 163, 0.024) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 255, 163, 0.024) 1px, transparent 1px);
+    linear-gradient(rgba(0, 229, 160, 0.024) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 160, 0.024) 1px, transparent 1px);
   background-size: 28px 28px;
   mask-image: linear-gradient(180deg,
     transparent 0%,
@@ -43,8 +43,8 @@
   height: 150px;
   border-radius: 50%;
   background: radial-gradient(ellipse,
-    rgba(0, 255, 163, 0.12) 0%,
-    rgba(0, 255, 163, 0.03) 55%,
+    rgba(0, 229, 160, 0.12) 0%,
+    rgba(0, 229, 160, 0.03) 55%,
     transparent 75%);
   pointer-events: none;
   z-index: 0;
@@ -58,7 +58,7 @@
   flex-direction: column;
   gap: 10px;
   padding: 20px 18px 16px;
-  border-bottom: 1px solid rgba(0, 255, 163, 0.08);
+  border-bottom: 1px solid rgba(0, 229, 160, 0.08);
 }
 
 .brand-wordmark {
@@ -80,7 +80,7 @@
 
 .brand-tagline {
   display: block;
-  color: rgba(0, 255, 163, 0.45);
+  color: rgba(0, 229, 160, 0.55);
   font-family: var(--font-mono);
   font-size: 8.5px;
   font-weight: 700;
@@ -125,7 +125,7 @@
 }
 
 .nav-section span {
-  color: rgba(0, 255, 163, 0.28);
+  color: rgba(0, 229, 160, 0.38);
   font-family: var(--font-mono);
   font-size: 8.5px;
   font-weight: 700;
@@ -138,7 +138,7 @@
   content: '';
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, rgba(0, 255, 163, 0.15), transparent);
+  background: linear-gradient(90deg, rgba(0, 229, 160, 0.2), transparent);
   margin-left: 4px;
 }
 
@@ -162,7 +162,7 @@
   padding: 0 12px;
   border-radius: 5px;
   border: 1px solid transparent;
-  color: #3d5a72;
+  color: #6898b8;
   text-decoration: none;
   position: relative;
   transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
@@ -201,34 +201,34 @@
 
 /* ── Hover state ──────────────────────────────────────────── */
 .nav-link:hover {
-  color: #7ab0cc;
-  background: rgba(0, 255, 163, 0.04);
-  border-color: rgba(0, 255, 163, 0.08);
+  color: #b0d8f0;
+  background: rgba(0, 229, 160, 0.05);
+  border-color: rgba(0, 229, 160, 0.1);
 }
 
 .nav-link:hover::before {
-  background: rgba(0, 255, 163, 0.3);
-  top: 30%;
-  bottom: 30%;
+  background: rgba(0, 229, 160, 0.45);
+  top: 28%;
+  bottom: 28%;
 }
 
 /* ── Active state: indicator only, no block ───────────────── */
 .nav-link.active {
-  color: #00ffa3;
-  background: rgba(0, 255, 163, 0.05);
-  border-color: rgba(0, 255, 163, 0.12);
+  color: #00e5a0;
+  background: rgba(0, 229, 160, 0.07);
+  border-color: rgba(0, 229, 160, 0.15);
 }
 
 .nav-link.active::before {
-  background: #00ffa3;
+  background: #00e5a0;
   top: 15%;
   bottom: 15%;
   box-shadow:
-    0 0 6px rgba(0, 255, 163, 1),
-    0 0 16px rgba(0, 255, 163, 0.6),
-    0 0 32px rgba(0, 255, 163, 0.25);
+    0 0 6px rgba(0, 229, 160, 0.9),
+    0 0 18px rgba(0, 229, 160, 0.5),
+    0 0 36px rgba(0, 229, 160, 0.2);
 }
 
 .nav-link.active .nav-icon {
-  filter: drop-shadow(0 0 4px rgba(0, 255, 163, 0.8));
+  filter: drop-shadow(0 0 5px rgba(0, 229, 160, 0.7));
 }

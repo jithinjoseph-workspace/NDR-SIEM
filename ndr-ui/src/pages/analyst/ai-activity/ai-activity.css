@@ -9,9 +9,9 @@
   gap: 2rem;
   background-color: #020810;
   background-image:
-    linear-gradient(rgba(0, 255, 163, 0.016) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 255, 163, 0.016) 1px, transparent 1px),
-    radial-gradient(ellipse at 85% 0%, rgba(0, 255, 163, 0.06) 0%, transparent 50%),
+    linear-gradient(rgba(0, 229, 160, 0.016) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 160, 0.016) 1px, transparent 1px),
+    radial-gradient(ellipse at 85% 0%, rgba(0, 229, 160, 0.06) 0%, transparent 50%),
     radial-gradient(ellipse at 10% 100%, rgba(0, 100, 200, 0.04) 0%, transparent 40%);
   background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%;
   color: #c0d8ee;
@@ -28,7 +28,7 @@
   padding: 1.25rem 1.75rem;
   background: rgba(0, 8, 18, 0.8);
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(0, 255, 163, 0.1);
+  border: 1px solid rgba(0, 229, 160, 0.1);
   border-radius: 4px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
 }
@@ -36,8 +36,8 @@
 .header-icon {
   width: 2.5rem;
   height: 2.5rem;
-  color: #00ffa3;
-  filter: drop-shadow(0 0 8px rgba(0, 255, 163, 0.7)) drop-shadow(0 0 20px rgba(0, 255, 163, 0.3));
+  color: #00e5a0;
+  filter: drop-shadow(0 0 8px rgba(0, 229, 160, 0.7)) drop-shadow(0 0 20px rgba(0, 229, 160, 0.3));
 }
 
 .page-header > div:not(.live-indicator) {
@@ -50,7 +50,7 @@
   margin: 0;
   font-size: 1.6rem;
   font-weight: 800;
-  background: linear-gradient(120deg, #ffffff 0%, #7be0ff 55%, #00ffa3 100%);
+  background: linear-gradient(120deg, #ffffff 0%, #7be0ff 55%, #00e5a0 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
