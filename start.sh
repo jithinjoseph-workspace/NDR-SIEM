@@ -114,7 +114,8 @@ sudo docker exec kafka1 \
     --replication-factor 3 \
     2>/dev/null || true
 
-log "✅ Kafka 3 partitions ready for scaling"
+ACTUAL_PARTS=$(sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic ndr-events 2>/dev/null | grep PartitionCount | grep -oP 'PartitionCount:\s*\K\d+' || echo "?")
+log "✅ Kafka ${ACTUAL_PARTS} partitions ready for scaling"
 
 # Verify
 sudo docker exec kafka1 \

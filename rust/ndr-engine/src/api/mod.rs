@@ -2193,21 +2193,33 @@ pub async fn get_rule_by_id(
 pub async fn get_rules(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
-    
-    // Load community rules (tenant_id='*') + tenant custom rules from ClickHouse
+    let search = params.get("q").map(|s| s.to_lowercase()).unwrap_or_default();
+
     let db_rules = state.ch_storage.get_all_sigma_rules(&tenant_id).await.unwrap_or_default();
 
     let result: Vec<serde_json::Value> = db_rules.iter()
-        .map(|(id, name, content, _r_tenant_id, enabled, source)| {
+        .filter_map(|(id, name, content, _r_tenant_id, enabled, source)| {
             let parsed = crate::detection::parse_rule_content(content).ok();
             let conditions_len = parsed.as_ref().map(|p| p.conditions.len()).unwrap_or(0);
             let tags      = parsed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
             let severity  = parsed.as_ref().map(|p| p.severity.clone()).unwrap_or_default();
             let logsource = parsed.as_ref().map(|p| p.logsource.clone());
             let is_enabled = *enabled == 1;
-            json!({
+
+            // Filter by search query if provided
+            if !search.is_empty() {
+                let name_lc = name.to_lowercase();
+                let sev_lc  = severity.to_lowercase();
+                let tag_match = tags.iter().any(|t| t.to_lowercase().contains(&search));
+                if !name_lc.contains(&search) && !sev_lc.contains(&search) && !tag_match {
+                    return None;
+                }
+            }
+
+            Some(json!({
                 "id":        id,
                 "name":      name,
                 "title":     name,
@@ -2222,7 +2234,7 @@ pub async fn get_rules(
                 },
                 "enabled": is_enabled,
                 "status":  if is_enabled { "ACTIVE" } else { "DISABLED" },
-            })
+            }))
         })
         .collect();
 

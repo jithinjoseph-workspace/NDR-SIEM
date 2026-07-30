@@ -1198,7 +1198,7 @@ while true; do
         cd "\$INSTALL_DIR_"
         docker pull ghcr.io/jithinjoseph-workspace/ndr-engine:latest 2>&1 | logger -t ndr-updater || true
         docker pull ghcr.io/jithinjoseph-workspace/ndr-ui:latest     2>&1 | logger -t ndr-updater || true
-        docker compose up -d --no-deps ndr-engine-1 ndr-engine-2 ndr-engine-3 2>&1 | logger -t ndr-updater || true
+        docker compose up -d --no-deps ndr-engine-1 ndr-engine-2 ndr-engine-3 ndr-ui 2>&1 | logger -t ndr-updater || true
         logger -t ndr-updater "Update complete"
     fi
     sleep 30

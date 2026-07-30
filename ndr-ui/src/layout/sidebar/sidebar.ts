@@ -81,29 +81,29 @@ export class Sidebar implements OnInit, OnDestroy {
       ];
     } else {
       this.navItems = [
-        { label: 'Dashboard',    route: '/dashboard',    icon: LayoutDashboard, permission: 'dashboard' },
-        { label: 'Alerts',       route: '/alerts',       icon: Bell,            permission: 'alerts' },
-        { label: 'Network',      route: '/logs',         icon: FileText,        permission: 'logs' },
-        { label: 'Network Map',  route: '/network-map',  icon: Network,         permission: 'network-map' },
-        { label: 'Assets',       route: '/assets',       icon: Server,          permission: 'assets' },
-        { label: 'Rules',        route: '/rules',        icon: ShieldAlert,     permission: 'rules' },
-        { label: 'Threat Intel', route: '/intel',        icon: Search,          permission: 'intel' },
-        { label: 'System Health',route: '/health',       icon: Database,        permission: 'health' },
+        { label: 'Dashboard',    route: '/analyst/dashboard',    icon: LayoutDashboard, permission: 'dashboard' },
+        { label: 'Alerts',       route: '/analyst/alerts',       icon: Bell,            permission: 'alerts' },
+        { label: 'Network',      route: '/analyst/logs',         icon: FileText,        permission: 'logs' },
+        { label: 'Network Map',  route: '/analyst/network-map',  icon: Network,         permission: 'network-map' },
+        { label: 'Assets',       route: '/analyst/assets',       icon: Server,          permission: 'assets' },
+        { label: 'Rules',        route: '/analyst/rules',        icon: ShieldAlert,     permission: 'rules' },
+        { label: 'Threat Intel', route: '/analyst/intel',        icon: Search,          permission: 'intel' },
+        { label: 'System Health',route: '/analyst/health',       icon: Database,        permission: 'health' },
       ].filter(item => this.auth.hasPermission(item.permission));
 
       if (isDefaultTenant && this.auth.hasPermission('setup')) {
-        this.navItems.push({ label: 'Sensor Setup', route: '/setup', icon: Settings, permission: 'setup' });
+        this.navItems.push({ label: 'Sensor Setup', route: '/analyst/setup', icon: Settings, permission: 'setup' });
       }
 
       if (this.auth.hasPermission('soar')) {
-        this.navItems.push({ label: 'SOAR', route: '/soar', icon: Zap, permission: 'soar' });
+        this.navItems.push({ label: 'SOAR', route: '/analyst/soar', icon: Zap, permission: 'soar' });
       }
 
       if (this.auth.hasPermission('evidence')) {
-        this.navItems.push({ label: 'Evidence',    route: '/evidence',    icon: FolderSearch, permission: 'evidence' });
+        this.navItems.push({ label: 'Evidence',    route: '/analyst/evidence',    icon: FolderSearch, permission: 'evidence' });
       }
       if (this.auth.hasPermission('ai-activity') && this.auth.isTenantAiEnabled()) {
-        this.navItems.push({ label: 'AI Activity', route: '/ai-activity', icon: Bot,          permission: 'ai-activity' });
+        this.navItems.push({ label: 'AI Activity', route: '/analyst/ai-activity', icon: Bot,          permission: 'ai-activity' });
       }
     }
 

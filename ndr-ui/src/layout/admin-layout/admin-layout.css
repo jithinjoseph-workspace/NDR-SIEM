@@ -195,44 +195,57 @@
 /* .sa-shell wraps all admin page content — this beats any other bare-class override */
 
 .sa-shell .primary-action,
+.tenant-admin-shell .primary-action,
+.analyst-shell .primary-action,
 .modal-panel .primary-action {
-  background: linear-gradient(135deg, #3b8ef8 0%, #2260e8 100%) !important;
-  border: 1px solid rgba(147,197,253,0.50) !important;
-  color: #ffffff !important;
+  background: linear-gradient(135deg, #1a6ef5 0%, #1048d4 100%) !important;
+  border: 1px solid rgba(96,165,250,0.45) !important;
+  color: #e8f1ff !important;
   font-weight: 600;
-  box-shadow: 0 2px 18px rgba(59,142,248,0.50), inset 0 1px 0 rgba(255,255,255,0.12) !important;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.20);
+  box-shadow: 0 0 0 1px rgba(96,165,250,0.12), 0 2px 10px rgba(26,110,245,0.30), inset 0 1px 0 rgba(255,255,255,0.10) !important;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.30);
 }
 
 .sa-shell .primary-action:hover:not(:disabled),
+.tenant-admin-shell .primary-action:hover:not(:disabled),
+.analyst-shell .primary-action:hover:not(:disabled),
 .modal-panel .primary-action:hover:not(:disabled) {
-  background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%) !important;
-  border-color: rgba(147,197,253,0.75) !important;
+  background: linear-gradient(135deg, #2979ff 0%, #1a56e8 100%) !important;
+  border-color: rgba(96,165,250,0.65) !important;
   color: #ffffff !important;
-  box-shadow: 0 4px 28px rgba(59,130,246,0.65), inset 0 1px 0 rgba(255,255,255,0.16) !important;
+  box-shadow: 0 0 0 1px rgba(96,165,250,0.20), 0 4px 18px rgba(41,121,255,0.45), 0 0 22px rgba(41,121,255,0.20), inset 0 1px 0 rgba(255,255,255,0.14) !important;
 }
 
 .sa-shell .primary-action:disabled,
+.tenant-admin-shell .primary-action:disabled,
+.analyst-shell .primary-action:disabled,
 .modal-panel .primary-action:disabled {
   opacity: 0.40;
 }
 
 .sa-shell .secondary-action,
+.tenant-admin-shell .secondary-action,
+.analyst-shell .secondary-action,
 .modal-panel .secondary-action {
-  background: rgba(79,140,255,0.10);
-  border: 1px solid rgba(79,140,255,0.30);
-  color: #93c5fd;
+  background: rgba(30,58,138,0.22) !important;
+  border: 1px solid rgba(96,165,250,0.30) !important;
+  color: #93c5fd !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05) !important;
 }
 
 .sa-shell .secondary-action:hover:not(:disabled),
+.tenant-admin-shell .secondary-action:hover:not(:disabled),
+.analyst-shell .secondary-action:hover:not(:disabled),
 .modal-panel .secondary-action:hover:not(:disabled) {
-  background: rgba(79,140,255,0.18);
-  border-color: rgba(79,140,255,0.48);
-  color: #bfdbfe;
-  box-shadow: 0 0 14px rgba(79,140,255,0.14);
+  background: rgba(30,58,138,0.35) !important;
+  border-color: rgba(96,165,250,0.50) !important;
+  color: #bfdbfe !important;
+  box-shadow: 0 0 12px rgba(79,140,255,0.18), inset 0 1px 0 rgba(255,255,255,0.06) !important;
 }
 
 .sa-shell .danger-action,
+.tenant-admin-shell .danger-action,
+.analyst-shell .danger-action,
 .modal-panel .danger-action {
   background: rgba(239,68,68,0.12);
   border: 1px solid rgba(239,68,68,0.38);
@@ -240,6 +253,8 @@
 }
 
 .sa-shell .danger-action:hover:not(:disabled),
+.tenant-admin-shell .danger-action:hover:not(:disabled),
+.analyst-shell .danger-action:hover:not(:disabled),
 .modal-panel .danger-action:hover:not(:disabled) {
   background: rgba(239,68,68,0.20);
   border-color: rgba(239,68,68,0.58);
@@ -248,31 +263,41 @@
 }
 
 .sa-shell .danger-action.solid,
+.tenant-admin-shell .danger-action.solid,
+.analyst-shell .danger-action.solid,
 .modal-panel .danger-action.solid {
   background: rgba(239,68,68,0.25);
   border-color: rgba(239,68,68,0.55);
   color: #fecaca;
 }
 
-.sa-shell .icon-button {
+.sa-shell .icon-button,
+.tenant-admin-shell .icon-button,
+.analyst-shell .icon-button {
   background: rgba(79,140,255,0.07);
   border: 1px solid rgba(79,140,255,0.20);
   color: #6B90C0;
 }
 
-.sa-shell .icon-button:hover {
+.sa-shell .icon-button:hover,
+.tenant-admin-shell .icon-button:hover,
+.analyst-shell .icon-button:hover {
   background: rgba(79,140,255,0.16);
   border-color: rgba(79,140,255,0.40);
   color: #93c5fd;
 }
 
-.sa-shell .danger-icon { color: #6B7FA8; }
-.sa-shell .danger-icon:hover {
+.sa-shell .danger-icon,
+.tenant-admin-shell .danger-icon,
+.analyst-shell .danger-icon { color: #6B7FA8; }
+.sa-shell .danger-icon:hover,
+.tenant-admin-shell .danger-icon:hover,
+.analyst-shell .danger-icon:hover {
   background: rgba(239,68,68,0.12);
   color: #f87171;
 }
 
-.ai-toggle-btn { font-size: 12\.5px; font-weight: 700; letter-spacing: 0.04em; }
+.ai-toggle-btn { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em; }
 .ai-toggle-btn.ai-enabled {
   border-color: rgba(167,139,250,0.30);
   background: rgba(167,139,250,0.10);
@@ -394,7 +419,7 @@
   align-items: center;
   padding: 3px 10px;
   border-radius: 20px;
-  font-size: 12\.5px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
   background: rgba(148,163,184,0.08);
@@ -419,7 +444,7 @@
   align-items: center;
   padding: 3px 10px;
   border-radius: 20px;
-  font-size: 12\.5px;
+  font-size: 12.5px;
   font-weight: 600;
   background: rgba(79,140,255,0.10);
   color: #7FB1FF;
@@ -433,7 +458,7 @@
   gap: 6px;
   padding: 3px 10px;
   border-radius: 20px;
-  font-size: 12\.5px;
+  font-size: 12.5px;
   font-weight: 700;
   letter-spacing: 0.05em;
   color: #4ade80;
@@ -506,7 +531,7 @@
 
 .table-head {
   background: rgba(79,140,255,0.06);
-  font-size: 12\.5px;
+  font-size: 12.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -525,7 +550,7 @@
 }
 
 .muted-note {
-  font-size: 12\.5px;
+  font-size: 12.5px;
   color: #5E7A9A;
   font-style: italic;
 }
@@ -553,7 +578,7 @@
 }
 
 .user-cell > div { display: flex; flex-direction: column; gap: 1px; }
-.user-cell span { font-size: 12\.5px; color: #5E7A9A; }
+.user-cell span { font-size: 12.5px; color: #5E7A9A; }
 
 /* ── TENANT LIST ────────────────────────────────────────────────── */
 .tenant-list {
@@ -606,7 +631,7 @@
 
 .tenant-main strong { font-size: 14px; color: #c0cfe8; }
 .tenant-main code {
-  font-size: 12\.5px;
+  font-size: 12.5px;
   color: #5E7A9A;
   background: rgba(79,140,255,0.06);
   padding: 1px 6px;
@@ -657,7 +682,7 @@
 .tenant-group-title strong { font-size: 14.5px; color: #c0cfe8; }
 
 .group-count {
-  font-size: 12\.5px;
+  font-size: 12.5px;
   color: #7090A8;
   background: rgba(255,255,255,0.04);
   padding: 1px 7px;
@@ -679,7 +704,7 @@
 
 .form-field span,
 .form-field > label > span {
-  font-size: 12\.5px;
+  font-size: 12.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -687,7 +712,7 @@
 }
 
 .form-field small {
-  font-size: 12\.5px;
+  font-size: 12.5px;
   color: #f87171;
   margin-top: 2px;
 }

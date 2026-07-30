@@ -1110,10 +1110,11 @@ pub async fn update_announcement(
     start_at: Option<&str>,
     end_at: Option<&str>,
 ) -> anyhow::Result<()> {
+    let now_literal = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let start_expr = start_at
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
-        .unwrap_or_else(|| "now()".to_string());
+        .unwrap_or_else(|| format!("toDateTime('{}')", now_literal));
     let end_expr = end_at
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
