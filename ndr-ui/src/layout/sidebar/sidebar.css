@@ -1,107 +1,204 @@
+/* ══════════════════════════════════════════════════════════════
+   SIDEBAR — PromaAlpha Tactical Cyber Theme
+   ══════════════════════════════════════════════════════════════ */
+
 .sidebar-shell {
   display: flex;
-  width: 264px;
+  width: 256px;
   height: 100%;
   flex-direction: column;
-  border-right: 1px solid rgba(110, 117, 136, 0.16);
-  background: var(--color-surface-container-low, #08101f);
-  transition: background 300ms ease;
+  position: relative;
+  background: #030c18;
+  border-right: 1px solid rgba(0, 255, 163, 0.09);
+  overflow: hidden;
 }
 
+/* ── Circuit grid background ──────────────────────────────── */
+.sidebar-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(0, 255, 163, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 163, 0.028) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: linear-gradient(180deg,
+    transparent 0%,
+    rgba(0,0,0,0.5) 15%,
+    rgba(0,0,0,0.5) 85%,
+    transparent 100%);
+  z-index: 0;
+}
+
+/* ── Top radial glow ──────────────────────────────────────── */
+.sidebar-shell::after {
+  content: '';
+  position: absolute;
+  top: -40px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 280px;
+  height: 160px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse,
+    rgba(0, 255, 163, 0.14) 0%,
+    rgba(0, 255, 163, 0.04) 50%,
+    transparent 75%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Brand block ──────────────────────────────────────────── */
 .brand-block {
+  position: relative;
+  z-index: 1;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 22px 20px 18px;
-  border-bottom: 1px solid rgba(110, 117, 136, 0.1);
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 0;
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid rgba(0, 255, 163, 0.08);
 }
 
 .brand-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border: 1px solid rgba(105, 246, 184, 0.22);
-  border-radius: 8px;
-  background: rgba(105, 246, 184, 0.1);
-  color: var(--color-primary, #69f6b8);
-  font-family: var(--font-display);
-  font-weight: 800;
+  display: none;
 }
 
 .brand-block h1 {
   margin: 0;
-  color: var(--color-on-surface-variant, #f7f9ff);
+  color: #dff0ff;
   font-family: var(--font-display);
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .brand-block p {
-  margin-top: 2px;
-  color: var(--color-outline, #8792a7);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.15em;
+  margin: 0;
+  color: rgba(0, 255, 163, 0.5);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
+  line-height: 1.4;
 }
 
+/* PromaSecure badge pill override */
+.brand-block > div {
+  margin-top: 10px !important;
+  background: rgba(0, 0, 0, 0.4) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 3px !important;
+  padding: 3px 8px !important;
+  box-shadow: none !important;
+  width: fit-content;
+}
+
+.brand-block > div span {
+  color: rgba(255, 255, 255, 0.4) !important;
+  font-family: var(--font-mono) !important;
+}
+
+/* ── Nav list ─────────────────────────────────────────────── */
 .nav-list {
+  position: relative;
+  z-index: 1;
   display: grid;
-  gap: 4px;
-  padding: 18px 12px;
+  gap: 1px;
+  padding: 14px 10px;
+  flex: 1;
 }
 
 .nav-link,
 .footer-link {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   border: 1px solid transparent;
-  border-radius: 10px;
-  color: var(--color-on-surface-variant, #9aa5ba);
+  border-radius: 5px;
+  color: #4d6880;
   text-decoration: none;
-  transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+/* Left neon bar */
+.nav-link::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 28%;
+  bottom: 28%;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+  transition: all 160ms ease;
 }
 
 .nav-link {
-  min-height: 48px;
-  padding: 0 16px;
-  font-size: 14px;
+  min-height: 42px;
+  padding: 0 14px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.025em;
 }
 
 .nav-link:hover,
 .footer-link:hover {
-  border-color: rgba(110, 117, 136, 0.2);
-  background: rgba(216, 222, 236, 0.06);
-  color: var(--color-on-surface-variant, #f7f9ff);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transform: translateY(-1px);
+  border-color: rgba(0, 255, 163, 0.1);
+  background: rgba(0, 255, 163, 0.05);
+  color: #8fc8e0;
+  transform: translateX(3px);
+}
+
+.nav-link:hover::before {
+  background: rgba(0, 255, 163, 0.4);
+  top: 32%;
+  bottom: 32%;
 }
 
 .nav-link.active {
-  border-color: rgba(105, 246, 184, 0.3);
-  background: rgba(105, 246, 184, 0.15);
-  color: var(--color-primary, #69f6b8);
-  box-shadow: 0 4px 20px rgba(105, 246, 184, 0.35), inset 0 0 12px rgba(105, 246, 184, 0.1);
-  transform: translateY(-1px);
+  border-color: rgba(0, 255, 163, 0.2);
+  background: rgba(0, 255, 163, 0.07);
+  color: #00ffa3;
+  transform: translateX(3px);
+  box-shadow:
+    0 0 20px rgba(0, 255, 163, 0.06),
+    inset 0 0 16px rgba(0, 255, 163, 0.03);
 }
 
+.nav-link.active::before {
+  background: #00ffa3;
+  top: 18%;
+  bottom: 18%;
+  box-shadow:
+    0 0 8px rgba(0, 255, 163, 0.9),
+    0 0 20px rgba(0, 255, 163, 0.5),
+    0 0 40px rgba(0, 255, 163, 0.2);
+}
+
+.nav-link.active lucide-icon {
+  filter: drop-shadow(0 0 5px rgba(0, 255, 163, 0.7));
+}
+
+/* ── Footer ───────────────────────────────────────────────── */
 .sidebar-footer {
+  position: relative;
+  z-index: 1;
   display: grid;
-  gap: 4px;
+  gap: 1px;
   margin-top: auto;
-  padding: 14px 12px;
-  border-top: 1px solid rgba(110, 117, 136, 0.1);
+  padding: 10px 10px 14px;
+  border-top: 1px solid rgba(0, 255, 163, 0.06);
 }
 
 .footer-link {
-  min-height: 36px;
+  min-height: 34px;
   padding: 0 12px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
