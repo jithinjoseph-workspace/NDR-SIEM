@@ -230,6 +230,58 @@
 
         <button class="panel-link" type="button" (click)="openNetworkMap()">View All IPs</button>
       </section>
+
+      <section class="panel agent-status-panel">
+        <div class="panel-header compact">
+          <div>
+            <h4>Agent Telemetry</h4>
+            <p>Engine event split.</p>
+          </div>
+        </div>
+
+        <div class="agent-bars">
+          <div class="agent-row">
+            <div class="agent-label-row">
+              <span class="agent-name">Agent-Z</span>
+              <span class="agent-count">{{ zeekEvents().toLocaleString() }}</span>
+            </div>
+            <div class="agent-track">
+              <div class="agent-fill agent-z"
+                   [style.width.%]="(zeekEvents() / ((zeekEvents() + suricataEvents()) || 1)) * 100">
+              </div>
+            </div>
+          </div>
+          <div class="agent-row">
+            <div class="agent-label-row">
+              <span class="agent-name">Agent-S</span>
+              <span class="agent-count">{{ suricataEvents().toLocaleString() }}</span>
+            </div>
+            <div class="agent-track">
+              <div class="agent-fill agent-s"
+                   [style.width.%]="(suricataEvents() / ((zeekEvents() + suricataEvents()) || 1)) * 100">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sys-health">
+          <div class="health-item">
+            <span class="health-dot online"></span>
+            <span>NDR Engine</span>
+            <strong>Online</strong>
+          </div>
+          <div class="health-item">
+            <span class="health-dot online"></span>
+            <span>WebSocket</span>
+            <strong>Active</strong>
+          </div>
+          <div class="health-item">
+            <span class="health-dot" [class.alert]="critical() > 0" [class.online]="critical() === 0"></span>
+            <span>Threat Level</span>
+            <strong [class.threat-elevated]="critical() > 0">{{ critical() > 0 ? 'Elevated' : 'Normal' }}</strong>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
   <div class="secondary-charts-grid">
@@ -261,6 +313,39 @@
         </div>
       </div>
       <div #protocolPieChart class="d3-container" style="width: 100%; height: 220px;"></div>
+    </section>
+
+    <section class="panel posture-panel">
+      <div class="panel-header compact">
+        <div>
+          <h4>Network Posture</h4>
+          <p>Operational KPIs at a glance.</p>
+        </div>
+      </div>
+      <div class="posture-grid">
+        <div class="posture-stat">
+          <span class="posture-label">Detection Rate</span>
+          <span class="posture-value accent">
+            {{ totalEvents() > 0 ? ((totalHits() / totalEvents()) * 100).toFixed(2) : '0.00' }}%
+          </span>
+          <span class="posture-sub">hits / total events</span>
+        </div>
+        <div class="posture-stat">
+          <span class="posture-label">Events / Hour</span>
+          <span class="posture-value">{{ eventsLastHour().toLocaleString() }}</span>
+          <span class="posture-sub">rolling 1h window</span>
+        </div>
+        <div class="posture-stat">
+          <span class="posture-label">Correlation Hits</span>
+          <span class="posture-value accent-cyan">{{ hitsLastHour().toLocaleString() }}</span>
+          <span class="posture-sub">last hour</span>
+        </div>
+        <div class="posture-stat" [class.posture-danger]="critical() > 0">
+          <span class="posture-label">Critical / High</span>
+          <span class="posture-value accent-red">{{ critical() }} / {{ high() }}</span>
+          <span class="posture-sub">active alerts</span>
+        </div>
+      </div>
     </section>
   </div>
 </section>

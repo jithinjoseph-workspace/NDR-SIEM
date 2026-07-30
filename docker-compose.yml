@@ -181,6 +181,7 @@ services:
       - ${HOME_DIR}/logs:/logs
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
+      - ${INSTALL_DIR}/rust/ndr-engine/data:/app/ndr-engine/data
       - ${INSTALL_DIR}/config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/ndr/pcap:/opt/ndr/pcap
@@ -242,6 +243,7 @@ services:
       - ${HOME_DIR}/logs:/logs
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
+      - ${INSTALL_DIR}/rust/ndr-engine/data:/app/ndr-engine/data
       - ${INSTALL_DIR}/config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/ndr/pcap:/opt/ndr/pcap
@@ -303,6 +305,7 @@ services:
       - ${HOME_DIR}/logs:/logs
       - ${HOME_DIR}/ndr-config:/config
       - ${INSTALL_DIR}/rust/ndr-engine/rules:/app/ndr-engine/rules
+      - ${INSTALL_DIR}/rust/ndr-engine/data:/app/ndr-engine/data
       - ${INSTALL_DIR}/config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/ndr/pcap:/opt/ndr/pcap

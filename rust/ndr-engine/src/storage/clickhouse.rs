@@ -2637,7 +2637,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
             "SELECT proto, count() as cnt FROM {db}.ndr_events \
-             WHERE proto != '' AND timestamp >= now() - INTERVAL 1 HOUR{sf} \
+             WHERE proto != '' AND timestamp >= now() - INTERVAL 24 HOUR{sf} \
              GROUP BY proto ORDER BY cnt DESC LIMIT {limit}",
             db = db_name, sf = sf, limit = limit))
             .fetch_all::<(String, u64)>().await.unwrap_or_default();
@@ -2651,7 +2651,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
             "SELECT src_ip, count() as cnt FROM {db}.ndr_events \
-             WHERE src_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR{sf} \
+             WHERE src_ip != '' AND timestamp >= now() - INTERVAL 24 HOUR{sf} \
              GROUP BY src_ip ORDER BY cnt DESC LIMIT {limit}",
             db = db_name, sf = sf, limit = limit))
             .fetch_all::<(String, u64)>().await.unwrap_or_default();
@@ -2665,11 +2665,28 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
             "SELECT dst_ip, count() as cnt FROM {db}.ndr_events \
-             WHERE dst_ip != '' AND timestamp >= now() - INTERVAL 1 HOUR{sf} \
+             WHERE dst_ip != '' AND timestamp >= now() - INTERVAL 24 HOUR{sf} \
              GROUP BY dst_ip ORDER BY cnt DESC LIMIT {limit}",
             db = db_name, sf = sf, limit = limit))
             .fetch_all::<(String, u64)>().await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({ "ip": r.0, "count": r.1 })).collect())
+    }
+
+    pub async fn get_top_external_src_ips_by_tenant(
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
+    ) -> anyhow::Result<Vec<(String, u64)>> {
+        let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
+        // Exclude RFC-1918 and loopback ranges at the DB level for efficiency
+        let rows = self.client.query(&format!(
+            "SELECT src_ip, count() as cnt FROM {db}.ndr_events \
+             WHERE src_ip != '' \
+               AND NOT match(src_ip, '^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.|127\\.|0\\.|169\\.254\\.)') \
+               AND timestamp >= now() - INTERVAL 24 HOUR{sf} \
+             GROUP BY src_ip ORDER BY cnt DESC LIMIT {limit}",
+            db = db_name, sf = sf, limit = limit))
+            .fetch_all::<(String, u64)>().await.unwrap_or_default();
+        Ok(rows)
     }
 
     pub async fn get_recent_hits_by_tenant(
@@ -2751,13 +2768,14 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         if !unique_ips.is_empty() {
             let ip_list = unique_ips.iter().map(|ip| format!("'{}'", sql_escape(ip))).collect::<Vec<_>>().join(",");
             if let Ok(assets) = self.client.query(&format!(
-                "SELECT ip, hostname, mac, vendor, device_type, trusted, threat_flagged \
+                "SELECT ip, hostname, mac, vendor, device_type, trusted, threat_flagged, custom_name \
                  FROM {db}.assets FINAL WHERE ip IN ({ip_list}) AND tenant_id = '{tid}'",
                 db = db_name, ip_list = ip_list, tid = sql_escape(tenant_id)
-            )).fetch_all::<(String,String,String,String,String,u8,u8)>().await {
-                for (ip, hostname, mac, vendor, device_type, trusted, threat_flagged) in assets {
+            )).fetch_all::<(String,String,String,String,String,u8,u8,String)>().await {
+                for (ip, hostname, mac, vendor, device_type, trusted, threat_flagged, custom_name) in assets {
                     asset_map.insert(ip, serde_json::json!({
-                        "hostname": hostname, "mac": mac, "vendor": vendor,
+                        "custom_name": custom_name, "hostname": hostname,
+                        "mac": mac, "vendor": vendor,
                         "device_type": device_type,
                         "trusted": trusted != 0, "threat_flagged": threat_flagged != 0
                     }));
@@ -4209,14 +4227,15 @@ pub async fn clear_sensor_command(
         replied_by: &str,
         status: &str,
     ) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         self.client
-            .query(
+            .query(&format!(
                 "ALTER TABLE ndr.support_messages
-                 UPDATE admin_reply = ?, replied_by = ?, replied_at = now(),
+                 UPDATE admin_reply = ?, replied_by = ?, replied_at = toDateTime('{now}'),
                         status = ?
                  WHERE id = ?
                  SETTINGS mutations_sync=1"
-            )
+            ))
             .bind(reply)
             .bind(replied_by)
             .bind(status)
@@ -4227,14 +4246,15 @@ pub async fn clear_sensor_command(
     }
 
     pub async fn forward_support_message(&self, id: &str, forwarded_by: &str) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         self.client
-            .query(
+            .query(&format!(
                 "ALTER TABLE ndr.support_messages
-                 UPDATE forwarded = 1, forwarded_by = ?, forwarded_at = now(),
+                 UPDATE forwarded = 1, forwarded_by = ?, forwarded_at = toDateTime('{now}'),
                         status = 'forwarded'
                  WHERE id = ?
                  SETTINGS mutations_sync=1"
-            )
+            ))
             .bind(forwarded_by)
             .bind(id)
             .execute()
@@ -4341,11 +4361,12 @@ pub async fn clear_sensor_command(
         );
         self.client.query(&query).execute().await?;
 
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let update = format!(
             "ALTER TABLE {}.soar_native_playbooks \
-             UPDATE run_count = run_count + 1, last_run = now() \
+             UPDATE run_count = run_count + 1, last_run = toDateTime('{}') \
              WHERE id = '{}'",
-            db, sql_escape(&run.playbook_id)
+            db, now, sql_escape(&run.playbook_id)
         );
         let _ = self.client.query(&update).execute().await;
         Ok(())
@@ -4389,10 +4410,15 @@ pub async fn clear_sensor_command(
 
     pub async fn update_soar_case_status(&self, id: &str, status: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
-        let closed_at = if status == "Resolved" || status == "False Positive" { "now()" } else { "NULL" };
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let closed_at = if status == "Resolved" || status == "False Positive" {
+            format!("toDateTime('{}')", now)
+        } else {
+            "NULL".to_string()
+        };
         let query = format!(
-            "ALTER TABLE {}.soar_cases UPDATE status = '{}', updated_at = now(), closed_at = {} WHERE id = '{}' SETTINGS mutations_sync=1",
-            db, sql_escape(status), closed_at, sql_escape(id)
+            "ALTER TABLE {}.soar_cases UPDATE status = '{}', updated_at = toDateTime('{}'), closed_at = {} WHERE id = '{}' SETTINGS mutations_sync=1",
+            db, sql_escape(status), now, closed_at, sql_escape(id)
         );
         self.client.query(&query).execute().await?;
         Ok(())
@@ -5034,7 +5060,7 @@ pub async fn get_related_hits_by_ip(
     let rows = self.client.query(&format!(
         "SELECT community_id, src_ip, dst_ip,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp,
-         severity, rule_name
+         severity, arrayElement(sigma_hits, 1) as rule_name
          FROM {}.ndr_hits
          WHERE src_ip = '{}'
          AND community_id LIKE '1:%'
@@ -5060,7 +5086,7 @@ pub async fn get_rule_hits_by_community_id(
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let db = tenant_db(tenant_id);
     let rows = self.client.query(&format!(
-        "SELECT rule_name, severity,
+        "SELECT arrayElement(sigma_hits, 1) as rule_name, severity,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp,
          src_ip, dst_ip
          FROM {}.ndr_hits
@@ -5156,7 +5182,7 @@ pub async fn get_latest_critical_hit_for_aria(
         timestamp:    String,
     }
     let rows = self.client.query(&format!(
-        "SELECT community_id, src_ip, dst_ip, rule_name, score,
+        "SELECT community_id, src_ip, dst_ip, arrayElement(sigma_hits, 1) as rule_name, score,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
          FROM {db}.ndr_hits
          WHERE severity = 'CRITICAL'{sf}
@@ -5289,7 +5315,9 @@ pub async fn fetch_aria_context(
         timestamp:    String,
     }
     if let Ok(hits) = self.client.query(&format!(
-        "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+        "SELECT community_id, src_ip, dst_ip, severity, score,
+         arrayStringConcat(tags, ', ') as tags,
+         arrayElement(sigma_hits, 1) as rule_name,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
          FROM {db}.ndr_hits
          WHERE 1=1{sf}
@@ -5315,7 +5343,9 @@ pub async fn fetch_aria_context(
     if let Some(cap) = ip_re.captures(&msg) {
         let ip = cap[1].to_string();
         if let Ok(ip_hits) = self.client.query(&format!(
-            "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+            "SELECT community_id, src_ip, dst_ip, severity, score,
+             arrayStringConcat(tags, ', ') as tags,
+             arrayElement(sigma_hits, 1) as rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
              FROM {db}.ndr_hits
              WHERE (src_ip='{ip}' OR dst_ip='{ip}'){sf}
@@ -5340,10 +5370,13 @@ pub async fn fetch_aria_context(
     // ── Lateral movement ────────────────────────────────────────────────────
     if msg.contains("lateral") || msg.contains("spread") || msg.contains("movement") {
         if let Ok(lat) = self.client.query(&format!(
-            "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+            "SELECT community_id, src_ip, dst_ip, severity, score,
+             arrayStringConcat(tags, ', ') as tags,
+             arrayElement(sigma_hits, 1) as rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
              FROM {db}.ndr_hits
-             WHERE (lower(tags) LIKE '%lateral%' OR lower(rule_name) LIKE '%lateral%'){sf}
+             WHERE (arrayExists(x -> lower(x) LIKE '%lateral%', tags)
+                    OR arrayExists(x -> lower(x) LIKE '%lateral%', sigma_hits)){sf}
              ORDER BY timestamp DESC LIMIT 10",
             db = db, sf = sf
         )).fetch_all::<HitRow>().await {
@@ -5411,7 +5444,9 @@ pub async fn fetch_aria_context(
     if msg.contains("critical") || msg.contains("high") || msg.contains("severe") {
         let sev = if msg.contains("critical") { "CRITICAL" } else { "HIGH" };
         if let Ok(sev_hits) = self.client.query(&format!(
-            "SELECT community_id, src_ip, dst_ip, severity, score, tags, rule_name,
+            "SELECT community_id, src_ip, dst_ip, severity, score,
+             arrayStringConcat(tags, ', ') as tags,
+             arrayElement(sigma_hits, 1) as rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
              FROM {db}.ndr_hits
              WHERE severity='{sev}' AND timestamp >= now() - INTERVAL 24 HOUR{sf}

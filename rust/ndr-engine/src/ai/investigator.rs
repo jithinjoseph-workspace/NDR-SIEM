@@ -100,7 +100,8 @@ async fn gather_context(
         timestamp: String,
     }
     if let Ok(hits) = ch.client.query(&format!(
-        "SELECT rule_name, severity, score, tags, src_ip, dst_ip,
+        "SELECT arrayElement(sigma_hits, 1) as rule_name, severity, score,
+         arrayStringConcat(tags, ', ') as tags, src_ip, dst_ip,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
          FROM {db}.ndr_hits
          WHERE community_id = '{cid}'

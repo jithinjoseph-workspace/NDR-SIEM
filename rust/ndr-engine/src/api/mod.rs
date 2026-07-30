@@ -2289,6 +2289,59 @@ pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http
 }
 
 
+// Attack Intelligence Map — top external source IPs with geo-lookup
+pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+
+    let ip_rows = state.ch_storage
+        .get_top_external_src_ips_by_tenant(50, &tenant_id, &sensor_ids)
+        .await
+        .unwrap_or_default();
+
+    if ip_rows.is_empty() {
+        return Json(json!({ "countries": [] }));
+    }
+
+    // Batch geo-lookup via ip-api.com (free, no key, ≤100 IPs per batch)
+    let batch: Vec<Value> = ip_rows.iter().take(100).map(|(ip, _)| json!({ "query": ip })).collect();
+    let geo_results: Vec<Value> = match HTTP_CLIENT
+        .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
+        .json(&batch)
+        .send()
+        .await
+    {
+        Ok(resp) => resp.json::<Vec<Value>>().await.unwrap_or_default(),
+        Err(_)   => vec![],
+    };
+
+    // Build a count map from the DB rows
+    let count_map: std::collections::HashMap<String, u64> = ip_rows.into_iter().collect();
+
+    // Aggregate by country
+    let mut country_map: std::collections::HashMap<String, (String, f64, f64, u64)> = std::collections::HashMap::new();
+    for geo in &geo_results {
+        if geo.get("status").and_then(|s| s.as_str()) != Some("success") { continue; }
+        let ip      = geo["query"].as_str().unwrap_or("").to_string();
+        let country = geo["country"].as_str().unwrap_or("Unknown").to_string();
+        let code    = geo["countryCode"].as_str().unwrap_or("XX").to_string();
+        let lat     = geo["lat"].as_f64().unwrap_or(0.0);
+        let lon     = geo["lon"].as_f64().unwrap_or(0.0);
+        let cnt     = count_map.get(&ip).copied().unwrap_or(1);
+        country_map.entry(country.clone())
+            .and_modify(|e| e.3 += cnt)
+            .or_insert((code, lat, lon, cnt));
+    }
+
+    let mut countries: Vec<Value> = country_map.into_iter().map(|(country, (code, lat, lon, count))| {
+        json!({ "country": country, "code": code, "lat": lat, "lon": lon, "count": count })
+    }).collect();
+    countries.sort_by(|a, b| b["count"].as_u64().unwrap_or(0).cmp(&a["count"].as_u64().unwrap_or(0)));
+    countries.truncate(15);
+
+    Json(json!({ "countries": countries }))
+}
 
 //lookup ioc
 //lookup ioc

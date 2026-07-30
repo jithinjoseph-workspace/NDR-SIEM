@@ -1,11 +1,10 @@
-import { Component, OnInit, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, ViewEncapsulation, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router, RouterOutlet, NavigationEnd } from '@angular/router';
+import { Router, RouterOutlet, NavigationEnd, NavigationStart } from '@angular/router';
 import { Sidebar } from '../layout/sidebar/sidebar';
 import { Navbar } from '../layout/navbar/navbar';
 import { Websocket } from '../services/websocket/websocket';
 import { AuthService } from '../services/auth/auth';
-import { filter } from 'rxjs/operators';
 import { ToastContainer } from '../components/toast-container/toast-container';
 import { AriaBot } from '../components/aria-bot/aria-bot';
 
@@ -24,25 +23,42 @@ export class App implements OnInit {
   constructor(
     private wsService: Websocket,
     private router: Router,
-    private auth: AuthService
+    private auth: AuthService,
+    private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
-    // Determine shell visibility on every navigation
-    this.router.events
-      .pipe(filter(e => e instanceof NavigationEnd))
-      .subscribe((e: any) => {
+    this.router.events.subscribe((e: any) => {
+      if (e instanceof NavigationStart) {
+        // Update shell state NOW — before guards run and before the router
+        // activates the component into an outlet. This ensures the correct
+        // <router-outlet> is in the DOM when the component gets placed into it.
+        // Without this, the component lands in the loginView outlet, which then
+        // gets destroyed when NavigationEnd fires and showShell flips to true.
+        const url: string = e.url;
+        const goingToLogin = url === '/login' || url.startsWith('/login?') || url === '/';
+        if (!goingToLogin && this.auth.isLoggedIn()) {
+          this.showShell = true;
+          this.showGlobalSidebar = !url.startsWith('/tenant-admin') && !url.startsWith('/admin');
+          this.cdr.detectChanges();
+        } else if (goingToLogin) {
+          this.showShell = false;
+          this.showGlobalSidebar = false;
+          this.cdr.detectChanges();
+        }
+        return;
+      }
+
+      if (e instanceof NavigationEnd) {
         const url: string = e.urlAfterRedirects || e.url;
         const isLoginPage = url === '/login' || url.startsWith('/login?');
         this.showShell = !isLoginPage && this.auth.isLoggedIn();
         this.showGlobalSidebar = this.showShell && !url.startsWith('/tenant-admin') && !url.startsWith('/admin');
-
-        // Stop polling when user reaches the login page (covers manual logout
-        // or any other redirect that lands on /login)
         if (isLoginPage) {
           this.auth.stopSessionPoll();
         }
-      });
+      }
+    });
 
     // Initial check (before first NavigationEnd fires)
     const url = this.router.url;

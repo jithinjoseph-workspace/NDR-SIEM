@@ -34,16 +34,18 @@ function primaryTag(tags: string[]): string {
 }
 
 export interface AlertGroup {
-  key:      string;
-  tag:      string;
-  src_ip:   string;
-  dstIps:   string[];   // unique victim IPs/hostnames for group header display
-  count:    number;
-  maxScore: number;
-  severity: string;
-  latest:   string;
-  alerts:   any[];
-  expanded: boolean;
+  key:           string;
+  tag:           string;
+  src_ip:        string;
+  src_hostname?: string;
+  src_mac?:      string;
+  dstIps:        string[];   // unique victim IPs/hostnames for group header display
+  count:         number;
+  maxScore:      number;
+  severity:      string;
+  latest:        string;
+  alerts:        any[];
+  expanded:      boolean;
 }
 
 @Component({
@@ -255,8 +257,12 @@ export class Alerts implements OnInit, OnDestroy {
       const tag = primaryTag(a.tags);
       const key = `${tag}::${a.src_ip}`;
       if (!map.has(key)) {
+        const assetName = a.src_asset?.custom_name || a.src_asset?.hostname || undefined;
+        const assetMac  = a.src_asset?.mac  || undefined;
         map.set(key, {
           key, tag, src_ip: a.src_ip,
+          src_hostname: assetName,
+          src_mac:      assetMac,
           dstIps: [],
           count: 0, maxScore: 0,
           severity: a.severity, latest: a.time,

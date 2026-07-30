@@ -1,0 +1,110 @@
+<section class="tm-shell">
+
+  <!-- Header -->
+  <div class="tm-header">
+    <div>
+      <div class="tm-eyebrow">// LIVE THREAT INTELLIGENCE</div>
+      <h2 class="tm-title">Attack Intelligence Map</h2>
+      <p class="tm-sub">Global threat landscape — external attackers targeting your network</p>
+    </div>
+    <div class="tm-header-actions">
+      <div class="tm-live-pill">
+        <span class="tm-live-dot"></span>
+        Live telemetry
+      </div>
+      <div class="tm-stat-chip">
+        <span class="tm-stat-label">Vectors</span>
+        <span class="tm-stat-val">{{ attackSources.length }}</span>
+      </div>
+      <div class="tm-stat-chip">
+        <span class="tm-stat-label">Total hits</span>
+        <span class="tm-stat-val">{{ totalAttacks.toLocaleString() }}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="tm-body">
+
+    <!-- Map -->
+    <div class="tm-map-wrap">
+      <div class="tm-map-label">
+        <lucide-icon [name]="RadarIcon" class="w-3 h-3"></lucide-icon>
+        Live Attack Map
+      </div>
+      <div #mapContainer class="tm-map-canvas"></div>
+
+      <!-- Loading -->
+      <div *ngIf="loading" class="tm-loading">
+        <div class="tm-spinner"></div>
+        <span>Loading threat intelligence…</span>
+      </div>
+
+      <!-- Empty -->
+      <div *ngIf="!loading && attackSources.length === 0" class="tm-empty">
+        <lucide-icon [name]="ShieldIcon" class="w-8 h-8"></lucide-icon>
+        <span>No external attack data in the last 24 hours</span>
+      </div>
+    </div>
+
+    <!-- Right panel -->
+    <div class="tm-side">
+
+      <!-- Top sources -->
+      <div class="tm-panel">
+        <div class="tm-panel-header">
+          <lucide-icon [name]="TargetIcon" class="w-4 h-4"></lucide-icon>
+          Top Attack Sources
+        </div>
+        <div class="tm-source-list" *ngIf="attackSources.length > 0; else noSources">
+          <div *ngFor="let src of attackSources.slice(0,8); let i = index"
+               class="tm-source-row"
+               [class.tm-source-top]="i === 0">
+            <span class="tm-rank">{{ i + 1 }}</span>
+            <div class="tm-source-info">
+              <span class="tm-country">{{ src.country }}</span>
+              <div class="tm-bar-track">
+                <div class="tm-bar-fill"
+                     [style.width.%]="(src.count / attackSources[0].count) * 100"
+                     [style.background]="src.color">
+                </div>
+              </div>
+            </div>
+            <span class="tm-count">{{ src.count.toLocaleString() }}</span>
+          </div>
+        </div>
+        <ng-template #noSources>
+          <div class="tm-no-data">No attack data yet</div>
+        </ng-template>
+      </div>
+
+      <!-- Attack trends (static display) -->
+      <div class="tm-panel">
+        <div class="tm-panel-header">
+          <lucide-icon [name]="TrendIcon" class="w-4 h-4"></lucide-icon>
+          Network Exposure
+        </div>
+        <div class="tm-exposure-grid">
+          <div class="tm-exposure-stat">
+            <span class="tm-exposure-label">Unique Countries</span>
+            <span class="tm-exposure-val">{{ attackSources.length }}</span>
+          </div>
+          <div class="tm-exposure-stat">
+            <span class="tm-exposure-label">Attack Vectors</span>
+            <span class="tm-exposure-val accent">{{ attackSources.length }}</span>
+          </div>
+          <div class="tm-exposure-stat">
+            <span class="tm-exposure-label">Total Hits</span>
+            <span class="tm-exposure-val">{{ totalAttacks.toLocaleString() }}</span>
+          </div>
+          <div class="tm-exposure-stat">
+            <span class="tm-exposure-label">Top Threat</span>
+            <span class="tm-exposure-val danger">{{ attackSources[0]?.country || '—' }}</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</section>

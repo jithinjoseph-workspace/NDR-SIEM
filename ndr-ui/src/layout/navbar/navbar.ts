@@ -53,6 +53,7 @@ export class Navbar implements OnInit, OnDestroy {
     { label: 'Alerts', hint: 'View correlation hits', route: '/alerts', permission: 'alerts' },
     { label: 'Rules', hint: 'Manage SIGMA rules', route: '/rules', permission: 'rules' },
     { label: 'Threat Intel', hint: 'IOC lookup', route: '/intel', permission: 'intel' },
+    { label: 'Attack Map', hint: 'Global threat map', route: '/analyst/threat-map', permission: 'intel' },
     { label: 'Network Map', hint: 'Topology view', route: '/network-map', permission: 'network-map' },
     { label: 'System Health', hint: 'Service status', route: '/health', permission: 'health' },
     { label: 'Live Stream', hint: 'Real-time events', route: '/live', permission: 'live' },
@@ -324,7 +325,7 @@ export class Navbar implements OnInit, OnDestroy {
     const user = this.auth.getUser();
     if (!user) return false;
 
-    const analystRoutes = ['/logs', '/alerts', '/rules', '/intel', '/network-map', '/health', '/live'];
+    const analystRoutes = ['/logs', '/alerts', '/rules', '/intel', '/network-map', '/health', '/live', '/threat-map', '/analyst/threat-map'];
     if (analystRoutes.includes(route) || route.startsWith('/logs?') || route.startsWith('/rules?')) {
       if (this.auth.isAdmin() || user.role === 'tenant_admin') {
         return false;

@@ -684,6 +684,7 @@ async fn main() {
         .route("/api/rules/sync-community", post(api::sync_community_rules_api))
         .route("/api/rules/hit-counts", get(api::get_rule_hit_counts))
         .route("/api/rules/:id",      get(api::get_rule_by_id).delete(api::delete_rule))
+        .route("/api/threat-map",        get(api::get_threat_map))
         .route("/api/threat-intel",     get(api::get_threat_intel))
         .route("/api/threat-intel/:ip", get(api::lookup_ioc))
         .route("/api/rules/:id/toggle", post(api::toggle_rule))

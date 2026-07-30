@@ -262,7 +262,10 @@
                 <span class="tag-chip">{{ tagLabel(g.tag) }}</span>
               </td>
               <td class="src-cell">
-                <span class="src-ip">{{ g.src_ip || '—' }}</span>
+                <div class="src-stack">
+                  <span class="src-name">{{ g.src_hostname || g.src_ip || '—' }}</span>
+                  <span *ngIf="g.src_hostname" class="src-ip-sub">{{ g.src_ip }}<ng-container *ngIf="g.src_mac"> · {{ g.src_mac }}</ng-container></span>
+                </div>
                 <button *ngIf="g.src_ip" class="ip-copy-btn" (click)="copyIp(g.src_ip, $event)" title="Copy IP" type="button">
                   <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>
                 </button>

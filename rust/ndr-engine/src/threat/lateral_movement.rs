@@ -53,7 +53,7 @@ async fn scan_tenant(ch: &Arc<ClickhouseStorage>, tenant_id: &str) -> anyhow::Re
     // Fetch recent high/medium alerts as edges
     let edges: Vec<AlertEdge> = ch.client.query(&format!(
         "SELECT community_id, src_ip, dst_ip, severity, \
-                ifNull(rule_name, '') as rule_name, \
+                arrayElement(sigma_hits, 1) as rule_name, \
                 toUnixTimestamp(timestamp) as ts \
          FROM {db}.ndr_hits FINAL \
          WHERE timestamp >= now() - INTERVAL 2 HOUR \
