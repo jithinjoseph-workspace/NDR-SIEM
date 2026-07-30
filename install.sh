@@ -947,7 +947,8 @@ log "Installing NDR Agent as system service..."
 sudo tee /etc/systemd/system/ndr-agent.service > /dev/null << SERVICE
 [Unit]
 Description=NDR Host Agent
-After=network.target
+After=network.target docker.service
+Requires=docker.service
 
 [Service]
 Type=simple
@@ -959,6 +960,7 @@ RestartSec=3
 Environment=HOME=$HOME_DIR
 Environment=SENSOR_ID=local-central
 Environment=TENANT_ID=default
+Environment=NDR_AGENT_SECRET=$NDR_AGENT_SECRET
 
 [Install]
 WantedBy=multi-user.target

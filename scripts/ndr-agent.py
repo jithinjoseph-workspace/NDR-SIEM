@@ -33,7 +33,7 @@ def _docker_bridge_ip() -> str:
                 return line.strip().split()[1].split("/")[0]
     except Exception:
         pass
-    return "0.0.0.0"  # last resort — binds all interfaces
+    return "127.0.0.1"  # last resort — loopback only, docker containers reach via host.docker.internal
 
 HOME_DIR = os.path.expanduser("~")
 LOGDIR = os.path.join(HOME_DIR, "logs")
