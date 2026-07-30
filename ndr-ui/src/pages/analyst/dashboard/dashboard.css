@@ -30,25 +30,41 @@
 }
 
 .eyebrow {
-  color: #69f6b8;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(0, 255, 163, 0.6);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
 }
 
+.eyebrow::before {
+  content: '//';
+  opacity: 0.5;
+}
+
 .dashboard-header h2 {
-  margin: 5px 0 4px;
-  color: #f7f9ff;
+  margin: 6px 0 4px;
   font-family: var(--font-display);
-  font-size: clamp(26px, 3vw, 38px);
-  font-weight: 700;
+  font-size: clamp(24px, 3vw, 36px);
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: linear-gradient(120deg, #ffffff 0%, #7be0ff 55%, #00ffa3 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .dashboard-header p,
 .panel-header p {
-  color: #98a3b8;
-  font-size: 13px;
+  color: #4a6880;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
 .dashboard-actions {
@@ -364,10 +380,11 @@
 }
 
 .metric-card h3 {
-  color: #98a3b8;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.1em;
+  color: rgba(0, 255, 163, 0.45);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
 }
 
@@ -479,30 +496,35 @@
 
 .panel-header h4 {
   margin: 0 0 4px;
-  color: #f7f9ff;
+  color: #c8e4f8;
   font-family: var(--font-display);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .live-pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid rgba(105, 246, 184, 0.18);
-  border-radius: 999px;
-  background: rgba(105, 246, 184, 0.08);
-  color: #9ffbd0;
-  padding: 6px 10px;
-  font-size: 11px;
-  font-weight: 800;
+  border: 1px solid rgba(0, 255, 163, 0.2);
+  border-radius: 3px;
+  background: rgba(0, 255, 163, 0.06);
+  color: #00ffa3;
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .chart-frame {
   height: 340px;
-  border: 1px solid rgba(110, 117, 136, 0.1);
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(11, 19, 35, 0.6), rgba(7, 14, 29, 0.36));
+  border: 1px solid rgba(0, 255, 163, 0.07);
+  border-radius: 5px;
+  background: rgba(0, 6, 14, 0.6);
   padding: 16px;
 }
 
