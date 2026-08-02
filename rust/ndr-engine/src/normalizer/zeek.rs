@@ -68,10 +68,30 @@ pub fn normalize_zeek(raw: &Value) -> Option<NormalizedEvent> {
         .map(String::from);
 
     // log_source helps the drop filter (stats, capture_loss, etc.)
+    // Prefer explicit tag from Vector/Filebeat; fall back to field-presence inference
+    // when the pipeline doesn't add log_type or _path (common for conn.log entries).
     let log_source = raw.get("log_type")
         .or_else(|| raw.get("_path"))
         .and_then(|v| v.as_str())
-        .map(String::from);
+        .map(String::from)
+        .or_else(|| {
+            // Infer Zeek log type from field signatures exclusive to each log type
+            if raw.get("conn_state").is_some() || raw.get("history").is_some() {
+                Some("conn".to_string())
+            } else if raw.get("query").is_some() || raw.get("qtype_name").is_some() {
+                Some("dns".to_string())
+            } else if raw.get("method").is_some() && raw.get("uri").is_some() {
+                Some("http".to_string())
+            } else if raw.get("server_name").is_some() || raw.get("cipher").is_some() {
+                Some("ssl".to_string())
+            } else if raw.get("mime_type").is_some() || raw.get("fuid").is_some() {
+                Some("files".to_string())
+            } else if raw.get("name").is_some() && raw.get("peer").is_some() {
+                Some("weird".to_string())
+            } else {
+                None
+            }
+        });
 
     // Zeek ts is a Unix float (seconds.microseconds)
     let timestamp = raw.get("ts")

@@ -1,252 +1,499 @@
-<div class="p-8 animate-in fade-in duration-500">
+<div class="intel-page">
 
-  <!-- Header -->
-  <div class="flex items-center justify-between mb-8">
-    <div>
-      <h2 class="text-2xl font-display font-bold text-white uppercase tracking-tight">
-        Threat Intelligence
-      </h2>
-      <p class="text-on-surface-variant text-sm mt-1">
-        {{ source || 'abuse.ch Feodo Tracker' }} — malicious IP blocklist
+  <!-- ── PAGE HEADER ──────────────────────────────────────────────────────── -->
+  <div class="intel-header">
+    <div class="intel-header-left">
+      <div class="intel-eyebrow">
+        <lucide-icon [name]="ShieldCheckIcon" class="w-3 h-3"></lucide-icon>
+        THREAT INTELLIGENCE CENTER
+      </div>
+      <h1 class="intel-title">Threat Intelligence</h1>
+      <p class="intel-subtitle">
+        abuse.ch — Feodo Tracker · MalwareBazaar · URLhaus
+        <span *ngIf="lastRefresh" class="intel-refresh-time">· Updated {{ lastRefresh }}</span>
       </p>
     </div>
-    <div class="flex gap-2">
-      <button (click)="loadIntel()"
-        class="bg-surface-container-low text-on-surface-variant hover:text-white p-2 rounded-md border border-outline/10 transition-all">
+    <div class="intel-header-right">
+      <button class="btn-refresh" (click)="loadIntel()" [class.spinning]="loading">
         <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
+        Refresh
       </button>
     </div>
   </div>
-  <!-- Stats -->
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-    <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10">
-      <div class="flex items-center gap-4">
-        <div class="p-3 bg-white/5 rounded-lg">
-          <lucide-icon [name]="HashIcon" class="w-6 h-6 text-primary"></lucide-icon>
+
+  <!-- ── 5 STAT CARDS ──────────────────────────────────────────────────────── -->
+  <div class="intel-stats-bar">
+    <div class="stat-card stat-ip">
+      <div class="stat-icon-wrap">
+        <lucide-icon [name]="AlertTriangleIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div class="stat-body">
+        <div class="stat-value">{{ totalMaliciousIps.toLocaleString() }}</div>
+        <div class="stat-label">Malicious IPs</div>
+        <div class="stat-sub">in active feed</div>
+      </div>
+    </div>
+    <div class="stat-card stat-hash">
+      <div class="stat-icon-wrap">
+        <lucide-icon [name]="FileWarningIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div class="stat-body">
+        <div class="stat-value">{{ totalMaliciousHashes.toLocaleString() }}</div>
+        <div class="stat-label">Malicious Hashes</div>
+        <div class="stat-sub">MalwareBazaar</div>
+      </div>
+    </div>
+    <div class="stat-card stat-domain">
+      <div class="stat-icon-wrap">
+        <lucide-icon [name]="GlobeIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div class="stat-body">
+        <div class="stat-value">{{ totalMaliciousDomains.toLocaleString() }}</div>
+        <div class="stat-label">Malicious Domains</div>
+        <div class="stat-sub">URLhaus</div>
+      </div>
+    </div>
+    <div class="stat-card stat-detected" [class.has-hits]="detectedInNetwork.length > 0">
+      <div class="stat-icon-wrap">
+        <lucide-icon [name]="AlertIcon" class="w-5 h-5"></lucide-icon>
+      </div>
+      <div class="stat-body">
+        <div class="stat-value" [class.text-red]="detectedInNetwork.length > 0">{{ detectedInNetwork.length }}</div>
+        <div class="stat-label">Detected in Network</div>
+        <div class="stat-sub">malicious IPs active</div>
+      </div>
+    </div>
+    <div class="stat-card stat-live">
+      <div class="stat-icon-wrap">
+        <lucide-icon [name]="BellIcon" class="w-5 h-5"></lucide-icon>
+        <span *ngIf="newAlertCount > 0" class="stat-badge">{{ newAlertCount > 9 ? '9+' : newAlertCount }}</span>
+      </div>
+      <div class="stat-body">
+        <div class="stat-value">{{ liveAlerts.length }}</div>
+        <div class="stat-label">Live Alerts</div>
+        <div class="stat-sub">this session</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TAB BAR ───────────────────────────────────────────────────────────── -->
+  <div class="intel-tabs">
+    <button class="intel-tab" [class.active]="activeTab === 'overview'"  (click)="switchTab('overview')">
+      <lucide-icon [name]="ActivityIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Overview
+    </button>
+    <button class="intel-tab" [class.active]="activeTab === 'ioc-tools'" (click)="switchTab('ioc-tools')">
+      <lucide-icon [name]="SearchIcon" class="w-3.5 h-3.5"></lucide-icon>
+      IOC Tools
+    </button>
+    <button class="intel-tab" [class.active]="activeTab === 'watchlist'" (click)="switchTab('watchlist')">
+      <lucide-icon [name]="EyeIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Watchlist
+      <span *ngIf="watchlist.length > 0" class="tab-count">{{ watchlist.length }}</span>
+    </button>
+    <button class="intel-tab" [class.active]="activeTab === 'feeds'"     (click)="switchTab('feeds')">
+      <lucide-icon [name]="DatabaseIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Feed Sources
+    </button>
+    <button class="intel-tab" [class.active]="activeTab === 'geo'"       (click)="switchTab('geo')">
+      <lucide-icon [name]="GlobeIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Geo Intel
+    </button>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB: OVERVIEW
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'overview'" class="intel-tab-body">
+
+    <!-- Live Threat Alerts -->
+    <div *ngIf="liveAlerts.length > 0" class="intel-card live-alerts-card">
+      <div class="intel-card-header">
+        <div class="live-dot-row">
+          <span class="live-dot"></span>
+          <span class="section-eyebrow red">LIVE THREAT ALERTS — REAL-TIME</span>
         </div>
-        <div>
-          <p class="text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">
-            Malicious IPs in Feed
-          </p>
-          <p class="text-xl font-display font-bold text-white">
-            {{ totalMaliciousIps.toLocaleString() }}
-          </p>
-          <p class="text-[10px] text-on-surface-variant mt-1">{{ lastRefresh }}</p>
+        <button class="btn-ghost-sm" (click)="clearAlerts()">Clear</button>
+      </div>
+      <div class="live-alerts-list">
+        <div *ngFor="let alert of liveAlerts" class="live-alert-row">
+          <lucide-icon [name]="AlertIcon" class="w-4 h-4 text-red shrink-0"></lucide-icon>
+          <div class="live-alert-flow font-mono">
+            <span class="ip-threat">{{ alert.src_ip }}</span>
+            <span class="arrow">→</span>
+            <span class="ip-dst">{{ alert.dst_ip }}</span>
+          </div>
+          <div class="live-alert-meta">
+            <span class="score-badge">{{ alert.score.toFixed(0) }}</span>
+            <span class="time-label">{{ alert.time }}</span>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10">
-      <div class="flex items-center gap-4">
-        <div class="p-3 bg-white/5 rounded-lg">
-          <lucide-icon [name]="AlertIcon" class="w-6 h-6 text-red-400"></lucide-icon>
-        </div>
+    <!-- Detected IPs table -->
+    <div class="intel-card">
+      <div class="intel-card-header">
         <div>
-          <p class="text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">
-            Detected in Network
-          </p>
-          <p class="text-xl font-display font-bold text-white">
-            {{ detectedInNetwork.length }}
-          </p>
-          <p class="text-[10px] text-on-surface-variant mt-1">malicious IPs seen</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="bg-surface-container-highest p-6 rounded-xl border border-outline/10">
-      <div class="flex items-center gap-4">
-        <div class="p-3 bg-white/5 rounded-lg relative">
-          <lucide-icon [name]="BellIcon" class="w-6 h-6 text-orange-400"></lucide-icon>
-          <span *ngIf="newAlertCount > 0" class="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white
-            text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
-            {{ newAlertCount > 9 ? '9+' : newAlertCount }}
+          <span class="section-eyebrow">MALICIOUS IPs DETECTED IN NETWORK</span>
+          <span class="record-count" *ngIf="detectedInNetwork.length > 0">
+            {{ filteredDetected.length }} of {{ detectedInNetwork.length }}
           </span>
         </div>
-        <div>
-          <p class="text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">
-            Live Threat Alerts
-          </p>
-          <p class="text-xl font-display font-bold text-white">
-            {{ liveAlerts.length }}
-          </p>
-          <p class="text-[10px] text-on-surface-variant mt-1">this session</p>
+        <div class="card-header-actions">
+          <div class="search-mini">
+            <lucide-icon [name]="FilterIcon" class="w-3 h-3"></lucide-icon>
+            <input [(ngModel)]="filterText" placeholder="Filter IPs..." class="search-mini-input" />
+          </div>
+          <button class="btn-ghost-sm" (click)="exportCsv()" title="Export CSV">
+            <lucide-icon [name]="DownloadIcon" class="w-3.5 h-3.5"></lucide-icon>
+            Export
+          </button>
+        </div>
+      </div>
+
+      <div *ngIf="loading" class="empty-state">
+        <div class="loading-pulse">Loading threat data...</div>
+      </div>
+
+      <div *ngIf="!loading && detectedInNetwork.length === 0" class="empty-state">
+        <lucide-icon [name]="ShieldCheckIcon" class="w-12 h-12 empty-icon"></lucide-icon>
+        <div class="empty-title">No malicious IPs detected</div>
+        <div class="empty-sub">Your network traffic looks clean</div>
+      </div>
+
+      <div *ngIf="!loading && detectedInNetwork.length > 0" class="intel-table-wrap">
+        <table class="intel-table">
+          <thead>
+            <tr>
+              <th>Source IP</th>
+              <th>Destination IP</th>
+              <th class="sortable" (click)="sortBy('hits')">
+                Hits
+                <lucide-icon *ngIf="sortField === 'hits' && sortDir === 'desc'" [name]="ChevronDownIcon" class="w-3 h-3 inline"></lucide-icon>
+                <lucide-icon *ngIf="sortField === 'hits' && sortDir === 'asc'"  [name]="ChevronUpIcon"   class="w-3 h-3 inline"></lucide-icon>
+              </th>
+              <th class="sortable" (click)="sortBy('last_seen')">
+                Last Seen
+                <lucide-icon *ngIf="sortField === 'last_seen' && sortDir === 'desc'" [name]="ChevronDownIcon" class="w-3 h-3 inline"></lucide-icon>
+                <lucide-icon *ngIf="sortField === 'last_seen' && sortDir === 'asc'"  [name]="ChevronUpIcon"   class="w-3 h-3 inline"></lucide-icon>
+              </th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let ioc of filteredDetected" class="table-row">
+              <td class="ip-threat font-mono font-bold">{{ ioc.src_ip }}</td>
+              <td class="font-mono">{{ ioc.dst_ip }}</td>
+              <td>
+                <span class="hits-badge" [class.hits-high]="ioc.hits >= 10" [class.hits-med]="ioc.hits >= 3 && ioc.hits < 10">
+                  {{ ioc.hits }}
+                </span>
+              </td>
+              <td class="text-dim">{{ getTimestamp(ioc.last_seen) }}</td>
+              <td><span class="status-threat">THREAT DETECTED</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB: IOC TOOLS
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'ioc-tools'" class="intel-tab-body">
+
+    <!-- IOC Lookup -->
+    <div class="intel-card">
+      <div class="intel-card-header">
+        <span class="section-eyebrow">IOC LOOKUP</span>
+        <span class="section-meta">IP address · Domain · MD5/SHA1/SHA256 hash</span>
+      </div>
+      <div class="lookup-row">
+        <div class="lookup-input-wrap">
+          <lucide-icon [name]="SearchIcon" class="lookup-icon w-4 h-4"></lucide-icon>
+          <input type="text" [(ngModel)]="searchQuery" (keyup.enter)="lookupIoc()"
+            placeholder="Enter IP, domain, or file hash to check..."
+            class="lookup-input" />
+          <button *ngIf="searchQuery" (click)="clearLookup()" class="lookup-clear">
+            <lucide-icon [name]="XIcon" class="w-3.5 h-3.5"></lucide-icon>
+          </button>
+        </div>
+        <button (click)="lookupIoc()" [disabled]="searching || !searchQuery.trim()" class="btn-primary-sm">
+          {{ searching ? 'Checking...' : 'Lookup' }}
+        </button>
+      </div>
+
+      <div *ngIf="lookupResult" class="lookup-result" [class.result-threat]="lookupResult.is_malicious" [class.result-clean]="!lookupResult.is_malicious">
+        <div class="result-icon">
+          <lucide-icon [name]="lookupResult.is_malicious ? AlertTriangleIcon : CheckCircleIcon" class="w-6 h-6"></lucide-icon>
+        </div>
+        <div class="result-body">
+          <div class="result-ioc font-mono">{{ lookupResult.ioc || lookupResult.ip }}</div>
+          <div class="result-verdict" [class.verdict-threat]="lookupResult.is_malicious" [class.verdict-clean]="!lookupResult.is_malicious">
+            {{ lookupResult.is_malicious ? '⚠ MALICIOUS — Found in active threat feed' : '✓ CLEAN — Not in threat feed' }}
+          </div>
+          <div class="result-meta">
+            <span class="meta-pill">TYPE: {{ (lookupResult.type || lookupResult.ioc_type || 'ip').toUpperCase() }}</span>
+            <span class="meta-pill">SOURCE: {{ lookupResult.source }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Manual IOC -->
+    <div class="intel-card">
+      <div class="intel-card-header">
+        <span class="section-eyebrow">ADD MANUAL IOC</span>
+        <span class="section-meta">Persisted across restarts · Affects real-time detection immediately</span>
+      </div>
+      <div class="add-ioc-row">
+        <select [(ngModel)]="addIocType" class="ioc-type-select">
+          <option value="ip">IP Address</option>
+          <option value="domain">Domain</option>
+          <option value="hash">File Hash</option>
+          <option value="ja3">JA3 Fingerprint</option>
+          <option value="url">URL</option>
+        </select>
+        <div class="add-ioc-input-wrap">
+          <lucide-icon [name]="PlusIcon" class="add-ioc-icon w-4 h-4"></lucide-icon>
+          <input type="text" [(ngModel)]="addIocValue" (keyup.enter)="addManualIoc()"
+            placeholder="Enter IOC value..."
+            class="add-ioc-input" />
+        </div>
+        <button (click)="addManualIoc()" [disabled]="addIocLoading || !addIocValue.trim()" class="btn-primary-sm">
+          {{ addIocLoading ? 'Adding...' : 'Add IOC' }}
+        </button>
+      </div>
+      <div *ngIf="addIocResult" class="add-ioc-result" [class.result-ok]="addIocResult.status === 'ok'" [class.result-err]="addIocResult.status !== 'ok'">
+        {{ addIocResult.message }}
+      </div>
+      <div class="ioc-type-hints">
+        <div class="type-hint" [class.active-hint]="addIocType === 'ip'">
+          <span class="type-badge type-ip">IP</span>
+          <span>e.g. 192.168.1.100 or 185.220.101.45</span>
+        </div>
+        <div class="type-hint" [class.active-hint]="addIocType === 'domain'">
+          <span class="type-badge type-domain">DOMAIN</span>
+          <span>e.g. malware.example.com</span>
+        </div>
+        <div class="type-hint" [class.active-hint]="addIocType === 'hash'">
+          <span class="type-badge type-hash">HASH</span>
+          <span>MD5 (32), SHA1 (40), or SHA256 (64) hex</span>
+        </div>
+        <div class="type-hint" [class.active-hint]="addIocType === 'ja3'">
+          <span class="type-badge type-ja3">JA3</span>
+          <span>TLS client fingerprint hash</span>
+        </div>
+        <div class="type-hint" [class.active-hint]="addIocType === 'url'">
+          <span class="type-badge type-url">URL</span>
+          <span>e.g. http://evil.com/malware.exe</span>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Live Threat Alerts -->
-  <div *ngIf="liveAlerts.length > 0" class="mb-8 bg-red-500/5 rounded-xl border border-red-500/20 overflow-hidden">
-    <div class="px-6 py-4 border-b border-red-500/20 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <span class="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
-        <span class="text-red-400 text-xs font-bold uppercase tracking-wider">
-          Live Threat Alerts — Real-time
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB: WATCHLIST
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'watchlist'" class="intel-tab-body">
+    <div class="intel-card">
+      <div class="intel-card-header">
+        <div>
+          <span class="section-eyebrow">MANUAL IOC WATCHLIST</span>
+          <span class="record-count" *ngIf="watchlist.length > 0">{{ watchlistFiltered.length }} entries</span>
+        </div>
+        <div class="card-header-actions">
+          <div class="search-mini">
+            <lucide-icon [name]="FilterIcon" class="w-3 h-3"></lucide-icon>
+            <input [(ngModel)]="watchlistFilter" placeholder="Filter watchlist..." class="search-mini-input" />
+          </div>
+        </div>
+      </div>
+
+      <div *ngIf="loadingWatchlist" class="empty-state">
+        <div class="loading-pulse">Loading watchlist...</div>
+      </div>
+
+      <div *ngIf="!loadingWatchlist && watchlist.length === 0" class="empty-state">
+        <lucide-icon [name]="EyeIcon" class="w-10 h-10 empty-icon"></lucide-icon>
+        <div class="empty-title">No manual IOCs added yet</div>
+        <div class="empty-sub">Add IOCs in the IOC Tools tab to populate this watchlist</div>
+      </div>
+
+      <div *ngIf="!loadingWatchlist && watchlistFiltered.length > 0" class="intel-table-wrap">
+        <table class="intel-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>IOC Value</th>
+              <th>Source</th>
+              <th>Added</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let ioc of watchlistFiltered" class="table-row">
+              <td><span class="type-badge" [class]="iocTypeBadge(ioc.type)">{{ iocTypeLabel(ioc.type) }}</span></td>
+              <td class="font-mono text-sm">{{ ioc.value }}</td>
+              <td><span class="source-badge">{{ ioc.source || 'manual' }}</span></td>
+              <td class="text-dim">{{ getTimestamp(ioc.added_at) }}</td>
+              <td>
+                <button class="btn-delete" (click)="deleteWatchlistIoc(ioc)" [disabled]="deletingIoc === ioc.value" title="Remove IOC">
+                  <lucide-icon [name]="TrashIcon" class="w-3.5 h-3.5"></lucide-icon>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB: FEED SOURCES
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'feeds'" class="intel-tab-body">
+
+    <div class="feed-cards-grid">
+      <div *ngFor="let feed of feedSources" class="feed-card">
+        <div class="feed-card-header">
+          <div class="feed-type-dot">{{ feedTypeIcon(feed.type) }}</div>
+          <div>
+            <div class="feed-name">{{ feed.name }}</div>
+            <div class="feed-type-label">{{ feed.type }}</div>
+          </div>
+          <span class="feed-status-pill">
+            <span class="status-dot"></span>
+            LIVE
+          </span>
+        </div>
+        <div class="feed-stat">
+          <div class="feed-count">{{ feedCount(feed.type).toLocaleString() }}</div>
+          <div class="feed-count-label">active indicators</div>
+        </div>
+        <div class="feed-footer">
+          <span class="feed-refresh-info">
+            <lucide-icon [name]="RefreshIcon" class="w-3 h-3"></lucide-icon>
+            Every 60 minutes
+          </span>
+          <a [href]="feed.url" target="_blank" rel="noopener" class="feed-url-link">
+            {{ feed.url | slice:8:40 }}…
+            <lucide-icon [name]="ExternalLinkIcon" class="w-3 h-3"></lucide-icon>
+          </a>
+        </div>
+      </div>
+
+      <!-- Fallback if backend returns no sources -->
+      <div *ngIf="feedSources.length === 0" class="feed-card">
+        <div class="feed-card-header">
+          <div class="feed-type-dot">🔴</div>
+          <div>
+            <div class="feed-name">Feodo Tracker</div>
+            <div class="feed-type-label">IP</div>
+          </div>
+          <span class="feed-status-pill"><span class="status-dot"></span>LIVE</span>
+        </div>
+        <div class="feed-stat">
+          <div class="feed-count">{{ totalMaliciousIps.toLocaleString() }}</div>
+          <div class="feed-count-label">active indicators</div>
+        </div>
+        <div class="feed-footer">
+          <span class="feed-refresh-info"><lucide-icon [name]="RefreshIcon" class="w-3 h-3"></lucide-icon>Every 60 minutes</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feed info box -->
+    <div class="intel-card feed-info-box">
+      <div class="intel-card-header">
+        <span class="section-eyebrow">ABOUT THREAT FEEDS</span>
+      </div>
+      <div class="feed-info-grid">
+        <div class="feed-info-item">
+          <div class="feed-info-label">Feodo Tracker</div>
+          <div class="feed-info-desc">Tracks botnet C&C servers (Emotet, TrickBot, QakBot, AgentTesla, etc.). Updated multiple times per day.</div>
+        </div>
+        <div class="feed-info-item">
+          <div class="feed-info-label">MalwareBazaar</div>
+          <div class="feed-info-desc">Crowdsourced malware sample hashes (MD5/SHA256). Cross-referenced against traffic to detect known malware downloads.</div>
+        </div>
+        <div class="feed-info-item">
+          <div class="feed-info-label">URLhaus</div>
+          <div class="feed-info-desc">Malicious URLs and domains hosting malware. Used to detect drive-by downloads and C2 communications via DNS.</div>
+        </div>
+      </div>
+      <div class="feed-last-refresh">
+        <lucide-icon [name]="RefreshIcon" class="w-3 h-3"></lucide-icon>
+        Last feed refresh: {{ lastRefresh || 'Unknown' }}
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TAB: GEO INTEL
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div *ngIf="activeTab === 'geo'" class="intel-tab-body">
+    <div class="intel-card">
+      <div class="intel-card-header">
+        <div>
+          <span class="section-eyebrow">TOP ATTACK ORIGIN COUNTRIES</span>
+          <span class="section-meta">Based on external source IPs seen in your network traffic</span>
+        </div>
+        <button class="btn-refresh" (click)="loadGeo()">
+          <lucide-icon [name]="RefreshIcon" class="w-3.5 h-3.5"></lucide-icon>
+        </button>
+      </div>
+
+      <div *ngIf="loadingGeo" class="empty-state">
+        <div class="loading-pulse">Fetching geo intelligence...</div>
+      </div>
+
+      <div *ngIf="!loadingGeo && geoData.length === 0" class="empty-state">
+        <lucide-icon [name]="GlobeIcon" class="w-10 h-10 empty-icon"></lucide-icon>
+        <div class="empty-title">No geo data available</div>
+        <div class="empty-sub">Geo intelligence builds as your network captures external traffic</div>
+      </div>
+
+      <div *ngIf="!loadingGeo && geoData.length > 0" class="geo-table">
+        <div class="geo-header">
+          <span>Country</span>
+          <span>Connections</span>
+          <span class="geo-bar-col">Relative Volume</span>
+        </div>
+        <div *ngFor="let c of geoData; let i = index" class="geo-row">
+          <div class="geo-country">
+            <span class="geo-rank">{{ i + 1 }}</span>
+            <span class="geo-flag">{{ countryFlag(c.code) }}</span>
+            <span class="geo-name">{{ c.country }}</span>
+            <span class="geo-code">{{ c.code }}</span>
+          </div>
+          <div class="geo-count font-mono">{{ c.count.toLocaleString() }}</div>
+          <div class="geo-bar-wrap">
+            <div class="geo-bar" [style.width.%]="geoBarPct(c.count)"
+              [class.geo-bar-top]="i === 0" [class.geo-bar-high]="i > 0 && i < 3">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div *ngIf="!loadingGeo && geoData.length > 0" class="intel-card geo-note-card">
+      <div class="geo-note">
+        <lucide-icon [name]="CpuIcon" class="w-4 h-4 shrink-0"></lucide-icon>
+        <span>
+          Geo data is derived from external source IPs observed in your captured network traffic using ip-api.com.
+          Only public, routable IPs are geolocated. Private/RFC1918 addresses are excluded.
         </span>
       </div>
-      <button (click)="clearAlerts()" class="text-[10px] text-on-surface-variant hover:text-white transition-colors">
-        Clear
-      </button>
-    </div>
-    <div class="divide-y divide-red-500/10 max-h-64 overflow-auto">
-      <div *ngFor="let alert of liveAlerts" class="px-6 py-3 flex items-center justify-between
-           animate-in slide-in-from-top-2 duration-300">
-        <div class="flex items-center gap-3">
-          <lucide-icon [name]="AlertIcon" class="w-4 h-4 text-red-400 shrink-0"></lucide-icon>
-          <div>
-            <div class="text-white text-xs font-mono font-bold">
-              {{ alert.src_ip }} → {{ alert.dst_ip }}
-            </div>
-            <div class="text-[10px] text-red-400 font-bold">
-              ⚠️ MALICIOUS IP DETECTED IN NETWORK TRAFFIC
-            </div>
-          </div>
-        </div>
-        <div class="flex items-center gap-4 text-right">
-          <div>
-            <div class="text-[10px] text-on-surface-variant">Score</div>
-            <div class="text-orange-400 font-mono font-bold text-xs">
-              {{ alert.score.toFixed(0) }}
-            </div>
-          </div>
-          <div>
-            <div class="text-[10px] text-on-surface-variant">Time</div>
-            <div class="text-white font-mono text-[10px]">{{ alert.time }}</div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
-  <!-- IOC Lookup -->
-  <div class="mb-8 bg-surface-container-highest p-6 rounded-xl border border-outline/10">
-    <h3 class="text-white font-bold uppercase text-sm mb-4">IOC Lookup</h3>
-    <div class="flex gap-3">
-      <div class="relative flex-1">
-        <lucide-icon [name]="SearchIcon"
-          class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">
-        </lucide-icon>
-        <input type="text" [(ngModel)]="searchIp" (keyup.enter)="lookupIoc()" placeholder="Enter IP address to check..."
-          class="w-full bg-surface-container-low border border-outline/20 rounded-md py-2 pl-10 pr-4 text-xs text-white focus:outline-none focus:border-primary/50" />
-      </div>
-      <button (click)="lookupIoc()" [disabled]="searching"
-        class="bg-primary text-black text-xs font-bold px-6 py-2 rounded hover:bg-primary/90 disabled:opacity-50">
-        {{ searching ? 'Checking...' : 'Lookup' }}
-      </button>
-    </div>
-
-    <!-- Lookup result -->
-    <div *ngIf="lookupResult" class="mt-4 p-4 rounded-lg border" [class]="lookupResult.is_malicious ?
-           'bg-red-500/10 border-red-500/20' :
-           'bg-primary/10 border-primary/20'">
-      <div class="flex items-center gap-3">
-        <lucide-icon [name]="lookupResult.is_malicious ? AlertIcon : ShieldCheckIcon"
-          [class]="'w-5 h-5 ' + (lookupResult.is_malicious ? 'text-red-400' : 'text-primary')">
-        </lucide-icon>
-        <div>
-          <div class="text-white font-bold font-mono">{{ lookupResult.ip }}</div>
-          <div [class]="lookupResult.is_malicious ? 'text-red-400' : 'text-primary'" class="text-xs font-bold">
-            {{ lookupResult.is_malicious ?
-            '⚠️ MALICIOUS — Found in threat feed' :
-            '✅ CLEAN — Not in threat feed' }}
-          </div>
-          <div class="text-[10px] text-on-surface-variant mt-1">
-            Source: {{ lookupResult.source }}
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Add Manual IOC -->
-  <div class="mb-8 bg-surface-container-highest p-6 rounded-xl border border-outline/10">
-    <h3 class="text-white font-bold uppercase text-sm mb-4">Add Manual IOC</h3>
-    <div class="flex gap-3">
-      <select [(ngModel)]="addIocType"
-        class="bg-surface-container-low border border-outline/20 rounded-md py-2 px-3 text-xs text-white focus:outline-none focus:border-primary/50">
-        <option value="ip">IP Address</option>
-        <option value="domain">Domain</option>
-        <option value="hash">File Hash</option>
-        <option value="ja3">JA3 Fingerprint</option>
-        <option value="url">URL</option>
-      </select>
-      <div class="relative flex-1">
-        <lucide-icon [name]="PlusIcon"
-          class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">
-        </lucide-icon>
-        <input type="text" [(ngModel)]="addIocValue" (keyup.enter)="addManualIoc()"
-          placeholder="Enter IOC value..."
-          class="w-full bg-surface-container-low border border-outline/20 rounded-md py-2 pl-10 pr-4 text-xs text-white focus:outline-none focus:border-primary/50" />
-      </div>
-      <button (click)="addManualIoc()" [disabled]="addIocLoading || !addIocValue.trim()"
-        class="bg-primary text-black text-xs font-bold px-6 py-2 rounded hover:bg-primary/90 disabled:opacity-50">
-        {{ addIocLoading ? 'Adding...' : 'Add IOC' }}
-      </button>
-    </div>
-    <div *ngIf="addIocResult" class="mt-3 text-xs px-3 py-2 rounded-md"
-      [class]="addIocResult.status === 'ok'
-        ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-        : 'bg-red-500/10 text-red-400 border border-red-500/20'">
-      {{ addIocResult.message }}
-    </div>
-  </div>
-
-  <!-- Detected in Network -->
-  <div class="bg-surface-container-highest rounded-lg overflow-hidden border border-outline/5">
-    <div class="px-6 py-4 border-b border-outline/10 flex items-center justify-between">
-      <span class="text-xs font-bold text-white uppercase tracking-wider">
-        Malicious IPs Detected in Network
-      </span>
-      <span class="text-[10px] text-on-surface-variant">
-        Real-time + historical
-      </span>
-    </div>
-
-    <div *ngIf="loading" class="py-10 text-center text-on-surface-variant animate-pulse text-sm">
-      Loading threat data...
-    </div>
-
-    <div *ngIf="!loading && detectedInNetwork.length === 0"
-      class="py-16 flex flex-col items-center text-on-surface-variant">
-      <lucide-icon [name]="ShieldCheckIcon" class="w-12 h-12 mb-4 text-primary opacity-40">
-      </lucide-icon>
-      <p class="text-sm font-bold text-primary">No malicious IPs detected</p>
-      <p class="text-xs mt-1">Your network looks clean!</p>
-    </div>
-
-    <table *ngIf="!loading && detectedInNetwork.length > 0" class="w-full text-left border-collapse">
-      <thead>
-        <tr class="bg-surface-container-low/50 text-on-surface-variant
-          text-[10px] uppercase tracking-widest">
-          <th class="px-6 py-3 font-bold">Source IP</th>
-          <th class="px-6 py-3 font-bold">Destination IP</th>
-          <th class="px-6 py-3 font-bold">Hits</th>
-          <th class="px-6 py-3 font-bold">Last Seen</th>
-          <th class="px-6 py-3 font-bold">Status</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-outline/5 font-mono text-[12px]">
-        <tr *ngFor="let ioc of detectedInNetwork" class="hover:bg-surface-container-low/50 transition-colors">
-          <td class="px-6 py-4 text-red-400 font-bold">{{ ioc.src_ip }}</td>
-          <td class="px-6 py-4 text-white">{{ ioc.dst_ip }}</td>
-          <td class="px-6 py-4">
-            <span class="text-orange-400 font-bold">{{ ioc.hits }}</span>
-          </td>
-          <td class="px-6 py-4 text-on-surface-variant">
-            {{ getTimestamp(ioc.last_seen) }}
-          </td>
-          <td class="px-6 py-4">
-            <span class="text-[10px] bg-red-500/10 text-red-400
-              border border-red-500/20 px-2 py-0.5 rounded font-bold uppercase">
-              THREAT DETECTED
-            </span>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="mt-4 text-[11px] text-on-surface-variant text-right">
+  <!-- Footer -->
+  <div class="intel-footer">
+    <lucide-icon [name]="ActivityIcon" class="w-3 h-3"></lucide-icon>
     Feed refreshes every 60 minutes · WebSocket connected for real-time alerts
   </div>
+
 </div>

@@ -82,12 +82,12 @@ export class Logs implements OnInit, OnDestroy {
             });
         const log = {
           ts: evtTime,
-          proto: event.proto?.toUpperCase() || '-',
-          src: event.src || '-',
-          dst: event.dst || '-',
-          source: event.type || '-',
+          proto: event.proto?.toUpperCase() || '',
+          src: event.src || '',
+          dst: event.dst || '',
+          source: event.type || '',
           action: 'ALLOW',
-          event_type: event.event_type || '-',
+          event_type: this.normalizeEventType(event.event_type),
         };
         this.logs.unshift(log);
         if (this.logs.length > 200) this.logs.pop();
@@ -104,12 +104,12 @@ export class Logs implements OnInit, OnDestroy {
           ts: new Date(e.timestamp * 1000).toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit'
           }),
-          proto: e.proto?.toUpperCase() || '-',
-          src: e.src_ip || '-',
-          dst: e.dst_ip || '-',
-          source: e.source || '-',
+          proto: e.proto?.toUpperCase() || '',
+          src: e.src_ip || '',
+          dst: e.dst_ip || '',
+          source: e.source || '',
           action: 'ALLOW',
-          event_type: e.event_type || '-',
+          event_type: this.normalizeEventType(e.event_type),
         }));
         this.totalCount = data.length;
         this.applyFilter();
@@ -125,18 +125,23 @@ export class Logs implements OnInit, OnDestroy {
 
   applyFilter() {
     const MAX_DISPLAY = 100;
+    const hasEndpoint = (l: any) => {
+      const src = l.src?.trim();
+      const dst = l.dst?.trim();
+      return (src && src !== '-') || (dst && dst !== '-');
+    };
     if (!this.searchText) {
-      // Slice so the DOM never renders more than MAX_DISPLAY rows;
-      // the full buffer (up to 200) is kept in memory for searches.
-      this.filteredLogs = this.logs.slice(0, MAX_DISPLAY);
+      this.filteredLogs = this.logs.filter(hasEndpoint).slice(0, MAX_DISPLAY);
     } else {
       const s = this.searchText.toLowerCase();
-      this.filteredLogs = this.logs.filter(l =>
-        l.src?.toLowerCase().includes(s) ||
-        l.dst?.toLowerCase().includes(s) ||
-        l.proto?.toLowerCase().includes(s) ||
-        l.source?.toLowerCase().includes(s)
-      ).slice(0, MAX_DISPLAY);
+      this.filteredLogs = this.logs
+        .filter(hasEndpoint)
+        .filter(l =>
+          l.src?.toLowerCase().includes(s) ||
+          l.dst?.toLowerCase().includes(s) ||
+          l.proto?.toLowerCase().includes(s) ||
+          l.source?.toLowerCase().includes(s)
+        ).slice(0, MAX_DISPLAY);
     }
   }
 
@@ -156,6 +161,34 @@ export class Logs implements OnInit, OnDestroy {
 
   exportLogs() {
     this.api.exportNetworkLogs(this.exportFormat, this.timeRange);
+  }
+
+  getRowClass(log: any): string {
+    const t = this.evtSlug(log.event_type);
+    return `log-grid log-row evt-${t}`;
+  }
+
+  getEventBadgeClass(eventType: string): string {
+    return `event-badge evt-${this.evtSlug(eventType)}`;
+  }
+
+  getSourceClass(source: string): string {
+    const s = (source || '').toLowerCase();
+    if (s === 'agent-s') return 'source-badge src-s';
+    if (s === 'agent-z') return 'source-badge src-z';
+    return 'source-badge';
+  }
+
+  getProtoClass(proto: string): string {
+    return `proto-badge proto-${(proto || '').toLowerCase()}`;
+  }
+
+  private normalizeEventType(t: string | null | undefined): string {
+    return (t && t !== '-') ? t : 'conn';
+  }
+
+  private evtSlug(t: string): string {
+    return (t || 'conn').toLowerCase().replace(/[^a-z0-9]/g, '') || 'conn';
   }
 
   ngOnDestroy() {

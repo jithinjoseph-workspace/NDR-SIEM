@@ -342,12 +342,13 @@
 /* ── Map Panel ─────────────────────────────────── */
 .map-panel {
   position: relative;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: #07101f;
+  border-radius: 16px;
+  border: 1px solid rgba(105, 246, 184, 0.09);
+  background: linear-gradient(150deg, #060d1c 0%, #04091a 100%);
   box-shadow:
     0 0 0 1px rgba(105, 246, 184, 0.04) inset,
-    0 20px 60px rgba(0, 0, 0, 0.35);
+    0 0 120px rgba(105, 246, 184, 0.015) inset,
+    0 28px 80px rgba(0, 0, 0, 0.55);
   overflow: hidden;
   min-height: 640px;
 }
@@ -1196,11 +1197,12 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
-  padding: 8px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(6, 12, 26, 0.85);
-  backdrop-filter: blur(16px);
+  padding: 10px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(105, 246, 184, 0.1);
+  background: linear-gradient(100deg, rgba(4,9,22,0.97) 0%, rgba(6,12,26,0.95) 100%);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 4px 28px rgba(0,0,0,0.4), 0 0 0 1px rgba(105,246,184,0.03) inset;
   overflow: hidden;
 }
 

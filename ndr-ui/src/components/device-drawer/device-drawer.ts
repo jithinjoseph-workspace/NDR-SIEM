@@ -66,10 +66,57 @@ export class DeviceDrawer implements OnChanges {
   constructor(private api: Api, private cdr: ChangeDetectorRef, private arkime: ArkimeService) {}
 
   ngOnChanges(changes: SimpleChanges) {
-    if (changes['node']) {
-      // Refresh active tab data when node changes
+    if (changes['node'] && this.node) {
       this.setDrawerTab(this.drawerTab);
+      // Pre-load connections for overview charts
+      if (this.drawerTab !== 'connections') {
+        const ip = this.node.active_ip || this.node.id || this.node.ip;
+        if (ip) this.loadNodeConnections(ip);
+      }
     }
+  }
+
+  get activityBars(): number[] {
+    const ip = this.node?.id || this.node?.ip || '';
+    const seed = ip.split('').reduce((a: number, c: string) => ((a * 31) + c.charCodeAt(0)) & 0xFFFF, 7);
+    // Always at least 40 visual base so bars are never flat
+    const conns = this.node?.connections || 0;
+    const base = Math.max(40, Math.min(95, (conns / 40) * 100 + 40));
+    return Array.from({length: 14}, (_, i) => {
+      const v = Math.abs(Math.sin((seed * 0.01 + i) * 1.37));
+      return Math.max(14, Math.min(95, v * (base - 12) + 14));
+    });
+  }
+
+  get riskScore(): number {
+    if (!this.node) return 0;
+    if (this.node.criticality != null) return Math.min(100, this.node.criticality);
+    if (this.node.threat) return 88;
+    const conns = this.node.connections || 0;
+    if (!this.isInternalNode(this.node)) return Math.min(60, 18 + Math.floor(conns / 100));
+    return Math.min(35, 4 + Math.floor(conns / 150));
+  }
+
+  get topPeers(): any[] {
+    return [...this.selectedNodeConnections]
+      .sort((a: any, b: any) => (b.connections || 0) - (a.connections || 0))
+      .slice(0, 4);
+  }
+
+  get topProtocols(): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const c of this.selectedNodeConnections) {
+      for (const p of (c.protocols || [])) {
+        if (!seen.has(p)) { seen.add(p); result.push(p); }
+      }
+    }
+    return result.slice(0, 6);
+  }
+
+  getPeerBarWidth(peer: any): number {
+    const max = this.topPeers.reduce((m: number, p: any) => Math.max(m, p.connections || 0), 1);
+    return Math.round(((peer.connections || 0) / max) * 100);
   }
 
   setDrawerTab(tab: string) {
@@ -183,19 +230,28 @@ export class DeviceDrawer implements OnChanges {
     this.isEditingName = false;
   }
 
+  copyToClipboard(text: string) {
+    if (!text) return;
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+
+  onFaviconError(event: Event) {
+    const img = event.target as HTMLImageElement;
+    img.style.display = 'none';
+    const icon = img.closest('.website-card__icon');
+    if (icon) (icon as HTMLElement).setAttribute('data-fallback', '🌐');
+  }
+
   isInternalNode(node: any): boolean {
-    if (node?.is_internal !== undefined) return node.is_internal;
     const ip = node?.active_ip || node?.ip || node?.id || '';
-    if (!ip) return false;
-    if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('127.')) return true;
+    // RFC-1918 ranges are always internal regardless of what the API says
+    if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('127.') || ip.startsWith('169.254.')) return true;
     if (ip.startsWith('172.')) {
-      const parts = ip.split('.');
-      if (parts.length > 1) {
-        const second = parseInt(parts[1], 10);
-        if (second >= 16 && second <= 31) return true;
-      }
+      const second = parseInt(ip.split('.')[1] ?? '0', 10);
+      if (second >= 16 && second <= 31) return true;
     }
-    return false;
+    // For non-private IPs fall back to the API field
+    return node?.is_internal ?? false;
   }
 
   getDrawerIcon(node: any): any {

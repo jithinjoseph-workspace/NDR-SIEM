@@ -2,36 +2,53 @@
 
   <!-- ── INNER SIDEBAR ── -->
   <aside class="sidebar-shell">
-    <div class="brand-block" style="flex-direction:column;align-items:flex-start;padding:18px 20px;">
-      <h1 style="margin:0;color:var(--color-on-surface-variant,#f7f9ff);font-family:var(--font-display);font-size:22px;font-weight:700;letter-spacing:0.02em;">PromaAlpha</h1>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:8px;background:#fff;padding:4px 10px;border-radius:20px;width:fit-content;box-shadow:0 2px 6px rgba(0,0,0,.1);">
-        <span style="font-size:10px;color:#000;font-weight:800;letter-spacing:.05em;text-transform:uppercase;">powered by</span>
-        <img src="/assets/images/promasecure.png" alt="PromaSecure" style="height:18px;object-fit:contain;" />
+
+    <!-- Brand -->
+    <div class="brand-block">
+      <div class="brand-wordmark">
+        <span class="brand-name">PromaAlpha</span>
+        <span class="brand-tagline">Admin Console</span>
+      </div>
+      <div class="brand-badge">
+        <span class="brand-badge-text">powered by</span>
+        <img src="/assets/images/promasecure.png" alt="PromaSecure" class="brand-badge-logo" />
       </div>
     </div>
 
+    <!-- Nav -->
     <nav class="nav-list">
       <a routerLink="/tenant-admin/users" routerLinkActive="active" class="nav-link">
-        <lucide-icon [name]="UsersIcon" class="w-5 h-5"></lucide-icon>
-        <span>Users &amp; Sensors</span>
+        <span class="nav-icon">
+          <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
+        </span>
+        <span class="nav-label">Users &amp; Sensors</span>
       </a>
       <a routerLink="/tenant-admin/trusted-domains" routerLinkActive="active" class="nav-link">
-        <lucide-icon [name]="GlobeIcon" class="w-5 h-5"></lucide-icon>
-        <span>Trusted Domains</span>
+        <span class="nav-icon">
+          <lucide-icon [name]="GlobeIcon" class="w-4 h-4"></lucide-icon>
+        </span>
+        <span class="nav-label">Trusted Domains</span>
       </a>
       <a routerLink="/tenant-admin/sessions" routerLinkActive="active" class="nav-link">
-        <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
-        <span>Active Sessions</span>
+        <span class="nav-icon">
+          <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
+        </span>
+        <span class="nav-label">Active Sessions</span>
       </a>
       <a routerLink="/tenant-admin/profile" routerLinkActive="active" class="nav-link">
-        <lucide-icon [name]="UserIcon" class="w-5 h-5"></lucide-icon>
-        <span>My Profile</span>
+        <span class="nav-icon">
+          <lucide-icon [name]="UserIcon" class="w-4 h-4"></lucide-icon>
+        </span>
+        <span class="nav-label">My Profile</span>
       </a>
       <a routerLink="/tenant-admin/setup" routerLinkActive="active" class="nav-link">
-        <lucide-icon [name]="SettingsIcon" class="w-5 h-5"></lucide-icon>
-        <span>Sensor Setup</span>
+        <span class="nav-icon">
+          <lucide-icon [name]="SettingsIcon" class="w-4 h-4"></lucide-icon>
+        </span>
+        <span class="nav-label">Sensor Setup</span>
       </a>
     </nav>
+
   </aside>
 
   <!-- ── MAIN CONTENT ── -->

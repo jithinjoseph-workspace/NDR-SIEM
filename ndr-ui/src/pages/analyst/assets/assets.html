@@ -134,6 +134,7 @@
     </div>
   </div>
 
+  <div class="asset-workspace" [class.has-selection]="selectedAsset">
   <div class="data-grid">
     <div class="grid-header">
       <div class="col-type">Type</div>
@@ -243,10 +244,12 @@
     </div>
   </div>
 
-  <app-device-drawer 
+  <app-device-drawer
     *ngIf="selectedAsset"
     [node]="selectedAsset"
     (closeDrawer)="closeDrawer()"
     (focusRequested)="handleFocus($event)">
   </app-device-drawer>
+
+  </div><!-- /asset-workspace -->
 </div>

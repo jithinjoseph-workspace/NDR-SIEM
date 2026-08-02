@@ -183,6 +183,58 @@ export class Rules implements OnInit {
   DownloadIcon = Download;
 
   syncing = false;
+  categoryFilter: string = '';
+  severityFilter: string = '';
+
+  get topCategories(): { tag: string; label: string; count: number }[] {
+    const counts: { [key: string]: number } = {};
+    for (const rule of this.rules) {
+      for (const tag of (rule.tags || [])) {
+        if (/^attack\.t\d+/i.test(tag)) continue;
+        if (!tag.startsWith('attack.')) continue;
+        counts[tag] = (counts[tag] || 0) + 1;
+      }
+    }
+    return Object.entries(counts)
+      .map(([tag, count]) => ({ tag, label: this.catLabel(tag), count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 9);
+  }
+
+  get severityCounts(): { [key: string]: number } {
+    const counts: { [key: string]: number } = {};
+    for (const rule of this.rules) {
+      const s = (rule.severity || 'MEDIUM').toUpperCase();
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    return counts;
+  }
+
+  get displayRules(): any[] {
+    return this.rules.filter(rule => {
+      const catOk = !this.categoryFilter || (rule.tags || []).includes(this.categoryFilter);
+      const sevOk = !this.severityFilter || rule.severity.toUpperCase() === this.severityFilter;
+      return catOk && sevOk;
+    });
+  }
+
+  setCategory(tag: string) {
+    this.categoryFilter = this.categoryFilter === tag ? '' : tag;
+  }
+
+  setSeverity(sev: string) {
+    this.severityFilter = this.severityFilter === sev ? '' : sev;
+  }
+
+  clearFilters() {
+    this.categoryFilter = '';
+    this.severityFilter = '';
+  }
+
+  private catLabel(tag: string): string {
+    const name = tag.replace('attack.', '').replace(/-/g, ' ');
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }
 
   constructor(
     private api: Api,
@@ -415,20 +467,15 @@ export class Rules implements OnInit {
   }
 
   getSeverityClass(severity: string): string {
-    switch (severity?.toUpperCase()) {
-      case 'CRITICAL': return 'text-red-400';
-      case 'HIGH': return 'text-orange-400';
-      case 'MEDIUM': return 'text-yellow-400';
-      default: return 'text-blue-400';
+    switch (severity?.toLowerCase()) {
+      case 'critical': return 'yaml-sev yaml-sev-critical';
+      case 'high':     return 'yaml-sev yaml-sev-high';
+      case 'medium':   return 'yaml-sev yaml-sev-medium';
+      default:         return 'yaml-sev yaml-sev-low';
     }
   }
 
   getSeverityBadgeClass(severity: string): string {
-    switch (severity?.toUpperCase()) {
-      case 'CRITICAL': return 'bg-red-500/10 text-red-400 border-red-500/20';
-      case 'HIGH': return 'bg-orange-500/10 text-orange-400 border-orange-500/20';
-      case 'MEDIUM': return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
-      default: return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-    }
+    return 'sev-badge sev-' + (severity || 'low').toLowerCase();
   }
 }

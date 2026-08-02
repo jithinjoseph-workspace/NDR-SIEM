@@ -201,6 +201,18 @@ export class Api {
   lookupIoc(ip: string): Observable<any> {
     return this.http.get(`${this.baseUrl}/threat-intel/${ip}`);
   }
+
+  getWatchlistIocs(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat-intel/watchlist`);
+  }
+
+  deleteWatchlistIoc(value: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/threat-intel/watchlist/${encodeURIComponent(value)}`);
+  }
+
+  getThreatMap(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat-map`);
+  }
   reloadRules(): Observable<any> {
     return this.http.post(`${this.baseUrl}/rules/reload`, {});
   }
@@ -617,6 +629,12 @@ export class Api {
   }
   getSoarCases(): Observable<any> {
     return this.http.get(`${this.baseUrl}/soar/cases`);
+  }
+  createSoarCase(payload: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/soar/cases`, payload);
+  }
+  updateSoarCase(id: string, payload: any): Observable<any> {
+    return this.http.put(`${this.baseUrl}/soar/cases/${id}`, payload);
   }
   updateSoarCaseStatus(id: string, status: string): Observable<any> {
     return this.http.put(`${this.baseUrl}/soar/cases/${id}/status`, { status });

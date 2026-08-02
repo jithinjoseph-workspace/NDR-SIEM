@@ -198,28 +198,57 @@ pub async fn execute_action(
             }
         }
         "create_case" => {
-            let case_id = Uuid::new_v4().to_string();
-            let title = format!("Automated Case: {} -> {} ({})", src, dst, risk.severity.as_str());
-            let description = format!("Playbook {} generated this case.", pb.name);
+            let sev_rank = |s: &str| match s { "CRITICAL" => 4, "HIGH" => 3, "MEDIUM" => 2, "LOW" => 1, _ => 0 };
+            let priority = match risk.severity.as_str() {
+                "CRITICAL" => "P1", "HIGH" => "P2", "MEDIUM" => "P3", _ => "P4",
+            };
 
-            match state.ch_storage.insert_soar_case(
-                &case_id,
-                &title,
-                &description,
-                risk.severity.as_str(),
-                "New",
-                src,
-                dst,
-                &hit.community_id,
-                &risk.tags,
-                &pb.tenant_id,
-            ).await {
-                Ok(_) => {
+            // Group into an existing open case for the same src/dst pair (last 7 days)
+            if let Some((existing_id, existing_num, existing_sev, _existing_pri)) =
+                state.ch_storage.find_open_case_by_src_dst(src, dst, &pb.tenant_id).await
+            {
+                // Append a corroborating alert as a timeline comment
+                let comment = format!(
+                    "[AUTO] {} alert corroborated: {} → {} | Score: {}/100 | Tags: {} | CID: {}",
+                    risk.severity.as_str(), src, dst,
+                    risk.score as u32,
+                    risk.tags.join(", "),
+                    hit.community_id,
+                );
+                let _ = state.ch_storage.insert_soar_case_comment(
+                    &existing_id, "SOAR Engine", &comment, &pb.tenant_id,
+                ).await;
+
+                // Escalate severity/priority if this alert is more severe
+                if sev_rank(risk.severity.as_str()) > sev_rank(&existing_sev) {
+                    let _ = state.ch_storage.escalate_case_severity(
+                        &existing_id, risk.severity.as_str(), priority, &pb.tenant_id,
+                    ).await;
                     status = "success".to_string();
-                    detail = format!("Case {} created", case_id);
+                    detail = format!("Alert grouped into {} — escalated to {}", existing_num, risk.severity.as_str());
+                } else {
+                    status = "success".to_string();
+                    detail = format!("Alert grouped into existing case {}", existing_num);
                 }
-                Err(e) => {
-                    detail = format!("Failed to create case: {}", e);
+            } else {
+                // No open case for this pair — create a fresh one
+                let case_id = Uuid::new_v4().to_string();
+                let case_number = state.ch_storage.get_next_case_number(&pb.tenant_id).await;
+                let title = format!("Automated Case: {} -> {} ({})", src, dst, risk.severity.as_str());
+                let description = format!("Playbook {} generated this case.", pb.name);
+
+                match state.ch_storage.insert_soar_case(
+                    &case_id, &case_number, &title, &description,
+                    risk.severity.as_str(), priority, "New", "",
+                    src, dst, &hit.community_id, &risk.tags, &pb.tenant_id,
+                ).await {
+                    Ok(_) => {
+                        status = "success".to_string();
+                        detail = format!("Case {} ({}) created", case_number, case_id);
+                    }
+                    Err(e) => {
+                        detail = format!("Failed to create case: {}", e);
+                    }
                 }
             }
         }
@@ -282,33 +311,55 @@ pub async fn execute_action(
                 "ndr_events": ch_events,
             });
 
-            // 4. Create case with evidence attached
-            let case_id = Uuid::new_v4().to_string();
-            let title = format!("Evidence: {} → {} [{}]", src, dst, risk.severity.as_str());
-            let description = evidence.to_string();
+            // 4. Attach evidence to an existing open case, or create a new one
+            let sev_rank = |s: &str| match s { "CRITICAL" => 4, "HIGH" => 3, "MEDIUM" => 2, "LOW" => 1, _ => 0 };
+            let priority = match risk.severity.as_str() {
+                "CRITICAL" => "P1", "HIGH" => "P2", "MEDIUM" => "P3", _ => "P4",
+            };
+            let event_count = ch_events.as_array().map(|a| a.len()).unwrap_or(0);
 
-            match state.ch_storage.insert_soar_case(
-                &case_id,
-                &title,
-                &description,
-                risk.severity.as_str(),
-                "Evidence Collected",
-                src,
-                dst,
-                cid,
-                &risk.tags,
-                &pb.tenant_id,
-            ).await {
-                Ok(_) => {
-                    let event_count = ch_events.as_array().map(|a| a.len()).unwrap_or(0);
-                    status = "success".to_string();
-                    detail = format!(
-                        "Evidence collected: {} PCAP sessions, {} NDR events → Case {}",
-                        pcap_count, event_count, case_id
-                    );
+            if let Some((existing_id, existing_num, existing_sev, _existing_pri)) =
+                state.ch_storage.find_open_case_by_src_dst(src, dst, &pb.tenant_id).await
+            {
+                // Append evidence summary as a comment
+                let comment = format!(
+                    "[AUTO] Evidence collected: {} PCAP sessions, {} NDR events | {} alert | CID: {}",
+                    pcap_count, event_count, risk.severity.as_str(), cid
+                );
+                let _ = state.ch_storage.insert_soar_case_comment(
+                    &existing_id, "SOAR Engine", &comment, &pb.tenant_id,
+                ).await;
+                if sev_rank(risk.severity.as_str()) > sev_rank(&existing_sev) {
+                    let _ = state.ch_storage.escalate_case_severity(
+                        &existing_id, risk.severity.as_str(), priority, &pb.tenant_id,
+                    ).await;
                 }
-                Err(e) => {
-                    detail = format!("Evidence collected but case insert failed: {}", e);
+                status = "success".to_string();
+                detail = format!(
+                    "Evidence ({} PCAP, {} events) appended to case {}",
+                    pcap_count, event_count, existing_num
+                );
+            } else {
+                let case_id = Uuid::new_v4().to_string();
+                let case_number = state.ch_storage.get_next_case_number(&pb.tenant_id).await;
+                let title = format!("Evidence: {} → {} [{}]", src, dst, risk.severity.as_str());
+                let description = evidence.to_string();
+
+                match state.ch_storage.insert_soar_case(
+                    &case_id, &case_number, &title, &description,
+                    risk.severity.as_str(), priority, "In Progress", "",
+                    src, dst, cid, &risk.tags, &pb.tenant_id,
+                ).await {
+                    Ok(_) => {
+                        status = "success".to_string();
+                        detail = format!(
+                            "Evidence collected: {} PCAP sessions, {} NDR events → Case {}",
+                            pcap_count, event_count, case_number
+                        );
+                    }
+                    Err(e) => {
+                        detail = format!("Evidence collected but case insert failed: {}", e);
+                    }
                 }
             }
         }

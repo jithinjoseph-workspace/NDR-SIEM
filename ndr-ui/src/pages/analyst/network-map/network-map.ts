@@ -196,7 +196,98 @@ export class NetworkMap implements OnInit, OnDestroy {
   }
 
   focusMode: boolean = false;
-  
+  activeFilter: string = 'all';
+  selectedPathNode: any = null;
+
+  get internalNodes(): any[] {
+    return [...this.nodesData]
+      .filter((n: any) => n.is_internal && n.type !== 'cluster')
+      .sort((a: any, b: any) => {
+        const aGw = ['router','gateway','firewall','switch'].includes(a.type);
+        const bGw = ['router','gateway','firewall','switch'].includes(b.type);
+        if (aGw && !bGw) return -1;
+        if (!aGw && bGw) return 1;
+        return (b.connections || 0) - (a.connections || 0);
+      });
+  }
+
+  get gatewayNode(): any {
+    const explicit = this.nodesData.find((n: any) =>
+      n.is_internal && ['router','gateway','firewall'].includes(n.type)
+    );
+    if (explicit) return explicit;
+    return [...this.nodesData]
+      .filter((n: any) => n.is_internal)
+      .sort((a: any, b: any) => (b.connections || 0) - (a.connections || 0))[0];
+  }
+
+  get selectedPathExternals(): any[] {
+    if (!this.selectedPathNode) return [];
+    const nodeId = this.selectedPathNode.id;
+    const connectedIds = new Set<string>();
+    for (const e of this.edgesData) {
+      const src = (e.source as any)?.id ?? (e.source as string);
+      const tgt = (e.target as any)?.id ?? (e.target as string);
+      if (src === nodeId) connectedIds.add(tgt);
+      if (tgt === nodeId) connectedIds.add(src);
+    }
+    return this.nodesData
+      .filter((n: any) => connectedIds.has(n.id) && !n.is_internal)
+      .sort((a: any, b: any) => (b.connections || 0) - (a.connections || 0))
+      .slice(0, 10);
+  }
+
+  selectPathNode(node: any) {
+    this.selectedPathNode = node;
+    this.selectedNode = node;
+    this.focusMode = true;
+    this.loadFocusMode(node.id);
+    this.cdr.detectChanges();
+  }
+
+  isIPAddress(val: string): boolean {
+    if (!val) return false;
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(val) || val.includes(':');
+  }
+
+  exitDeviceFocus() {
+    this.selectedPathNode = null;
+    this.focusMode = false;
+    this.loadMap(true);
+  }
+
+  get internalCount(): number { return this.nodesData.filter((n: any) => n.is_internal && !n.threat).length; }
+  get externalCount(): number { return this.nodesData.filter((n: any) => !n.is_internal && !n.threat).length; }
+  get threatCount():   number { return this.nodesData.filter((n: any) => n.threat).length; }
+  get trafficCount():  number { return this.nodesData.filter((n: any) => (n.connections || 0) > 5).length; }
+
+  setFilter(filter: string) {
+    this.activeFilter = filter;
+    const svg = d3.select(this.svgRef.nativeElement);
+
+    svg.selectAll<SVGGElement, any>('g.topology-node').transition().duration(220).style('opacity', (d: any) => {
+      if (filter === 'all') return 1;
+      if (filter === 'internal') return (d.is_internal && !d.threat) ? 1 : 0.08;
+      if (filter === 'external') return (!d.is_internal && !d.threat) ? 1 : 0.08;
+      if (filter === 'threat') return d.threat ? 1 : 0.08;
+      if (filter === 'traffic') return (d.connections || 0) > 5 ? 1 : 0.08;
+      return 1;
+    });
+
+    svg.selectAll<SVGLineElement, any>('line').transition().duration(220).style('opacity', (d: any) => {
+      if (filter === 'all') return 1;
+      if (filter === 'internal') {
+        const si = d.source?.is_internal && !d.source?.threat;
+        const ti = d.target?.is_internal && !d.target?.threat;
+        return (si || ti) ? 0.5 : 0.04;
+      }
+      if (filter === 'external') return (!d.source?.is_internal || !d.target?.is_internal) ? 0.5 : 0.04;
+      if (filter === 'threat') return (d.source?.threat || d.target?.threat) ? 0.8 : 0.04;
+      if (filter === 'traffic') return (d.connections || 0) > 5 ? 1 : 0.04;
+      return 1;
+    });
+  }
+
   toggleFocus() {
     this.focusMode = !this.focusMode;
     if (this.focusMode && this.selectedNode) {
@@ -680,7 +771,11 @@ export class NetworkMap implements OnInit, OnDestroy {
             .attr('height', 20)
             .attr('x', -10)
             .attr('y', -10)
-            .style('display', (d: any) => (this.hasFavicon(d) ? 'block' : 'none'));
+            .style('display', (d: any) => (this.hasFavicon(d) ? 'block' : 'none'))
+            .on('error', function() {
+              d3.select(this as SVGImageElement).style('display', 'none');
+              d3.select((this as SVGImageElement).parentNode as SVGGElement).select('path').style('display', 'block');
+            });
 
           nodeEnter.append('text')
             .attr('text-anchor', 'middle')

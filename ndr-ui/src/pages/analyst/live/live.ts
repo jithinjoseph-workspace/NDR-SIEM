@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Websocket } from '../../../services/websocket/websocket';
-import { LucideAngularModule, Radio, Zap, Activity } from 'lucide-angular';
+import { LucideAngularModule, Radio, Zap, Activity, ShieldAlert, Wifi } from 'lucide-angular';
 import { Subscription } from 'rxjs';
 
 @Component({
@@ -20,12 +20,14 @@ export class Live implements OnInit, OnDestroy {
   RadioIcon = Radio;
   ZapIcon = Zap;
   ActivityIcon = Activity;
+  ShieldIcon = ShieldAlert;
+  WifiIcon = Wifi;
 
   @ViewChild('streamContainer') streamContainer!: ElementRef;
 
   private subs: Subscription[] = [];
-
   private updateScheduled = false;
+
   private scheduleUpdate() {
     if (this.updateScheduled) return;
     this.updateScheduled = true;
@@ -35,61 +37,65 @@ export class Live implements OnInit, OnDestroy {
     }, 0);
   }
 
-  constructor(
-    private ws: Websocket,
-    private cdr: ChangeDetectorRef
-  ) {}
+  constructor(private ws: Websocket, private cdr: ChangeDetectorRef) {}
 
   ngOnInit() {
-    // Listen to all WebSocket messages
     this.subs.push(
       this.ws.messages$.subscribe(msg => {
         if (msg.type === 'agent_status' || msg.type === 'interfaces') return;
 
-        let event = '';
-        let data = '';
-        let color = 'border-primary/30';
+        let entry: any = {
+          timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          src: msg.src || '',
+          dst: msg.dst || '',
+          proto: (msg.proto || '').toUpperCase(),
+          raw: msg,
+        };
 
         if (msg.type === 'agent-z') {
-          event = 'AGENT-Z';
-          data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.proto || '-'}] ${msg.service || ''} ${msg.conn_state || ''}`;
-          color = 'border-primary/30';
+          entry.kind = 'zeek';
+          entry.label = 'AGENT-Z';
+          entry.event_type = (msg.service || msg.conn_state || 'conn').toUpperCase();
+          entry.extra = msg.conn_state || '';
           this.eventCount++;
         } else if (msg.type === 'agent-s') {
-          event = 'AGENT-S';
-          data = `${msg.src || '-'} -> ${msg.dst || '-'} [${msg.proto || '-'}] ${msg.event_type || ''}`;
-          color = 'border-secondary/30';
+          entry.kind = 'suricata';
+          entry.label = 'AGENT-S';
+          entry.event_type = (msg.event_type || 'flow').toUpperCase();
+          entry.extra = '';
           this.eventCount++;
         } else if (msg.type === 'hit') {
-          event = 'HIT';
-          data = `Score:${msg.score?.toFixed(0)} | ${msg.severity?.toUpperCase()} | ${msg.tags?.join(', ') || ''} | CID:${msg.cid || '-'}`;
-          color = 'border-tertiary/50';
+          entry.kind = 'hit';
+          entry.label = 'HIT';
+          entry.event_type = (msg.severity || 'medium').toUpperCase();
+          entry.extra = msg.tags?.join(' · ') || '';
+          entry.score = msg.score != null ? Math.round(msg.score) : null;
+          entry.cid = msg.cid || '';
           this.hitCount++;
         } else if (msg.type === 'alert') {
-          event = 'ALERT';
-          data = msg.description || msg.rule || 'Rule triggered';
-          color = 'border-red-400/50';
+          entry.kind = 'alert';
+          entry.label = 'ALERT';
+          entry.event_type = 'ALERT';
+          entry.extra = msg.description || msg.rule || 'Rule triggered';
           this.hitCount++;
+        } else {
+          return;
         }
 
-        this.messages.unshift({
-          timestamp: new Date().toLocaleTimeString(),
-          event,
-          data,
-          color,
-          raw: msg
-        });
-
-        // Keep max 100 messages
+        this.messages.unshift(entry);
         if (this.messages.length > 100) this.messages.pop();
         this.scheduleUpdate();
 
-        // Auto scroll to top
         if (this.autoScroll && this.streamContainer) {
           this.streamContainer.nativeElement.scrollTop = 0;
         }
       })
     );
+  }
+
+  getEventBadgeClass(entry: any): string {
+    const t = (entry.event_type || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return `evt-badge evt-${t}`;
   }
 
   clearMessages() {
