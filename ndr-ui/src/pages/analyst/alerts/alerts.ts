@@ -36,6 +36,7 @@ function primaryTag(tags: string[]): string {
 export interface AlertGroup {
   key:           string;
   tag:           string;
+  sid?:          string;     // Suricata SID or Zeek tag extracted from raw tags
   src_ip:        string;
   src_hostname?: string;
   src_mac?:      string;
@@ -77,6 +78,9 @@ export class Alerts implements OnInit, OnDestroy {
   // ── Active group suppressions (fetched from API on init, updated on suppress) ─
   // Used to filter both sessionStorage hits and live WebSocket hits.
   private groupSups: { src_ip: string; tag: string }[] = [];
+
+  // ── Local asset lookup: IP → {name, mac} ──────────────────────────────────
+  private assetMap = new Map<string, { name: string; mac: string }>();
 
   // ── Entity scores panel ───────────────────────────────────────────────────
   entityScores: any[] = [];
@@ -147,6 +151,23 @@ export class Alerts implements OnInit, OnDestroy {
       })
     );
 
+    // Load asset map first so names/MACs show in group rows without backend rebuild
+    this.api.getAssets().subscribe({
+      next: (assets: any[]) => {
+        this.assetMap.clear();
+        for (const a of assets) {
+          if (!a.ip) continue;
+          this.assetMap.set(a.ip, {
+            name: a.custom_name || a.hostname || '',
+            mac:  a.mac || '',
+          });
+        }
+        this.rebuild();
+        this.cdr.detectChanges();
+      },
+      error: () => {},
+    });
+
     // Fetch active group suppressions first so WS filter is ready before hits arrive
     this.api.getActiveSuppressions().subscribe({
       next: (sups: any[]) => {
@@ -178,14 +199,16 @@ export class Alerts implements OnInit, OnDestroy {
   }
 
   private isGroupSuppressedHit(hit: any): boolean {
-    if (!hit.src_ip || !hit.tags?.length) return false;
-    // Mirror ARM2 SQL: hasAny(tags, [suppressed_tag]) — a hit is suppressed if
-    // ANY of its tags matches the group suppression, not just the primary tag.
-    // This prevents multi-tag alerts from leaking through the WebSocket filter
-    // when primaryTag() returns a different tag than the one being suppressed.
-    return this.groupSups.some(s =>
-      s.src_ip === hit.src_ip && hit.tags.includes(s.tag)
-    );
+    if (!hit.src_ip) return false;
+    return this.groupSups.some(s => {
+      if (s.src_ip !== hit.src_ip) return false;
+      // 'alert' is the fallback tag for hits with no detection tags — mirrors
+      // the backend rule: empty(tags) AND empty(sigma_hits)
+      if (s.tag === 'alert') {
+        return !hit.tags?.length && !hit.sigma_hits?.length;
+      }
+      return hit.tags?.includes(s.tag) || hit.sigma_hits?.includes(s.tag);
+    });
   }
 
   loadAlerts() {
@@ -257,8 +280,9 @@ export class Alerts implements OnInit, OnDestroy {
       const tag = primaryTag(a.tags);
       const key = `${tag}::${a.src_ip}`;
       if (!map.has(key)) {
-        const assetName = a.src_asset?.custom_name || a.src_asset?.hostname || undefined;
-        const assetMac  = a.src_asset?.mac  || undefined;
+        const localAsset = this.assetMap.get(a.src_ip);
+        const assetName  = localAsset?.name || a.src_asset?.hostname || undefined;
+        const assetMac   = localAsset?.mac  || a.src_asset?.mac || undefined;
         map.set(key, {
           key, tag, src_ip: a.src_ip,
           src_hostname: assetName,
@@ -270,6 +294,14 @@ export class Alerts implements OnInit, OnDestroy {
         });
       }
       const g = map.get(key)!;
+      if (!g.sid) {
+        const sidTag = (a.tags as string[] || []).find((t: string) => /^(?:suricata|zeek):/i.test(t));
+        if (sidTag) {
+          g.sid = sidTag.replace(/^(?:suricata|zeek):/i, '');
+        } else if (a.sigma_hits?.length) {
+          g.sid = (a.sigma_hits[0] as string).replace(/suricata/gi, 'Agent-S').replace(/zeek/gi, 'Agent-Z');
+        }
+      }
       g.alerts.push(a);
       g.count++;
       if ((a.score ?? 0) > g.maxScore) {
@@ -387,9 +419,10 @@ export class Alerts implements OnInit, OnDestroy {
 
   private dismissGroup(srcIp: string, tag: string) {
     for (const a of this.allAlerts) {
-      if (a.src_ip === srcIp && primaryTag(a.tags) === tag) {
-        this.dismissedCids.add(a.community_id);
-      }
+      const matches = tag === 'alert'
+        ? a.src_ip === srcIp && !a.tags?.length && !a.sigma_hits?.length
+        : a.src_ip === srcIp && primaryTag(a.tags) === tag;
+      if (matches) this.dismissedCids.add(a.community_id);
     }
     this.rebuild();
     this.cdr.detectChanges();
@@ -488,8 +521,88 @@ export class Alerts implements OnInit, OnDestroy {
     return 'score-low';
   }
 
+  tagSid(tag: string): string | null {
+    const m = tag.match(/^(?:suricata|zeek):(.+)$/i);
+    return m ? m[1] : null;
+  }
+
   tagLabel(tag: string): string {
+    // Never expose vendor names — Suricata = Agent-S, Zeek = Agent-Z
+    if (/^suricata:/i.test(tag)) return 'Agent-S';
+    if (/^zeek:/i.test(tag))     return 'Agent-Z';
+    const labels: Record<string, string> = {
+      'ids-alert':            'Agent-S Alert',
+      'dns-beaconing':        'DNS Beaconing',
+      'dns-tunneling':        'DNS Tunneling',
+      'port-scan':            'Port Scan',
+      'slow-scan':            'Slow Scan',
+      'lateral-movement':     'Lateral Movement',
+      'credential-stuffing':  'Credential Stuffing',
+      'beaconing':            'C2 Beaconing',
+      'threat-intel':         'Threat Intel',
+      'volume-anomaly':       'Volume Anomaly',
+      'large-volume-exfil':   'Large Exfil',
+      'icmp-flood':           'ICMP Flood',
+      'nxdomain-flood':       'NX Domain Flood',
+      'internal-recon':       'Internal Recon',
+      'new-external-contact': 'New External',
+      'data-staging':         'Data Staging',
+      'abnormal-rst':         'Abnormal RST',
+      'abnormal-hours':       'Abnormal Hours',
+      'tls-cert-anomaly':     'TLS Anomaly',
+      'protocol-misuse':      'Protocol Misuse',
+      'sensitive-country':    'Sensitive Country',
+      'ip-conflict':          'IP Conflict',
+      'sigma':                'Sigma Rule',
+      'dga':                  'DGA Domain',
+      'doh-evasion':          'DoH Evasion',
+      'malicious-domain':     'Malicious Domain',
+      // Connection-state derived tags
+      'mid-stream':           'Mid-Stream TCP',
+      'midstream':            'Mid-Stream TCP',
+      'half-open':            'Half-Open TCP',
+      'connection-reset':     'Connection Reset',
+      'compromised-host':     'Compromised Host',
+      'alert':                'Correlation Hit',
+      // Protocol tags (colon format from Zeek)
+      'protocol:http':        'HTTP',
+      'protocol:https':       'HTTPS',
+      'protocol:dns':         'DNS',
+      'protocol:smtp':        'SMTP',
+      'protocol:ssh':         'SSH',
+      'protocol:ftp':         'FTP',
+      'protocol:smb':         'SMB',
+      // Threat category tags
+      't:exfiltration':       'Exfiltration',
+      't:command-and-control':'C2 Traffic',
+      't:lateral-movement':   'Lateral Movement',
+      't:recon':              'Reconnaissance',
+      't:persistence':        'Persistence',
+    };
+    if (labels[tag]) return labels[tag];
+    // Strip t: or protocol: prefixes that aren't in the table above
+    if (tag.startsWith('t:'))        return tag.slice(2).replace(/-/g, ' ');
+    if (tag.startsWith('protocol:')) return tag.slice(9).toUpperCase();
     return tag.replace(/-/g, ' ');
+  }
+
+  ruleLabel(rule: string): string {
+    return rule.replace(/suricata/gi, 'Agent-S').replace(/zeek/gi, 'Agent-Z');
+  }
+
+  tagColorClass(tag: string): string {
+    if (/^suricata:/i.test(tag) || /^zeek:/i.test(tag))                                               return 'tc-intrusion';
+    if (['ids-alert','tls-cert-anomaly','protocol-misuse'].includes(tag))                              return 'tc-intrusion';
+    if (['port-scan','slow-scan','internal-recon','ip-conflict'].includes(tag))                        return 'tc-recon';
+    if (['dns-beaconing','dns-tunneling','doh-evasion','nxdomain-flood','dga','malicious-domain'].includes(tag)) return 'tc-dns';
+    if (['volume-anomaly','large-volume-exfil','icmp-flood'].includes(tag))                            return 'tc-volume';
+    if (['lateral-movement','credential-stuffing','beaconing','new-external-contact','sensitive-country','t:command-and-control','t:lateral-movement'].includes(tag)) return 'tc-lateral';
+    if (['threat-intel','t:exfiltration','compromised-host'].includes(tag))                           return 'tc-threat';
+    if (['sigma'].includes(tag))                                                                       return 'tc-sigma';
+    if (['data-staging','abnormal-rst','abnormal-hours','mid-stream','midstream','half-open','connection-reset','alert'].includes(tag)) return 'tc-anomaly';
+    if (tag.startsWith('protocol:'))                                                                   return 'tc-default';
+    if (tag.startsWith('t:'))                                                                          return 'tc-lateral';
+    return 'tc-default';
   }
 
   isDnsBeaconing(alert: any): boolean {

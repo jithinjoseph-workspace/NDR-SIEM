@@ -55,14 +55,20 @@
         <div class="tm-panel-header">
           <lucide-icon [name]="TargetIcon" class="w-4 h-4"></lucide-icon>
           Top Attack Sources
+          <span class="tm-panel-hint">tap row for details</span>
         </div>
         <div class="tm-source-list" *ngIf="attackSources.length > 0; else noSources">
           <div *ngFor="let src of attackSources.slice(0,8); let i = index"
                class="tm-source-row"
-               [class.tm-source-top]="i === 0">
+               [class.tm-source-top]="i === 0"
+               [class.tm-source-selected]="selectedCountry?.country === src.country"
+               (click)="selectCountry(src)">
             <span class="tm-rank">{{ i + 1 }}</span>
             <div class="tm-source-info">
-              <span class="tm-country">{{ src.country }}</span>
+              <div class="tm-country-row">
+                <span class="tm-flag">{{ countryFlag(src.code) }}</span>
+                <span class="tm-country">{{ src.country }}</span>
+              </div>
               <div class="tm-bar-track">
                 <div class="tm-bar-fill"
                      [style.width.%]="(src.count / attackSources[0].count) * 100"
@@ -76,6 +82,33 @@
         <ng-template #noSources>
           <div class="tm-no-data">No attack data yet</div>
         </ng-template>
+
+        <!-- Attack detail panel — shown when a country is selected -->
+        <div *ngIf="selectedCountry" class="tm-attack-detail">
+          <div class="tm-detail-header">
+            <span class="tm-detail-flag">{{ countryFlag(selectedCountry.code) }}</span>
+            <span class="tm-detail-country-name">{{ selectedCountry.country }}</span>
+            <span class="tm-detail-total">{{ selectedCountry.count.toLocaleString() }} hits</span>
+            <button class="tm-detail-close" (click)="selectedCountry = null" type="button">×</button>
+          </div>
+          <div class="tm-detail-eyebrow">Attack type breakdown · last 24h</div>
+
+          <div *ngIf="selectedCountry.attacks && selectedCountry.attacks.length > 0; else noBreakdown"
+               class="tm-detail-list">
+            <div *ngFor="let a of selectedCountry.attacks" class="tm-detail-row">
+              <span class="tm-detail-tag">{{ tagLabel(a.tag) }}</span>
+              <div class="tm-detail-bar-track">
+                <div class="tm-detail-bar"
+                     [style.width.%]="(a.count / selectedCountry.attacks![0].count) * 100">
+                </div>
+              </div>
+              <span class="tm-detail-count">{{ a.count }}</span>
+            </div>
+          </div>
+          <ng-template #noBreakdown>
+            <div class="tm-no-data tm-no-data-sm">No attack type data for this country</div>
+          </ng-template>
+        </div>
       </div>
 
       <!-- Attack trends (static display) -->

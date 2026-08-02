@@ -1119,21 +1119,26 @@ pub async fn update_announcement(
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!("parseDateTimeBestEffort('{}')", sql_escape(value)))
         .unwrap_or_else(|| "CAST(NULL, 'Nullable(DateTime)')".to_string());
+    // INSERT SELECT: ReplacingMergeTree(updated_at) forbids ALTER TABLE UPDATE on the version key.
+    // Insert a new row copying immutable fields (created_by, created_at) from the existing row.
     let query = format!(
-        "ALTER TABLE ndr.announcements UPDATE \
-         title = '{}', message = '{}', announcement_type = '{}', audience = '{}', status = '{}', target_roles = {}, \
-         target_tenants = {}, start_at = {}, end_at = {} \
-         WHERE id = '{}' SETTINGS mutations_sync=1",
-        sql_escape(title),
-        sql_escape(message),
-        sql_escape(announcement_type),
-        sql_escape(audience),
-        sql_escape(status),
-        sql_array_literal(target_roles),
-        sql_array_literal(target_tenants),
-        start_expr,
-        end_expr,
-        sql_escape(id),
+        "INSERT INTO ndr.announcements \
+         (id, title, message, announcement_type, audience, status, \
+          target_roles, target_tenants, start_at, end_at, created_by, created_at, updated_at) \
+         SELECT id, '{title}', '{message}', '{atype}', '{audience}', '{status}', \
+                {roles}, {tenants}, {start_expr}, {end_expr}, \
+                created_by, created_at, now() \
+         FROM ndr.announcements FINAL WHERE id = '{id}'",
+        title      = sql_escape(title),
+        message    = sql_escape(message),
+        atype      = sql_escape(announcement_type),
+        audience   = sql_escape(audience),
+        status     = sql_escape(status),
+        roles      = sql_array_literal(target_roles),
+        tenants    = sql_array_literal(target_tenants),
+        start_expr = start_expr,
+        end_expr   = end_expr,
+        id         = sql_escape(id),
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -1304,6 +1309,8 @@ pub async fn delete_announcement(
                  ENGINE = ReplacingMergeTree(created_at) ORDER BY ip",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS gmail String DEFAULT ''",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS secret_code String DEFAULT ''",
+                "ALTER TABLE ndr.soar_cases ADD COLUMN IF NOT EXISTS case_number String DEFAULT ''",
+                "ALTER TABLE ndr.soar_cases ADD COLUMN IF NOT EXISTS priority String DEFAULT 'P2'",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -2689,6 +2696,41 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         Ok(rows)
     }
 
+    pub async fn get_country_attack_tags(
+        &self, tenant_id: &str, sensor_ids: &[String]
+    ) -> anyhow::Result<std::collections::HashMap<String, Vec<(String, u64)>>> {
+        let db_name = tenant_db(tenant_id);
+        let sf = Self::sensor_filter(sensor_ids);
+
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { src_country: String, tag: String, cnt: u64 }
+
+        // arrayConcat merges detection tags + sigma rule names so countries with
+        // empty tags[] but populated sigma_hits[] still produce breakdown rows.
+        let rows = self.client.query(&format!(
+            "SELECT src_country, arrayJoin(arrayConcat(tags, sigma_hits)) as tag, count() as cnt \
+             FROM {db}.ndr_hits FINAL \
+             WHERE src_country != '' \
+               AND timestamp >= now() - INTERVAL 24 HOUR \
+               AND (notEmpty(tags) OR notEmpty(sigma_hits)) \
+               {sf} \
+             GROUP BY src_country, tag \
+             ORDER BY cnt DESC \
+             LIMIT 300",
+            db = db_name, sf = sf
+        )).fetch_all::<Row>().await.unwrap_or_default();
+
+        let mut map: std::collections::HashMap<String, Vec<(String, u64)>> = Default::default();
+        for r in rows {
+            map.entry(r.src_country).or_default().push((r.tag, r.cnt));
+        }
+        for v in map.values_mut() {
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.truncate(5);
+        }
+        Ok(map)
+    }
+
     pub async fn get_recent_hits_by_tenant(
         &self, limit: u64, tenant_id: &str, sensor_ids: &[String], hours: u32,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -2721,11 +2763,18 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let group_filter = if group_sups.is_empty() {
             String::new()
         } else {
-            let conds: Vec<String> = group_sups.iter().map(|s| format!(
-                "(src_ip = '{}' AND (hasAny(tags, ['{name}']) OR hasAny(sigma_hits, ['{name}'])))",
-                sql_escape(&s.suppress_ip),
-                name = sql_escape(&s.signature_name)
-            )).collect();
+            let conds: Vec<String> = group_sups.iter().map(|s| {
+                if s.signature_name == "alert" {
+                    // 'alert' is the fallback for hits with no detection tags.
+                    // Suppress all untagged hits from this src_ip.
+                    format!("(src_ip = '{}' AND empty(tags) AND empty(sigma_hits))",
+                        sql_escape(&s.suppress_ip))
+                } else {
+                    format!("(src_ip = '{}' AND (hasAny(tags, ['{name}']) OR hasAny(sigma_hits, ['{name}'])))",
+                        sql_escape(&s.suppress_ip),
+                        name = sql_escape(&s.signature_name))
+                }
+            }).collect();
             format!("AND NOT ({})", conds.join(" OR "))
         };
 
@@ -4317,13 +4366,87 @@ pub async fn clear_sensor_command(
         }).collect())
     }
 
+    pub async fn get_next_case_number(&self, tenant_id: &str) -> String {
+        let db = tenant_db(tenant_id);
+        let year = chrono::Utc::now().format("%Y").to_string().parse::<u32>().unwrap_or(2026);
+        let count = self.client
+            .query(&format!(
+                "SELECT count() + 1 FROM {}.soar_cases FINAL WHERE toYear(created_at) = {}",
+                db, year
+            ))
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(1);
+        format!("INC-{}-{:04}", year, count)
+    }
+
+    /// Find an existing open case for the same src/dst pair (within last 7 days).
+    /// Returns (id, case_number, severity, priority) if one exists.
+    pub async fn find_open_case_by_src_dst(
+        &self,
+        src_ip: &str,
+        dst_ip: &str,
+        tenant_id: &str,
+    ) -> Option<(String, String, String, String)> {
+        let db = tenant_db(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct OpenCaseRow {
+            id: String,
+            case_number: String,
+            severity: String,
+            priority: String,
+        }
+        let query = format!(
+            "SELECT id, case_number, severity, priority FROM {db}.soar_cases FINAL \
+             WHERE src_ip = '{src}' AND dst_ip = '{dst}' \
+             AND status NOT IN ('Closed', 'Resolved', 'False Positive') \
+             AND created_at >= now() - INTERVAL 7 DAY \
+             ORDER BY created_at DESC LIMIT 1",
+            db = db,
+            src = sql_escape(src_ip),
+            dst = sql_escape(dst_ip),
+        );
+        self.client.query(&query).fetch_one::<OpenCaseRow>().await.ok()
+            .map(|r| (r.id, r.case_number, r.severity, r.priority))
+    }
+
+    /// Escalate a case's severity and priority to a higher level.
+    pub async fn escalate_case_severity(
+        &self,
+        id: &str,
+        severity: &str,
+        priority: &str,
+        tenant_id: &str,
+    ) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        // INSERT SELECT to avoid "Cannot UPDATE key column updated_at" on ReplacingMergeTree.
+        let query = format!(
+            "INSERT INTO {db}.soar_cases \
+             (id, case_number, title, description, severity, priority, status, assigned_to, \
+              src_ip, dst_ip, community_id, tags, tenant_id, created_at, updated_at, closed_at) \
+             SELECT id, case_number, title, description, '{sev}', '{pri}', \
+                    status, assigned_to, src_ip, dst_ip, community_id, tags, tenant_id, \
+                    created_at, now(), closed_at \
+             FROM {db}.soar_cases FINAL WHERE id = '{id}'",
+            db  = db,
+            sev = sql_escape(severity),
+            pri = sql_escape(priority),
+            id  = sql_escape(id),
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
     pub async fn insert_soar_case(
         &self,
         id: &str,
+        case_number: &str,
         title: &str,
         description: &str,
         severity: &str,
+        priority: &str,
         status: &str,
+        assigned_to: &str,
         src_ip: &str,
         dst_ip: &str,
         community_id: &str,
@@ -4334,12 +4457,45 @@ pub async fn clear_sensor_command(
         let tags_str = sql_array_literal(tags);
         let query = format!(
             "INSERT INTO {}.soar_cases \
-             (id, title, description, severity, status, src_ip, dst_ip, community_id, tags, tenant_id) \
-             VALUES ('{}','{}','{}','{}','{}','{}','{}','{}',{},'{}')",
+             (id, case_number, title, description, severity, priority, status, assigned_to, src_ip, dst_ip, community_id, tags, tenant_id) \
+             VALUES ('{}','{}','{}','{}','{}','{}','{}','{}','{}','{}','{}',{},'{}')",
             db,
-            sql_escape(id), sql_escape(title), sql_escape(description), sql_escape(severity),
-            sql_escape(status), sql_escape(src_ip), sql_escape(dst_ip), sql_escape(community_id),
+            sql_escape(id), sql_escape(case_number), sql_escape(title), sql_escape(description),
+            sql_escape(severity), sql_escape(priority), sql_escape(status), sql_escape(assigned_to),
+            sql_escape(src_ip), sql_escape(dst_ip), sql_escape(community_id),
             tags_str, sql_escape(tenant_id)
+        );
+        self.client.query(&query).execute().await?;
+        Ok(())
+    }
+
+    pub async fn update_soar_case_fields(
+        &self,
+        id: &str,
+        title: &str,
+        description: &str,
+        assigned_to: &str,
+        priority: &str,
+        severity: &str,
+        tenant_id: &str,
+    ) -> anyhow::Result<()> {
+        let db = tenant_db(tenant_id);
+        // INSERT SELECT to avoid "Cannot UPDATE key column updated_at" on ReplacingMergeTree.
+        let query = format!(
+            "INSERT INTO {db}.soar_cases \
+             (id, case_number, title, description, severity, priority, status, assigned_to, \
+              src_ip, dst_ip, community_id, tags, tenant_id, created_at, updated_at, closed_at) \
+             SELECT id, case_number, '{title}', '{desc}', '{sev}', '{pri}', \
+                    status, '{assigned}', src_ip, dst_ip, community_id, tags, tenant_id, \
+                    created_at, now(), closed_at \
+             FROM {db}.soar_cases FINAL WHERE id = '{id}'",
+            db       = db,
+            title    = sql_escape(title),
+            desc     = sql_escape(description),
+            sev      = sql_escape(severity),
+            pri      = sql_escape(priority),
+            assigned = sql_escape(assigned_to),
+            id       = sql_escape(id),
         );
         self.client.query(&query).execute().await?;
         Ok(())
@@ -4383,9 +4539,11 @@ pub async fn clear_sensor_command(
         #[derive(clickhouse::Row, serde::Deserialize)]
         struct CaseRow {
             id: String,
+            case_number: String,
             title: String,
             description: String,
             severity: String,
+            priority: String,
             status: String,
             assigned_to: String,
             src_ip: String,
@@ -4397,12 +4555,13 @@ pub async fn clear_sensor_command(
             closed_at_ts: Option<u32>,
         }
         let result = self.client
-            .query(&format!("SELECT id, title, description, severity, status, assigned_to, src_ip, dst_ip, community_id, tags, toUnixTimestamp(created_at) as created_at_ts, toUnixTimestamp(updated_at) as updated_at_ts, toUnixTimestamp(closed_at) as closed_at_ts FROM {db}.soar_cases FINAL{sensor_where} ORDER BY created_at DESC", db = db, sensor_where = sensor_where))
+            .query(&format!("SELECT id, case_number, title, description, severity, priority, status, assigned_to, src_ip, dst_ip, community_id, tags, toUnixTimestamp(created_at) as created_at_ts, toUnixTimestamp(updated_at) as updated_at_ts, toUnixTimestamp(closed_at) as closed_at_ts FROM {db}.soar_cases FINAL{sensor_where} ORDER BY created_at DESC", db = db, sensor_where = sensor_where))
             .fetch_all::<CaseRow>()
             .await?;
         Ok(result.into_iter().map(|r| json!({
-            "id": r.id, "title": r.title, "description": r.description, "severity": r.severity,
-            "status": r.status, "assigned_to": r.assigned_to, "src_ip": r.src_ip, "dst_ip": r.dst_ip,
+            "id": r.id, "case_number": r.case_number, "title": r.title, "description": r.description,
+            "severity": r.severity, "priority": r.priority, "status": r.status,
+            "assigned_to": r.assigned_to, "src_ip": r.src_ip, "dst_ip": r.dst_ip,
             "community_id": r.community_id, "tags": r.tags, "created_at": r.created_at_ts,
             "updated_at": r.updated_at_ts, "closed_at": r.closed_at_ts
         })).collect())
@@ -4410,15 +4569,24 @@ pub async fn clear_sensor_command(
 
     pub async fn update_soar_case_status(&self, id: &str, status: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
-        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let closed_at = if status == "Resolved" || status == "False Positive" {
-            format!("toDateTime('{}')", now)
-        } else {
-            "NULL".to_string()
+        // INSERT SELECT: ReplacingMergeTree(updated_at) forbids ALTER TABLE UPDATE on the version key.
+        // Insert a new row with updated status/closed_at; the engine deduplicates on next merge.
+        let closed_at_expr = match status {
+            "Resolved" | "Closed" | "False Positive" => "now()".to_string(),
+            _ => "closed_at".to_string(),
         };
         let query = format!(
-            "ALTER TABLE {}.soar_cases UPDATE status = '{}', updated_at = toDateTime('{}'), closed_at = {} WHERE id = '{}' SETTINGS mutations_sync=1",
-            db, sql_escape(status), now, closed_at, sql_escape(id)
+            "INSERT INTO {db}.soar_cases \
+             (id, case_number, title, description, severity, priority, status, assigned_to, \
+              src_ip, dst_ip, community_id, tags, tenant_id, created_at, updated_at, closed_at) \
+             SELECT id, case_number, title, description, severity, priority, \
+                    '{status}', assigned_to, src_ip, dst_ip, community_id, tags, tenant_id, \
+                    created_at, now(), {closed_at_expr} \
+             FROM {db}.soar_cases FINAL WHERE id = '{id}'",
+            db         = db,
+            status     = sql_escape(status),
+            closed_at_expr = closed_at_expr,
+            id         = sql_escape(id),
         );
         self.client.query(&query).execute().await?;
         Ok(())
@@ -4690,43 +4858,59 @@ pub async fn list_evidence_bundles(
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct EvidenceBundleListRow {
-        id:            String,
-        community_id:  String,
-        sha256:        String,
-        size_bytes:    u64,
-        auto_captured: u8,
-        captured_at:   String,
-        expires_at:    String,
-        status:        String,
-        legal_hold:    u8,
-        src_ip:        String,
-        dst_ip:        String,
-        severity:      String,
+        id:                 String,
+        community_id:       String,
+        sha256:             String,
+        size_bytes:         u64,
+        auto_captured:      u8,
+        captured_at:        String,
+        expires_at:         String,
+        status:             String,
+        legal_hold:         u8,
+        src_ip:             String,
+        dst_ip:             String,
+        severity:           String,
+        correlation_status: String,
     }
     let db = tenant_db(tenant_id);
     let sensor_where = if sensor_ids.is_empty() {
         String::new()
     } else {
         let sf = Self::sensor_filter(sensor_ids);
-        format!(" WHERE community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
+        format!(" WHERE eb.community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
     };
+    // LEFT JOIN ndr_hits to pull the best correlation_status per community_id.
+    // argMax picks the row with the latest updated_at so "corroborated" wins over
+    // the earlier "agent_z_only" row for the same CID.
     let rows = self.client.query(&format!(
-        "SELECT id, community_id, sha256, size_bytes,
-         auto_captured,
-         formatDateTime(captured_at, '%Y-%m-%dT%H:%i:%SZ') as captured_at,
-         formatDateTime(expires_at, '%Y-%m-%dT%H:%i:%SZ') as expires_at,
-         status, legal_hold, src_ip, dst_ip, severity
-         FROM {db}.evidence_bundles FINAL{sensor_where}
-         ORDER BY captured_at DESC LIMIT {limit}",
+        "SELECT eb.id, eb.community_id, eb.sha256, eb.size_bytes,
+         eb.auto_captured,
+         formatDateTime(eb.captured_at, '%Y-%m-%dT%H:%i:%SZ') as captured_at,
+         formatDateTime(eb.expires_at, '%Y-%m-%dT%H:%i:%SZ') as expires_at,
+         eb.status, eb.legal_hold, eb.src_ip, eb.dst_ip, eb.severity,
+         coalesce(nh.correlation_status, 'agent_z_only') as correlation_status
+         FROM (SELECT * FROM {db}.evidence_bundles FINAL) AS eb
+         LEFT JOIN (
+           SELECT community_id, argMax(correlation_status, updated_at) AS correlation_status
+           FROM {db}.ndr_hits FINAL
+           GROUP BY community_id
+         ) AS nh ON eb.community_id = nh.community_id
+         {sensor_where}
+         ORDER BY eb.captured_at DESC LIMIT {limit}",
         db = db, sensor_where = sensor_where, limit = limit
     )).fetch_all::<EvidenceBundleListRow>().await?;
-    Ok(rows.iter().map(|r| serde_json::json!({
-        "id": r.id, "community_id": r.community_id, "sha256": r.sha256,
-        "size_bytes": r.size_bytes, "auto_captured": r.auto_captured == 1,
-        "captured_at": r.captured_at, "expires_at": r.expires_at,
-        "status": r.status, "legal_hold": r.legal_hold == 1,
-        "src_ip": r.src_ip, "dst_ip": r.dst_ip, "severity": r.severity
-    })).collect())
+    Ok(rows.iter().map(|r| {
+        let corroborated = r.correlation_status == "corroborated";
+        serde_json::json!({
+            "id": r.id, "community_id": r.community_id, "sha256": r.sha256,
+            "size_bytes": r.size_bytes, "auto_captured": r.auto_captured == 1,
+            "captured_at": r.captured_at, "expires_at": r.expires_at,
+            "status": r.status, "legal_hold": r.legal_hold == 1,
+            "src_ip": r.src_ip, "dst_ip": r.dst_ip, "severity": r.severity,
+            "correlation_status": r.correlation_status,
+            "corroborated": corroborated,
+        })
+    }).collect())
 }
 
 pub async fn set_legal_hold(
@@ -6218,6 +6402,38 @@ pub async fn get_ioc_hits(
              (tenant_id, ioc_type, ioc_value, source, active) \
              VALUES ('{}', '{}', '{}', 'manual', 1)",
             sql_escape(tenant_id), sql_escape(ioc_type), sql_escape(value)
+        )).execute().await?;
+        Ok(())
+    }
+
+    /// List manual IOCs for a specific tenant (for the UI watchlist view).
+    pub async fn get_watchlist_iocs_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { ioc_type: String, ioc_value: String, created_at: u32 }
+        let rows = self.client
+            .query(&format!(
+                "SELECT ioc_type, ioc_value, toUnixTimestamp(created_at) as created_at \
+                 FROM ndr.ioc_watchlist FINAL \
+                 WHERE tenant_id = '{}' AND active = 1 AND expires_at > now() \
+                 ORDER BY created_at DESC",
+                sql_escape(tenant_id)
+            ))
+            .fetch_all::<Row>().await?;
+        Ok(rows.into_iter().map(|r| serde_json::json!({
+            "type":     r.ioc_type,
+            "value":    r.ioc_value,
+            "added_at": r.created_at,
+            "source":   "manual"
+        })).collect())
+    }
+
+    /// Soft-delete a manual IOC from the watchlist.
+    pub async fn delete_watchlist_ioc(&self, tenant_id: &str, value: &str) -> anyhow::Result<()> {
+        // Do not touch updated_at — it may be a ReplacingMergeTree key column.
+        self.client.query(&format!(
+            "ALTER TABLE ndr.ioc_watchlist UPDATE active = 0 \
+             WHERE tenant_id = '{}' AND ioc_value = '{}' SETTINGS mutations_sync=1",
+            sql_escape(tenant_id), sql_escape(value)
         )).execute().await?;
         Ok(())
     }

@@ -1091,7 +1091,15 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let now_ts         = chrono::Utc::now().timestamp() as u32;
     let sigma_deduped: Vec<String> = {
         let mut seen = std::collections::HashSet::new();
-        detections.iter().map(|d| d.title.clone()).filter(|t| seen.insert(t.clone())).collect()
+        let mut hits: Vec<String> = detections.iter().map(|d| d.title.clone())
+            .filter(|t| seen.insert(t.clone())).collect();
+        // Include Suricata rule name so corroborated hits expose the actual signature
+        if let Some(alert) = hit.agent_s.alert.as_ref() {
+            if !alert.signature.is_empty() && seen.insert(alert.signature.clone()) {
+                hits.push(alert.signature.clone());
+            }
+        }
+        hits
     };
     let src_country = enrichment.src_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
     let dst_country = enrichment.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default();
@@ -2295,10 +2303,12 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
     let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
 
-    let ip_rows = state.ch_storage
-        .get_top_external_src_ips_by_tenant(50, &tenant_id, &sensor_ids)
-        .await
-        .unwrap_or_default();
+    let (ip_rows, attack_tags) = tokio::join!(
+        state.ch_storage.get_top_external_src_ips_by_tenant(50, &tenant_id, &sensor_ids),
+        state.ch_storage.get_country_attack_tags(&tenant_id, &sensor_ids)
+    );
+    let ip_rows    = ip_rows.unwrap_or_default();
+    let attack_tags = attack_tags.unwrap_or_default();
 
     if ip_rows.is_empty() {
         return Json(json!({ "countries": [] }));
@@ -2335,7 +2345,11 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
     }
 
     let mut countries: Vec<Value> = country_map.into_iter().map(|(country, (code, lat, lon, count))| {
-        json!({ "country": country, "code": code, "lat": lat, "lon": lon, "count": count })
+        // attack_tags is keyed by ISO country code (stored in ndr_hits.src_country)
+        let attacks: Vec<Value> = attack_tags.get(&code)
+            .map(|tags| tags.iter().map(|(t, c)| json!({ "tag": t, "count": c })).collect())
+            .unwrap_or_default();
+        json!({ "country": country, "code": code, "lat": lat, "lon": lon, "count": count, "attacks": attacks })
     }).collect();
     countries.sort_by(|a, b| b["count"].as_u64().unwrap_or(0).cmp(&a["count"].as_u64().unwrap_or(0)));
     countries.truncate(15);
@@ -2412,7 +2426,37 @@ pub async fn add_manual_ioc(
     }))
 }
 
-// auto reload rules 
+pub async fn get_watchlist_iocs(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    match state.ch_storage.get_watchlist_iocs_by_tenant(&claims.tenant_id).await {
+        Ok(iocs) => Json(json!({"status": "ok", "data": iocs})),
+        Err(e)   => Json(json!({"status": "error", "message": e.to_string()})),
+    }
+}
+
+pub async fn delete_watchlist_ioc(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(value): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None    => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    let decoded = urlencoding::decode(&value).unwrap_or(std::borrow::Cow::Borrowed(&value)).to_string();
+    match state.ch_storage.delete_watchlist_ioc(&claims.tenant_id, &decoded).await {
+        Ok(_)  => Json(json!({"status": "ok", "message": "IOC removed from watchlist"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()})),
+    }
+}
+
+// auto reload rules
 pub async fn reload_rules_api(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -8147,6 +8191,55 @@ pub async fn update_soar_case_status(
     }
     match state.ch_storage.update_soar_case_status(&id, status, &claims.tenant_id).await {
         Ok(_) => Json(json!({"status": "success", "message": "Status updated"})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn create_soar_case(
+    State(state): State<AppState>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+    axum::extract::Json(payload): axum::extract::Json<Value>,
+) -> Json<Value> {
+    let title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if title.is_empty() {
+        return Json(json!({"status": "error", "message": "Title is required"}));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let case_number = state.ch_storage.get_next_case_number(&claims.tenant_id).await;
+    let description = payload.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let severity    = payload.get("severity").and_then(|v| v.as_str()).unwrap_or("MEDIUM").to_string();
+    let priority    = payload.get("priority").and_then(|v| v.as_str()).unwrap_or("P2").to_string();
+    let assigned_to = payload.get("assigned_to").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let src_ip      = payload.get("src_ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let dst_ip      = payload.get("dst_ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let community_id = payload.get("community_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let tags: Vec<String> = payload.get("tags")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+
+    match state.ch_storage.insert_soar_case(
+        &id, &case_number, &title, &description, &severity, &priority,
+        "New", &assigned_to, &src_ip, &dst_ip, &community_id, &tags, &claims.tenant_id,
+    ).await {
+        Ok(_) => Json(json!({"status": "success", "id": id, "case_number": case_number})),
+        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
+    }
+}
+
+pub async fn update_soar_case(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
+    axum::extract::Json(payload): axum::extract::Json<Value>,
+) -> Json<Value> {
+    let title       = payload.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let description = payload.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let assigned_to = payload.get("assigned_to").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let priority    = payload.get("priority").and_then(|v| v.as_str()).unwrap_or("P2").to_string();
+    let severity    = payload.get("severity").and_then(|v| v.as_str()).unwrap_or("MEDIUM").to_string();
+    match state.ch_storage.update_soar_case_fields(&id, &title, &description, &assigned_to, &priority, &severity, &claims.tenant_id).await {
+        Ok(_) => Json(json!({"status": "success", "message": "Case updated"})),
         Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
 }

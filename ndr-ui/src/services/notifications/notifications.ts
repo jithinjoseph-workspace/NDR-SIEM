@@ -43,8 +43,8 @@ export class Notifications {
 
       if (!isThreatIntel && !isHighRisk) return;
 
-      const srcIp = hit.src || hit['agent-z']?.src || hit['agent-s']?.src || '-';
-      const dstIp = hit.dst || hit['agent-z']?.dst || hit['agent-s']?.dst || '-';
+      const srcIp = hit.src_ip || hit.src || hit['agent-z']?.src || hit['agent-s']?.src || '-';
+      const dstIp = hit.dst_ip || hit.dst || hit['agent-z']?.dst || hit['agent-s']?.dst || '-';
 
       // Composite key: deduplicate notifications per IP pair so repeated hits
       // on the same flow increment the hit counter rather than flooding the list.
@@ -55,9 +55,7 @@ export class Notifications {
 
       const incoming: ThreatNotification = {
         id,
-        message: isThreatIntel
-          ? 'MALICIOUS IP DETECTED IN NETWORK TRAFFIC'
-          : `${severity} SEVERITY ALERT DETECTED`,
+        message: this.buildMessage(isThreatIntel, severity, hit.tags || [], hit.sigma_hits || []),
         time:     new Date().toLocaleTimeString(),
         src_ip:   srcIp,
         dst_ip:   dstIp,
@@ -103,6 +101,12 @@ export class Notifications {
       this.unreadNotificationIds.add(id);
       this.unreadCountSubject.next(this.unreadNotificationIds.size);
     });
+  }
+
+  private buildMessage(isThreatIntel: boolean, severity: string, tags: string[], sigmaHits: string[]): string {
+    if (isThreatIntel) return 'Threat intelligence match detected';
+    const label = (sigmaHits[0] || tags[0] || '').replace(/suricata/gi, 'Agent-S').replace(/zeek/gi, 'Agent-Z');
+    return label || `${severity} severity alert detected`;
   }
 
   markAllRead() {

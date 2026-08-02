@@ -12,6 +12,7 @@ export interface AttackSource {
   lon: number;
   count: number;
   color: string;
+  attacks?: { tag: string; count: number }[];
 }
 
 const ARC_COLORS = [
@@ -32,6 +33,7 @@ export class ThreatMap implements OnInit, OnDestroy {
   attackSources: AttackSource[] = [];
   totalAttacks = 0;
   loading = true;
+  selectedCountry: AttackSource | null = null;
 
   RadarIcon  = Radio;
   ShieldIcon = Shield;
@@ -45,6 +47,56 @@ export class ThreatMap implements OnInit, OnDestroy {
   constructor(private http: HttpClient, private ngZone: NgZone, private cdr: ChangeDetectorRef) {}
 
   ngOnInit() { this.init(); }
+
+  selectCountry(src: AttackSource) {
+    this.selectedCountry = this.selectedCountry?.country === src.country ? null : src;
+    this.ngZone.run(() => this.cdr.detectChanges());
+  }
+
+  tagLabel(tag: string): string {
+    const labels: Record<string, string> = {
+      'port-scan':            'Port Scan',
+      'dns-beaconing':        'DNS Beaconing',
+      'dns-tunneling':        'DNS Tunneling',
+      'threat-intel':         'Known Malicious',
+      'ids-alert':            'Agent-S Alert',
+      'volume-anomaly':       'Volume Anomaly',
+      'lateral-movement':     'Lateral Movement',
+      'credential-stuffing':  'Credential Stuffing',
+      'beaconing':            'C2 Beaconing',
+      'slow-scan':            'Slow Scan',
+      'data-staging':         'Data Staging',
+      'internal-recon':       'Internal Recon',
+      'new-external-contact': 'New External Contact',
+      'icmp-flood':           'ICMP Flood',
+      'nxdomain-flood':       'NX Domain Flood',
+      'abnormal-hours':       'Abnormal Hours',
+      'tls-cert-anomaly':     'TLS Cert Anomaly',
+      'protocol-misuse':      'Protocol Misuse',
+      'large-volume-exfil':   'Large Exfil',
+      'sensitive-country':    'Sensitive Country',
+      'sigma':                'Sigma Rule',
+      'dga':                  'DGA Domain',
+      'doh-evasion':          'DoH Evasion',
+      'malicious-domain':     'Malicious Domain',
+      'abnormal-rst':         'Abnormal RST',
+      'ip-conflict':          'IP Conflict',
+    };
+    if (labels[tag]) return labels[tag];
+    // Sigma / Suricata rule names — strip ET category prefix, replace vendor names
+    const clean = tag
+      .replace(/^ET\s+(INFO|SCAN|POLICY|ATTACK|MALWARE|TROJAN|EXPLOIT|WEB_SERVER)\s+/i, '')
+      .replace(/suricata/gi, 'Agent-S')
+      .replace(/zeek/gi, 'Agent-Z');
+    return clean.length > 28 ? clean.substring(0, 26) + '…' : clean;
+  }
+
+  countryFlag(code: string): string {
+    if (!code || code.length !== 2) return '🌍';
+    return code.toUpperCase().replace(/./g, c =>
+      String.fromCodePoint(127397 + c.charCodeAt(0))
+    );
+  }
 
   ngOnDestroy() {
     if (this.rafId) cancelAnimationFrame(this.rafId);
@@ -274,6 +326,27 @@ export class ThreatMap implements OnInit, OnDestroy {
         .transition().delay(i * 180 + 700).duration(500)
         .attr('opacity', 0.95);
 
+      // Transparent clickable overlay — covers dot + label pill
+      const hitW = lw + dotR + 14;
+      dotGroup.append('rect')
+        .attr('x', srcXY[0] - dotR - 4)
+        .attr('y', ly2 - 4)
+        .attr('width', hitW)
+        .attr('height', lh + 8)
+        .attr('rx', 4)
+        .attr('fill', 'transparent')
+        .attr('cursor', 'pointer')
+        .on('mouseenter', function() {
+          d3.select(this).attr('fill', `${src.color}18`).attr('stroke', src.color)
+            .attr('stroke-width', 0.8).attr('stroke-opacity', 0.4);
+        })
+        .on('mouseleave', function() {
+          d3.select(this).attr('fill', 'transparent').attr('stroke', 'none');
+        })
+        .on('click', () => {
+          this.ngZone.run(() => this.selectCountry(src));
+        });
+
       // Particles — more for higher counts
       const pCount = Math.min(4, Math.ceil(Math.log2(src.count + 1)));
       setTimeout(() => {
@@ -327,13 +400,17 @@ export class ThreatMap implements OnInit, OnDestroy {
       .attr('stroke', '#22c55e').attr('stroke-width', 1).attr('opacity', 0)
       .call((sel: any) => this.pulseRing(sel, 700, 42));
 
-    // Label — positioned above the dot with a dark pill background so it
-    // never overlaps with the India country text below it
+    // Label — shown only on hover over the target beacon
     const lx = targetXY[0];
-    const ly = targetXY[1] - 22;  // anchor above the dot
+    const ly = targetXY[1] - 22;
 
-    // Pill background
-    tg.append('rect')
+    const labelG = tg.append('g')
+      .attr('class', 'target-label')
+      .attr('pointer-events', 'none')
+      .style('opacity', '0')
+      .style('transition', 'opacity 0.2s');
+
+    labelG.append('rect')
       .attr('x', lx - 52).attr('y', ly - 12)
       .attr('width', 104).attr('height', 22)
       .attr('rx', 4)
@@ -341,7 +418,7 @@ export class ThreatMap implements OnInit, OnDestroy {
       .attr('stroke', 'rgba(34,197,94,0.35)')
       .attr('stroke-width', 1);
 
-    tg.append('text')
+    labelG.append('text')
       .attr('x', lx).attr('y', ly)
       .attr('text-anchor', 'middle')
       .attr('fill', '#86efac')
@@ -351,7 +428,7 @@ export class ThreatMap implements OnInit, OnDestroy {
       .attr('letter-spacing', '0.1em')
       .text('YOUR NETWORK');
 
-    tg.append('text')
+    labelG.append('text')
       .attr('x', lx).attr('y', ly + 9)
       .attr('text-anchor', 'middle')
       .attr('fill', 'rgba(134,239,172,0.55)')
@@ -359,6 +436,11 @@ export class ThreatMap implements OnInit, OnDestroy {
       .attr('font-family', 'JetBrains Mono, monospace')
       .attr('letter-spacing', '0.06em')
       .text('▲ PROTECTED');
+
+    // Show label only on hover
+    tg.style('cursor', 'pointer')
+      .on('mouseover', () => labelG.style('opacity', '1'))
+      .on('mouseout',  () => labelG.style('opacity', '0'));
 
     // Start particle animation loop
     this.animate();

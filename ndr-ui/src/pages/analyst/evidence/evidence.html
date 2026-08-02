@@ -1,12 +1,49 @@
 <div class="evidence-page">
-  <div class="page-header">
-    <h2>Evidence & Forensics</h2>
+  <header class="page-header">
+    <div>
+      <div class="page-eyebrow">Forensic Analysis</div>
+      <h2>Evidence &amp; Forensics</h2>
+      <p class="page-sub">Captured incident bundles with chain of custody and AI analysis.</p>
+    </div>
     <span class="badge">{{ groupedBundles().length }} incidents</span>
-  </div>
+  </header>
   <div class="evidence-layout">
 
     <!-- Left: Bundle list (grouped by community_id) -->
     <div class="bundle-list">
+      <div class="bundle-list-topbar">
+        <span class="bundle-list-title">Incidents</span>
+        <span class="badge">{{ groupedBundles().length }}</span>
+      </div>
+
+      <!-- Corroboration filter bar -->
+      <div class="corr-filter-bar">
+        <button class="corr-filter-btn corr-both"
+                [class.active]="corrFilterActive() === 'corroborated'"
+                (click)="toggleCorrFilter('corroborated')"
+                title="Corroborated — both Agent-Z + Agent-S matched this flow">
+          Z+S <span class="corr-count">{{ corroboratedCount() }}</span>
+        </button>
+        <button class="corr-filter-btn corr-s"
+                [class.active]="corrFilterActive() === 'agent_s_only'"
+                (click)="toggleCorrFilter('agent_s_only')"
+                title="Agent-S alert only — no Agent-Z flow match">
+          S <span class="corr-count">{{ bundles().filter(b => b.correlation_status === 'agent_s_only').length }}</span>
+        </button>
+        <button class="corr-filter-btn corr-z"
+                [class.active]="corrFilterActive() === 'agent_z_only'"
+                (click)="toggleCorrFilter('agent_z_only')"
+                title="Agent-Z flow only — no Agent-S alert match">
+          Z <span class="corr-count">{{ bundles().filter(b => b.correlation_status === 'agent_z_only').length }}</span>
+        </button>
+        <button class="corr-filter-btn corr-all"
+                [class.active]="corrFilterActive() === ''"
+                (click)="toggleCorrFilter('')"
+                title="Show all incidents">
+          ALL
+        </button>
+      </div>
+
       <div *ngFor="let group of groupedBundles()" class="bundle-group">
 
         <!-- Primary card — highest severity for this CID -->
@@ -20,6 +57,11 @@
             </span>
             <span class="hold-badge" *ngIf="group.primary.legal_hold">LEGAL HOLD</span>
             <span class="auto-badge" *ngIf="group.primary.auto_captured">AUTO</span>
+            <span class="corr-badge"
+                  [class]="corrLabel(group.primary.correlation_status).cls"
+                  [title]="group.primary.correlation_status === 'corroborated' ? 'Corroborated: Both Agent-Z + Agent-S detected this flow' : group.primary.correlation_status === 'agent_s_only' ? 'Agent-S only detection' : 'Agent-Z only detection'">
+              {{ corrLabel(group.primary.correlation_status).label }}
+            </span>
           </div>
 
           <div class="bundle-ips">
@@ -68,10 +110,31 @@
     <!-- Right: Bundle detail -->
     <div class="bundle-detail" *ngIf="selectedBundle()">
       <div class="detail-header">
-        <h3>Evidence Bundle</h3>
+        <div class="detail-title-block">
+          <div class="detail-header-top">
+            <span class="severity-badge" [class]="'sev-' + selectedBundle()?.severity?.toLowerCase()">
+              {{ selectedBundle()?.severity }}
+            </span>
+            <h3>Evidence Bundle</h3>
+            <span class="corr-badge detail-corr-badge"
+                  [class]="corrLabel(selectedBundle()?.correlation_status).cls"
+                  [title]="selectedBundle()?.corroborated
+                    ? 'Corroborated — Agent-Z flow + Agent-S alert matched on this community ID'
+                    : 'Single-source detection — no cross-sensor match'">
+              {{ selectedBundle()?.corroborated ? 'CORROBORATED' : (selectedBundle()?.correlation_status === 'agent_s_only' ? 'AGENT-S ONLY' : 'AGENT-Z ONLY') }}
+            </span>
+            <span class="hold-badge" *ngIf="selectedBundle().legal_hold">⚠ LEGAL HOLD</span>
+          </div>
+          <div class="detail-flow">
+            <span class="detail-ip src">{{ selectedBundle()?.src_ip }}</span>
+            <span class="detail-arrow">→</span>
+            <span class="detail-ip dst">{{ selectedBundle()?.dst_ip }}</span>
+            <span class="detail-cid">CID: {{ selectedBundle()?.community_id | slice:0:22 }}…</span>
+          </div>
+        </div>
         <div class="actions">
           <button class="btn-primary" (click)="download(selectedBundle())">
-            Download ZIP
+            ↓ Download ZIP
           </button>
           <button class="btn-secondary" (click)="verify(selectedBundle())">
             Verify Integrity
@@ -221,7 +284,7 @@
           </div>
 
           <div *ngIf="!timeline()?.zeek_uid" class="uid-story uid-story-empty">
-            No Zeek UID found for this connection — UID linking not available.
+            No Agent-Z UID found for this connection — UID linking not available.
           </div>
         </div>
       </div>

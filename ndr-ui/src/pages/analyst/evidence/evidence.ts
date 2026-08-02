@@ -46,10 +46,32 @@ export class EvidenceComponent implements OnInit {
   newNote    = '';
   newTag     = '';
 
+  // ── Computed: corroboration stats ────────────────────────────────
+  corroboratedCount = computed(() =>
+    this.bundles().filter(b => b.correlation_status === 'corroborated').length
+  );
+
+  corrFilterActive = signal<string>('');   // '' | 'corroborated' | 'agent_z_only' | 'agent_s_only'
+
+  corrLabel(status: string): { label: string; cls: string } {
+    switch (status) {
+      case 'corroborated': return { label: 'Z+S',   cls: 'corr-both' };
+      case 'agent_s_only': return { label: 'S',     cls: 'corr-s'    };
+      case 'multiflow':    return { label: 'Z+S+',  cls: 'corr-both' };
+      default:             return { label: 'Z',     cls: 'corr-z'    };
+    }
+  }
+
+  toggleCorrFilter(val: string) {
+    this.corrFilterActive.set(this.corrFilterActive() === val ? '' : val);
+  }
+
   // ── Computed: group bundles by community_id, highest sev first ────
   groupedBundles = computed(() => {
+    const filter = this.corrFilterActive();
     const map = new Map<string, any[]>();
     for (const b of this.bundles()) {
+      if (filter && b.correlation_status !== filter) continue;
       const cid = b.community_id || b.id;
       if (!map.has(cid)) map.set(cid, []);
       map.get(cid)!.push(b);

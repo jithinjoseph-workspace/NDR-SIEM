@@ -151,8 +151,8 @@
   <section *ngIf="!loading && entityScores.length > 0" class="entity-panel" aria-label="Top risky hosts">
     <div class="entity-panel-header">
       <lucide-icon [name]="ShieldAlertIcon" class="w-3.5 h-3.5"></lucide-icon>
-      <span>Top Risky Hosts</span>
-      <span class="entity-panel-hint">click to filter</span>
+      <span>Highest-Risk Internal Devices</span>
+      <span class="entity-panel-desc">Internal source IPs with the most accumulated threat activity — click to filter</span>
     </div>
     <div class="entity-cards">
       <button
@@ -161,14 +161,24 @@
         [class.active]="activeHostFilter === h.src_ip"
         (click)="filterByHost(h.src_ip)"
         type="button"
-        [title]="h.src_ip"
+        [title]="'Internal device ' + h.src_ip + ' — ' + h.alert_count + ' alerts, risk score ' + h.accumulated_score"
       >
-        <span class="entity-sev-dot" [style.background]="severityColor(h.top_severity)"></span>
-        <span class="entity-ip">{{ h.src_ip }}</span>
-        <span class="entity-score">{{ h.accumulated_score | number:'1.0-0' }}</span>
-        <span class="entity-count">{{ h.alert_count }} alerts</span>
-        <div class="entity-tags">
-          <span *ngFor="let t of h.top_tags.slice(0,3)" class="entity-tag">{{ t }}</span>
+        <!-- Left: severity bar -->
+        <span class="entity-sev-bar" [style.background]="severityColor(h.top_severity)"></span>
+        <!-- Right: content -->
+        <div class="entity-card-body">
+          <div class="entity-card-row1">
+            <span class="entity-ip">{{ h.src_ip }}</span>
+            <span class="entity-badge-internal">INT</span>
+          </div>
+          <div class="entity-card-row2">
+            <span class="entity-score">{{ h.accumulated_score | number:'1.0-0' }}</span>
+            <span class="entity-score-sep">·</span>
+            <span class="entity-count">{{ h.alert_count }} alerts</span>
+          </div>
+          <div class="entity-tags">
+            <span *ngFor="let t of h.top_tags.slice(0,2)" class="entity-tag">{{ tagLabel(t) }}</span>
+          </div>
         </div>
       </button>
     </div>
@@ -259,12 +269,18 @@
                 </span>
               </td>
               <td>
-                <span class="tag-chip">{{ tagLabel(g.tag) }}</span>
+                <div class="type-cell">
+                  <span [class]="'tag-chip ' + tagColorClass(g.tag)">{{ tagLabel(g.tag) }}</span>
+                  <small *ngIf="g.sid" class="tag-sid">Rule {{ g.sid }}</small>
+                </div>
               </td>
               <td class="src-cell">
                 <div class="src-stack">
                   <span class="src-name">{{ g.src_hostname || g.src_ip || '—' }}</span>
-                  <span *ngIf="g.src_hostname" class="src-ip-sub">{{ g.src_ip }}<ng-container *ngIf="g.src_mac"> · {{ g.src_mac }}</ng-container></span>
+                  <span *ngIf="g.src_hostname || g.src_mac" class="src-ip-sub">
+                    <ng-container *ngIf="g.src_hostname">{{ g.src_ip }}</ng-container>
+                    <ng-container *ngIf="g.src_mac"> · {{ g.src_mac }}</ng-container>
+                  </span>
                 </div>
                 <button *ngIf="g.src_ip" class="ip-copy-btn" (click)="copyIp(g.src_ip, $event)" title="Copy IP" type="button">
                   <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>
@@ -276,7 +292,7 @@
                 </ng-container>
               </td>
               <td>
-                <span [class]="'score-pill ' + getScoreClass(g.maxScore)">
+                <span [class]="'score-pill ' + getScoreClass(g.maxScore)" [style.--fill]="(g.maxScore || 0) + '%'">
                   {{ g.maxScore.toFixed(0) || '0' }}
                 </span>
               </td>
@@ -337,9 +353,9 @@
                         Threat Intel
                       </span>
                     </small>
-                    <!-- Sigma rule name chips (named rules take priority over generic tag text) -->
+                    <!-- Rule name chips — Suricata → Agent-S, Zeek → Agent-Z in display -->
                     <div *ngIf="alert.sigma_hits?.length" class="sigma-chips">
-                      <span *ngFor="let rule of alert.sigma_hits" class="sigma-chip" [title]="rule">{{ rule }}</span>
+                      <span *ngFor="let rule of alert.sigma_hits" class="sigma-chip" [title]="ruleLabel(rule)">{{ ruleLabel(rule) }}</span>
                     </div>
                     <small *ngIf="!alert.sigma_hits?.length" class="description-cell">{{ alert.description }}</small>
                   </div>

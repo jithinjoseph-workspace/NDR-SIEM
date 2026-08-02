@@ -1,6 +1,7 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { Api } from '../../../services/api/api';
 import { ArkimeService } from '../../../services/arkime/arkime';
 import {
@@ -262,10 +263,19 @@ export class Soar implements OnInit {
     /** Sensor IDs this user is scoped to (from JWT). */
     sensorIds: string[] = [];
 
-    constructor(private api: Api, private arkime: ArkimeService, private cdr: ChangeDetectorRef, private auth: AuthService) {}
+    /** Display name of the currently logged-in analyst. */
+    currentUsername = '';
+
+    constructor(private api: Api, private arkime: ArkimeService, private cdr: ChangeDetectorRef, private auth: AuthService, private router: Router) {}
+
+    viewEvidence(cid: string) {
+        this.router.navigate(['/analyst/evidence'], { queryParams: { cid } });
+    }
 
     ngOnInit() {
         this.sensorIds = this.auth.getSensorIds();
+        const user = this.auth.getUser();
+        this.currentUsername = user?.username || user?.name || '';
         this.loadCases();
         this.loadPlaybooks();
         this.loadIntegrations();
@@ -509,9 +519,171 @@ export class Soar implements OnInit {
         return this.isolationEnforcementTypes.find(t => t.value === enforcement)?.label.split(' — ')[0] || enforcement;
     }
 
-    // --- Cases Logic ---
+    // ─── Case Workflow ────────────────────────────────────────────────────────
+    // States: New → Assigned → In Progress → Pending → Under Review → Resolved → Closed
+    // Also: False Positive (from any active state)
+
+    readonly WORKFLOW_STATES = [
+        'New', 'Assigned', 'In Progress', 'Pending', 'Under Review', 'Resolved', 'Closed'
+    ];
+    readonly WORKFLOW_NEXT: Record<string, string[]> = {
+        'New':           ['Assigned', 'In Progress', 'False Positive'],
+        'Assigned':      ['In Progress', 'Pending', 'False Positive'],
+        'In Progress':   ['Pending', 'Under Review', 'Resolved', 'False Positive'],
+        'Pending':       ['In Progress', 'Resolved', 'Closed', 'False Positive'],
+        'Under Review':  ['In Progress', 'Resolved', 'Closed', 'False Positive'],
+        'Resolved':      ['Closed', 'In Progress'],
+        'Closed':        ['New'],
+        'False Positive': ['New'],
+        'Evidence Collected': ['In Progress', 'Resolved', 'Closed', 'False Positive'],
+    };
+
+    nextStates(status: string): string[] {
+        return this.WORKFLOW_NEXT[status] || ['In Progress'];
+    }
+
+    statusClass(status: string): string {
+        switch (status) {
+            case 'New':           return 'status-new';
+            case 'Assigned':      return 'status-assigned';
+            case 'In Progress':   return 'status-inprogress';
+            case 'Pending':       return 'status-pending';
+            case 'Under Review':  return 'status-review';
+            case 'Resolved':      return 'status-resolved';
+            case 'Closed':        return 'status-closed';
+            case 'False Positive':return 'status-fp';
+            default:              return 'status-inprogress';
+        }
+    }
+
+    priorityClass(p: string): string {
+        switch (p) {
+            case 'P1': return 'prio-p1';
+            case 'P2': return 'prio-p2';
+            case 'P3': return 'prio-p3';
+            default:   return 'prio-p4';
+        }
+    }
+
+    priorityLabel(p: string): string {
+        return { P1: 'P1 CRITICAL', P2: 'P2 HIGH', P3: 'P3 MEDIUM', P4: 'P4 LOW' }[p] || p;
+    }
+
+    // ─── Case Stats (computed from loaded cases) ─────────────────────────────
+    get caseStats() {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayTs = Math.floor(today.getTime() / 1000);
+        const active     = this.cases.filter(c => !['Closed', 'False Positive'].includes(c.status)).length;
+        const inProgress = this.cases.filter(c => c.status === 'In Progress').length;
+        const resolvedToday = this.cases.filter(c =>
+            c.status === 'Resolved' && c.closed_at && c.closed_at >= todayTs
+        ).length;
+
+        const closed = this.cases.filter(c =>
+            ['Resolved', 'Closed'].includes(c.status) && c.closed_at && c.created_at
+        );
+        const avgHrs = closed.length
+            ? Math.round(closed.reduce((s, c) => s + (c.closed_at - c.created_at) / 3600, 0) / closed.length)
+            : 0;
+
+        return { active, inProgress, resolvedToday, avgHrs };
+    }
+
+    // ─── New Case Form ────────────────────────────────────────────────────────
+    showNewCase = false;
+    newCaseTitle = '';
+    newCaseDescription = '';
+    newCaseSeverity = 'HIGH';
+    newCasePriority = 'P2';
+    newCaseAssignedTo = '';
+    newCaseSrcIp = '';
+    newCaseDstIp = '';
+    newCaseTags = '';
+    newCaseError = '';
+    savingNewCase = false;
+
+    openNewCaseModal() {
+        this.newCaseTitle = '';
+        this.newCaseDescription = '';
+        this.newCaseSeverity = 'HIGH';
+        this.newCasePriority = 'P2';
+        this.newCaseAssignedTo = this.currentUsername;
+        this.newCaseSrcIp = '';
+        this.newCaseDstIp = '';
+        this.newCaseTags = '';
+        this.newCaseError = '';
+        this.showNewCase = true;
+    }
+
+    submitNewCase() {
+        if (!this.newCaseTitle.trim()) { this.newCaseError = 'Title is required'; return; }
+        this.savingNewCase = true;
+        this.newCaseError = '';
+        const tags = this.newCaseTags.split(',').map(t => t.trim()).filter(Boolean);
+        this.api.createSoarCase({
+            title: this.newCaseTitle.trim(),
+            description: this.newCaseDescription.trim(),
+            severity: this.newCaseSeverity,
+            priority: this.newCasePriority,
+            assigned_to: this.newCaseAssignedTo.trim(),
+            src_ip: this.newCaseSrcIp.trim(),
+            dst_ip: this.newCaseDstIp.trim(),
+            tags,
+        }).subscribe({
+            next: (res: any) => {
+                this.savingNewCase = false;
+                if (res.status === 'success') {
+                    this.showNewCase = false;
+                    this.loadCases();
+                    this.cdr.detectChanges();
+                } else {
+                    this.newCaseError = res.message || 'Failed to create case';
+                    this.cdr.detectChanges();
+                }
+            },
+            error: (err: any) => {
+                this.savingNewCase = false;
+                this.newCaseError = err.error?.message || 'Request failed';
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    // ─── Case Assignment Inline Edit ──────────────────────────────────────────
+    editingAssignee = false;
+    assigneeInput = '';
+
+    startEditAssignee() {
+        this.assigneeInput = this.selectedCase?.assigned_to || this.currentUsername;
+        this.editingAssignee = true;
+        this.cdr.detectChanges();
+    }
+
+    saveAssignee() {
+        if (!this.selectedCase) return;
+        this.editingAssignee = false;
+        const assigned_to = this.assigneeInput.trim();
+        const c = this.selectedCase;
+        this.api.updateSoarCase(c.id, {
+            title: c.title, description: c.description,
+            assigned_to, priority: c.priority || 'P2', severity: c.severity || 'MEDIUM',
+        }).subscribe({
+            next: (res: any) => {
+                if (res.status === 'success') {
+                    this.selectedCase.assigned_to = assigned_to;
+                    this.loadCases();
+                }
+                this.cdr.detectChanges();
+            },
+            error: () => this.cdr.detectChanges()
+        });
+    }
+
+    // ─── Cases Logic ─────────────────────────────────────────────────────────
     openCase(c: any) {
         this.selectedCase = c;
+        this.editingAssignee = false;
         this.liveEvidence = null;
         this.loadingCase = true;
 
@@ -523,12 +695,9 @@ export class Soar implements OnInit {
             this.cdr.detectChanges();
         });
 
-        // Auto-load live evidence for any case that has a community_id
         if (c.community_id) {
             this.evidenceLoading = true;
             const cid = c.community_id;
-
-            // Fetch PCAP sessions + NDR events in parallel
             this.arkime.getSessions({ cid, limit: 10 }).subscribe((pcap: any) => {
                 this.liveEvidence = this.liveEvidence || {};
                 this.liveEvidence.pcap_sessions = pcap.sessions || [];
@@ -536,7 +705,6 @@ export class Soar implements OnInit {
                 this.evidenceLoading = false;
                 this.cdr.detectChanges();
             });
-
             this.api.getEventsByCid(cid).subscribe((res: any) => {
                 this.liveEvidence = this.liveEvidence || {};
                 this.liveEvidence.ndr_events = res.events || [];
@@ -555,11 +723,18 @@ export class Soar implements OnInit {
         return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
+    formatDateShort(ts: any): string {
+        if (!ts) return '-';
+        const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
+        return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
     closeCaseModal() {
         this.selectedCase = null;
         this.caseComments = [];
         this.liveEvidence = null;
         this.evidenceLoading = false;
+        this.editingAssignee = false;
     }
 
     updateCaseStatus(status: string) {
@@ -568,27 +743,27 @@ export class Soar implements OnInit {
             next: (res: any) => {
                 if (res.status === 'success') {
                     this.selectedCase.status = status;
+                    if (['Resolved', 'Closed', 'False Positive'].includes(status)) {
+                        this.selectedCase.closed_at = Math.floor(Date.now() / 1000);
+                    } else {
+                        this.selectedCase.closed_at = null;
+                    }
                     this.cdr.detectChanges();
                     this.loadCases();
-                } else {
-                    console.error('Status update failed:', res);
-                    alert('Update failed: ' + res.message);
                 }
             },
             error: (err) => {
-                console.error('Status update API error:', err);
-                alert('API error updating status: ' + (err.error?.message || err.message));
+                alert('Status update failed: ' + (err.error?.message || err.message));
             }
         });
     }
-
 
     addComment() {
         if (!this.newComment.trim() || !this.selectedCase) return;
         this.api.addSoarCaseComment(this.selectedCase.id, this.newComment).subscribe((res: any) => {
             if (res.status === 'success') {
                 this.newComment = '';
-                this.openCase(this.selectedCase); // reload comments
+                this.openCase(this.selectedCase);
             }
         });
     }
@@ -599,6 +774,16 @@ export class Soar implements OnInit {
         if (s === 'high') return 'text-orange-400 bg-orange-500/10';
         if (s === 'medium') return 'text-yellow-400 bg-yellow-500/10';
         return 'text-blue-400 bg-blue-500/10';
+    }
+
+    severityClass(sev: string): string {
+        switch ((sev || '').toUpperCase()) {
+            case 'CRITICAL': return 'sev-critical';
+            case 'HIGH':     return 'sev-high';
+            case 'MEDIUM':   return 'sev-medium';
+            case 'LOW':      return 'sev-low';
+            default:         return 'sev-low';
+        }
     }
 
     // --- Condition Helpers ---
