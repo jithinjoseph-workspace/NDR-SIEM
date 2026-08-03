@@ -2,6 +2,8 @@
 // License: Apache-2.0
 
 pub mod websocket;
+pub mod response;
+pub use response::{ApiResponse, JsonResponse, ok as api_ok, err_response as api_err};
 
 /// Global semaphore — limits concurrent evidence bundle AI calls to 4.
 /// Prevents burst of HIGH/CRITICAL alerts from exhausting AI rate limits.
@@ -286,15 +288,31 @@ pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
 pub fn extract_claims(
     headers: &axum::http::HeaderMap
 ) -> Option<AuthClaims> {
-    let token = headers
-        .get("Authorization")
+    // Try httpOnly cookie first; fall back to Authorization: Bearer header.
+    // Both paths stay active so old clients (localStorage) keep working.
+    let token_from_cookie = headers
+        .get("Cookie")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))?;
+        .and_then(|c| {
+            c.split(';').find_map(|p| {
+                p.trim().strip_prefix("ndr_token=").map(str::to_owned)
+            })
+        });
+
+    let token_from_header = || {
+        headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::to_owned)
+    };
+
+    let token = token_from_cookie.or_else(token_from_header)?;
 
     let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
 
     decode::<AuthClaims>(
-        token,
+        &token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::default()
     ).ok().map(|d| d.claims)
@@ -4558,7 +4576,11 @@ pub async fn login(
                 let _: redis::RedisResult<()> = mux.del(format!("ndr:login_attempts:{}", username)).await;
             }
             tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
-            (
+            let cookie_header = format!(
+                "ndr_token={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400",
+                token
+            );
+            let mut resp = (
                 StatusCode::OK,
                 Json(json!({
                     "status": "ok",
@@ -4574,7 +4596,11 @@ pub async fn login(
                         "secret_code": user["secret_code"].as_str().unwrap_or("")
                     }
                 }))
-            ).into_response()
+            ).into_response();
+            if let Ok(v) = cookie_header.parse::<axum::http::HeaderValue>() {
+                resp.headers_mut().insert(axum::http::header::SET_COOKIE, v);
+            }
+            resp
         }
         Ok(None) => {
             tracing::warn!("❌ Login FAILED (wrong credentials): username='{}'", username);
@@ -4770,11 +4796,22 @@ pub async fn update_me_gmail(
 }
 
 // POST /api/auth/logout
-pub async fn logout() -> Json<Value> {
-    Json(json!({
-        "status": "ok",
-        "message": "Logged out"
-    }))
+pub async fn logout() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut resp = (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "message": "Logged out"
+        }))
+    ).into_response();
+    // Expire the httpOnly cookie immediately
+    if let Ok(v) = "ndr_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0"
+        .parse::<axum::http::HeaderValue>()
+    {
+        resp.headers_mut().insert(axum::http::header::SET_COOKIE, v);
+    }
+    resp
 }
 
 // ── Password Reset Flow (Tenant Admins) ─────────────────────────────────────
