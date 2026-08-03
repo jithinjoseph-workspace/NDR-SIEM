@@ -22,15 +22,19 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
     sudo mkdir -p "$INSTALL_DIR"
-    sudo chown "$(id -un):$(id -gn)" "$INSTALL_DIR"
 
     RAW="https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime"
+    AUTH_HEADER="Authorization: token $GH_TOKEN"
 
     echo "  Downloading docker-compose.yml..."
-    curl -fsSL "$RAW/docker-compose.yml" | sudo tee "$INSTALL_DIR/docker-compose.yml" > /dev/null
+    curl -fsSL -H "$AUTH_HEADER" "$RAW/docker-compose.yml" -o /tmp/ndr_dc.yml \
+        || { echo "  ERROR: Failed to download docker-compose.yml. Check your token."; exit 1; }
+    sudo mv /tmp/ndr_dc.yml "$INSTALL_DIR/docker-compose.yml"
 
     echo "  Downloading install-customer.sh..."
-    curl -fsSL "$RAW/install-customer.sh" | sudo tee "$INSTALL_DIR/install-customer.sh" > /dev/null
+    curl -fsSL -H "$AUTH_HEADER" "$RAW/install-customer.sh" -o /tmp/ndr_install.sh \
+        || { echo "  ERROR: Failed to download install-customer.sh."; exit 1; }
+    sudo mv /tmp/ndr_install.sh "$INSTALL_DIR/install-customer.sh"
     sudo chmod +x "$INSTALL_DIR/install-customer.sh"
 
     echo "  Downloading config, scripts and detection rules..."
