@@ -23,23 +23,9 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     echo "  Installing to: $INSTALL_DIR"
     sudo mkdir -p "$INSTALL_DIR"
 
-    RAW="https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime"
-    AUTH_HEADER="Authorization: token $GH_TOKEN"
-
-    echo "  Downloading docker-compose.yml..."
-    curl -fsSL -H "$AUTH_HEADER" "$RAW/docker-compose.yml" -o /tmp/ndr_dc.yml \
-        || { echo "  ERROR: Failed to download docker-compose.yml. Check your token."; exit 1; }
-    sudo mv /tmp/ndr_dc.yml "$INSTALL_DIR/docker-compose.yml"
-
-    echo "  Downloading install-customer.sh..."
-    curl -fsSL -H "$AUTH_HEADER" "$RAW/install-customer.sh" -o /tmp/ndr_install.sh \
-        || { echo "  ERROR: Failed to download install-customer.sh."; exit 1; }
-    sudo mv /tmp/ndr_install.sh "$INSTALL_DIR/install-customer.sh"
-    sudo chmod +x "$INSTALL_DIR/install-customer.sh"
-
-    echo "  Downloading config, scripts and detection rules..."
+    echo "  Downloading config files via API..."
     GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
-import urllib.request, json, os, base64
+import urllib.request, json, os, base64, sys
 
 token    = os.environ["GH_TOKEN"]
 dest     = os.environ["INSTALL_DIR"]
@@ -48,8 +34,20 @@ headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github
 
 def gh_get(url):
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as r:
-        return r.read()
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.read()
+    except Exception as e:
+        print(f"  ERROR: API request failed: {e}")
+        sys.exit(1)
+
+def download_file(repo_path, local_path):
+    meta = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
+    content = base64.b64decode(meta["content"].replace("\n", ""))
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    with open(local_path, "wb") as f:
+        f.write(content)
+    print(f"    {repo_path}")
 
 def download_dir(repo_path, local_path):
     os.makedirs(local_path, exist_ok=True)
@@ -57,7 +55,6 @@ def download_dir(repo_path, local_path):
     for item in items:
         target = os.path.join(local_path, item["name"])
         if item["type"] == "file":
-            # Fetch via contents API and decode base64 — avoids CDN redirect auth drop
             meta = json.loads(gh_get(f"{api_base}/contents/{item['path']}?ref=arkime"))
             content = base64.b64decode(meta["content"].replace("\n", ""))
             with open(target, "wb") as f:
@@ -66,10 +63,13 @@ def download_dir(repo_path, local_path):
         elif item["type"] == "dir":
             download_dir(item["path"], target)
 
+download_file("docker-compose.yml",   f"{dest}/docker-compose.yml")
+download_file("install-customer.sh",  f"{dest}/install-customer.sh")
 download_dir("config",                f"{dest}/config")
 download_dir("scripts",               f"{dest}/scripts")
 download_dir("rust/ndr-engine/rules", f"{dest}/rust/ndr-engine/rules")
 PYEOF
+    chmod +x "$INSTALL_DIR/install-customer.sh"
 
     echo ""
     exec bash "$INSTALL_DIR/install-customer.sh" "$INSTALL_DIR"
