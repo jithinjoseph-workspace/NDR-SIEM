@@ -665,20 +665,38 @@ fi
 
 # ── Configure Zeek ────────────────────────────
 log "Configuring Agent-Z..."
-sudo tee /opt/zeek/share/zeek/site/local.zeek > /dev/null << ZEEKCONF
+# Write local.zeek — only load scripts that actually exist on this Zeek version
+ZEEK_SITE=/opt/zeek/share/zeek/site
+ZEEK_BASE=/opt/zeek/share/zeek
+
+zeek_load() {
+    local s="$1"
+    for d in "$ZEEK_BASE" "$ZEEK_BASE/policy" "$ZEEK_BASE/base"; do
+        [ -f "$d/$s.zeek" ] || [ -f "$d/$s" ] && { echo "@load $s"; return; }
+    done
+    if [[ "$s" == *"detect-sql-injection"* ]]; then
+        local alt="${s/detect-sql-injection/detect-sqli}"
+        for d in "$ZEEK_BASE" "$ZEEK_BASE/policy" "$ZEEK_BASE/base"; do
+            [ -f "$d/$alt.zeek" ] || [ -f "$d/$alt" ] && { echo "@load $alt"; return; }
+        done
+    fi
+    log "Zeek: skipping missing script: $s"
+}
+
+sudo tee "$ZEEK_SITE/local.zeek" > /dev/null << ZEEKCONF
 # NDR Stack — Zeek Configuration
 @load policy/tuning/json-logs.zeek
 @load policy/protocols/conn/community-id-logging
-@load protocols/ssh/detect-bruteforcing
-@load protocols/ssl/validate-certs
-@load protocols/http/detect-sql-injection
-@load protocols/http/detect-webapps
-@load misc/detect-traceroute
-@load frameworks/files/hash-all-files
-@load frameworks/files/detect-MHR
-@load policy/frameworks/software/vulnerable
-@load policy/frameworks/software/version-changes
-@load policy/frameworks/software/windows-version-detection
+$(zeek_load protocols/ssh/detect-bruteforcing)
+$(zeek_load protocols/ssl/validate-certs)
+$(zeek_load protocols/http/detect-sql-injection)
+$(zeek_load protocols/http/detect-webapps)
+$(zeek_load misc/detect-traceroute)
+$(zeek_load frameworks/files/hash-all-files)
+$(zeek_load frameworks/files/detect-MHR)
+$(zeek_load policy/frameworks/software/vulnerable)
+$(zeek_load policy/frameworks/software/version-changes)
+$(zeek_load policy/frameworks/software/windows-version-detection)
 @load policy/protocols/conn/known-hosts
 @load policy/protocols/conn/known-services
 @load policy/tuning/track-all-assets.zeek
