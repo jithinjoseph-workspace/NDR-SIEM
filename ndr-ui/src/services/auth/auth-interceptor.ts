@@ -7,11 +7,16 @@ import { catchError, throwError } from 'rxjs';
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthService);
   const router = inject(Router);
+  const token = auth.getToken();
 
-  // withCredentials: true sends the httpOnly cookie on every /api request
-  // and lets the browser store Set-Cookie responses (login / logout).
-  // Bearer header is gone — the cookie is now the sole token carrier.
-  const authReq = req.clone({ withCredentials: true });
+  // withCredentials: true sends the httpOnly cookie on every request.
+  // Bearer header is still included while a legacy token exists in localStorage
+  // (sessions active before the cookie migration); once those sessions
+  // re-authenticate the token is never written back and this path dies out.
+  const authReq = req.clone({
+    withCredentials: true,
+    ...(token ? { setHeaders: { Authorization: `Bearer ${token}` } } : {})
+  });
 
   return next(authReq).pipe(
     catchError(err => {

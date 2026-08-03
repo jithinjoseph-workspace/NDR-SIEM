@@ -4579,7 +4579,7 @@ pub async fn login(
             tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
             let expires_at = chrono::Utc::now().timestamp() as u64 + 86400;
             let cookie_header = format!(
-                "ndr_token={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400",
+                "ndr_token={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
                 token
             );
             let mut resp = (
@@ -4810,7 +4810,7 @@ pub async fn logout() -> axum::response::Response {
         }))
     ).into_response();
     // Expire the httpOnly cookie immediately
-    if let Ok(v) = "ndr_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0"
+    if let Ok(v) = "ndr_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
         .parse::<axum::http::HeaderValue>()
     {
         resp.headers_mut().insert(axum::http::header::SET_COOKIE, v);

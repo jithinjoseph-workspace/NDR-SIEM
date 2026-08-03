@@ -100,15 +100,22 @@ export class AuthService implements OnDestroy {
   }
 
   getToken(): string | null {
-    // Token lives only in the httpOnly cookie — not accessible to JS.
-    return null;
+    // Read any legacy token still in localStorage from before the cookie
+    // migration. New logins no longer write here, so this path becomes dead
+    // once every active session has re-authenticated via the new flow.
+    return localStorage.getItem(this.TOKEN_KEY);
   }
 
   refreshUser(): Observable<any> {
     return this.http.get(`${this.baseUrl}/auth/me`).pipe(
       tap((res: any) => {
         if (res.status === 'ok' && res.user) {
+          // Spread existing stored data first so sensor_ids / expires_at
+          // (written at login) are preserved across polls — /api/auth/me
+          // does not re-send those fields.
+          const current = this.getUser() ?? {};
           localStorage.setItem(this.USER_KEY, JSON.stringify({
+            ...current,
             ...res.user,
             permissions: this.normalizePermissions(res.user.permissions),
           }));
