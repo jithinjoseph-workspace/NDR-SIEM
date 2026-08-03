@@ -22,6 +22,7 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
     sudo mkdir -p "$INSTALL_DIR"
+    sudo chmod 777 "$INSTALL_DIR"
 
     echo "  Downloading config files via API..."
     GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
