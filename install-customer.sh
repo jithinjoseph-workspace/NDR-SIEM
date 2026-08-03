@@ -686,7 +686,7 @@ zeek_load() {
             [ -f "$d/$alt.zeek" ] || [ -f "$d/$alt" ] && { echo "@load $alt"; return; }
         done
     fi
-    log "Zeek: skipping missing script: $s"
+    echo "  [zeek] skipping missing script: $s" >&2
 }
 
 sudo tee "$ZEEK_SITE/local.zeek" > /dev/null << ZEEKCONF
