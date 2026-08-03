@@ -4657,95 +4657,75 @@ pub async fn get_me(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Json<Value> {
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-
-    let Ok(secret) = std::env::var("JWT_SECRET") else {
-        return Json(json!({"status": "error", "message": "Server misconfiguration"}));
+    let username = match extract_claims(&headers) {
+        Some(c) => c.sub,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
     };
 
-    match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default()
-    ) {
-        Ok(data) => {
-            let username = data.claims.sub;
-            match state.ch_storage.get_user_by_username(&username).await {
-                Ok(Some(user)) => {
-                    let role = user["role"].as_str().unwrap_or("analyst");
+    match state.ch_storage.get_user_by_username(&username).await {
+        Ok(Some(user)) => {
+            let role = user["role"].as_str().unwrap_or("analyst");
 
-                    // ── Per-user active check ─────────────────────────────────
-                    // Roles that Tenant Admin can block are re-validated here so
-                    // the 30-second session poll picks up a block even if the
-                    // auth_middleware fast-path was not hit yet.
-                    let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
-                    if blockable_roles.contains(&role) {
-                        match state.ch_storage.is_user_active(&username).await {
-                            Ok(false) => {
-                                tracing::info!(
-                                    "🚫 get_me: blocked user '{}' session check — returning USER_DISABLED",
-                                    username
-                                );
-                                return Json(json!({
-                                    "status": "error",
-                                    "message": "Your account has been disabled by your administrator.",
-                                    "code": "USER_DISABLED"
-                                }));
-                            }
-                            Err(e) => {
-                                tracing::warn!("User active check error in get_me for '{}': {}", username, e);
-                            }
-                            Ok(true) => {}
-                        }
+            // Roles that Tenant Admin can block are re-validated here so
+            // the 30-second session poll picks up a block promptly.
+            let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
+            if blockable_roles.contains(&role) {
+                match state.ch_storage.is_user_active(&username).await {
+                    Ok(false) => {
+                        tracing::info!(
+                            "🚫 get_me: blocked user '{}' — returning USER_DISABLED",
+                            username
+                        );
+                        return Json(json!({
+                            "status": "error",
+                            "message": "Your account has been disabled by your administrator.",
+                            "code": "USER_DISABLED"
+                        }));
                     }
-
-                    let permissions_str = if role == "super_admin" || role == "tenant_admin" {
-                        crate::storage::clickhouse::default_permissions(role)
-                    } else {
-                        let stored = user["permissions"].as_str().unwrap_or("").to_string();
-                        if stored.is_empty() {
-                            crate::storage::clickhouse::default_permissions(role)
-                        } else {
-                            stored
-                        }
-                    };
-                    let permissions: Vec<String> = permissions_str
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-
-                    Json(json!({
-                        "status": "ok",
-                        "user": {
-                            "id": user["id"].as_str().unwrap_or(""),
-                            "username": username,
-                            "role": role,
-                            "tenant_id": user["tenant_id"].as_str().unwrap_or("default"),
-                            "permissions": permissions,
-                            "secret_code": user["secret_code"].as_str().unwrap_or(""),
-                            "gmail": user["gmail"].as_str().unwrap_or("")
-                        }
-                    }))
+                    Err(e) => {
+                        tracing::warn!("User active check error in get_me for '{}': {}", username, e);
+                    }
+                    Ok(true) => {}
                 }
-                Ok(None) => Json(json!({
-                    "status": "error",
-                    "message": "User not found"
-                })),
-                Err(e) => Json(json!({
-                    "status": "error",
-                    "message": e.to_string()
-                })),
             }
-        },
-        Err(_) => Json(json!({
+
+            let permissions_str = if role == "super_admin" || role == "tenant_admin" {
+                crate::storage::clickhouse::default_permissions(role)
+            } else {
+                let stored = user["permissions"].as_str().unwrap_or("").to_string();
+                if stored.is_empty() {
+                    crate::storage::clickhouse::default_permissions(role)
+                } else {
+                    stored
+                }
+            };
+            let permissions: Vec<String> = permissions_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            Json(json!({
+                "status": "ok",
+                "user": {
+                    "id": user["id"].as_str().unwrap_or(""),
+                    "username": username,
+                    "role": role,
+                    "tenant_id": user["tenant_id"].as_str().unwrap_or("default"),
+                    "permissions": permissions,
+                    "secret_code": user["secret_code"].as_str().unwrap_or(""),
+                    "gmail": user["gmail"].as_str().unwrap_or("")
+                }
+            }))
+        }
+        Ok(None) => Json(json!({
             "status": "error",
-            "message": "Invalid token"
-        }))
+            "message": "User not found"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        })),
     }
 }
 
