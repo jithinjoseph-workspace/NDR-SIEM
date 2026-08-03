@@ -75,19 +75,15 @@ export class Websocket {
     }
 
     try {
-      const token = localStorage.getItem('ndr_token') || '';
-      if (!token) {
-        console.warn('No token found, aborting WebSocket connection');
-        return;
-      }
-
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${wsProtocol}//${location.host}/ws`;
 
       this.socket = new WebSocket(wsUrl);
 
       this.socket.onopen = () => this.zone.run(() => {
-        this.socket?.send(JSON.stringify({ type: 'auth', token }));
+        // Cookie is sent in the HTTP upgrade request (same-origin, SameSite=Strict).
+        // The backend authenticates via cookie before the first message.
+        // No app-level auth message needed.
       });
 
       // Message handler runs OUTSIDE zone; only critical events enter zone immediately
@@ -112,7 +108,6 @@ export class Websocket {
               // Respect target_username if present — only kick the right user
               if (!data.target_username || data.target_username === me) {
                 this.disconnect();
-                localStorage.removeItem('ndr_token');
                 localStorage.removeItem('ndr_user');
                 sessionStorage.clear();
                 window.location.href = '/login';

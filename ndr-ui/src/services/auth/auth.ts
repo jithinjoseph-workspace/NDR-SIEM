@@ -56,11 +56,13 @@ export class AuthService implements OnDestroy {
       username, password
     }).pipe(
       tap((res: any) => {
-        if (res.token) {
-          localStorage.setItem(this.TOKEN_KEY, res.token);
+        if (res.user) {
+          // Token stays only in the httpOnly cookie — never in localStorage.
           localStorage.setItem(this.USER_KEY, JSON.stringify({
             ...res.user,
             permissions: this.normalizePermissions(res.user?.permissions),
+            sensor_ids: res.user.sensor_ids ?? [],
+            expires_at: res.user.expires_at,
           }));
           this.userDataFreshAt = Date.now();
         }
@@ -98,7 +100,8 @@ export class AuthService implements OnDestroy {
   }
 
   getToken(): string | null {
-    return localStorage.getItem(this.TOKEN_KEY);
+    // Token lives only in the httpOnly cookie — not accessible to JS.
+    return null;
   }
 
   refreshUser(): Observable<any> {
@@ -134,22 +137,17 @@ export class AuthService implements OnDestroy {
   }
 
   isLoggedIn(): boolean {
-    const token = this.getToken();
-    if (!token) return false;
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      return payload.exp > Date.now() / 1000;
-    } catch { return false; }
+    const user = this.getUser();
+    if (!user) return false;
+    if (!user.expires_at) return true; // legacy sessions without expires_at stored
+    return user.expires_at > Date.now() / 1000;
   }
 
-  /** Returns milliseconds until the JWT expires. Negative means already expired. */
+  /** Returns milliseconds until the session expires. Negative means already expired. */
   getTokenExpiresInMs(): number {
-    const token = this.getToken();
-    if (!token) return -1;
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      return payload.exp * 1000 - Date.now();
-    } catch { return -1; }
+    const user = this.getUser();
+    if (!user?.expires_at) return -1;
+    return (user.expires_at * 1000) - Date.now();
   }
 
   isAdmin(): boolean {
@@ -167,12 +165,7 @@ export class AuthService implements OnDestroy {
    * Returns [] for unrestricted users (admins / tenant_admins) or when no token exists.
    */
   getSensorIds(): string[] {
-    const token = this.getToken();
-    if (!token) return [];
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      return Array.isArray(payload.sensor_ids) ? payload.sensor_ids : [];
-    } catch { return []; }
+    return this.getUser()?.sensor_ids ?? [];
   }
 
   isTenantAiEnabled(): boolean {

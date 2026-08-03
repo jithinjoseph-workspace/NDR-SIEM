@@ -3,6 +3,7 @@
 
 pub mod websocket;
 pub mod response;
+#[allow(unused_imports)]
 pub use response::{ApiResponse, JsonResponse, ok as api_ok, err_response as api_err};
 
 /// Global semaphore — limits concurrent evidence bundle AI calls to 4.
@@ -4392,7 +4393,7 @@ pub async fn login(
         use redis::AsyncCommands;
         let mut mux = state.redis_mux.clone();
         let lock_key    = format!("ndr:login_locked:{}", username);
-        let attempt_key = format!("ndr:login_attempts:{}", username);
+        let _attempt_key = format!("ndr:login_attempts:{}", username);
 
         // Check if account is locked
         let locked: bool = mux.exists(&lock_key).await.unwrap_or(false);
@@ -4576,6 +4577,7 @@ pub async fn login(
                 let _: redis::RedisResult<()> = mux.del(format!("ndr:login_attempts:{}", username)).await;
             }
             tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
+            let expires_at = chrono::Utc::now().timestamp() as u64 + 86400;
             let cookie_header = format!(
                 "ndr_token={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400",
                 token
@@ -4593,7 +4595,9 @@ pub async fn login(
                         "permissions": permissions_vec,
                         "ai_enabled": ai_enabled,
                         "gmail": user["gmail"].as_str().unwrap_or(""),
-                        "secret_code": user["secret_code"].as_str().unwrap_or("")
+                        "secret_code": user["secret_code"].as_str().unwrap_or(""),
+                        "sensor_ids": sensor_ids,
+                        "expires_at": expires_at
                     }
                 }))
             ).into_response();

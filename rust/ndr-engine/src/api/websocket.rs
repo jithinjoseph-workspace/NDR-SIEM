@@ -24,37 +24,49 @@ struct WsAuthContext {
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
-    // Token is sent as the first WebSocket message after connect (not in the URL)
-    // so it never appears in nginx access logs or browser history.
-    ws.on_upgrade(move |socket| authenticate_then_handle(socket, state))
+    // Try cookie auth on the HTTP upgrade request first (Step 3 cookie path).
+    // Falls back to the app-level {"type":"auth","token":"..."} message so old
+    // Bearer-header clients continue to work during the migration period.
+    let pre_auth = crate::api::extract_claims(&headers);
+    ws.on_upgrade(move |socket| authenticate_then_handle(socket, state, pre_auth))
 }
 
-async fn authenticate_then_handle(mut socket: WebSocket, state: AppState) {
-    // Wait up to 10 seconds for the client to send {"type":"auth","token":"..."}
-    let claims = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        async {
-            while let Some(Ok(Message::Text(text))) = socket.next().await {
-                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if msg["type"] == "auth" {
-                        if let Some(token) = msg["token"].as_str() {
-                            return crate::api::extract_claims_with_token(token);
+async fn authenticate_then_handle(
+    mut socket: WebSocket,
+    state: AppState,
+    pre_auth: Option<crate::api::AuthClaims>,
+) {
+    // If the HTTP upgrade already carried a valid cookie, skip the message wait.
+    let claims = if let Some(c) = pre_auth {
+        c
+    } else {
+        // Legacy path: wait up to 10 s for {"type":"auth","token":"..."}
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                while let Some(Ok(Message::Text(text))) = socket.next().await {
+                    if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if msg["type"] == "auth" {
+                            if let Some(token) = msg["token"].as_str() {
+                                return crate::api::extract_claims_with_token(token);
+                            }
                         }
                     }
                 }
+                None
             }
-            None
-        }
-    ).await.unwrap_or(None);
+        ).await.unwrap_or(None);
 
-    let claims = match claims {
-        Some(c) => c,
-        None => {
-            let _ = socket.send(Message::Text(
-                r#"{"type":"error","message":"Unauthorized"}"#.to_string()
-            )).await;
-            return;
+        match result {
+            Some(c) => c,
+            None => {
+                let _ = socket.send(Message::Text(
+                    r#"{"type":"error","message":"Unauthorized"}"#.to_string()
+                )).await;
+                return;
+            }
         }
     };
 

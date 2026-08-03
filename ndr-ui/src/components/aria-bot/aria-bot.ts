@@ -5,7 +5,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { interval, Subscription } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { DotLottie } from '@lottiefiles/dotlottie-web';
@@ -402,8 +402,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
       case 'evidence':
         const cid = action.data?.community_id;
         if (cid) {
-          const token = localStorage.getItem('ndr_token') || '';
-          window.open(`/api/evidence/${encodeURIComponent(cid)}?token=${token}`, '_blank');
+          window.open(`/api/evidence/${encodeURIComponent(cid)}`, '_blank');
         } else {
           this.router.navigate(['/evidence']);
         }
@@ -575,15 +574,11 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   // ── HTTP ──
 
-  private headers(): HttpHeaders {
-    return new HttpHeaders({ Authorization: `Bearer ${localStorage.getItem('ndr_token') || ''}` });
-  }
-
   private httpGet(url: string) {
-    return this.http.get<any>(url, { headers: this.headers() });
+    return this.http.get<any>(url);
   }
 
   private httpPost(url: string, body: any) {
-    return this.http.post<any>(url, body, { headers: this.headers() });
+    return this.http.post<any>(url, body);
   }
 }

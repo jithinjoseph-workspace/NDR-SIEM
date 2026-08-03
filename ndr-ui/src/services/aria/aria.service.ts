@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Observable, interval, Subject } from 'rxjs';
 import { switchMap, takeUntil } from 'rxjs/operators';
 
@@ -19,23 +19,12 @@ export class AriaService {
 
   constructor(private http: HttpClient) {}
 
-  private headers(): HttpHeaders {
-    return new HttpHeaders({
-      Authorization: `Bearer ${localStorage.getItem('ndr_token') || ''}`
-    });
-  }
-
   chat(message: string, history: any[]): Observable<any> {
-    return this.http.post('/api/aria/chat',
-      { message, history },
-      { headers: this.headers() }
-    );
+    return this.http.post('/api/aria/chat', { message, history });
   }
 
   getStatus(): Observable<any> {
-    return this.http.get('/api/aria/status',
-      { headers: this.headers() }
-    );
+    return this.http.get('/api/aria/status');
   }
 
   pollStatus(intervalMs = 30000): Observable<any> {

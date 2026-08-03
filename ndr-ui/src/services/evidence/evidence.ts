@@ -1,21 +1,14 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 @Injectable({ providedIn: 'root' })
 export class EvidenceService {
   constructor(private http: HttpClient) {}
 
-  private headers(): HttpHeaders {
-    return new HttpHeaders({
-      Authorization: `Bearer ${localStorage.getItem('ndr_token')}`
-    });
-  }
-
-  // Download ZIP bundle — fetches with Authorization header then triggers browser download
+  // Download ZIP bundle — fetches with cookie auth then triggers browser download
   downloadBundle(communityId: string): void {
     this.http.get(`/api/evidence/${encodeURIComponent(communityId)}`, {
-      headers: this.headers(),
       responseType: 'blob'
     }).subscribe({
       next: (blob) => {
@@ -33,62 +26,51 @@ export class EvidenceService {
   }
 
   listBundles(limit = 50): Observable<any> {
-    return this.http.get(`/api/evidence/bundles?limit=${limit}`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/bundles?limit=${limit}`);
   }
 
   getBundle(bundleId: string): Observable<any> {
-    return this.http.get(`/api/evidence/bundle/${bundleId}`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/bundle/${bundleId}`);
   }
 
   verifyBundle(bundleId: string): Observable<any> {
-    return this.http.get(`/api/evidence/bundle/${bundleId}/verify`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/bundle/${bundleId}/verify`);
   }
 
   setLegalHold(bundleId: string, hold: boolean, reason: string): Observable<any> {
-    return this.http.post(`/api/evidence/bundle/${bundleId}/hold`,
-      { hold, reason }, { headers: this.headers() });
+    return this.http.post(`/api/evidence/bundle/${bundleId}/hold`, { hold, reason });
   }
 
   annotate(bundleId: string, communityId: string, note: string, tag: string): Observable<any> {
     return this.http.post(`/api/evidence/bundle/${bundleId}/annotate`,
-      { community_id: communityId, note, tag }, { headers: this.headers() });
+      { community_id: communityId, note, tag });
   }
 
   getAnnotations(bundleId: string): Observable<any> {
-    return this.http.get(`/api/evidence/bundle/${bundleId}/annotations`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/bundle/${bundleId}/annotations`);
   }
 
   getTimeline(communityId: string): Observable<any> {
-    return this.http.get(`/api/evidence/${encodeURIComponent(communityId)}/timeline`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/${encodeURIComponent(communityId)}/timeline`);
   }
 
   getLog(communityId: string): Observable<any> {
-    return this.http.get(`/api/evidence/${encodeURIComponent(communityId)}/log`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/${encodeURIComponent(communityId)}/log`);
   }
 
   checkIoc(value: string): Observable<any> {
-    return this.http.get(`/api/evidence/iocs/check?value=${encodeURIComponent(value)}`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/iocs/check?value=${encodeURIComponent(value)}`);
   }
 
   getBundleContents(bundleId: string): Observable<any> {
-    return this.http.get(`/api/evidence/bundle/${bundleId}/contents`,
-      { headers: this.headers() });
+    return this.http.get(`/api/evidence/bundle/${bundleId}/contents`);
   }
 
   runInvestigation(communityId: string): Observable<any> {
-    return this.http.post('/api/aria/investigate',
-      { community_id: communityId }, { headers: this.headers() });
+    return this.http.post('/api/aria/investigate', { community_id: communityId });
   }
 
   getVerdict(communityId: string): Observable<any> {
-    return this.http.get(`/api/aria/verdict?cid=${encodeURIComponent(communityId)}`,
-      { headers: this.headers() });
+    return this.http.get(`/api/aria/verdict?cid=${encodeURIComponent(communityId)}`);
   }
 }
