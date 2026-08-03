@@ -309,7 +309,7 @@ export class Dashboard implements OnInit, OnDestroy {
       .range([margin.left, width - margin.right]);
 
     const maxVal = d3.max(snap.data) || 0;
-    const yDomainMax = maxVal > 0 ? maxVal * 1.1 : 10;
+    const yDomainMax = maxVal > 0 ? maxVal * 1.1 : 2;
 
     const y = d3.scaleLinear()
       .domain([0, yDomainMax])
