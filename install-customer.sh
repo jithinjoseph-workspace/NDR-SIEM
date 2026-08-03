@@ -66,11 +66,17 @@ def download_dir(repo_path, local_path):
 
 download_file("docker-compose.yml",   f"{dest}/docker-compose.yml")
 download_file("install-customer.sh",  f"{dest}/install-customer.sh")
+download_file("start.sh",             f"{dest}/start.sh")
+download_file("stop.sh",              f"{dest}/stop.sh")
+download_file("status.sh",            f"{dest}/status.sh")
 download_dir("config",                f"{dest}/config")
 download_dir("scripts",               f"{dest}/scripts")
 download_dir("rust/ndr-engine/rules", f"{dest}/rust/ndr-engine/rules")
 PYEOF
     chmod +x "$INSTALL_DIR/install-customer.sh"
+    chmod +x "$INSTALL_DIR/start.sh"
+    chmod +x "$INSTALL_DIR/stop.sh"
+    chmod +x "$INSTALL_DIR/status.sh"
 
     echo ""
     exec bash "$INSTALL_DIR/install-customer.sh" "$INSTALL_DIR"
@@ -1350,8 +1356,29 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+sudo tee /etc/systemd/system/ndr.service > /dev/null << EOF
+[Unit]
+Description=NDR Platform
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$INSTALL_DIR
+ExecStart=/bin/bash $INSTALL_DIR/start.sh
+ExecStop=/bin/bash $INSTALL_DIR/stop.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 sudo systemctl daemon-reload
+sudo systemctl enable ndr.service
 sudo systemctl enable --now ndr-updater.service
+log "NDR auto-start on boot enabled"
 log "NDR update watcher installed and running"
 
 # ══════════════════════════════════════════════
