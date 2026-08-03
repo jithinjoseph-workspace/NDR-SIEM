@@ -86,7 +86,7 @@
 
 .page-sub {
   margin: 0;
-  color: #4a5a74;
+  color: #7a9ab8;
   font-size: 13px;
 }
 
@@ -149,7 +149,7 @@
   flex-shrink: 0;
 }
 .bundle-list-title {
-  color: #2e4a38;
+  color: #6aaa88;
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 700;
@@ -342,18 +342,18 @@
   box-shadow: 0 0 8px rgba(105,246,184,0.15);
 }
 
-/* Zeek only → dim yellow */
+/* Zeek only → yellow */
 .corr-badge.corr-z {
-  background: rgba(244,208,63,0.08);
-  border-color: rgba(244,208,63,0.22);
-  color: #a8893a;
+  background: rgba(244,208,63,0.1);
+  border-color: rgba(244,208,63,0.3);
+  color: #d4b84a;
 }
 
 /* Suricata only → orange */
 .corr-badge.corr-s {
-  background: rgba(248,135,50,0.08);
-  border-color: rgba(248,135,50,0.25);
-  color: #b06020;
+  background: rgba(248,135,50,0.1);
+  border-color: rgba(248,135,50,0.3);
+  color: #e08848;
 }
 
 /* In detail header — slightly larger */
@@ -390,19 +390,19 @@
   border-radius: 6px;
   border: 1px solid rgba(255,255,255,0.06);
   background: rgba(4,9,22,0.6);
-  color: #2e4a38;
+  color: #6a8aaa;
   cursor: pointer;
   transition: all 140ms ease;
 }
 .corr-filter-btn:hover { color: #c8d8f0; border-color: rgba(255,255,255,0.12); }
 
-.corr-filter-btn.corr-both          { color: #2e6647; border-color: rgba(105,246,184,0.1); }
+.corr-filter-btn.corr-both          { color: #5aaa78; border-color: rgba(105,246,184,0.15); }
 .corr-filter-btn.corr-both.active   { background: rgba(105,246,184,0.1); border-color: rgba(105,246,184,0.35); color: #69f6b8; box-shadow: 0 0 10px rgba(105,246,184,0.12); }
-.corr-filter-btn.corr-s             { color: #6b3820; border-color: rgba(248,135,50,0.08); }
+.corr-filter-btn.corr-s             { color: #c07848; border-color: rgba(248,135,50,0.15); }
 .corr-filter-btn.corr-s.active      { background: rgba(248,135,50,0.08); border-color: rgba(248,135,50,0.28); color: #f08050; }
-.corr-filter-btn.corr-z             { color: #5a4a20; border-color: rgba(244,208,63,0.08); }
+.corr-filter-btn.corr-z             { color: #c0a050; border-color: rgba(244,208,63,0.15); }
 .corr-filter-btn.corr-z.active      { background: rgba(244,208,63,0.08); border-color: rgba(244,208,63,0.25); color: #e6c84a; }
-.corr-filter-btn.corr-all           { color: #2e3f56; }
+.corr-filter-btn.corr-all           { color: #6a88aa; }
 .corr-filter-btn.corr-all.active    { background: rgba(61,158,255,0.08); border-color: rgba(61,158,255,0.2); color: #3d9eff; }
 
 .corr-count {
@@ -546,12 +546,12 @@
 .detail-ip.dst { color: #f88732; }
 
 .detail-arrow {
-  color: #1e2d40;
+  color: #5a7890;
   font-size: 11px;
 }
 
 .detail-cid {
-  color: #1e2d40;
+  color: #5a7890;
   font-size: 10px;
   font-family: var(--font-mono);
   padding-left: 8px;
@@ -596,8 +596,8 @@
 
 .btn-secondary {
   background: rgba(4,9,22,0.7);
-  border-color: rgba(255,255,255,0.07);
-  color: #4a5a74;
+  border-color: rgba(255,255,255,0.12);
+  color: #8aabc8;
 }
 .btn-secondary:hover {
   border-color: rgba(105,246,184,0.2);
@@ -613,8 +613,8 @@
 
 .btn-release {
   background: rgba(4,9,22,0.7);
-  border-color: rgba(255,255,255,0.06);
-  color: #4a5a74;
+  border-color: rgba(255,255,255,0.12);
+  color: #8aabc8;
 }
 .btn-release:hover { color: #c8d8f0; border-color: rgba(255,255,255,0.12); }
 
@@ -637,7 +637,7 @@
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  color: #2e3f56;
+  color: #6a88aa;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
@@ -1130,9 +1130,9 @@ html[data-theme="light"] .custody-table td {
 .section-nav button {
   padding: 5px 12px;
   background: rgba(4,9,22,0.7);
-  border: 1px solid rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: 20px;
-  color: #2e3f56;
+  color: #6a88aa;
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 700;
@@ -1293,7 +1293,7 @@ html[data-theme="light"] .custody-table td {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: #2e3f56;
+  color: #7a92aa;
 }
 .summary-card span {
   font-family: var(--font-mono);
