@@ -22,16 +22,16 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
     sudo mkdir -p "$INSTALL_DIR"
-    sudo chown "$USER:$USER" "$INSTALL_DIR"
+    sudo chown "$(id -un):$(id -gn)" "$INSTALL_DIR"
 
     RAW="https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime"
 
     echo "  Downloading docker-compose.yml..."
-    curl -fsSL "$RAW/docker-compose.yml" -o "$INSTALL_DIR/docker-compose.yml"
+    curl -fsSL "$RAW/docker-compose.yml" | sudo tee "$INSTALL_DIR/docker-compose.yml" > /dev/null
 
     echo "  Downloading install-customer.sh..."
-    curl -fsSL "$RAW/install-customer.sh" -o "$INSTALL_DIR/install-customer.sh"
-    chmod +x "$INSTALL_DIR/install-customer.sh"
+    curl -fsSL "$RAW/install-customer.sh" | sudo tee "$INSTALL_DIR/install-customer.sh" > /dev/null
+    sudo chmod +x "$INSTALL_DIR/install-customer.sh"
 
     echo "  Downloading config, scripts and detection rules..."
     GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
