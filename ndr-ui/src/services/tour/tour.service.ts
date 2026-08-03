@@ -17,10 +17,12 @@ export class TourService {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css';
+      link.integrity = 'sha384-bovbcpDBo0pTIhd7ws6ebPh1PG31ubAHcX2pv8Tcu5EtFHNl5FBciYFtS/e2SN66';
+      link.crossOrigin = 'anonymous';
       document.head.appendChild(link);
 
       const style = document.createElement('style');
-      style.innerHTML = `
+      style.textContent = `
         @keyframes aiPulse {
           0% { box-shadow: 0 0 0 0 rgba(105, 246, 184, 0.4); }
           70% { box-shadow: 0 0 0 10px rgba(105, 246, 184, 0); }
@@ -62,6 +64,8 @@ export class TourService {
 
       const script = document.createElement('script');
       script.src = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js';
+      script.integrity = 'sha384-yPK823YWGKpXfBT8wLqUXmrB5ejcI7sgGBIary/01UavNc1bD92AOUBCBzjXQS/s';
+      script.crossOrigin = 'anonymous';
       script.onload = () => {
         this.driverLoaded = true;
         resolve();

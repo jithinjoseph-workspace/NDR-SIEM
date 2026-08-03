@@ -170,8 +170,17 @@ export class NetworkMap implements OnInit, OnDestroy {
 
   getDomain(node: any): string {
     if (!node || !node.label) return '';
-    // Extract just the domain part before the space/IP address (legacy support)
-    return node.label.split(' ')[0];
+    const raw = String(node.label).split(' ')[0];
+    // Reject obvious unsafe values: contains path or port separators
+    if (raw.includes('/') || raw.includes(':')) return '';
+    // Reject plain IPv4 addresses
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(raw)) return '';
+    // Strict hostname regex: labels 1-63 chars, overall <=253, TLD alpha-only 2-63
+    const hostnameRegex = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[A-Za-z]{2,63}$/;
+    if (!hostnameRegex.test(raw)) return '';
+    // Defensive: no consecutive dots
+    if (raw.includes('..')) return '';
+    return raw.toLowerCase();
   }
 
   getNodeKindLabel(node: any): string {
