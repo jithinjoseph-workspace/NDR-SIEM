@@ -90,6 +90,10 @@ export class AuthService implements OnDestroy {
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.USER_KEY);
     sessionStorage.clear();
+    // Tell the backend to expire the httpOnly cookie (fire-and-forget;
+    // navigation happens regardless of whether the request succeeds).
+    this.http.post(`${this.baseUrl}/auth/logout`, {}, { withCredentials: true })
+      .subscribe({ error: () => {} });
     window.location.href = '/login';
   }
 

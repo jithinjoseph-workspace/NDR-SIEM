@@ -9,9 +9,14 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const router = inject(Router);
   const token = auth.getToken();
 
-  const authReq = token ? req.clone({
-    setHeaders: { Authorization: `Bearer ${token}` }
-  }) : req;
+  // withCredentials: true lets the browser send the httpOnly cookie on every
+  // request and store Set-Cookie responses (login / logout).
+  // The Authorization: Bearer header is still sent while localStorage has a
+  // token — both auth paths remain active so neither client breaks.
+  const authReq = req.clone({
+    withCredentials: true,
+    ...(token ? { setHeaders: { Authorization: `Bearer ${token}` } } : {})
+  });
 
   return next(authReq).pipe(
     catchError(err => {
