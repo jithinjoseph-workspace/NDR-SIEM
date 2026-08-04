@@ -38,10 +38,12 @@ export class Profile implements OnInit {
   readonly messageType       = signal<'success' | 'error'>('success');
   readonly loading           = signal(true);
 
-  showSecretCode    = false;
-  isEditingEmail    = false;
-  editingEmailValue = '';
-  emailUpdateLoading = false;
+  showSecretCode       = false;
+  isEditingEmail       = false;
+  editingEmailValue    = '';
+  emailUpdateLoading   = false;
+  generatingCode       = false;
+  newlyGeneratedCode   = '';
 
   constructor(private api: Api, private auth: AuthService, private cdr: ChangeDetectorRef, private router: Router) {}
 
@@ -66,9 +68,32 @@ export class Profile implements OnInit {
   }
 
   copySecretCode() {
-    if (this.currentUser()?.secret_code) {
-      navigator.clipboard.writeText(this.currentUser().secret_code);
-    }
+    const code = this.newlyGeneratedCode || this.currentUser()?.secret_code;
+    if (code) navigator.clipboard.writeText(code);
+  }
+
+  generateSecretCode() {
+    if (this.generatingCode) return;
+    this.generatingCode = true;
+    this.api.regenerateSecretCode().subscribe({
+      next: (res: any) => {
+        this.generatingCode = false;
+        if (res.status === 'ok') {
+          this.newlyGeneratedCode = res.secret_code;
+          this.showSecretCode = true;
+          this.showMessage('New secret code generated — save it somewhere safe!', 'success');
+          this.auth.refreshUser().subscribe({
+            next: () => { this.currentUser.set(this.auth.getUser() || {}); this.cdr.markForCheck(); }
+          });
+        } else {
+          this.showMessage(res.message || 'Failed to generate code', 'error');
+        }
+      },
+      error: () => {
+        this.generatingCode = false;
+        this.showMessage('Failed to generate code', 'error');
+      }
+    });
   }
 
   startEmailEdit() {

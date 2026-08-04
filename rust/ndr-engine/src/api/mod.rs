@@ -433,6 +433,27 @@ pub async fn auth_middleware(
             if claims.role != "super_admin" {
                 let mut rc = state.redis_mux.clone();
 
+                // ── Session JTI gate — force-logout / session revocation ───────
+                // Checks that the session still exists in Redis. Deleted by force-logout
+                // or explicit logout. Falls back to allow if Redis is unavailable.
+                if let Some(jti) = &claims.jti {
+                    let session_key = format!("ndr:session:{}", jti);
+                    let exists: bool = redis::cmd("EXISTS")
+                        .arg(&session_key)
+                        .query_async(&mut rc)
+                        .await
+                        .unwrap_or(true); // Redis down → allow through
+                    if !exists {
+                        return axum::response::Response::builder()
+                            .status(401)
+                            .header("Content-Type", "application/json")
+                            .body(axum::body::Body::from(
+                                r#"{"status":"error","code":"SESSION_TERMINATED","message":"Session terminated — please log in again"}"#
+                            ))
+                            .unwrap();
+                    }
+                }
+
                 // ── Tenant-level gate (Redis-cached 60s) ──────────────────────
                 let t_key = format!("ndr:active:tenant:{}", claims.tenant_id);
                 let t_cached: Option<String> = redis::cmd("GET").arg(&t_key).query_async(&mut rc).await.ok().flatten();
@@ -1195,10 +1216,12 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         }
     }
 
-    // Queue PCAP upload request for external sensors — HIGH/CRITICAL only.
+    // Queue PCAP upload request for sensors — HIGH/CRITICAL only.
     // MEDIUM generates too many short-lived multicast sessions (SSDP etc.)
     // and evidence bundles for MEDIUM are already auto-captured above.
-    if tenant_id != "default" && !hit.community_id.is_empty()
+    // Default-tenant cloud sensors (e.g. EVOFOX) also need queuing — they
+    // poll /api/pcap/pending and upload from their local Arkime raw files.
+    if !hit.community_id.is_empty()
         && matches!(risk.severity.as_str(), "HIGH" | "CRITICAL")
     {
         let ch2 = state.ch_storage.clone();
@@ -4736,47 +4759,31 @@ pub async fn update_me_gmail(
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-
-    let Ok(secret) = std::env::var("JWT_SECRET") else {
-        return Json(json!({"status": "error", "message": "Server misconfiguration"}));
+    let username = match extract_claims(&headers) {
+        Some(c) => c.sub,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
     };
+    match state.ch_storage.get_user_by_username(&username).await {
+        Ok(Some(user)) => {
+            let id = user["id"].as_str().unwrap_or("");
+            let gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
 
-    match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default()
-    ) {
-        Ok(data) => {
-            let username = data.claims.sub;
-            match state.ch_storage.get_user_by_username(&username).await {
-                Ok(Some(user)) => {
-                    let id = user["id"].as_str().unwrap_or("");
-                    let gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
-                    
-                    if gmail.is_empty() {
-                        return Json(json!({"status": "error", "message": "Email address cannot be empty"}));
-                    }
-                    if !gmail.contains('@') {
-                        return Json(json!({"status": "error", "message": "Invalid email address format"}));
-                    }
+            if gmail.is_empty() {
+                return Json(json!({"status": "error", "message": "Email address cannot be empty"}));
+            }
+            if !gmail.contains('@') {
+                return Json(json!({"status": "error", "message": "Invalid email address format"}));
+            }
 
-                    match state.ch_storage.update_user_gmail(id, &gmail).await {
-                        Ok(_) => Json(json!({"status": "ok", "message": "Recovery email updated successfully"})),
-                        Err(e) => {
-                            tracing::error!("Failed to update recovery email for user '{}': {}", username, e);
-                            Json(json!({"status": "error", "message": "Failed to update recovery email"}))
-                        }
-                    }
-                },
-                _ => Json(json!({"status": "error", "message": "User not found"}))
+            match state.ch_storage.update_user_gmail(id, &gmail).await {
+                Ok(_) => Json(json!({"status": "ok", "message": "Recovery email updated successfully"})),
+                Err(e) => {
+                    tracing::error!("Failed to update recovery email for user '{}': {}", username, e);
+                    Json(json!({"status": "error", "message": "Failed to update recovery email"}))
+                }
             }
         },
-        Err(_) => Json(json!({"status": "error", "message": "Invalid token"}))
+        _ => Json(json!({"status": "error", "message": "User not found"}))
     }
 }
 
@@ -4797,6 +4804,38 @@ pub async fn logout() -> axum::response::Response {
         resp.headers_mut().insert(axum::http::header::SET_COOKIE, v);
     }
     resp
+}
+
+// POST /api/auth/me/regenerate-secret
+pub async fn regenerate_secret_code(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let username = match extract_claims(&headers) {
+        Some(c) => c.sub,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    let user = match state.ch_storage.get_user_by_username(&username).await {
+        Ok(Some(u)) => u,
+        _ => return Json(json!({"status": "error", "message": "User not found"})),
+    };
+    let id = user["id"].as_str().unwrap_or("").to_string();
+    // ThreadRng is !Send — keep it in its own block so it drops before the .await
+    let code: String = {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        (0..6).map(|_| {
+            let idx = rng.gen_range(0..36usize);
+            if idx < 10 { (b'0' + idx as u8) as char } else { (b'A' + (idx - 10) as u8) as char }
+        }).collect()
+    };
+    match state.ch_storage.update_user_secret_code(&id, &code).await {
+        Ok(_) => Json(json!({"status": "ok", "secret_code": code})),
+        Err(e) => {
+            tracing::error!("Failed to regenerate secret_code for '{}': {}", username, e);
+            Json(json!({"status": "error", "message": "Failed to generate code"}))
+        }
+    }
 }
 
 // ── Password Reset Flow (Tenant Admins) ─────────────────────────────────────
@@ -6477,6 +6516,48 @@ fn extract_sensor_key_prefix(
     Some(key[..16].to_string())
 }
 
+/// GET /api/sensor/pcap-uploader.py
+/// Extracts the embedded pcap-uploader.py from install-sensor.sh and serves it.
+/// Used by sensors to self-update the uploader without a full reinstall.
+pub async fn serve_pcap_uploader() -> axum::response::Response {
+    let script_path = std::env::var("SENSOR_INSTALL_SCRIPT_PATH")
+        .unwrap_or_else(|_| "/scripts/install-sensor.sh".to_string());
+
+    let script = match tokio::fs::read_to_string(&script_path).await {
+        Ok(s) => s,
+        Err(_) => return axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("# pcap-uploader.py not found\n"))
+            .unwrap(),
+    };
+
+    // Extract between heredoc markers:
+    // cat > /opt/ndr-sensor/pcap-uploader.py << 'UPLOADER'
+    // ...
+    // UPLOADER
+    let start_marker = "<< 'UPLOADER'";
+    let end_marker = "\nUPLOADER";
+    let uploader = if let Some(start) = script.find(start_marker) {
+        let after = &script[start + start_marker.len()..];
+        if let Some(end) = after.find(end_marker) {
+            after[..end].trim_start_matches('\n').to_string()
+        } else { String::new() }
+    } else { String::new() };
+
+    if uploader.is_empty() {
+        return axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("# uploader section not found in install script\n"))
+            .unwrap();
+    }
+
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/x-python; charset=utf-8")
+        .body(axum::body::Body::from(uploader))
+        .unwrap()
+}
+
 pub async fn install_sensor_script() -> axum::response::Response {
     let path = std::env::var("SENSOR_INSTALL_SCRIPT_PATH")
         .unwrap_or_else(|_| "/scripts/install-sensor.sh".to_string());
@@ -7453,7 +7534,11 @@ pub async fn arkime_status(
         }
         Err(e) => axum::Json(json!({
             "status": "error",
-            "message": format!("Arkime unreachable: {}", e)
+            "message": if e.is_connect() {
+                "Arkime is not running on this sensor".to_string()
+            } else {
+                "Arkime unreachable".to_string()
+            }
         })).into_response()
     }
 }
@@ -7634,6 +7719,14 @@ pub async fn pcap_upload(
         tracing::warn!("pcap_upload: failed to index session: {}", e);
     }
 
+    // Back-fill file_path on any existing pcap_sessions rows for this community_id
+    // (e.g. rows created by the Arkime background sync that had file_path = "").
+    // ReplacingMergeTree keeps the row with the latest start_time, so re-inserting
+    // with now() makes the file_path visible on the next FINAL read.
+    let _ = state.ch_storage
+        .update_pcap_file_path_by_community_id(&tenant_id, &community_id, &file_path)
+        .await;
+
     let _ = state.ch_storage.mark_pcap_fulfilled(&tenant_id, &community_id).await;
     tracing::info!("pcap_upload: ✅ saved cid={} tenant={} size={}B", community_id, tenant_id, bytes_count);
 
@@ -7706,7 +7799,46 @@ pub async fn pcap_download_stored(
         return (axum::http::StatusCode::NOT_FOUND, "PCAP not available").into_response();
     }
 
-    let target = format!("{}/api/session/{}/pcap", arkime_url, session_id);
+    // Arkime PCAP endpoint requires the node name: /api/session/{node}/{id}/pcap
+    // Try ?node= query param first (passed by Angular from session.sensor_host),
+    // then fall back to querying OpenSearch directly for the session document.
+    let node_from_param = raw_query.as_deref().unwrap_or("").split('&').find_map(|p| {
+        p.strip_prefix("node=").map(|v| urlencoding::decode(v).unwrap_or_default().into_owned())
+    }).unwrap_or_default();
+
+    let node = if !node_from_param.is_empty() {
+        node_from_param
+    } else {
+        // Query OpenSearch for the session _id to get the node name
+        let es_url = std::env::var("OPENSEARCH_URL")
+            .unwrap_or_else(|_| "http://localhost:9200".to_string());
+        let search = json!({
+            "size": 1,
+            "_source": ["node"],
+            "query": {"ids": {"values": [&session_id]}}
+        });
+        match state.http_client
+            .post(&format!("{}/arkime_sessions3-*/_search", es_url))
+            .json(&search)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => {
+                r.json::<serde_json::Value>().await
+                    .ok()
+                    .and_then(|v| v["hits"]["hits"][0]["_source"]["node"].as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            }
+            _ => String::new(),
+        }
+    };
+
+    let target = if node.is_empty() {
+        format!("{}/api/session/{}/pcap", arkime_url, session_id)
+    } else {
+        format!("{}/api/session/{}/{}/pcap", arkime_url, node, session_id)
+    };
     match state.http_client
         .get(&target)
         .header("Authorization", format!("Basic {}", arkime_basic_auth(&arkime_pass)))
@@ -7715,7 +7847,47 @@ pub async fn pcap_download_stored(
         .await
     {
         Ok(resp) => {
+            if !resp.status().is_success() {
+                return (axum::http::StatusCode::NOT_FOUND,
+                    format!("Arkime: session not found or no PCAP stored ({})", resp.status())
+                ).into_response();
+            }
+            // Arkime returns HTML (its viewer page) with 200 when the node is missing
+            // from the URL or auth fails — check content-type and PCAP magic bytes.
+            let ct = resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
             let bytes = resp.bytes().await.unwrap_or_default();
+            let is_pcap = !ct.contains("html") && bytes.len() >= 4 && {
+                let magic = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                magic == 0xa1b2_c3d4 || magic == 0xd4c3_b2a1 || magic == 0x0a0d_0d0a
+            };
+            if !is_pcap {
+                // Fall through to raw-file fallback below
+                tracing::warn!("Arkime returned non-PCAP for session {} (ct={}), trying raw fallback", session_id, ct);
+                let qs = raw_query.as_deref().unwrap_or("");
+                let qp = |key: &str| -> String {
+                    qs.split('&').find_map(|p| {
+                        p.strip_prefix(&format!("{}=", key))
+                            .map(|v| urlencoding::decode(v).unwrap_or_default().into_owned())
+                    }).unwrap_or_default()
+                };
+                let src_ip   = qp("src_ip");
+                let dst_ip   = qp("dst_ip");
+                let src_port = qp("src_port");
+                let dst_port = qp("dst_port");
+                if let Some(raw_bytes) = pcap_from_raw_direct(&src_ip, &dst_ip, &src_port, &dst_port, &session_id).await {
+                    return ([
+                        ("Content-Type", "application/vnd.tcpdump.pcap"),
+                        ("Content-Disposition", &format!("attachment; filename=\"{}.pcap\"", session_id)),
+                    ], raw_bytes).into_response();
+                }
+                return (axum::http::StatusCode::BAD_GATEWAY,
+                    "Arkime returned an unexpected response — session PCAP could not be retrieved."
+                ).into_response();
+            }
             (
                 [
                     ("Content-Type", "application/vnd.tcpdump.pcap"),
@@ -7725,11 +7897,121 @@ pub async fn pcap_download_stored(
                 bytes,
             ).into_response()
         }
-        Err(e) => (
-            axum::http::StatusCode::BAD_GATEWAY,
-            format!("Arkime unreachable: {}", e),
-        ).into_response(),
+        Err(e) => {
+            if !e.is_connect() {
+                return (axum::http::StatusCode::BAD_GATEWAY, "Arkime unreachable").into_response();
+            }
+            // Arkime viewer down — raw files still in /opt/arkime/raw/.
+            // Read IPs/ports directly from query params (passed by the frontend from session data).
+            let qs = raw_query.as_deref().unwrap_or("");
+            let qp = |key: &str| -> String {
+                qs.split('&').find_map(|p| {
+                    p.strip_prefix(&format!("{}=", key))
+                        .map(|v| urlencoding::decode(v).unwrap_or_default().into_owned())
+                }).unwrap_or_default()
+            };
+            let src_ip   = qp("src_ip");
+            let dst_ip   = qp("dst_ip");
+            let src_port = qp("src_port");
+            let dst_port = qp("dst_port");
+
+            if let Some(bytes) = pcap_from_raw_direct(&src_ip, &dst_ip, &src_port, &dst_port, &session_id).await {
+                return (
+                    [
+                        ("Content-Type", "application/vnd.tcpdump.pcap"),
+                        ("Content-Disposition",
+                         &format!("attachment; filename=\"{}.pcap\"", session_id)),
+                    ],
+                    bytes,
+                ).into_response();
+            }
+            (
+                axum::http::StatusCode::BAD_GATEWAY,
+                "Arkime viewer is not running — raw PCAP files exist but could not be extracted \
+                 (install tshark or tcpdump, or start arkimeviewer).",
+            ).into_response()
+        }
     }
+}
+
+/// Arkime viewer is down — extract session directly from /opt/arkime/raw/ using
+/// IPs from query params (no OpenSearch needed). Handles .pcap.zst files.
+/// Arkime viewer is down — extract session from /opt/arkime/raw/ using IPs from query params.
+/// Handles Arkime's .pcap.zst compressed files via zstd + tcpdump pipeline.
+/// session_id prefix (e.g. "260802-...") is used to find the right date's files first.
+async fn pcap_from_raw_arkime(_state: &AppState, session_id: &str) -> Option<Vec<u8>> {
+    // caller passes IPs via query params — see call site
+    None // IPs not available here; see pcap_from_raw_direct called at the Err branch
+}
+
+async fn pcap_from_raw_direct(
+    src_ip: &str, dst_ip: &str,
+    src_port: &str, dst_port: &str,
+    session_id: &str,
+) -> Option<Vec<u8>> {
+    if src_ip.is_empty() || dst_ip.is_empty() { return None; }
+
+    let raw_dir = std::path::Path::new("/opt/arkime/raw");
+    if !raw_dir.is_dir() { return None; }
+
+    // Session ID starts with YYMMDD (e.g. "260802-...") — prefer files from that date
+    let date_prefix = session_id.split('-').next().unwrap_or("");
+
+    // Collect all .pcap and .pcap.zst files; prefer same-date files first
+    let mut files: Vec<(u8, std::time::SystemTime, String)> = vec![]; // (priority, mtime, path)
+    if let Ok(rd) = std::fs::read_dir(raw_dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let is_zst  = name.ends_with(".pcap.zst");
+            let is_pcap = name.ends_with(".pcap") && !is_zst;
+            if !is_zst && !is_pcap { continue; }
+            let mtime = e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+            let priority = if !date_prefix.is_empty() && name.contains(date_prefix) { 0u8 } else { 1u8 };
+            files.push((priority, mtime, p.to_string_lossy().into_owned()));
+        }
+    }
+    if files.is_empty() { return None; }
+    // Sort: same-date files first, then newest first within each group
+    files.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+
+    let bpf = if !src_port.is_empty() && !dst_port.is_empty() {
+        format!("host {} and host {} and (port {} or port {})", src_ip, dst_ip, src_port, dst_port)
+    } else {
+        format!("host {} and host {}", src_ip, dst_ip)
+    };
+
+    for (_, _, path) in &files {
+        let pcap_path = if path.ends_with(".pcap.zst") {
+            // Decompress to a temp file, then filter with tcpdump
+            let tmp = format!("/tmp/ndr_raw_{}.pcap", std::process::id());
+            let ok = tokio::process::Command::new("zstd")
+                .args(["-dc", path, "-o", &tmp])
+                .stderr(std::process::Stdio::null())
+                .status().await
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok { continue; }
+            Some(tmp)
+        } else {
+            None // use original path
+        };
+        let read_path = pcap_path.as_deref().unwrap_or(path.as_str());
+        let out = tokio::process::Command::new("tcpdump")
+            .args(["-r", read_path, "-w", "-", &bpf])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output().await;
+        if let Some(tmp) = &pcap_path {
+            let _ = tokio::fs::remove_file(tmp).await;
+        }
+        let bytes = match out {
+            Ok(o) if o.stdout.len() > 24 => o.stdout,
+            _ => continue,
+        };
+        return Some(bytes);
+    }
+    None
 }
 
 pub async fn pcap_pending(
@@ -8416,6 +8698,112 @@ pub async fn get_soar_runs(
 // ============================================================
 
 
+
+/// POST /api/evidence/trigger
+/// Trigger evidence bundle capture in background for a given community_id.
+/// Returns 202 immediately; build runs async (same path as alert auto-capture).
+#[derive(serde::Deserialize)]
+pub struct TriggerEvidenceBody { pub community_id: String }
+
+pub async fn trigger_evidence_capture(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Json(body): axum::extract::Json<TriggerEvidenceBody>,
+) -> impl axum::response::IntoResponse {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({"error":"unauthorized"}))),
+    };
+
+    let cid     = body.community_id.clone();
+    let tenant  = claims.tenant_id.clone();
+    let ch      = state.ch_storage.clone();
+
+    let alert_json = ch.get_hit_by_community_id(&tenant, &cid).await
+        .unwrap_or_default()
+        .unwrap_or(serde_json::json!({"community_id": cid, "timestamp": chrono::Utc::now().to_rfc3339()}));
+
+    let opensearch_url = if tenant == "default" {
+        std::env::var("OPENSEARCH_URL").unwrap_or_else(|_| "http://localhost:9200".to_string())
+    } else {
+        String::new()
+    };
+    let arkime_url  = std::env::var("ARKIME_URL").unwrap_or_default();
+    let arkime_pass = std::env::var("ARKIME_PASS").unwrap_or_else(|_| "admin".to_string());
+    let pcap_path   = if tenant != "default" {
+        ch.get_pcap_file_path_by_community_id(&tenant, &cid).await.unwrap_or_default()
+    } else { None };
+
+    tokio::spawn(async move {
+        let _permit = evidence_semaphore().acquire_owned().await;
+        match crate::evidence::build_evidence_bundle(
+            &opensearch_url, &arkime_url, &arkime_pass,
+            &cid, alert_json, &tenant, pcap_path,
+        ).await {
+            Ok((zip_bytes, bundle_sha256, manifest)) => {
+                let bundle_id = manifest["bundle_id"].as_str().unwrap_or("").to_string();
+                let src_ip    = manifest["summary"]["src_ip"].as_str().unwrap_or("").to_string();
+                let dst_ip    = manifest["summary"]["dst_ip"].as_str().unwrap_or("").to_string();
+                let severity  = manifest["summary"]["severity"].as_str().unwrap_or("UNKNOWN").to_string();
+                let date      = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                let dir       = format!("/opt/ndr/evidence/{}/{}", tenant, date);
+                let _ = tokio::fs::create_dir_all(&dir).await;
+                let file_path = format!("{}/{}.zip", dir, bundle_id);
+                let size      = zip_bytes.len() as u64;
+                if tokio::fs::write(&file_path, &zip_bytes).await.is_ok() {
+                    let _ = ch.save_evidence_bundle(
+                        &tenant, &bundle_id, &cid,
+                        &file_path, &bundle_sha256, size,
+                        0, // manual capture (not auto)
+                        90, &src_ip, &dst_ip, &severity, &cid,
+                    ).await;
+                }
+                tracing::info!("Manual collect-pcap triggered bundle {} for cid {}", bundle_id, cid);
+
+                // Queue PCAP upload for the sensor to pull.
+                // Case community_id may not be "1:xxx" format — look up real
+                // network community IDs from ndr_events using src/dst IP.
+                let cids_to_queue: Vec<String> = if cid.starts_with("1:") {
+                    vec![cid.clone()]
+                } else if !src_ip.is_empty() && !dst_ip.is_empty() {
+                    #[derive(clickhouse::Row, serde::Deserialize)]
+                    struct CidRow { community_id: String }
+                    ch.client
+                        .query(&format!(
+                            "SELECT DISTINCT community_id \
+                             FROM {}.ndr_events \
+                             WHERE ((src_ip = '{}' AND dst_ip = '{}') \
+                                 OR (src_ip = '{}' AND dst_ip = '{}')) \
+                             AND community_id LIKE '1:%' \
+                             AND timestamp > now() - INTERVAL 24 HOUR \
+                             LIMIT 10",
+                            crate::storage::clickhouse::tenant_db_pub(&tenant),
+                            sql_escape(&src_ip), sql_escape(&dst_ip),
+                            sql_escape(&dst_ip), sql_escape(&src_ip),
+                        ))
+                        .fetch_all::<CidRow>().await
+                        .unwrap_or_default()
+                        .into_iter().map(|r| r.community_id).collect()
+                } else {
+                    vec![]
+                };
+
+                for flow_cid in &cids_to_queue {
+                    let _ = ch.queue_pcap_request(&tenant, flow_cid).await;
+                }
+                if !cids_to_queue.is_empty() {
+                    tracing::info!(
+                        "Queued pcap_pending for {} flow(s) (case cid={})",
+                        cids_to_queue.len(), cid
+                    );
+                }
+            }
+            Err(e) => tracing::warn!("trigger_evidence_capture failed for cid {}: {}", cid, e),
+        }
+    });
+
+    (axum::http::StatusCode::ACCEPTED, axum::Json(serde_json::json!({"status":"collection triggered"})))
+}
 
 /// GET /api/evidence/:community_id
 /// Build and return a ZIP evidence bundle for a community_id.
@@ -10732,6 +11120,51 @@ pub async fn force_logout_user(
     tracing::info!(
         "Admin '{}' force-logged-out '{}' ({} sessions terminated)",
         claims.sub, target_username, count
+    );
+    Json(json!({"status":"ok","sessions_terminated":count}))
+}
+
+// DELETE /api/admin/sessions/:username/device — sign out one specific device (by ip+device string)
+#[derive(serde::Deserialize)]
+pub struct ForceLogoutDeviceBody { pub ip: String, pub device: String }
+
+pub async fn force_logout_device(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(target_username): axum::extract::Path<String>,
+    axum::extract::Json(body): axum::extract::Json<ForceLogoutDeviceBody>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status":"error","message":"Unauthorized"})),
+    };
+    if !matches!(claims.role.as_str(), "admin" | "super_admin" | "tenant_admin") {
+        return Json(json!({"status":"error","message":"Forbidden"}));
+    }
+    let tenant_id = &claims.tenant_id;
+
+    use redis::AsyncCommands;
+    let mut mux = state.redis_mux.clone();
+    let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, target_username);
+    let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+
+    let jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
+    let mut count = 0usize;
+    for jti in &jtis {
+        let session_key = format!("ndr:session:{}", jti);
+        let s_ip:    Option<String> = mux.hget(&session_key, "ip").await.unwrap_or(None);
+        let s_device: Option<String> = mux.hget(&session_key, "device").await.unwrap_or(None);
+        if s_ip.as_deref() == Some(&body.ip) && s_device.as_deref() == Some(&body.device) {
+            let _: redis::RedisResult<i64> = mux.del(&session_key).await;
+            let _: redis::RedisResult<i64> = mux.srem(&user_set_key, jti).await;
+            let _: redis::RedisResult<i64> = mux.srem(&tenant_set_key, jti).await;
+            count += 1;
+        }
+    }
+
+    tracing::info!(
+        "Admin '{}' signed out device '{}' / '{}' for user '{}' ({} sessions)",
+        claims.sub, body.device, body.ip, target_username, count
     );
     Json(json!({"status":"ok","sessions_terminated":count}))
 }

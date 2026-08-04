@@ -111,6 +111,11 @@
               <strong>Password Reset Code</strong>
               <small>Required to reset your password if you forget it</small>
             </div>
+            <button (click)="generateSecretCode()" [disabled]="generatingCode"
+                    class="profile-field-edit-btn" style="margin-left:auto;">
+              <lucide-icon [name]="ShieldIcon" class="w-3 h-3"></lucide-icon>
+              {{ generatingCode ? 'Generating…' : (currentUser()?.secret_code ? 'Regenerate' : 'Generate') }}
+            </button>
           </div>
           <div class="modal-fields" style="margin-top:12px;">
             <div class="modal-field">
@@ -118,14 +123,21 @@
               <div class="input-wrap" style="padding-right:8px;">
                 <lucide-icon [name]="ShieldIcon" class="input-icon w-4 h-4"></lucide-icon>
                 <span style="flex:1;font-family:monospace;font-size:16px;letter-spacing:4px;color:var(--tx1);user-select:none;">
-                  {{ showSecretCode ? (currentUser()?.secret_code || 'Not configured') : '••••••' }}
+                  <ng-container *ngIf="showSecretCode">
+                    {{ newlyGeneratedCode || currentUser()?.secret_code || 'Not configured' }}
+                  </ng-container>
+                  <ng-container *ngIf="!showSecretCode">
+                    {{ (newlyGeneratedCode || currentUser()?.secret_code) ? '••••••' : 'Not configured' }}
+                  </ng-container>
                 </span>
                 <div style="display:flex;gap:6px;flex-shrink:0;">
                   <button (click)="showSecretCode = !showSecretCode" class="profile-icon-btn"
-                          [title]="showSecretCode ? 'Hide' : 'Reveal'">
+                          [title]="showSecretCode ? 'Hide' : 'Reveal'"
+                          [disabled]="!newlyGeneratedCode && !currentUser()?.secret_code">
                     <lucide-icon [name]="showSecretCode ? EyeOffIcon : EyeIcon" class="w-4 h-4"></lucide-icon>
                   </button>
-                  <button (click)="copySecretCode()" class="profile-icon-btn blue-btn" title="Copy to clipboard">
+                  <button (click)="copySecretCode()" class="profile-icon-btn blue-btn" title="Copy to clipboard"
+                          [disabled]="!newlyGeneratedCode && !currentUser()?.secret_code">
                     <lucide-icon [name]="CopyIcon" class="w-4 h-4"></lucide-icon>
                   </button>
                 </div>

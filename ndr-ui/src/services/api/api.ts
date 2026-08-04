@@ -433,6 +433,10 @@ export class Api {
     return this.http.put(`${this.baseUrl}/auth/me/gmail`, { gmail });
   }
 
+  regenerateSecretCode(): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/me/regenerate-secret`, {});
+  }
+
   setUserStatus(id: string, active: boolean): Observable<any> {
     return this.http.post(`${this.baseUrl}/auth/users/${id}/status`, { active });
   }
@@ -653,6 +657,10 @@ export class Api {
     return this.http.get(`${this.baseUrl}/events/by-cid?cid=${encodeURIComponent(cid)}`);
   }
 
+  triggerEvidenceCapture(communityId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/evidence/trigger`, { community_id: communityId });
+  }
+
   getAiActivity(): Observable<any> {
     return this.http.get(`${this.baseUrl}/ai-activity`);
   }
@@ -781,5 +789,9 @@ export class Api {
 
   forceLogoutUser(username: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/admin/sessions/${encodeURIComponent(username)}`);
+  }
+
+  forceLogoutDevice(username: string, ip: string, device: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/admin/sessions/${encodeURIComponent(username)}/device`, { body: { ip, device } });
   }
 }

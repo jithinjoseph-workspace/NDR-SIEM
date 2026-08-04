@@ -989,15 +989,38 @@ async fn build_evidence_bundle_inner(
 
     // ── 2. PCAP bytes ─────────────────────────────────────────────────────────
     let arkime_session_id = session_meta["arkime_session_id"].as_str().unwrap_or("");
+    let arkime_node = session_meta["source"]["node"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
 
     let pcap_bytes: Vec<u8> = if let Some(ref path) = pcap_file_path {
         tokio::fs::read(path).await.unwrap_or_default()
     } else if !arkime_session_id.is_empty() && !arkime_url.is_empty() {
         async {
-            let bytes = http.get(format!("{}/api/session/{}/pcap", arkime_url, arkime_session_id))
+            // Arkime requires the node name in the URL; without it the viewer
+            // returns its HTML page with a 200 status instead of PCAP data.
+            let url = if arkime_node.is_empty() {
+                format!("{}/api/session/{}/pcap", arkime_url, arkime_session_id)
+            } else {
+                format!("{}/api/session/{}/{}/pcap", arkime_url, arkime_node, arkime_session_id)
+            };
+            let resp = http.get(&url)
                 .basic_auth("admin", Some(arkime_pass))
-                .send().await.ok()?
-                .bytes().await.ok()?;
+                .send().await.ok()?;
+            let ct = resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            if ct.contains("html") { return None; }
+            let bytes = resp.bytes().await.ok()?;
+            // Validate PCAP magic number (d4 c3 b2 a1 or a1 b2 c3 d4)
+            if bytes.len() < 4 { return None; }
+            let magic = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            if magic != 0xa1b2_c3d4 && magic != 0xd4c3_b2a1 && magic != 0x0a0d_0d0a {
+                return None;
+            }
             Some(bytes.to_vec())
         }.await.unwrap_or_default()
     } else {

@@ -740,6 +740,23 @@ pub async fn update_user_gmail(
     Ok(())
 }
 
+pub async fn update_user_secret_code(
+    &self,
+    id: &str,
+    code: &str,
+) -> anyhow::Result<()> {
+    let esc_id   = sql_escape(id);
+    let esc_code = sql_escape(code);
+    self.client.query(&format!(
+        "ALTER TABLE ndr.users \
+         UPDATE secret_code = '{}' \
+         WHERE id = '{}' \
+         SETTINGS mutations_sync=1",
+        esc_code, esc_id
+    )).execute().await?;
+    Ok(())
+}
+
 
 pub async fn get_tenants(
     &self
@@ -3708,6 +3725,58 @@ pub async fn save_pcap_session(
         sql_escape(sensor_host), sql_escape(file_path)
     );
     self.client.query(&query).execute().await?;
+    Ok(())
+}
+
+/// Re-insert all pcap_sessions rows matching community_id with file_path set.
+/// ReplacingMergeTree keeps the row with the latest start_time, so inserting
+/// now() makes the updated row win after the next FINAL merge.
+pub async fn update_pcap_file_path_by_community_id(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+    file_path: &str,
+) -> anyhow::Result<()> {
+    let db = tenant_db(tenant_id);
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row {
+        session_id:  String,
+        community_id: String,
+        src_ip:      String,
+        dst_ip:      String,
+        src_port:    u16,
+        dst_port:    u16,
+        proto:       String,
+        bytes:       u64,
+        packets:     u64,
+        arkime_url:  String,
+        sensor_host: String,
+    }
+    let rows = self.client.query(&format!(
+        "SELECT session_id, community_id, src_ip, dst_ip, src_port, dst_port, \
+                proto, bytes, packets, arkime_url, sensor_host \
+         FROM {}.pcap_sessions FINAL \
+         WHERE tenant_id = '{}' AND community_id = '{}' AND file_path = ''",
+        db, sql_escape(tenant_id), sql_escape(community_id)
+    )).fetch_all::<Row>().await?;
+
+    for r in rows {
+        let q = format!(
+            "INSERT INTO {}.pcap_sessions \
+             (session_id, community_id, src_ip, dst_ip, src_port, dst_port, \
+              proto, start_time, end_time, bytes, packets, arkime_url, \
+              tenant_id, sensor_host, file_path) \
+             VALUES ('{}','{}','{}','{}',{},{},'{}',now(),now(),{},{},'{}','{}','{}','{}')",
+            db,
+            sql_escape(&r.session_id), sql_escape(&r.community_id),
+            sql_escape(&r.src_ip), sql_escape(&r.dst_ip),
+            r.src_port, r.dst_port, sql_escape(&r.proto),
+            r.bytes, r.packets,
+            sql_escape(&r.arkime_url), sql_escape(tenant_id),
+            sql_escape(&r.sensor_host), sql_escape(file_path)
+        );
+        let _ = self.client.query(&q).execute().await;
+    }
     Ok(())
 }
 

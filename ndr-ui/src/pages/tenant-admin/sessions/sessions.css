@@ -1,0 +1,30 @@
+.device-signout-btn {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: transparent;
+  color: #f87171;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.session-device-row:hover .device-signout-btn { opacity: 1; }
+.device-signout-btn:hover { border-color: rgba(239, 68, 68, 0.7); background: rgba(239, 68, 68, 0.08); }
+.device-signout-btn:disabled { opacity: 0 !important; cursor: not-allowed; }
+
+.device-confirm { margin-left: 32px; }
+
+.session-tab-count {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #69f6b8;
+  background: rgba(105, 246, 184, 0.1);
+  border: 1px solid rgba(105, 246, 184, 0.2);
+  border-radius: 10px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}

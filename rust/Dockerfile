@@ -24,6 +24,7 @@ FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates libssl3 libsasl2-2 libcurl4 curl \
+    zstd tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker

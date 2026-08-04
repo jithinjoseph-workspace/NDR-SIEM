@@ -109,8 +109,11 @@ export class Websocket {
               if (!data.target_username || data.target_username === me) {
                 this.disconnect();
                 localStorage.removeItem('ndr_user');
+                localStorage.removeItem('ndr_token');
                 sessionStorage.clear();
-                window.location.href = '/login';
+                // Expire the httpOnly cookie server-side before redirecting
+                fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+                  .finally(() => { window.location.href = '/login'; });
               }
             }
           });

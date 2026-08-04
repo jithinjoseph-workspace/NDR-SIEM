@@ -76,12 +76,33 @@
         </button>
       </div>
 
-      <div class="session-device-row" *ngFor="let s of sessionsGrouped()[username]; trackBy: trackByIndex">
-        <lucide-icon [name]="ServerIcon" class="w-4 h-4 session-device-icon"></lucide-icon>
-        <span class="session-device-name">{{ s.device }}</span>
-        <span class="session-device-ip">{{ s.ip }}</span>
-        <span class="session-device-time">{{ formatLoginTime(s.login_time) }}</span>
-      </div>
+      <ng-container *ngFor="let g of groupedDevices(username); trackBy: trackByIndex">
+        <div class="session-device-row">
+          <lucide-icon [name]="ServerIcon" class="w-4 h-4 session-device-icon"></lucide-icon>
+          <span class="session-device-name">{{ g.device }}</span>
+          <span class="session-device-ip">{{ g.ip }}</span>
+          <span class="session-device-time">{{ formatLoginTime(g.latestTime) }}</span>
+          <span *ngIf="g.count > 1" class="session-tab-count">{{ g.count }} tabs</span>
+          <button class="device-signout-btn" type="button"
+                  (click)="promptForceLogoutDevice(username, g.ip, g.device)"
+                  [disabled]="forceLogoutDeviceKey() !== '' || forceLogoutConfirmUser() !== ''">
+            Sign Out
+          </button>
+        </div>
+        <div *ngIf="forceLogoutDeviceKey() === username + '|' + g.ip + '|' + g.device" class="force-logout-confirm device-confirm">
+          <lucide-icon [name]="AlertCircleIcon" class="w-4 h-4"></lucide-icon>
+          Sign out <strong>{{ g.device }}</strong> from <strong>{{ g.ip }}</strong>?
+          <div class="force-logout-confirm-actions">
+            <button class="modal-cancel-btn" type="button" (click)="cancelForceLogoutDevice()">Cancel</button>
+            <button class="modal-save-btn" type="button"
+                    style="background:linear-gradient(135deg,#ef4444,#dc2626);box-shadow:0 4px 12px rgba(239,68,68,0.35);"
+                    (click)="confirmForceLogoutDevice(username, g.ip, g.device)">
+              <lucide-icon [name]="XCircleIcon" class="w-4 h-4"></lucide-icon>
+              Confirm
+            </button>
+          </div>
+        </div>
+      </ng-container>
 
       <div *ngIf="forceLogoutConfirmUser() === username" class="force-logout-confirm">
         <lucide-icon [name]="AlertCircleIcon" class="w-4 h-4"></lucide-icon>

@@ -450,6 +450,9 @@ if [ $PORT_ATTEMPTS -eq $MAX_PORT_RETRIES ]; then
   error "Could not find a free port for OpenSearch after several attempts."
 fi
 
+# Write the resolved OpenSearch port into sensor.conf so pcap-uploader reads it
+echo "OPENSEARCH_URL=http://localhost:${OS_PORT}" >> /etc/ndr/sensor.conf
+
 # Wait properly — up to 3 minutes
 log "Waiting for OpenSearch on port ${OS_PORT} (up to 3 min)..."
 TRIES=0
@@ -2027,10 +2030,57 @@ def sha16(key):
     return hashlib.sha256(
         key.encode()).hexdigest()[:16]
 
-def find_session_in_opensearch(cid):
+def get_opensearch_url():
+    """Read OpenSearch URL from sensor.conf (written at install time)."""
     try:
-        url = "http://localhost:9201/" \
-              "arkime_sessions3-*/_search"
+        with open('/etc/ndr/sensor.conf') as f:
+            for line in f:
+                if line.startswith('OPENSEARCH_URL='):
+                    return line.split('=', 1)[1].strip().rstrip('/')
+    except Exception:
+        pass
+    return 'http://localhost:9200'
+
+def find_in_raw_pcap_direct(cid):
+    """Scan /opt/arkime/raw/ directly with tshark when OpenSearch is down.
+    Returns (meta, pcap_files) or (None, [])."""
+    raw_dir = '/opt/arkime/raw'
+    if not os.path.isdir(raw_dir):
+        print('[UPLOADER] No Arkime raw dir')
+        return None, []
+    # Collect pcap files modified in the last 24h, newest first
+    cutoff = time.time() - 86400
+    files = []
+    for fn in os.listdir(raw_dir):
+        if not (fn.endswith('.pcap') or fn.endswith('.pcap.zst')):
+            continue
+        fp = os.path.join(raw_dir, fn)
+        try:
+            mtime = os.path.getmtime(fp)
+            if mtime >= cutoff:
+                files.append((mtime, fp))
+        except Exception:
+            pass
+    files.sort(reverse=True)
+    pcap_files = [f for _, f in files]
+    if not pcap_files:
+        print('[UPLOADER] No recent Arkime raw files')
+        return None, []
+    print(f'[UPLOADER] OpenSearch down — scanning '
+          f'{len(pcap_files)} raw file(s) directly')
+    meta = {
+        'src_ip': '', 'dst_ip': '',
+        'src_port': '0', 'dst_port': '0',
+        'proto': '', 'sensor_host': os.uname().nodename,
+        'file_ids': [], 'root_id': ''
+    }
+    return meta, pcap_files
+
+def find_session_in_opensearch(cid):
+    os_base = get_opensearch_url()
+    try:
+        url = os_base + \
+              "/arkime_sessions3-*/_search"
         query = {
             "query": {
                 "term": {
@@ -2092,8 +2142,8 @@ def get_arkime_files(file_ids):
     if not file_ids:
         return []
     try:
-        url = "http://localhost:9201/" \
-              "arkime_files/_search"
+        url = get_opensearch_url() + \
+              "/arkime_files/_search"
         query = {
             "query": {"terms": {"num": file_ids}},
             "_source": ["name","num"],
@@ -2407,6 +2457,12 @@ if __name__ == '__main__':
 
         meta, os_hits = \
             find_session_in_opensearch(cid)
+        direct_pcap_files = []
+        if not meta:
+            # OpenSearch unreachable or session not indexed yet.
+            # Try scanning Arkime raw files directly with tshark.
+            meta, direct_pcap_files = \
+                find_in_raw_pcap_direct(cid)
 
         if not meta:
             # Count local "not in Arkime" retries.
@@ -2447,6 +2503,9 @@ if __name__ == '__main__':
         extracted = False
         pcap_files = get_arkime_files(
             meta.get('file_ids', []))
+        # If OpenSearch was down, use the directly scanned files
+        if not pcap_files and direct_pcap_files:
+            pcap_files = direct_pcap_files
         if pcap_files:
             # 1. tshark with communityid filter
             extracted = extract_with_tshark(
@@ -2486,11 +2545,6 @@ if __name__ == '__main__':
         try: os.remove(raw_out)
         except: pass
 UPLOADER
-# Patch OpenSearch port into the uploader if a non-default port was chosen
-if [ "${OS_PORT}" != "9200" ]; then
-  sed -i "s|http://localhost:9200/|http://localhost:${OS_PORT}/|g" \
-    /opt/ndr-sensor/pcap-uploader.py
-fi
 chmod +x /opt/ndr-sensor/pcap-uploader.py
 
 # ── Systemd services ──────────────────────────────

@@ -136,6 +136,10 @@
   border: 1px solid rgba(105, 246, 184, 0.2);
   background: rgba(22, 31, 51, 0.84); color: #69f6b8;
 }
+.secondary-action.compact {
+  width: auto; min-height: 32px; padding: 4px 12px;
+  white-space: nowrap; flex-shrink: 0;
+}
 .stop-action {
   border: 1px solid rgba(255, 113, 106, 0.22);
   background: rgba(255, 113, 106, 0.08); color: #ff918b;

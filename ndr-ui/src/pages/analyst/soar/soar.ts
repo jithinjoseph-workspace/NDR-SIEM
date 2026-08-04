@@ -1,4 +1,4 @@
-import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -261,6 +261,8 @@ export class Soar implements OnInit {
     evidenceLoading = false;
     liveEvidence: any = null;
     dismissedSessionIds = new Set<string>();
+    collectingPcap = false;
+    collectPcapDone = false;
     showEvidenceOverlay  = false;
     evidenceOverlaySrc: SafeResourceUrl = '';
     selectedSession: any = null;
@@ -306,18 +308,610 @@ export class Soar implements OnInit {
         return (this.liveEvidence?.pcap_sessions || []).filter((s: any) => !this.dismissedSessionIds.has(s.id));
     }
 
+    sessionNote = '';
+
+    // ── PCAP file viewer ─────────────────────────────────────────────────────
+    pcapViewSession: any = null;
+    pcapPackets: any[]  = [];
+    pcapLoading         = false;
+    pcapError           = '';
+    pcapNote            = '';
+    showPcapAnalysis    = false;
+    pcapAnalysis: any   = null;
+    paActiveTab         = 'overview';
+    @ViewChild('paChartCanvas') paChartCanvas?: ElementRef<HTMLCanvasElement>;
+    expandedPktIdx      = new Set<number>();
+
     analyzeSession(session: any) {
         this.selectedSession = session;
+        this.sessionNote = '';
         this.cdr.detectChanges();
     }
 
     closeSessionDetail() {
         this.selectedSession = null;
+        this.sessionNote = '';
         this.cdr.detectChanges();
     }
 
+    addSessionNote(session: any) {
+        if (!this.sessionNote.trim() || !this.selectedCase) return;
+        const flow = `${session.src_ip}:${session.src_port} → ${session.dst_ip}:${session.dst_port}`;
+        const proto = (session.proto || 'TCP').toUpperCase();
+        const comment = `[SESSION NOTE — ${flow} ${proto}] ${this.sessionNote.trim()}`;
+        this.api.addSoarCaseComment(this.selectedCase.id, comment).subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.sessionNote = '';
+                this.openCase(this.selectedCase);
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    openPcapViewer(session: any) {
+        this.pcapViewSession = session;
+        this.pcapPackets = [];
+        this.pcapError   = '';
+        this.pcapNote    = '';
+        this.expandedPktIdx = new Set();
+        this.pcapLoading = true;
+        this.cdr.detectChanges();
+        const id   = session.id || session.session_id;
+        const node = session.sensor_host || '';
+        this.arkime.fetchPcapRaw(id, node, session).subscribe({
+            next: (buf: ArrayBuffer) => {
+                this.pcapLoading = false;
+                if (buf.byteLength === 0) {
+                    this.pcapError = 'PCAP file is empty. The capture may not be stored yet.';
+                    this.cdr.detectChanges();
+                    return;
+                }
+                // Detect if response is JSON/text error instead of binary PCAP
+                const firstByte = new Uint8Array(buf)[0];
+                if (firstByte === 0x7b || firstByte === 0x3c || firstByte === 0x50) { // { or < or P (JSON/HTML)
+                    try {
+                        const text = new TextDecoder().decode(buf.slice(0, 512));
+                        const parsed = JSON.parse(text);
+                        this.pcapError = parsed.message || parsed.error || 'PCAP not available from server.';
+                    } catch {
+                        // HTML error page from Arkime — session has no stored capture
+                        this.pcapError = 'No packet capture stored for this session. Use ↓ Download to try fetching from Arkime directly.';
+                    }
+                    this.cdr.detectChanges();
+                    return;
+                }
+                // Detect pcapng format (magic 0x0a0d0d0a) — not yet parseable inline
+                const v = new DataView(buf);
+                const magic = v.getUint32(0, false);
+                if (magic === 0x0a0d0d0a) {
+                    this.pcapError = 'PCAP-NG format detected. Use ↓ Download to open in Wireshark.';
+                    this.cdr.detectChanges();
+                    return;
+                }
+                this.pcapPackets = this.parsePcap(buf);
+                if (!this.pcapPackets.length) {
+                    this.pcapError = 'Could not parse PCAP — unrecognised format. Use ↓ Download to open in Wireshark.';
+                }
+                this.cdr.detectChanges();
+            },
+            error: (e: any) => {
+                this.pcapLoading = false;
+                const raw = e?.error ? (() => { try { return new TextDecoder().decode(e.error); } catch { return ''; } })() : '';
+                if (e?.status === 404 || raw.toLowerCase().includes('not found') || raw.toLowerCase().includes('not available')) {
+                    this.pcapError = 'No packet capture stored for this session. Use ↓ Download to try fetching from Arkime directly.';
+                } else if (e?.status === 502) {
+                    this.pcapError = 'Arkime is not running on this sensor — PCAP is unavailable. Start Arkime and try again.';
+                } else {
+                    this.pcapError = raw || e?.message || 'PCAP not available — no local capture and Arkime is not configured.';
+                }
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    closePcapViewer() {
+        this.pcapViewSession = null;
+        this.pcapPackets = [];
+        this.pcapNote = '';
+        this.cdr.detectChanges();
+    }
+
+    togglePktExpand(idx: number) {
+        if (this.expandedPktIdx.has(idx)) {
+            this.expandedPktIdx.delete(idx);
+        } else {
+            this.expandedPktIdx.add(idx);
+        }
+        this.expandedPktIdx = new Set(this.expandedPktIdx);
+        this.cdr.detectChanges();
+    }
+
+    addPcapNote() {
+        if (!this.pcapNote.trim() || !this.selectedCase) return;
+        const s = this.pcapViewSession;
+        const flow = s ? `${s.src_ip}:${s.src_port} → ${s.dst_ip}:${s.dst_port}` : '';
+        const comment = `[PCAP ANALYSIS${flow ? ' — ' + flow : ''}] ${this.pcapNote.trim()}`;
+        this.api.addSoarCaseComment(this.selectedCase.id, comment).subscribe((res: any) => {
+            if (res.status === 'success') {
+                this.pcapNote = '';
+                this.openCase(this.selectedCase);
+                this.cdr.detectChanges();
+            }
+        });
+    }
+
+    // ── Binary PCAP parser ────────────────────────────────────────────────────
+    private parsePcap(buf: ArrayBuffer): any[] {
+        if (buf.byteLength < 24) return [];
+        const v    = new DataView(buf);
+        // Read magic as big-endian to detect file byte order:
+        // LE pcap (Linux/x86): bytes d4 c3 b2 a1 → big-endian read = 0xd4c3b2a1 → isLE = true
+        // BE pcap (SPARC etc): bytes a1 b2 c3 d4 → big-endian read = 0xa1b2c3d4 → isLE = false
+        const magicBE = v.getUint32(0, false);
+        const isLE = (magicBE === 0xd4c3b2a1 || magicBE === 0x4d3cb2a1); // LE variants (standard + nanosec)
+        const linkType = v.getUint32(20, isLE);
+        let off = 24;
+        const pkts: any[] = [];
+        let idx = 1;
+        let t0Sec = 0, t0Usec = 0;
+        while (off + 16 <= buf.byteLength) {
+            const tsSec  = v.getUint32(off,     isLE);
+            const tsUsec = v.getUint32(off + 4, isLE);
+            const inclLen = v.getUint32(off + 8,  isLE);
+            const origLen = v.getUint32(off + 12, isLE);
+            off += 16;
+            if (inclLen > buf.byteLength - off || inclLen > 65536) break;
+            if (idx === 1) { t0Sec = tsSec; t0Usec = tsUsec; }
+            const relUs = (tsSec - t0Sec) * 1_000_000 + (tsUsec - t0Usec);
+            const relMs = relUs / 1000;
+            const pktData = new Uint8Array(buf, off, inclLen);
+            const pkt: any = { idx, ts: relMs, len: inclLen, orig_len: origLen };
+            if (linkType === 1)   this.parseEthernet(pktData, pkt);
+            else if (linkType === 101) this.parseIPv4(pktData, 0, pkt);
+            pkt.hexLines = this.toHexLines(pktData);
+            pkts.push(pkt);
+            off += inclLen;
+            idx++;
+        }
+        return pkts;
+    }
+
+    private parseEthernet(data: Uint8Array, pkt: any) {
+        if (data.length < 14) return;
+        pkt.dst_mac = Array.from(data.slice(0, 6)).map((b: number) => b.toString(16).padStart(2,'0')).join(':');
+        pkt.src_mac = Array.from(data.slice(6, 12)).map((b: number) => b.toString(16).padStart(2,'0')).join(':');
+        const et = (data[12] << 8) | data[13];
+        if (et === 0x0800) this.parseIPv4(data, 14, pkt);
+        else if (et === 0x0806) { pkt.proto = 'ARP'; pkt.info = 'ARP request/reply'; }
+        else if (et === 0x86dd) { pkt.proto = 'IPv6'; pkt.info = 'IPv6'; }
+        else { pkt.proto = `0x${et.toString(16)}`; pkt.info = `EtherType ${pkt.proto}`; }
+    }
+
+    private parseIPv4(data: Uint8Array, off: number, pkt: any) {
+        if (data.length < off + 20) return;
+        const ihl = (data[off] & 0x0f) * 4;
+        const proto = data[off + 9];
+        pkt.src_ip = `${data[off+12]}.${data[off+13]}.${data[off+14]}.${data[off+15]}`;
+        pkt.dst_ip = `${data[off+16]}.${data[off+17]}.${data[off+18]}.${data[off+19]}`;
+        pkt.ttl    = data[off + 8];
+        pkt.ipId   = (data[off+4] << 8) | data[off+5];
+        const ipPayoff = off + ihl;
+        if      (proto === 6)  this.parseTCP(data, ipPayoff, pkt);
+        else if (proto === 17) this.parseUDP(data, ipPayoff, pkt);
+        else if (proto === 1)  this.parseICMP(data, ipPayoff, pkt);
+        else { pkt.proto = `IP/${proto}`; pkt.info = `${pkt.src_ip} → ${pkt.dst_ip}`; }
+    }
+
+    private parseICMP(data: Uint8Array, off: number, pkt: any) {
+        pkt.proto = 'ICMP';
+        if (data.length < off + 4) { pkt.info = 'ICMP'; return; }
+        const type = data[off], code = data[off+1];
+        const ICMP_TYPES: Record<number, string> = {
+            0: 'Echo Reply', 3: 'Destination Unreachable', 4: 'Source Quench',
+            5: 'Redirect', 8: 'Echo Request', 9: 'Router Advertisement',
+            10: 'Router Solicitation', 11: 'Time Exceeded', 12: 'Parameter Problem',
+            13: 'Timestamp', 14: 'Timestamp Reply', 30: 'Traceroute',
+        };
+        const UNREACH_CODES: Record<number, string> = {
+            0:'Net Unreachable', 1:'Host Unreachable', 2:'Protocol Unreachable',
+            3:'Port Unreachable', 4:'Fragmentation Needed', 9:'Net Admin Prohibited',
+            10:'Host Admin Prohibited', 13:'Communication Prohibited',
+        };
+        const typeName = ICMP_TYPES[type] || `Type ${type}`;
+        const codeName = type === 3 ? (UNREACH_CODES[code] || `code ${code}`) :
+                         type === 11 ? (code === 0 ? 'TTL Exceeded in Transit' : 'Fragment Reassembly Exceeded') :
+                         type === 5  ? (['Net','Host','TOS+Net','TOS+Host'][code] || `code ${code}`) + ' Redirect' : '';
+        pkt.info = codeName ? `${typeName} (${codeName})` : typeName;
+        pkt.icmpDecoded = [
+            { k: 'Type', v: `${type} — ${typeName}` },
+            { k: 'Code', v: codeName || String(code) },
+        ];
+        // Echo request/reply: show id + seq
+        if ((type === 8 || type === 0) && data.length >= off + 8) {
+            const id  = (data[off+4] << 8) | data[off+5];
+            const seq = (data[off+6] << 8) | data[off+7];
+            pkt.icmpDecoded.push({ k: 'Identifier', v: String(id) });
+            pkt.icmpDecoded.push({ k: 'Sequence',   v: String(seq) });
+            pkt.info = `${typeName}  id=${id}  seq=${seq}`;
+        }
+    }
+
+    private parseTCP(data: Uint8Array, off: number, pkt: any) {
+        if (data.length < off + 20) return;
+        pkt.proto = 'TCP';
+        pkt.src_port = (data[off] << 8) | data[off+1];
+        pkt.dst_port = (data[off+2] << 8) | data[off+3];
+        const fl = data[off+13];
+        const fs = [fl&0x02?'SYN':'', fl&0x10?'ACK':'', fl&0x01?'FIN':'', fl&0x04?'RST':'', fl&0x08?'PSH':''].filter(Boolean).join('+');
+        pkt.flags = fs;
+        const dOff = ((data[off+12] >> 4) * 4);
+        const pl = data.slice(off + dOff);
+        if (pl.length > 0) {
+            const txt = new TextDecoder('utf-8', { fatal: false }).decode(pl.slice(0, 4096));
+            if (/^(GET |POST |PUT |DELETE |HEAD |PATCH |OPTIONS |HTTP\/)/.test(txt)) {
+                pkt.proto = 'HTTP';
+                const lines = txt.split('\r\n');
+                pkt.info = lines[0].slice(0, 100);
+                // Parse all headers into key→value pairs
+                pkt.httpFirstLine = lines[0];
+                pkt.httpHeaders = [];
+                let bodyStart = -1;
+                for (let i = 1; i < lines.length; i++) {
+                    if (lines[i] === '') { bodyStart = i + 1; break; }
+                    const colon = lines[i].indexOf(':');
+                    if (colon > 0) {
+                        pkt.httpHeaders.push({ k: lines[i].slice(0, colon).trim(), v: lines[i].slice(colon + 1).trim() });
+                    }
+                }
+                // Detect content-encoding for body display
+                const ceHeader = pkt.httpHeaders.find((h: any) => h.k.toLowerCase() === 'content-encoding');
+                const encoding = ceHeader?.v?.toLowerCase() || '';
+                const clHeader = pkt.httpHeaders.find((h: any) => h.k.toLowerCase() === 'content-length');
+                const bodyLen  = clHeader ? parseInt(clHeader.v, 10) : 0;
+                if (bodyStart > 0) {
+                    if (encoding === 'gzip' || encoding === 'deflate' || encoding === 'br') {
+                        pkt.httpBodyNote = `Body is ${encoding}-compressed (${bodyLen ? bodyLen + ' bytes' : 'binary'}) — download PCAP and open in Wireshark to view decoded content.`;
+                    } else if (bodyStart < lines.length) {
+                        const body = lines.slice(bodyStart).join('\r\n').slice(0, 1024);
+                        if (body.trim()) pkt.httpBody = body;
+                    }
+                }
+            } else if (pl[0] === 0x16 && pl[1] === 0x03) {
+                pkt.proto = 'TLS';
+                const tlsTypes: Record<number,string> = {1:'ClientHello',2:'ServerHello',11:'Certificate',12:'ServerKeyExchange',14:'ServerHelloDone',16:'ClientKeyExchange',20:'ChangeCipherSpec'};
+                const hsType = pl.length > 5 ? pl[5] : 0;
+                const hsName = tlsTypes[hsType] || 'Handshake';
+                pkt.info = `TLS ${hsName}`;
+                pkt.tlsDecoded = [
+                    { k: 'Record Type', v: 'Handshake (22)' },
+                    { k: 'Version',     v: pl.length > 2 ? `TLS 1.${pl[2] === 1 ? '0' : pl[2] === 2 ? '1' : pl[2] === 3 ? '2' : '?'}` : '?' },
+                    { k: 'Handshake',   v: hsName },
+                ];
+                // Extract SNI from ClientHello (type=1)
+                if (hsType === 1 && pl.length > 43) {
+                    try {
+                        let i = 43;
+                        const sessLen = pl[i++];
+                        i += sessLen;
+                        const ciphLen = (pl[i] << 8) | pl[i+1]; i += 2 + ciphLen;
+                        const compLen = pl[i++]; i += compLen;
+                        if (i + 2 < pl.length) {
+                            const extTotal = (pl[i] << 8) | pl[i+1]; i += 2;
+                            const extEnd = i + extTotal;
+                            while (i + 4 < extEnd) {
+                                const extType = (pl[i] << 8) | pl[i+1]; i += 2;
+                                const extLen  = (pl[i] << 8) | pl[i+1]; i += 2;
+                                if (extType === 0 && i + 5 < pl.length) { // SNI
+                                    const nameLen = (pl[i+3] << 8) | pl[i+4];
+                                    const sni = String.fromCharCode(...Array.from(pl.slice(i+5, i+5+nameLen)));
+                                    pkt.tlsDecoded.push({ k: 'SNI (server name)', v: sni });
+                                    pkt.info = `TLS ClientHello → ${sni}`;
+                                    break;
+                                }
+                                i += extLen;
+                            }
+                        }
+                    } catch (_) {}
+                }
+            }
+        }
+        if (!pkt.info) pkt.info = `${pkt.src_ip}:${pkt.src_port} → ${pkt.dst_ip}:${pkt.dst_port} [${fs || 'ACK'}]`;
+    }
+
+    private parseUDP(data: Uint8Array, off: number, pkt: any) {
+        if (data.length < off + 8) return;
+        pkt.proto = 'UDP';
+        pkt.src_port = (data[off] << 8) | data[off+1];
+        pkt.dst_port = (data[off+2] << 8) | data[off+3];
+        const pl = data.slice(off + 8);
+        if (pkt.src_port === 53 || pkt.dst_port === 53) {
+            pkt.proto = 'DNS';
+            this.parseDNS(pl, pkt);
+        } else if (pkt.src_port === 67 || pkt.dst_port === 67) {
+            pkt.proto = 'DHCP'; pkt.info = 'DHCP';
+        } else {
+            pkt.info = `${pkt.src_ip}:${pkt.src_port} → ${pkt.dst_ip}:${pkt.dst_port}`;
+        }
+    }
+
+    private parseDNS(data: Uint8Array, pkt: any) {
+        if (data.length < 12) { pkt.info = 'DNS'; return; }
+        const flags   = (data[2] << 8) | data[3];
+        const isResp  = !!(flags & 0x8000);
+        const qdCount = (data[4] << 8) | data[5];
+        const anCount = (data[6] << 8) | data[7];
+        const rcode   = flags & 0x000f;
+        const rcodes: Record<number,string> = {0:'No Error',1:'Format Error',2:'Server Failure',3:'NXDOMAIN',5:'Refused'};
+        // Read first question name
+        const readName = (off: number): [string, number] => {
+            const parts: string[] = [];
+            let i = off, safety = 0;
+            while (i < data.length && data[i] !== 0 && safety++ < 64) {
+                if ((data[i] & 0xc0) === 0xc0) { // pointer
+                    const ptr = ((data[i] & 0x3f) << 8) | data[i+1];
+                    parts.push(readName(ptr)[0]); i += 2; break;
+                }
+                const len = data[i++];
+                parts.push(String.fromCharCode(...Array.from(data.slice(i, i+len)))); i += len;
+            }
+            return [parts.join('.'), i + 1];
+        };
+        const QTYPES: Record<number,string> = {1:'A',2:'NS',5:'CNAME',6:'SOA',12:'PTR',15:'MX',16:'TXT',28:'AAAA',33:'SRV',255:'ANY'};
+        let qname = '', qtype = '';
+        if (qdCount > 0 && data.length > 12) {
+            const [name, end] = readName(12);
+            qname = name;
+            if (end + 1 < data.length) qtype = QTYPES[(data[end] << 8) | data[end+1]] || String((data[end] << 8) | data[end+1]);
+        }
+        if (isResp) {
+            const status = rcodes[rcode] || `rcode=${rcode}`;
+            pkt.info = `DNS Response: ${qname} [${status}]${anCount ? ` (${anCount} answer${anCount>1?'s':''})` : ''}`;
+        } else {
+            pkt.info = `DNS Query: ${qname}${qtype ? ' (' + qtype + ')' : ''}`;
+        }
+        pkt.dnsDecoded = [
+            { k: 'Direction',  v: isResp ? 'Response' : 'Query' },
+            { k: 'Name',       v: qname || '—' },
+            { k: 'Type',       v: qtype || '—' },
+            { k: 'Questions',  v: String(qdCount) },
+            { k: 'Answers',    v: String(anCount) },
+            ...(isResp ? [{ k: 'Status', v: rcodes[rcode] || `rcode=${rcode}` }] : []),
+        ];
+    }
+
+    private toHexLines(data: Uint8Array): string[] {
+        const lines: string[] = [];
+        for (let i = 0; i < Math.min(data.length, 512); i += 16) {
+            const chunk = Array.from(data.slice(i, i + 16));
+            const hex   = chunk.map((b: number) => b.toString(16).padStart(2,'0')).join(' ').padEnd(47, ' ');
+            const ascii = chunk.map((b: number) => b >= 32 && b < 127 ? String.fromCharCode(b) : '.').join('');
+            lines.push(`${i.toString(16).padStart(4,'0')}  ${hex}  ${ascii}`);
+        }
+        if (data.length > 512) lines.push(`      ... ${data.length - 512} more bytes`);
+        return lines;
+    }
+
+    protoColor(proto: string): string {
+        switch ((proto || '').toUpperCase()) {
+            case 'HTTP':  return 'text-green-400';
+            case 'TLS':   return 'text-blue-400';
+            case 'DNS':   return 'text-yellow-400';
+            case 'TCP':   return 'text-sky-400';
+            case 'UDP':   return 'text-purple-400';
+            case 'ICMP':  return 'text-orange-400';
+            case 'ARP':   return 'text-pink-400';
+            default:      return 'text-on-surface-variant';
+        }
+    }
+
+    isKeyHeader(key: string): boolean {
+        const important = ['host', 'content-type', 'user-agent', 'authorization', 'cookie', 'set-cookie', 'location', 'server', 'x-forwarded-for'];
+        return important.includes((key || '').toLowerCase());
+    }
+
+    openPcapAnalysis() {
+        const pkts = this.pcapPackets;
+        const totalBytes = pkts.reduce((s: number, p: any) => s + (p.len || 0), 0);
+
+        // Protocol counts
+        const protocols: Record<string, number> = {};
+        for (const p of pkts) {
+            const proto = p.proto || 'Other';
+            protocols[proto] = (protocols[proto] || 0) + 1;
+        }
+
+        // Unique bidirectional connections
+        const connMap = new Map<string, any>();
+        for (const p of pkts) {
+            if (!p.src_ip || !p.dst_ip) continue;
+            // Normalise so A→B and B→A are the same flow
+            const [a, b] = [`${p.src_ip}:${p.src_port||''}`, `${p.dst_ip}:${p.dst_port||''}`];
+            const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+            if (!connMap.has(key)) connMap.set(key, { src: `${p.src_ip}${p.src_port?':'+p.src_port:''}`, dst: `${p.dst_ip}${p.dst_port?':'+p.dst_port:''}`, proto: p.proto, pkts: 0, bytes: 0 });
+            const c = connMap.get(key);
+            c.pkts++;
+            c.bytes += p.len || 0;
+        }
+        const connections = [...connMap.values()].sort((a: any, b: any) => b.bytes - a.bytes);
+
+        // HTTP requests/responses
+        const http: any[] = [];
+        for (const p of pkts) {
+            if (!p.httpFirstLine) continue;
+            const host = p.httpHeaders?.find((h: any) => h.k.toLowerCase() === 'host')?.v || '';
+            const ct   = p.httpHeaders?.find((h: any) => h.k.toLowerCase() === 'content-type')?.v || '';
+            const ua   = p.httpHeaders?.find((h: any) => h.k.toLowerCase() === 'user-agent')?.v || '';
+            http.push({ line: p.httpFirstLine, host, ct, ua, src: p.src_ip, dst: p.dst_ip });
+        }
+
+        // DNS queries/responses (deduplicated by name)
+        const dnsMap = new Map<string, any>();
+        for (const p of pkts) {
+            if (!p.dnsDecoded?.length) continue;
+            const name = p.dnsDecoded.find((h: any) => h.k === 'Name')?.v || '—';
+            const type = p.dnsDecoded.find((h: any) => h.k === 'Type')?.v || '';
+            const dir  = p.dnsDecoded.find((h: any) => h.k === 'Direction')?.v || '';
+            const stat = p.dnsDecoded.find((h: any) => h.k === 'Status')?.v || '';
+            const key  = `${name}|${type}`;
+            if (!dnsMap.has(key)) dnsMap.set(key, { name, type, status: stat, hasResp: dir === 'Response' });
+            else if (dir === 'Response') { dnsMap.get(key).status = stat; dnsMap.get(key).hasResp = true; }
+        }
+        const dns = [...dnsMap.values()];
+
+        // TLS connections (deduplicated by SNI)
+        const tlsMap = new Map<string, any>();
+        for (const p of pkts) {
+            if (!p.tlsDecoded?.length) continue;
+            const sni = p.tlsDecoded.find((h: any) => h.k === 'SNI (server name)')?.v || '';
+            const hs  = p.tlsDecoded.find((h: any) => h.k === 'Handshake')?.v || '';
+            const ver = p.tlsDecoded.find((h: any) => h.k === 'Version')?.v || '';
+            const key = sni || `${p.src_ip}→${p.dst_ip}`;
+            if (!tlsMap.has(key)) tlsMap.set(key, { sni: sni || '(no SNI)', hs, ver, dst: p.dst_ip, count: 0 });
+            tlsMap.get(key).count++;
+        }
+        const tls = [...tlsMap.values()];
+
+        // ICMP summary
+        const icmp: any[] = [];
+        for (const p of pkts) {
+            if (!p.icmpDecoded?.length) continue;
+            const typeV = p.icmpDecoded.find((h: any) => h.k === 'Type')?.v || '';
+            const desc  = p.icmpDecoded.find((h: any) => h.k === 'Description')?.v || p.info || '';
+            icmp.push({ desc, type: typeV, src: p.src_ip, dst: p.dst_ip });
+        }
+
+        this.pcapAnalysis = { totalPackets: pkts.length, totalBytes, protocols, connections, http, dns, tls, icmp };
+        this.paActiveTab = 'overview';
+        this.showPcapAnalysis = true;
+        setTimeout(() => this.drawPcapChart(), 60);
+    }
+
+    setpaTab(tab: string) {
+        this.paActiveTab = tab;
+        if (tab === 'overview') setTimeout(() => this.drawPcapChart(), 60);
+    }
+
+    drawPcapChart() {
+        const canvas = document.getElementById('pa-chart-canvas') as HTMLCanvasElement | null;
+        if (!canvas || !this.pcapAnalysis) return;
+        const pkts = this.pcapPackets;
+        if (!pkts.length) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth;
+        const H = canvas.offsetHeight;
+        canvas.width  = W * dpr;
+        canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.scale(dpr, dpr);
+
+        const maxTs = pkts[pkts.length - 1]?.ts || 1;
+        const BUCKETS = 60;
+        const protos  = ['HTTP', 'TLS', 'DNS', 'ICMP', 'UDP', 'TCP', 'ARP', 'Other'];
+        const colors: Record<string, string> = {
+            HTTP:  '#86efac', TLS: '#93c5fd', DNS: '#fcd34d',
+            ICMP:  '#fdba74', UDP: '#c4b5fd', TCP: '#38bdf8',
+            ARP:   '#f9a8d4', Other: 'rgba(255,255,255,0.18)'
+        };
+
+        // Build stacked data: buckets × proto → bytes
+        const data: Record<string, number[]> = {};
+        for (const pr of protos) data[pr] = new Array(BUCKETS).fill(0);
+        for (const p of pkts) {
+            const bi = Math.min(Math.floor((p.ts / maxTs) * BUCKETS), BUCKETS - 1);
+            const pr = protos.includes(p.proto) ? p.proto : 'Other';
+            data[pr][bi] += p.len || 0;
+        }
+
+        // Max stacked value
+        let maxVal = 1;
+        for (let i = 0; i < BUCKETS; i++) {
+            const sum = protos.reduce((s, pr) => s + data[pr][i], 0);
+            if (sum > maxVal) maxVal = sum;
+        }
+
+        const pad = { top: 16, right: 8, bottom: 24, left: 48 };
+        const cW = W - pad.left - pad.right;
+        const cH = H - pad.top - pad.bottom;
+        const bw = cW / BUCKETS;
+
+        ctx.clearRect(0, 0, W, H);
+
+        // Grid lines
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 1;
+        for (let g = 0; g <= 4; g++) {
+            const y = pad.top + cH - (g / 4) * cH;
+            ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
+        }
+
+        // Draw stacked area (each proto fills on top of previous)
+        const stackBottom = new Array(BUCKETS).fill(0);
+        for (const pr of [...protos].reverse()) {
+            ctx.beginPath();
+            // Build points: left edge → each bucket top → right edge
+            const points: [number,number][] = [];
+            for (let i = 0; i < BUCKETS; i++) {
+                const x = pad.left + i * bw + bw / 2;
+                const stackH = (stackBottom[i] + data[pr][i]) / maxVal * cH;
+                points.push([x, pad.top + cH - stackH]);
+            }
+            // Smooth curve
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (let i = 1; i < points.length - 1; i++) {
+                const mx = (points[i][0] + points[i+1][0]) / 2;
+                const my = (points[i][1] + points[i+1][1]) / 2;
+                ctx.quadraticCurveTo(points[i][0], points[i][1], mx, my);
+            }
+            ctx.lineTo(points[points.length-1][0], points[points.length-1][1]);
+            // Close to baseline
+            const baseY = pad.top + cH;
+            ctx.lineTo(pad.left + cW, baseY);
+            ctx.lineTo(pad.left, baseY);
+            ctx.closePath();
+            ctx.fillStyle = colors[pr] ? colors[pr].replace(')', ', 0.35)').replace('rgb', 'rgba') : 'rgba(255,255,255,0.1)';
+            if (colors[pr].startsWith('#')) {
+                ctx.fillStyle = colors[pr] + '55';
+            }
+            ctx.fill();
+            // Update stack
+            for (let i = 0; i < BUCKETS; i++) stackBottom[i] += data[pr][i];
+        }
+
+        // Y-axis labels
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = `${9 * dpr / dpr}px monospace`;
+        ctx.textAlign = 'right';
+        for (let g = 0; g <= 4; g++) {
+            const val = (g / 4) * maxVal;
+            const y   = pad.top + cH - (g / 4) * cH;
+            ctx.fillText(this.formatBytes(val), pad.left - 4, y + 3);
+        }
+
+        // X-axis: start / mid / end
+        ctx.textAlign = 'center';
+        ctx.fillText('0ms', pad.left, H - 4);
+        const fmtMs = (ms: number) => ms < 1 ? `${(ms*1000).toFixed(0)}µs` : ms < 1000 ? `${ms.toFixed(1)}ms` : `${(ms/1000).toFixed(2)}s`;
+        ctx.fillText(fmtMs(maxTs / 2), pad.left + cW / 2, H - 4);
+        ctx.fillText(fmtMs(maxTs), pad.left + cW, H - 4);
+    }
+
+    protocolList(): { proto: string; count: number }[] {
+        if (!this.pcapAnalysis) return [];
+        return Object.entries(this.pcapAnalysis.protocols)
+            .map(([proto, count]) => ({ proto, count: count as number }))
+            .sort((a, b) => b.count - a.count);
+    }
+
+    formatBytes(b: number): string {
+        if (b < 1024) return `${b} B`;
+        if (b < 1048576) return `${(b/1024).toFixed(1)} KB`;
+        return `${(b/1048576).toFixed(2)} MB`;
+    }
+
     downloadPcap(session: any) {
-        this.arkime.downloadPcap(session.id || session.session_id);
+        this.arkime.downloadPcap(session.id || session.session_id, session.sensor_host || '', session);
     }
 
     sessionDuration(s: any): string {
@@ -741,6 +1335,19 @@ export class Soar implements OnInit {
         this.editingAssignee = false;
         this.liveEvidence = null;
         this.loadingCase = true;
+        this.collectingPcap = false;
+        this.collectPcapDone = false;
+        // Reset all PCAP/session state so previous case's data doesn't bleed in
+        this.pcapViewSession  = null;
+        this.pcapPackets      = [];
+        this.pcapError        = '';
+        this.pcapLoading      = false;
+        this.pcapNote         = '';
+        this.selectedSession  = null;
+        this.sessionNote      = '';
+        this.expandedPktIdx   = new Set();
+        this.incidentReport   = null;
+        this.showCloseForm    = false;
 
         this.api.getSoarCaseComments(c.id).subscribe((res: any) => {
             if (res.status === 'success') {
@@ -791,12 +1398,42 @@ export class Soar implements OnInit {
         return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
+    collectPcap() {
+        const cid = this.selectedCase?.community_id;
+        if (!cid || this.collectingPcap) return;
+        this.collectingPcap = true;
+        this.collectPcapDone = false;
+        this.api.triggerEvidenceCapture(cid).subscribe({
+            next: () => {
+                this.collectingPcap = false;
+                this.collectPcapDone = true;
+                setTimeout(() => this.openCase(this.selectedCase), 4000);
+            },
+            error: () => {
+                this.collectingPcap = false;
+                this.collectPcapDone = true;
+            },
+        });
+    }
+
     closeCaseModal() {
-        this.selectedCase = null;
-        this.caseComments = [];
-        this.liveEvidence = null;
+        this.selectedCase    = null;
+        this.caseComments    = [];
+        this.liveEvidence    = null;
         this.evidenceLoading = false;
         this.editingAssignee = false;
+        this.collectingPcap  = false;
+        this.collectPcapDone = false;
+        this.pcapViewSession = null;
+        this.pcapPackets     = [];
+        this.pcapError       = '';
+        this.pcapLoading     = false;
+        this.pcapNote        = '';
+        this.selectedSession = null;
+        this.sessionNote     = '';
+        this.expandedPktIdx  = new Set();
+        this.incidentReport  = null;
+        this.showCloseForm   = false;
     }
 
     updateCaseStatus(status: string) {
@@ -809,6 +1446,11 @@ export class Soar implements OnInit {
             this.showCloseForm = true;
             this.cdr.detectChanges();
             return;
+        }
+        // Auto-assign to logged-in analyst when transitioning to Assigned with no assignee
+        if (status === 'Assigned' && !this.selectedCase.assigned_to && this.currentUsername) {
+            this.assigneeInput = this.currentUsername;
+            this.saveAssignee();
         }
         this._doUpdateStatus(status);
     }

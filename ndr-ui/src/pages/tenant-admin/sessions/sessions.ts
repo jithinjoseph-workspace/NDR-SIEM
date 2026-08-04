@@ -29,9 +29,10 @@ export class Sessions implements OnInit {
   readonly activeSessions         = signal<any[]>([]);
   readonly sessionsLoading        = signal(false);
   readonly sessionsGrouped        = signal<Record<string, any[]>>({});
-  readonly forceLogoutConfirmUser = signal('');
-  readonly message                = signal('');
-  readonly messageType            = signal<'success' | 'error'>('success');
+  readonly forceLogoutConfirmUser   = signal('');
+  readonly forceLogoutDeviceKey     = signal(''); // "{username}|{ip}|{device}"
+  readonly message                  = signal('');
+  readonly messageType              = signal<'success' | 'error'>('success');
 
   trackByUsername(_: number, name: string) { return name; }
   trackByIndex(i: number)                  { return i; }
@@ -67,12 +68,48 @@ export class Sessions implements OnInit {
     return Object.keys(this.sessionsGrouped()).sort();
   }
 
+  groupedDevices(username: string): { device: string; ip: string; latestTime: string; count: number }[] {
+    const sessions = this.sessionsGrouped()[username] || [];
+    const map: Record<string, { device: string; ip: string; latestTime: string; count: number }> = {};
+    for (const s of sessions) {
+      const key = `${s.device}|${s.ip}`;
+      if (!map[key]) {
+        map[key] = { device: s.device || 'Unknown', ip: s.ip || '—', latestTime: s.login_time, count: 0 };
+      }
+      map[key].count++;
+      if (s.login_time > map[key].latestTime) map[key].latestTime = s.login_time;
+    }
+    return Object.values(map).sort((a, b) => b.latestTime.localeCompare(a.latestTime));
+  }
+
   promptForceLogout(username: string) {
     this.forceLogoutConfirmUser.set(username);
   }
 
   cancelForceLogout() {
     this.forceLogoutConfirmUser.set('');
+  }
+
+  promptForceLogoutDevice(username: string, ip: string, device: string) {
+    this.forceLogoutDeviceKey.set(`${username}|${ip}|${device}`);
+  }
+
+  cancelForceLogoutDevice() {
+    this.forceLogoutDeviceKey.set('');
+  }
+
+  confirmForceLogoutDevice(username: string, ip: string, device: string) {
+    this.api.forceLogoutDevice(username, ip, device).subscribe({
+      next: (data: any) => {
+        this.forceLogoutDeviceKey.set('');
+        this.showMessage(`Signed out ${device} (${ip}) — ${data.sessions_terminated} session(s) terminated`, 'success');
+        this.loadActiveSessions();
+      },
+      error: () => {
+        this.showMessage('Failed to sign out device', 'error');
+        this.forceLogoutDeviceKey.set('');
+      },
+    });
   }
 
   confirmForceLogout(username: string) {
