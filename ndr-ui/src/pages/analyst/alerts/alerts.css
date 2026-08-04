@@ -1138,6 +1138,28 @@ html[data-theme="light"] .alerts-action.primary {
   background: rgba(105,246,184,0.12);
 }
 
+.block-btn {
+  border-color: rgba(239,68,68,0.25);
+  background: rgba(239,68,68,0.07);
+  color: #f87171;
+}
+
+.block-btn:hover {
+  border-color: rgba(239,68,68,0.5);
+  background: rgba(239,68,68,0.15);
+}
+
+.incident-btn {
+  border-color: rgba(251,191,36,0.25);
+  background: rgba(251,191,36,0.07);
+  color: #fbbf24;
+}
+
+.incident-btn:hover {
+  border-color: rgba(251,191,36,0.5);
+  background: rgba(251,191,36,0.15);
+}
+
 /* ── Child rows ───────────────────────────────────────────────────── */
 .child-row {
   background: rgba(0, 0, 0, 0.12);

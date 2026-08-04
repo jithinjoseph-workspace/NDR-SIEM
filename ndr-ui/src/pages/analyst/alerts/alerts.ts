@@ -11,7 +11,7 @@ import {
   LucideAngularModule,
   TriangleAlert, BellOff, ChevronDown, ChevronRight,
   Download, ExternalLink, Globe, Package, RefreshCw, ShieldAlert, X,
-  Copy, ShieldCheck, Layers, GitBranch, ShieldX,
+  Copy, ShieldCheck, Layers, GitBranch, ShieldX, ShieldOff, FolderPlus,
 } from 'lucide-angular';
 import { AuthService } from '../../../services/auth/auth';
 
@@ -40,6 +40,7 @@ export interface AlertGroup {
   src_ip:        string;
   src_hostname?: string;
   src_mac?:      string;
+  dst_ip:        string;     // primary destination IP for this group
   dstIps:        string[];   // unique victim IPs/hostnames for group header display
   count:         number;
   maxScore:      number;
@@ -114,6 +115,8 @@ export class Alerts implements OnInit, OnDestroy {
   LayersIcon       = Layers;
   GitBranchIcon    = GitBranch;
   ShieldXIcon      = ShieldX;
+  ShieldOffIcon    = ShieldOff;
+  FolderPlusIcon   = FolderPlus;
 
   // ── Tab ───────────────────────────────────────────────────────────────────
   activeTab: 'alerts' | 'incidents' = 'alerts';
@@ -274,17 +277,18 @@ export class Alerts implements OnInit, OnDestroy {
       return true;
     });
 
-    // Group by primaryTag + src_ip
+    // Group by primaryTag + src_ip + dst_ip (each attacker→target path is its own group)
     const map = new Map<string, AlertGroup>();
     for (const a of filtered) {
-      const tag = primaryTag(a.tags);
-      const key = `${tag}::${a.src_ip}`;
+      const tag    = primaryTag(a.tags);
+      const dstKey = a.dst_ip || '';
+      const key    = `${tag}::${a.src_ip}::${dstKey}`;
       if (!map.has(key)) {
         const localAsset = this.assetMap.get(a.src_ip);
         const assetName  = localAsset?.name || a.src_asset?.hostname || undefined;
         const assetMac   = localAsset?.mac  || a.src_asset?.mac || undefined;
         map.set(key, {
-          key, tag, src_ip: a.src_ip,
+          key, tag, src_ip: a.src_ip, dst_ip: dstKey,
           src_hostname: assetName,
           src_mac:      assetMac,
           dstIps: [],
@@ -490,6 +494,90 @@ export class Alerts implements OnInit, OnDestroy {
       case 'LOW':      return '#44aaff';
       default:         return '#888888';
     }
+  }
+
+  // ── Block IP ──────────────────────────────────────────────────────────────
+
+  blockIp(alert: any) {
+    const ip = alert.src_ip;
+    if (!ip) return;
+    if (!confirm(`Block ${ip} for 24 hours?`)) return;
+    this.api.manualBlock({
+      src_ip: ip,
+      enforcement: 'rst',
+      duration_hours: 24,
+      reason: `Manual block from alert — ${alert.description || alert.tags?.join(', ') || 'threat detected'}`,
+    }).subscribe({
+      next: () => this.showToast(`Blocked ${ip} for 24h`),
+      error: () => this.showToast(`Failed to block ${ip}`),
+    });
+  }
+
+  // ── Create Incident ───────────────────────────────────────────────────────
+
+  createIncident(alert: any) {
+    const title    = `${alert.tags?.[0] || alert.description || 'Threat'} — ${alert.src_ip}`;
+    const analyst  = this.auth.getUser()?.username || '';
+    this.api.createSoarCase({
+      title,
+      description: `Auto-created from alert.\n\nSource IP: ${alert.src_ip}\nDestination IP: ${alert.dst_ip}\nScore: ${alert.score}\nTags: ${alert.tags?.join(', ')}\nSigma hits: ${alert.sigma_hits?.join(', ') || 'none'}`,
+      severity:    alert.severity,
+      priority:    alert.severity === 'CRITICAL' ? 'P1' : alert.severity === 'HIGH' ? 'P2' : 'P3',
+      src_ip:      alert.src_ip,
+      dst_ip:      alert.dst_ip,
+      community_id: alert.community_id,
+      tags:        alert.tags || [],
+      assigned_to: analyst,
+    }).subscribe({
+      next: (res: any) => {
+        this.showToast(`Incident created — ${title}`);
+        this.switchTab('incidents');
+        this.loadIncidents();
+      },
+      error: () => this.showToast(`Failed to create incident`),
+    });
+  }
+
+  blockIpGroup(g: AlertGroup) {
+    const ip = g.src_ip;
+    if (!ip) return;
+    if (!confirm(`Block ${ip} for 24 hours? (${g.count} alerts in this group)`)) return;
+    this.api.manualBlock({
+      src_ip: ip,
+      enforcement: 'rst',
+      duration_hours: 24,
+      reason: `Manual block from group — ${g.tag} (${g.count} alerts)`,
+    }).subscribe({
+      next: () => this.showToast(`Blocked ${ip} for 24h`),
+      error: () => this.showToast(`Failed to block ${ip}`),
+    });
+  }
+
+  createGroupIncident(g: AlertGroup) {
+    const dst      = g.dst_ip || g.dstIps[0] || 'unknown';
+    const title    = `${g.tag} — ${g.src_ip} → ${dst} (${g.count} alerts)`;
+    const analyst  = this.auth.getUser()?.username || '';
+    const allTags    = [...new Set(g.alerts.flatMap((a: any) => a.tags || []))];
+    const allSigmas  = [...new Set(g.alerts.flatMap((a: any) => a.sigma_hits || []))];
+    const ports      = [...new Set(g.alerts.map((a: any) => a.dst_port).filter(Boolean))];
+    this.api.createSoarCase({
+      title,
+      description: `Auto-created from alert group.\n\nSource IP: ${g.src_ip}\nDestination IP: ${dst}\nAlert count: ${g.count}\nPorts seen: ${ports.slice(0, 20).join(', ')}${ports.length > 20 ? ` (+${ports.length - 20} more)` : ''}\nTags: ${allTags.join(', ')}\nSigma hits: ${allSigmas.join(', ') || 'none'}`,
+      severity:    g.severity,
+      priority:    g.severity === 'CRITICAL' ? 'P1' : g.severity === 'HIGH' ? 'P2' : 'P3',
+      src_ip:      g.src_ip,
+      dst_ip:      dst,
+      community_id: g.alerts[0]?.community_id || '',
+      tags:        allTags,
+      assigned_to: analyst,
+    }).subscribe({
+      next: () => {
+        this.showToast(`Incident created — ${g.count} alerts bundled`);
+        this.switchTab('incidents');
+        this.loadIncidents();
+      },
+      error: () => this.showToast(`Failed to create incident`),
+    });
   }
 
   // ── Toast ──────────────────────────────────────────────────────────────────

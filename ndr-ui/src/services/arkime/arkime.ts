@@ -10,10 +10,12 @@ export class ArkimeService {
     return this.http.get('/api/arkime/status');
   }
 
-  getSessions(params?: { cid?: string; ip?: string; limit?: number }): Observable<any> {
+  getSessions(params?: { cid?: string; ip?: string; src_ip?: string; dst_ip?: string; limit?: number }): Observable<any> {
     let query = `/api/arkime/sessions?limit=${params?.limit ?? 50}`;
-    if (params?.cid) query += `&cid=${encodeURIComponent(params.cid)}`;
-    if (params?.ip)  query += `&ip=${encodeURIComponent(params.ip)}`;
+    if (params?.cid)    query += `&cid=${encodeURIComponent(params.cid)}`;
+    if (params?.ip)     query += `&ip=${encodeURIComponent(params.ip)}`;
+    if (params?.src_ip) query += `&src_ip=${encodeURIComponent(params.src_ip)}`;
+    if (params?.dst_ip) query += `&dst_ip=${encodeURIComponent(params.dst_ip)}`;
     return this.http.get(query);
   }
 

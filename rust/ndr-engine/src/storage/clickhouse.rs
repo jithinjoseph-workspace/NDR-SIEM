@@ -6393,15 +6393,16 @@ pub async fn get_ioc_hits(
 
     pub async fn save_watchlist_ioc(
         &self,
-        tenant_id: &str,
-        ioc_type:  &str,
-        value:     &str,
+        tenant_id:      &str,
+        ioc_type:       &str,
+        value:          &str,
+        attacker_group: &str,
     ) -> anyhow::Result<()> {
         self.client.query(&format!(
             "INSERT INTO ndr.ioc_watchlist \
-             (tenant_id, ioc_type, ioc_value, source, active) \
-             VALUES ('{}', '{}', '{}', 'manual', 1)",
-            sql_escape(tenant_id), sql_escape(ioc_type), sql_escape(value)
+             (tenant_id, ioc_type, ioc_value, source, attacker_group, active) \
+             VALUES ('{}', '{}', '{}', 'manual', '{}', 1)",
+            sql_escape(tenant_id), sql_escape(ioc_type), sql_escape(value), sql_escape(attacker_group)
         )).execute().await?;
         Ok(())
     }
@@ -6409,10 +6410,10 @@ pub async fn get_ioc_hits(
     /// List manual IOCs for a specific tenant (for the UI watchlist view).
     pub async fn get_watchlist_iocs_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
         #[derive(clickhouse::Row, serde::Deserialize)]
-        struct Row { ioc_type: String, ioc_value: String, created_at: u32 }
+        struct Row { ioc_type: String, ioc_value: String, attacker_group: String, created_at: u32 }
         let rows = self.client
             .query(&format!(
-                "SELECT ioc_type, ioc_value, toUnixTimestamp(created_at) as created_at \
+                "SELECT ioc_type, ioc_value, attacker_group, toUnixTimestamp(added_at) as created_at \
                  FROM ndr.ioc_watchlist FINAL \
                  WHERE tenant_id = '{}' AND active = 1 AND expires_at > now() \
                  ORDER BY created_at DESC",
@@ -6420,10 +6421,11 @@ pub async fn get_ioc_hits(
             ))
             .fetch_all::<Row>().await?;
         Ok(rows.into_iter().map(|r| serde_json::json!({
-            "type":     r.ioc_type,
-            "value":    r.ioc_value,
-            "added_at": r.created_at,
-            "source":   "manual"
+            "type":           r.ioc_type,
+            "value":          r.ioc_value,
+            "attacker_group": r.attacker_group,
+            "added_at":       r.created_at,
+            "source":         "manual"
         })).collect())
     }
 

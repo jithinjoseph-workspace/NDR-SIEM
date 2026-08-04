@@ -262,6 +262,9 @@
             placeholder="Enter IOC value..."
             class="add-ioc-input" />
         </div>
+        <input type="text" [(ngModel)]="addIocAttackerGroup" (keyup.enter)="addManualIoc()"
+          placeholder="Attacker group (optional)"
+          class="ioc-group-input" />
         <button (click)="addManualIoc()" [disabled]="addIocLoading || !addIocValue.trim()" class="btn-primary-sm">
           {{ addIocLoading ? 'Adding...' : 'Add IOC' }}
         </button>

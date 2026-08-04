@@ -53,9 +53,10 @@ export class Intel implements OnInit, OnDestroy {
   lookupResult: any = null;
 
   // ── Add Manual IOC ────────────────────────────────────────────────────────
-  addIocType    = 'ip';
-  addIocValue   = '';
-  addIocLoading = false;
+  addIocType           = 'ip';
+  addIocValue          = '';
+  addIocAttackerGroup  = '';
+  addIocLoading        = false;
   addIocResult: { status: string; message: string } | null = null;
 
   // ── Watchlist ─────────────────────────────────────────────────────────────
@@ -203,11 +204,12 @@ export class Intel implements OnInit, OnDestroy {
     if (!this.addIocValue.trim()) return;
     this.addIocLoading = true;
     this.addIocResult  = null;
-    this.api.addManualIoc(this.addIocType, this.addIocValue.trim()).subscribe({
+    this.api.addManualIoc(this.addIocType, this.addIocValue.trim(), this.addIocAttackerGroup.trim()).subscribe({
       next: (res: any) => {
-        this.addIocResult  = { status: 'ok', message: res.message || `${res.type} IOC added to watchlist` };
-        this.addIocValue   = '';
-        this.addIocLoading = false;
+        this.addIocResult       = { status: 'ok', message: res.message || `${res.type} IOC added to watchlist` };
+        this.addIocValue        = '';
+        this.addIocAttackerGroup = '';
+        this.addIocLoading      = false;
         if (this.activeTab === 'watchlist') this.loadWatchlist();
         this.cdr.detectChanges();
       },

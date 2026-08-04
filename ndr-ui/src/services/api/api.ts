@@ -697,8 +697,8 @@ export class Api {
     return this.http.put(`${this.baseUrl}/assets/subnet-roles`, roles);
   }
 
-  addManualIoc(type: string, value: string): Observable<any> {
-    return this.http.post(`${this.baseUrl}/threat-intel/add`, { type, value });
+  addManualIoc(type: string, value: string, attacker_group?: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/threat-intel/add`, { type, value, attacker_group: attacker_group || '' });
   }
 
   getJiraTickets(config: { url: string; email: string; token: string; project_key: string }): Observable<any> {

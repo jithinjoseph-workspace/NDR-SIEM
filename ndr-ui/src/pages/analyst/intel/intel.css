@@ -583,6 +583,21 @@
 .add-ioc-input:focus { border-color: rgba(34,197,94,0.4); }
 .add-ioc-input::placeholder { color: rgba(255,255,255,0.2); }
 
+.ioc-group-input {
+  flex-shrink: 0;
+  width: 180px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: #fff;
+  outline: none;
+  transition: border-color 160ms ease;
+}
+.ioc-group-input:focus { border-color: rgba(251,191,36,0.4); }
+.ioc-group-input::placeholder { color: rgba(255,255,255,0.2); }
+
 .add-ioc-result {
   margin: 0 18px 14px;
   font-size: 11px;

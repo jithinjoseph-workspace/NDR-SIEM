@@ -305,6 +305,14 @@
                   <lucide-icon [name]="BellOffIcon" class="w-3.5 h-3.5"></lucide-icon>
                   Suppress
                 </button>
+                <button *ngIf="g.src_ip" class="row-action block-btn" title="Block source IP" type="button" (click)="blockIpGroup(g)">
+                  <lucide-icon [name]="ShieldOffIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  Block IP
+                </button>
+                <button class="row-action incident-btn" title="Create incident from entire group" type="button" (click)="createGroupIncident(g)">
+                  <lucide-icon [name]="FolderPlusIcon" class="w-3.5 h-3.5"></lucide-icon>
+                  Incident ({{ g.count }})
+                </button>
               </td>
             </tr>
 
@@ -375,6 +383,14 @@
                   <button *ngIf="isDnsBeaconing(alert)" class="row-action trust-btn" title="Trust this domain" type="button" (click)="trustDomain(alert)">
                     <lucide-icon [name]="GlobeIcon" class="w-3 h-3"></lucide-icon>
                     Trust
+                  </button>
+                  <button *ngIf="alert.src_ip" class="row-action block-btn" title="Block source IP" type="button" (click)="blockIp(alert)">
+                    <lucide-icon [name]="ShieldOffIcon" class="w-3 h-3"></lucide-icon>
+                    Block IP
+                  </button>
+                  <button class="row-action incident-btn" title="Create incident" type="button" (click)="createIncident(alert)">
+                    <lucide-icon [name]="FolderPlusIcon" class="w-3 h-3"></lucide-icon>
+                    Incident
                   </button>
                   <button *ngIf="alert.community_id" class="icon-action" title="PCAP sessions" type="button" (click)="viewPcap(alert.community_id)">
                     <lucide-icon [name]="PackageIcon" class="w-3.5 h-3.5"></lucide-icon>

@@ -90,7 +90,41 @@ export class EvidenceComponent implements OnInit {
     return groups;
   });
 
-  private pendingCid: string | null = null;
+  // ── Computed: outer grouping by src_ip→dst_ip pair ────────────────
+  ipGroupedBundles = computed(() => {
+    const filter = this.corrFilterActive();
+    const map = new Map<string, any[]>();
+    for (const b of this.bundles()) {
+      if (filter && b.correlation_status !== filter) continue;
+      const key = `${b.src_ip || ''}→${b.dst_ip || ''}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(b);
+    }
+    return Array.from(map.entries()).map(([key, items]) => {
+      const [src_ip, dst_ip] = key.split('→');
+      const maxSev = items.reduce((best, b) =>
+        (SEV_ORDER[b.severity?.toUpperCase()] ?? 0) > (SEV_ORDER[best?.toUpperCase()] ?? 0) ? b.severity : best,
+        'INFO'
+      );
+      return { key, src_ip, dst_ip, bundles: items, count: items.length, maxSev };
+    }).sort((a, b) =>
+      (SEV_ORDER[b.maxSev?.toUpperCase()] ?? 0) - (SEV_ORDER[a.maxSev?.toUpperCase()] ?? 0)
+    );
+  });
+
+  expandedIpKeys = signal<Set<string>>(new Set());
+
+  toggleIpGroup(key: string) {
+    this.expandedIpKeys.update(s => {
+      const next = new Set(s);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  private pendingCid:   string | null = null;
+  private pendingSrcIp: string | null = null;
+  private pendingDstIp: string | null = null;
   private auth = inject(AuthService);
 
   /** Sensor IDs this user is scoped to (from JWT). */
@@ -106,6 +140,8 @@ export class EvidenceComponent implements OnInit {
     this.route.queryParams.subscribe(params => {
       const cid = params['cid'];
       if (cid) this.pendingCid = cid;
+      if (params['src_ip']) this.pendingSrcIp = params['src_ip'];
+      if (params['dst_ip']) this.pendingDstIp = params['dst_ip'];
     });
     this.loadBundles();
   }
@@ -120,8 +156,18 @@ export class EvidenceComponent implements OnInit {
         if (this.pendingCid) {
           const match = all.find(b => b.community_id === this.pendingCid);
           if (match) { this.pendingCid = null; this.selectBundle(match); }
-        } else if (!this.selectedBundle() && this.groupedBundles().length > 0) {
-          this.selectBundle(this.groupedBundles()[0].primary);
+        }
+        // Auto-expand IP group from SOAR overlay params
+        if (this.pendingSrcIp && this.pendingDstIp) {
+          const key = `${this.pendingSrcIp}→${this.pendingDstIp}`;
+          this.expandedIpKeys.set(new Set([key]));
+          const firstInGroup = all.find(b => b.src_ip === this.pendingSrcIp && b.dst_ip === this.pendingDstIp);
+          if (firstInGroup && !this.selectedBundle()) this.selectBundle(firstInGroup);
+          this.pendingSrcIp = null; this.pendingDstIp = null;
+        } else if (!this.selectedBundle() && this.ipGroupedBundles().length > 0) {
+          const first = this.ipGroupedBundles()[0];
+          this.expandedIpKeys.set(new Set([first.key]));
+          this.selectBundle(first.bundles[0]);
         }
       },
       error: () => this.loading.set(false)

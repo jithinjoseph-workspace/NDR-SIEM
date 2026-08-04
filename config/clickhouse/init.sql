@@ -804,6 +804,9 @@ ALTER TABLE ndr.threat_predictions ON CLUSTER ndr_cluster
 ALTER TABLE ndr.threat_predictions ON CLUSTER ndr_cluster
     ADD COLUMN IF NOT EXISTS source String DEFAULT 'predictor';
 
+ALTER TABLE ndr.ioc_watchlist ON CLUSTER ndr_cluster
+    ADD COLUMN IF NOT EXISTS attacker_group String DEFAULT '';
+
 -- MITRE ATT&CK technique definitions
 CREATE TABLE IF NOT EXISTS ndr.attack_patterns ON CLUSTER ndr_cluster
 (

@@ -2,6 +2,7 @@ import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { Api } from '../../../services/api/api';
 import { ArkimeService } from '../../../services/arkime/arkime';
 import {
@@ -259,6 +260,18 @@ export class Soar implements OnInit {
     ];
     evidenceLoading = false;
     liveEvidence: any = null;
+    dismissedSessionIds = new Set<string>();
+    showEvidenceOverlay  = false;
+    evidenceOverlaySrc: SafeResourceUrl = '';
+    selectedSession: any = null;
+
+    // ── Case Close / Resolve form ─────────────────────────────────────
+    showCloseForm    = false;
+    pendingStatus    = '';
+    closeNotes       = '';
+    addToIntel       = true;
+    intelGroup       = '';
+    incidentReport: any = null;
 
     /** Sensor IDs this user is scoped to (from JWT). */
     sensorIds: string[] = [];
@@ -266,10 +279,52 @@ export class Soar implements OnInit {
     /** Display name of the currently logged-in analyst. */
     currentUsername = '';
 
-    constructor(private api: Api, private arkime: ArkimeService, private cdr: ChangeDetectorRef, private auth: AuthService, private router: Router) {}
+    constructor(private api: Api, private arkime: ArkimeService, private cdr: ChangeDetectorRef, private auth: AuthService, private router: Router, private sanitizer: DomSanitizer) {}
 
     viewEvidence(cid: string) {
-        this.router.navigate(['/analyst/evidence'], { queryParams: { cid } });
+        const c = this.selectedCase;
+        let url = `/analyst/evidence?cid=${encodeURIComponent(cid)}`;
+        if (c?.src_ip) url += `&src_ip=${encodeURIComponent(c.src_ip)}`;
+        if (c?.dst_ip) url += `&dst_ip=${encodeURIComponent(c.dst_ip)}`;
+        this.evidenceOverlaySrc  = this.sanitizer.bypassSecurityTrustResourceUrl(url);
+        this.showEvidenceOverlay = true;
+        this.cdr.detectChanges();
+    }
+
+    closeEvidenceOverlay() {
+        this.showEvidenceOverlay = false;
+        this.evidenceOverlaySrc  = '';
+        this.cdr.detectChanges();
+    }
+
+    dismissSession(sessionId: string) {
+        this.dismissedSessionIds = new Set([...this.dismissedSessionIds, sessionId]);
+        this.cdr.detectChanges();
+    }
+
+    visibleSessions(): any[] {
+        return (this.liveEvidence?.pcap_sessions || []).filter((s: any) => !this.dismissedSessionIds.has(s.id));
+    }
+
+    analyzeSession(session: any) {
+        this.selectedSession = session;
+        this.cdr.detectChanges();
+    }
+
+    closeSessionDetail() {
+        this.selectedSession = null;
+        this.cdr.detectChanges();
+    }
+
+    downloadPcap(session: any) {
+        this.arkime.downloadPcap(session.id || session.session_id);
+    }
+
+    sessionDuration(s: any): string {
+        if (!s.start_time || !s.end_time) return '—';
+        const ms = s.end_time - s.start_time;
+        if (ms < 1000) return `${ms}ms`;
+        return `${(ms / 1000).toFixed(2)}s`;
     }
 
     ngOnInit() {
@@ -695,21 +750,28 @@ export class Soar implements OnInit {
             this.cdr.detectChanges();
         });
 
-        if (c.community_id) {
+        this.dismissedSessionIds = new Set();
+        const hasPair = c.src_ip && c.dst_ip;
+        const hasCid  = !!c.community_id;
+        if (hasPair || hasCid) {
             this.evidenceLoading = true;
-            const cid = c.community_id;
-            this.arkime.getSessions({ cid, limit: 10 }).subscribe((pcap: any) => {
+            const pcapParams = hasPair
+                ? { src_ip: c.src_ip, dst_ip: c.dst_ip, limit: 50 }
+                : { cid: c.community_id, limit: 50 };
+            this.arkime.getSessions(pcapParams).subscribe((pcap: any) => {
                 this.liveEvidence = this.liveEvidence || {};
                 this.liveEvidence.pcap_sessions = pcap.sessions || [];
                 this.liveEvidence.pcap_total = pcap.total || pcap.sessions?.length || 0;
                 this.evidenceLoading = false;
                 this.cdr.detectChanges();
             });
-            this.api.getEventsByCid(cid).subscribe((res: any) => {
-                this.liveEvidence = this.liveEvidence || {};
-                this.liveEvidence.ndr_events = res.events || [];
-                this.cdr.detectChanges();
-            });
+            if (hasCid) {
+                this.api.getEventsByCid(c.community_id).subscribe((res: any) => {
+                    this.liveEvidence = this.liveEvidence || {};
+                    this.liveEvidence.ndr_events = res.events || [];
+                    this.cdr.detectChanges();
+                });
+            }
         }
     }
 
@@ -738,6 +800,53 @@ export class Soar implements OnInit {
     }
 
     updateCaseStatus(status: string) {
+        if (!this.selectedCase) return;
+        if (['Resolved', 'Closed'].includes(status)) {
+            this.pendingStatus = status;
+            this.closeNotes    = '';
+            this.addToIntel    = !!this.selectedCase.src_ip;
+            this.intelGroup    = (this.selectedCase.tags || []).join(', ');
+            this.showCloseForm = true;
+            this.cdr.detectChanges();
+            return;
+        }
+        this._doUpdateStatus(status);
+    }
+
+    confirmClose() {
+        const c = this.selectedCase;
+        if (!c) return;
+        this._doUpdateStatus(this.pendingStatus);
+        // Add attacker IP to threat intel watchlist if requested
+        if (this.addToIntel && c.src_ip) {
+            this.api.addManualIoc('ip', c.src_ip, this.intelGroup).subscribe();
+        }
+        // Generate incident report
+        this.incidentReport = {
+            case_number:  c.case_number,
+            title:        c.title,
+            severity:     c.severity,
+            priority:     c.priority,
+            src_ip:       c.src_ip,
+            dst_ip:       c.dst_ip,
+            status:       this.pendingStatus,
+            analyst:      this.currentUsername,
+            closed_at:    new Date().toLocaleString(),
+            resolution:   this.closeNotes || 'No notes provided.',
+            pcap_count:   this.liveEvidence?.pcap_sessions?.length || 0,
+            tags:         (c.tags || []).join(', '),
+            description:  c.description,
+            intel_added:  this.addToIntel && c.src_ip ? `${c.src_ip} added to threat intel watchlist` : null,
+        };
+        // Add resolution note as case comment
+        if (this.closeNotes.trim()) {
+            this.api.addSoarCaseComment(c.id, `[${this.pendingStatus}] ${this.closeNotes}`).subscribe();
+        }
+        this.showCloseForm = false;
+        this.cdr.detectChanges();
+    }
+
+    _doUpdateStatus(status: string) {
         if (!this.selectedCase) return;
         this.api.updateSoarCaseStatus(this.selectedCase.id, status).subscribe({
             next: (res: any) => {

@@ -2424,8 +2424,9 @@ pub async fn add_manual_ioc(
     };
     let tenant_id = claims.tenant_id.clone();
 
-    let ioc_type = payload["type"].as_str().unwrap_or("ip");
-    let value    = payload["value"].as_str().unwrap_or("");
+    let ioc_type       = payload["type"].as_str().unwrap_or("ip");
+    let value          = payload["value"].as_str().unwrap_or("");
+    let attacker_group = payload["attacker_group"].as_str().unwrap_or("");
 
     if value.is_empty() {
         return Json(json!({"status": "error", "message": "value is required"}));
@@ -2435,7 +2436,7 @@ pub async fn add_manual_ioc(
     state.enrichment.threat_intel.add_ioc(ioc_type, value);
 
     // Persist to ioc_watchlist so it survives engine restarts
-    let _ = state.ch_storage.save_watchlist_ioc(&tenant_id, ioc_type, value).await;
+    let _ = state.ch_storage.save_watchlist_ioc(&tenant_id, ioc_type, value, attacker_group).await;
 
     Json(json!({
         "status":  "added",
@@ -7190,6 +7191,8 @@ pub async fn arkime_sessions(
 
     let community_id = params.get("cid").cloned();
     let src_ip       = params.get("ip").cloned();
+    let filter_src   = params.get("src_ip").cloned();
+    let filter_dst   = params.get("dst_ip").cloned();
     let limit        = params.get("limit")
         .and_then(|l| l.parse::<u32>().ok())
         .unwrap_or(50);
@@ -7216,6 +7219,15 @@ pub async fn arkime_sessions(
                 ]}
             }));
         }
+        // src_ip + dst_ip pair: match either direction of the flow
+        if let (Some(ref s), Some(ref d)) = (&filter_src, &filter_dst) {
+            must_clauses.push(json!({
+                "bool": {"should": [
+                    {"bool": {"must": [{"term": {"source.ip": s}}, {"term": {"destination.ip": d}}]}},
+                    {"bool": {"must": [{"term": {"source.ip": d}}, {"term": {"destination.ip": s}}]}}
+                ], "minimum_should_match": 1}
+            }));
+        }
 
         let es_query = json!({
             "size": limit,
@@ -7232,7 +7244,14 @@ pub async fn arkime_sessions(
                 "source.ip", "source.port",
                 "destination.ip", "destination.port",
                 "ipProtocol", "network.bytes", "network.packets",
-                "network.community_id", "node"
+                "network.community_id", "node",
+                "http.uri", "http.method", "http.statuscode", "http.host",
+                "http.user-agent", "http.response-content-type",
+                "dns.host", "dns.type", "dns.status",
+                "tls.ja3", "tls.ja3s", "tls.server-name",
+                "tcpflags.syn", "tcpflags.synack", "tcpflags.rst", "tcpflags.fin",
+                "protocol", "totDataBytes", "serverBytes", "clientBytes",
+                "tags"
             ]
         });
 
@@ -7252,12 +7271,47 @@ pub async fn arkime_sessions(
                 let hits = data["hits"]["hits"].as_array().cloned().unwrap_or_default();
                 let sessions: Vec<serde_json::Value> = hits.iter().map(|h| {
                     let s = &h["_source"];
-                    let proto = match s["ipProtocol"].as_u64().unwrap_or(0) {
+                    let proto_num = s["ipProtocol"].as_u64().unwrap_or(0);
+                    let proto = match proto_num {
                         6  => "tcp",
                         17 => "udp",
                         _  => "other",
                     };
+                    // Build optional layer-7 detail blocks
+                    let http = if !s["http"]["uri"].is_null() || !s["http"]["method"].is_null() {
+                        json!({
+                            "method":       s["http"]["method"].as_str().unwrap_or(""),
+                            "uri":          s["http"]["uri"].as_str().unwrap_or(""),
+                            "host":         s["http"]["host"].as_str().unwrap_or(""),
+                            "status":       s["http"]["statuscode"].as_u64().unwrap_or(0),
+                            "user_agent":   s["http"]["user-agent"].as_str().unwrap_or(""),
+                            "content_type": s["http"]["response-content-type"].as_str().unwrap_or("")
+                        })
+                    } else { json!(null) };
+                    let dns = if !s["dns"]["host"].is_null() {
+                        json!({
+                            "host":   s["dns"]["host"].as_str().unwrap_or(""),
+                            "type":   s["dns"]["type"].as_str().unwrap_or(""),
+                            "status": s["dns"]["status"].as_str().unwrap_or("")
+                        })
+                    } else { json!(null) };
+                    let tls = if !s["tls"]["ja3"].is_null() || !s["tls"]["server-name"].is_null() {
+                        json!({
+                            "ja3":         s["tls"]["ja3"].as_str().unwrap_or(""),
+                            "ja3s":        s["tls"]["ja3s"].as_str().unwrap_or(""),
+                            "server_name": s["tls"]["server-name"].as_str().unwrap_or("")
+                        })
+                    } else { json!(null) };
+                    let tcp_flags = if proto == "tcp" {
+                        json!({
+                            "syn":    s["tcpflags"]["syn"].as_u64().unwrap_or(0),
+                            "synack": s["tcpflags"]["synack"].as_u64().unwrap_or(0),
+                            "rst":    s["tcpflags"]["rst"].as_u64().unwrap_or(0),
+                            "fin":    s["tcpflags"]["fin"].as_u64().unwrap_or(0)
+                        })
+                    } else { json!(null) };
                     json!({
+                        "id":           h["_id"].as_str().unwrap_or(""),
                         "session_id":   h["_id"].as_str().unwrap_or(""),
                         "community_id": s["network"]["community_id"].as_str().unwrap_or(""),
                         "src_ip":       s["source"]["ip"].as_str().unwrap_or(""),
@@ -7267,10 +7321,18 @@ pub async fn arkime_sessions(
                         "proto":        proto,
                         "bytes":        s["network"]["bytes"].as_u64().unwrap_or(0),
                         "packets":      s["network"]["packets"].as_u64().unwrap_or(0),
+                        "data_bytes":   s["totDataBytes"].as_u64().unwrap_or(0),
+                        "server_bytes": s["serverBytes"].as_u64().unwrap_or(0),
+                        "client_bytes": s["clientBytes"].as_u64().unwrap_or(0),
                         "start_time":   s["firstPacket"].as_u64().unwrap_or(0),
                         "end_time":     s["lastPacket"].as_u64().unwrap_or(0),
                         "sensor_host":  s["node"].as_str().unwrap_or(""),
-                        "arkime_url":   arkime_url,
+                        "tags":         s["tags"].as_array().cloned().unwrap_or_default(),
+                        "http":         http,
+                        "dns":          dns,
+                        "tls":          tls,
+                        "tcp_flags":    tcp_flags,
+                        "arkime_url":   &arkime_url,
                         "file_path":    ""
                     })
                 }).collect();

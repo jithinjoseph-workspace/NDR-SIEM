@@ -5,15 +5,15 @@
       <h2>Evidence &amp; Forensics</h2>
       <p class="page-sub">Captured incident bundles with chain of custody and AI analysis.</p>
     </div>
-    <span class="badge">{{ groupedBundles().length }} incidents</span>
+    <span class="badge">{{ bundles().length }} incidents</span>
   </header>
   <div class="evidence-layout">
 
-    <!-- Left: Bundle list (grouped by community_id) -->
+    <!-- Left: Bundle list (grouped by src_ip→dst_ip, then by community_id) -->
     <div class="bundle-list">
       <div class="bundle-list-topbar">
         <span class="bundle-list-title">Incidents</span>
-        <span class="badge">{{ groupedBundles().length }}</span>
+        <span class="badge">{{ bundles().length }}</span>
       </div>
 
       <!-- Corroboration filter bar -->
@@ -44,65 +44,52 @@
         </button>
       </div>
 
-      <div *ngFor="let group of groupedBundles()" class="bundle-group">
+      <!-- Outer IP-pair groups -->
+      <div *ngFor="let ipGroup of ipGroupedBundles()" class="ip-bundle-group">
 
-        <!-- Primary card — highest severity for this CID -->
-        <div class="bundle-card"
-             [class.selected]="selectedBundle()?.community_id === group.community_id"
-             (click)="selectBundle(group.primary)">
-
-          <div class="bundle-header">
-            <span class="severity-badge" [class]="'sev-' + group.primary.severity?.toLowerCase()">
-              {{ group.primary.severity }}
-            </span>
-            <span class="hold-badge" *ngIf="group.primary.legal_hold">LEGAL HOLD</span>
-            <span class="auto-badge" *ngIf="group.primary.auto_captured">AUTO</span>
-            <span class="corr-badge"
-                  [class]="corrLabel(group.primary.correlation_status).cls"
-                  [title]="group.primary.correlation_status === 'corroborated' ? 'Corroborated: Both Agent-Z + Agent-S detected this flow' : group.primary.correlation_status === 'agent_s_only' ? 'Agent-S only detection' : 'Agent-Z only detection'">
-              {{ corrLabel(group.primary.correlation_status).label }}
-            </span>
-          </div>
-
-          <div class="bundle-ips">
-            <span>{{ group.primary.src_ip }}</span>
-            <span class="arrow">→</span>
-            <span>{{ group.primary.dst_ip }}</span>
-          </div>
-
-          <div class="bundle-meta">
-            <span>{{ group.primary.captured_at | date:'M/d/yy, h:mm a' }}</span>
-            <span>{{ (group.primary.size_bytes / 1024).toFixed(1) }} KB</span>
-          </div>
-
-          <div class="bundle-cid" title="{{ group.community_id }}">
-            CID: {{ group.community_id | slice:0:20 }}...
-          </div>
-
-          <!-- Expand toggle — only shown when multiple alerts share this CID -->
-          <div *ngIf="group.alerts.length > 1"
-               class="alerts-toggle"
-               (click)="toggleGroup(group, $event)">
-            {{ expandedCids().has(group.community_id) ? '▼' : '▶' }}&nbsp;{{ group.alerts.length }} alerts
-          </div>
+        <!-- IP pair header row — click to expand/collapse -->
+        <div class="ip-group-header" [class.ip-group-expanded]="expandedIpKeys().has(ipGroup.key)"
+             (click)="toggleIpGroup(ipGroup.key)">
+          <span class="ip-group-chevron">{{ expandedIpKeys().has(ipGroup.key) ? '▼' : '▶' }}</span>
+          <span class="ip-group-sev" [class]="'sev-' + ipGroup.maxSev?.toLowerCase()">{{ ipGroup.maxSev }}</span>
+          <span class="ip-group-flow">
+            <span class="ip-src">{{ ipGroup.src_ip }}</span>
+            <span class="ip-arrow"> → </span>
+            <span class="ip-dst">{{ ipGroup.dst_ip }}</span>
+          </span>
+          <span class="ip-group-count">{{ ipGroup.count }}</span>
         </div>
 
-        <!-- Expanded: all related alerts for this CID -->
-        <div *ngIf="expandedCids().has(group.community_id)" class="related-alerts-list">
-          <div *ngFor="let a of group.alerts"
-               class="related-alert-row"
-               [class.selected-sub]="selectedBundle()?.id === a.id"
-               (click)="selectBundle(a)">
-            <span class="sev-mini" [class]="'sev-' + a.severity?.toLowerCase()">{{ a.severity }}</span>
-            <span class="related-rule">{{ a.src_ip }} → {{ a.dst_ip }}</span>
-            <span class="related-time">{{ a.captured_at | date:'h:mm a' }}</span>
+        <!-- Expanded: individual bundles within this IP pair -->
+        <div *ngIf="expandedIpKeys().has(ipGroup.key)" class="ip-group-bundles">
+          <div *ngFor="let b of ipGroup.bundles" class="bundle-card bundle-card-inner"
+               [class.selected]="selectedBundle()?.id === b.id"
+               (click)="selectBundle(b)">
+
+            <div class="bundle-header">
+              <span class="severity-badge" [class]="'sev-' + b.severity?.toLowerCase()">{{ b.severity }}</span>
+              <span class="hold-badge" *ngIf="b.legal_hold">HOLD</span>
+              <span class="auto-badge" *ngIf="b.auto_captured">AUTO</span>
+              <span class="corr-badge" [class]="corrLabel(b.correlation_status).cls">
+                {{ corrLabel(b.correlation_status).label }}
+              </span>
+            </div>
+
+            <div class="bundle-meta">
+              <span>{{ b.captured_at | date:'M/d/yy, h:mm a' }}</span>
+              <span>{{ (b.size_bytes / 1024).toFixed(1) }} KB</span>
+            </div>
+
+            <div class="bundle-cid" title="{{ b.community_id }}">
+              CID: {{ b.community_id | slice:0:18 }}…
+            </div>
           </div>
         </div>
 
       </div>
 
       <div *ngIf="loading()" class="loading">Loading bundles...</div>
-      <div *ngIf="!loading() && groupedBundles().length === 0" class="empty">
+      <div *ngIf="!loading() && ipGroupedBundles().length === 0" class="empty">
         No evidence bundles yet.<br>HIGH/CRITICAL alerts auto-capture.
       </div>
     </div>
