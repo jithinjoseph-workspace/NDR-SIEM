@@ -275,7 +275,6 @@ pub struct AuthClaims {
     pub sensor_ids: Vec<String>,
 }
 
-// Accepts token from Authorization header OR ?token= query param (needed for window.open downloads)
 #[allow(dead_code)]
 pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
     let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
@@ -7490,25 +7489,10 @@ pub async fn arkime_pcap_download(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     axum::extract::Path(session_id): axum::extract::Path<String>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    // Support ?token= for window.open() downloads (cannot set Authorization header)
-    let mut effective_headers = headers.clone();
-    if let Some(q) = raw_query.as_deref() {
-        for part in q.split('&') {
-            if let Some(tok) = part.strip_prefix("token=") {
-                effective_headers.insert(
-                    axum::http::header::AUTHORIZATION,
-                    format!("Bearer {}", tok).parse().unwrap(),
-                );
-                break;
-            }
-        }
-    }
-
-    let (arkime_url, arkime_pass) = match get_tenant_arkime_creds(&state, &effective_headers).await {
+    let (arkime_url, arkime_pass) = match get_tenant_arkime_creds(&state, &headers).await {
         Ok(creds) => creds,
         Err(r) => return r,
     };
@@ -7778,21 +7762,7 @@ pub async fn pcap_download_stored(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    // Support ?token= for window.open() downloads
-    let mut effective_headers = headers.clone();
-    if let Some(q) = raw_query.as_deref() {
-        for part in q.split('&') {
-            if let Some(tok) = part.strip_prefix("token=") {
-                effective_headers.insert(
-                    axum::http::header::AUTHORIZATION,
-                    format!("Bearer {}", tok).parse().unwrap(),
-                );
-                break;
-            }
-        }
-    }
-
-    let claims = match extract_claims(&effective_headers) {
+    let claims = match extract_claims(&headers) {
         Some(c) => c,
         None => return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
     };
