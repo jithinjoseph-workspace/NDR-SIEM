@@ -1363,14 +1363,16 @@ export class Soar implements OnInit {
         // ── Chart 3: Top sessions by bytes ─────────────────────────────
         const topSess = [...sessions].sort((a: any, b: any) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0)).slice(0, 8);
         const maxTopB = Math.max(...topSess.map((s: any) => Number(s.bytes) || 0), 1);
-        const tBH = 18, tBG = 7;
+        const tBH = 18, tBG = 8;
         const c3H = topSess.length * (tBH + tBG) + 20;
+        // Label: "192.168.1.70:3702 → 192.168.1.76:36964" needs ~38 monospace chars × ~5.5px = ~210px right-aligned
         const c3Bars = topSess.map((s: any, i: number) => {
             const y   = 10 + i * (tBH + tBG);
             const b   = Number(s.bytes) || 0;
-            const w   = Math.max(4, Math.round((b / maxTopB) * 175));
-            const lbl = `${s.src_ip || '?'}:${s.src_port || ''}→${s.dst_ip || '?'}:${s.dst_port || ''}`;
-            return `<g><text x="172" y="${y+13}" text-anchor="end" font-size="8.5" fill="#555" font-family="'Courier New',monospace">${lbl}</text><rect x="177" y="${y}" width="${w}" height="${tBH}" rx="2" fill="#2563eb" opacity="0.82"/><text x="${177+w+4}" y="${y+13}" font-size="8.5" fill="#222" font-family="Arial">${fmtBytes(b)}</text></g>`;
+            const w   = Math.max(4, Math.round((b / maxTopB) * 140));
+            const lbl = `${s.src_ip || '?'}:${s.src_port || ''} → ${s.dst_ip || '?'}:${s.dst_port || ''}`;
+            const barX = 230;
+            return `<g><text x="${barX-5}" y="${y+13}" text-anchor="end" font-size="8.5" fill="#334155" font-family="'Courier New',monospace">${lbl}</text><rect x="${barX}" y="${y}" width="${w}" height="${tBH}" rx="2" fill="#2563eb" opacity="0.82"/><text x="${barX+w+5}" y="${y+13}" font-size="9" fill="#0f172a" font-family="Arial,sans-serif" font-weight="600">${fmtBytes(b)}</text></g>`;
         }).join('');
 
         // ── Chart 4: Session timeline (sessions per time bucket) ────────
@@ -1397,7 +1399,10 @@ export class Soar implements OnInit {
                 const x   = i * (bw + 1);
                 const y   = tlH - bh - 14;
                 const col = cnt > 0 ? '#2563eb' : '#e2e8f0';
-                return `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="1" fill="${col}" opacity="0.8"/>${cnt > 0 ? `<text x="${x+bw/2}" y="${tlH-2}" text-anchor="middle" font-size="7" fill="#888" font-family="Arial">${cnt}</text>` : ''}`;
+                // Count label above bar (never overlapping the bottom axis)
+                const lblY = Math.max(8, y - 3);
+                const lbl  = cnt > 0 ? `<text x="${x+bw/2}" y="${lblY}" text-anchor="middle" font-size="7" fill="#2563eb" font-family="Arial">${cnt}</text>` : '';
+                return `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="1" fill="${col}" opacity="0.8"/>${lbl}`;
             }).join('');
             const lbl0 = new Date(minT > 1e12 ? minT : minT*1000).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
             const lbl1 = new Date(maxT > 1e12 ? maxT : maxT*1000).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -1640,7 +1645,7 @@ ${topSess.length ? `
 <div style="margin-top:14px">
   <div class="chart-lbl">Top Connections by Traffic Volume</div>
   <div class="chart-box">
-    <svg width="100%" viewBox="0 0 480 ${c3H}" xmlns="http://www.w3.org/2000/svg">${c3Bars}</svg>
+    <svg width="100%" viewBox="0 0 460 ${c3H}" xmlns="http://www.w3.org/2000/svg">${c3Bars}</svg>
   </div>
 </div>` : ''}` : ''}
 
