@@ -7,7 +7,6 @@ import { Websocket } from '../websocket/websocket';
 @Injectable({ providedIn: 'root' })
 export class AuthService implements OnDestroy {
   private baseUrl = '/api';
-  private TOKEN_KEY = 'ndr_token';
   private USER_KEY = 'ndr_user';
 
   /**
@@ -89,7 +88,6 @@ export class AuthService implements OnDestroy {
     // Stop polling before clearing state so any in-flight poll doesn't restart it
     this.stopSessionPoll();
     this.ws.disconnect();
-    localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.USER_KEY);
     sessionStorage.clear();
     // Tell the backend to expire the httpOnly cookie (fire-and-forget;
@@ -97,13 +95,6 @@ export class AuthService implements OnDestroy {
     this.http.post(`${this.baseUrl}/auth/logout`, {}, { withCredentials: true })
       .subscribe({ error: () => {} });
     window.location.href = '/login';
-  }
-
-  getToken(): string | null {
-    // Read any legacy token still in localStorage from before the cookie
-    // migration. New logins no longer write here, so this path becomes dead
-    // once every active session has re-authenticated via the new flow.
-    return localStorage.getItem(this.TOKEN_KEY);
   }
 
   refreshUser(): Observable<any> {

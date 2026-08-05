@@ -130,8 +130,8 @@
 .alerts-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.4rem;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
   cursor: pointer;
 }
 
@@ -139,16 +139,17 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  min-height: 6rem;
-  border: 1px solid rgba(46, 125, 213, 0.16);
+  min-height: 6.5rem;
+  border: 1px solid rgba(56, 189, 248, 0.3);
   border-radius: 1rem;
-  background: rgba(8, 14, 28, 0.95);
-  box-shadow: 0 12px 30px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.04);
-  padding: 1rem 1.35rem 0.95rem;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.15) 0%, rgba(2, 132, 199, 0.05) 100%);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  padding: 1.1rem 1.4rem;
   position: relative;
   overflow: hidden;
   cursor: pointer;
-  transition: transform 190ms ease, box-shadow 190ms ease, border-color 190ms ease;
+  transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
   animation: tileIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
@@ -161,130 +162,122 @@
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 1.5px;
-  background: linear-gradient(90deg, transparent 0%, rgba(34,197,94,0.65) 50%, transparent 100%);
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(56, 189, 248, 0.8) 50%, transparent 100%);
   opacity: 0;
-  transition: opacity 200ms ease;
+  transition: opacity 250ms ease;
 }
 
 .summary-tile::after {
   content: '';
   position: absolute;
   bottom: -20px; right: -20px;
-  width: 80px; height: 80px;
+  width: 100px; height: 100px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(34,197,94,0.07) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.15) 0%, transparent 70%);
   pointer-events: none;
 }
 
 .summary-tile:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 18px 40px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.05);
-  border-color: rgba(96,165,250,0.22);
+  transform: translateY(-4px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  border-color: rgba(56, 189, 248, 0.6);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.2) 0%, rgba(2, 132, 199, 0.1) 100%);
 }
 
 .summary-tile:hover::before { opacity: 1; }
 
 .summary-tile span {
-  color: rgba(34, 197, 94, 0.45);
+  color: #7dd3fc;
   font-family: var(--font-mono);
-  font-size: 0.57rem;
+  font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.15em;
   display: block;
   margin-bottom: 0.5rem;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
 }
 
 .summary-tile strong {
-  color: #dde7f2;
+  color: #ffffff;
   font-family: var(--font-display);
-  font-size: 2.5rem;
+  font-size: 2.8rem;
   font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   display: block;
+  text-shadow: 0 2px 10px rgba(56, 189, 248, 0.3);
 }
 
-/* Priority tile */
-.summary-tile.priority {
-  border-color: rgba(72, 15, 31, 0.2);
-  background: linear-gradient(150deg, rgba(22, 13, 28, 0.96) 0%, rgba(17, 9, 24, 0.99) 100%);
+/* CRITICAL (priority in HTML) */
+/* Wait, HTML has CRITICAL and HIGH both using class "summary-tile priority". Let's distinguish by using nth-child or adding proper styling */
+.summary-tile:nth-child(2) {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: linear-gradient(135deg, rgba(220, 38, 38, 0.18) 0%, rgba(185, 28, 28, 0.05) 100%);
 }
-.summary-tile.priority::before {
-  background: linear-gradient(90deg, transparent 0%, rgba(248, 113, 113, 0.35) 50%, transparent 100%);
+.summary-tile:nth-child(2)::before { background: linear-gradient(90deg, transparent 0%, rgba(248, 113, 113, 0.8) 50%, transparent 100%); }
+.summary-tile:nth-child(2)::after { background: radial-gradient(circle, rgba(248, 113, 113, 0.15) 0%, transparent 70%); }
+.summary-tile:nth-child(2):hover {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: linear-gradient(135deg, rgba(220, 38, 38, 0.25) 0%, rgba(185, 28, 28, 0.1) 100%);
 }
-.summary-tile.priority::after {
-  background: radial-gradient(circle, rgba(248, 113, 113, 0.1) 0%, transparent 70%);
-}
-.summary-tile.priority:hover {
-  box-shadow: 0 16px 38px rgba(0,0,0,0.24),
-              0 0 0 1px rgba(248, 113, 113, 0.14);
-  border-color: rgba(248, 113, 113, 0.26);
-}
-.summary-tile.priority span   { color: rgba(248, 113, 113, 0.55); }
-.summary-tile.priority strong {
-  background: linear-gradient(135deg, #fb7185 0%, #fda4af 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+.summary-tile:nth-child(2) span { color: #fca5a5; }
+.summary-tile:nth-child(2) strong { text-shadow: 0 2px 10px rgba(248, 113, 113, 0.3); }
 
+/* HIGH (priority in HTML) */
+.summary-tile:nth-child(3) {
+  border-color: rgba(251, 146, 60, 0.3);
+  background: linear-gradient(135deg, rgba(217, 119, 6, 0.18) 0%, rgba(180, 83, 9, 0.05) 100%);
+}
+.summary-tile:nth-child(3)::before { background: linear-gradient(90deg, transparent 0%, rgba(251, 146, 60, 0.8) 50%, transparent 100%); }
+.summary-tile:nth-child(3)::after { background: radial-gradient(circle, rgba(251, 146, 60, 0.15) 0%, transparent 70%); }
+.summary-tile:nth-child(3):hover {
+  border-color: rgba(251, 146, 60, 0.6);
+  background: linear-gradient(135deg, rgba(217, 119, 6, 0.25) 0%, rgba(180, 83, 9, 0.1) 100%);
+}
+.summary-tile:nth-child(3) span { color: #fdba74; }
+.summary-tile:nth-child(3) strong { text-shadow: 0 2px 10px rgba(251, 146, 60, 0.3); }
+
+/* MEDIUM */
 .summary-tile.medium {
-  border-color: rgba(56, 52, 19, 0.2);
-  background: linear-gradient(150deg, rgba(10, 15, 22, 0.96) 0%, rgba(8, 12, 18, 0.99) 100%);
+  border-color: rgba(163, 230, 53, 0.3);
+  background: linear-gradient(135deg, rgba(101, 163, 13, 0.15) 0%, rgba(77, 124, 15, 0.05) 100%);
 }
-.summary-tile.medium::before {
-  background: linear-gradient(90deg, transparent 0%, rgba(94, 234, 212, 0.25) 50%, transparent 100%);
-}
-.summary-tile.medium::after {
-  background: radial-gradient(circle, rgba(94, 234, 212, 0.08) 0%, transparent 70%);
-}
+.summary-tile.medium::before { background: linear-gradient(90deg, transparent 0%, rgba(163, 230, 53, 0.8) 50%, transparent 100%); }
+.summary-tile.medium::after { background: radial-gradient(circle, rgba(163, 230, 53, 0.15) 0%, transparent 70%); }
 .summary-tile.medium:hover {
-  box-shadow: 0 16px 38px rgba(0,0,0,0.22),
-              0 0 0 1px rgba(94, 234, 212, 0.14);
-  border-color: rgba(94, 234, 212, 0.22);
+  border-color: rgba(163, 230, 53, 0.6);
+  background: linear-gradient(135deg, rgba(101, 163, 13, 0.25) 0%, rgba(77, 124, 15, 0.1) 100%);
 }
-.summary-tile.medium span { color: rgba(94, 234, 212, 0.5); }
-.summary-tile.medium strong {
-  background: linear-gradient(135deg, #5eead4 0%, #bef264 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+.summary-tile.medium span { color: #d9f99d; }
+.summary-tile.medium strong { text-shadow: 0 2px 10px rgba(163, 230, 53, 0.3); }
 
+/* INTEL */
 .summary-tile.intel {
-  border-color: rgba(67, 56, 202, 0.2);
-  background: linear-gradient(150deg, rgba(9, 12, 25, 0.96) 0%, rgba(7, 10, 18, 0.99) 100%);
+  border-color: rgba(129, 140, 248, 0.3);
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.18) 0%, rgba(67, 56, 202, 0.05) 100%);
 }
-.summary-tile.intel::before {
-  background: linear-gradient(90deg, transparent 0%, rgba(96, 165, 250, 0.3) 50%, transparent 100%);
-}
-.summary-tile.intel::after {
-  background: radial-gradient(circle, rgba(67, 56, 202, 0.09) 0%, transparent 70%);
-}
+.summary-tile.intel::before { background: linear-gradient(90deg, transparent 0%, rgba(129, 140, 248, 0.8) 50%, transparent 100%); }
+.summary-tile.intel::after { background: radial-gradient(circle, rgba(129, 140, 248, 0.15) 0%, transparent 70%); }
 .summary-tile.intel:hover {
-  box-shadow: 0 16px 38px rgba(0,0,0,0.22),
-              0 0 0 1px rgba(96, 165, 250, 0.14);
-  border-color: rgba(96, 165, 250, 0.22);
+  border-color: rgba(129, 140, 248, 0.6);
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.25) 0%, rgba(67, 56, 202, 0.1) 100%);
 }
-.summary-tile.intel span { color: rgba(96, 165, 250, 0.55); }
-.summary-tile.intel strong {
-  background: linear-gradient(135deg, #93c5fd 0%, #60a5fa 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+.summary-tile.intel span { color: #a5b4fc; }
+.summary-tile.intel strong { text-shadow: 0 2px 10px rgba(129, 140, 248, 0.3); }
 
 /* Active (filtered) state */
 .summary-tile.active {
-  box-shadow: 0 0 0 1.5px rgba(34,197,94,0.45), 0 8px 32px rgba(0,0,0,0.3) !important;
-  border-color: rgba(34,197,94,0.45) !important;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.8), 0 8px 32px rgba(0,0,0,0.3) !important;
+  border-color: rgba(56, 189, 248, 1) !important;
+  transform: translateY(-2px);
 }
 .summary-tile.active::before { opacity: 1 !important; }
-.summary-tile.priority.active { box-shadow: 0 0 0 1.5px rgba(244,63,94,0.55), 0 8px 32px rgba(0,0,0,0.3) !important; border-color: rgba(244,63,94,0.55) !important; }
-.summary-tile.medium.active   { box-shadow: 0 0 0 1.5px rgba(250,204,21,0.5),  0 8px 32px rgba(0,0,0,0.3) !important; border-color: rgba(250,204,21,0.5) !important; }
-.summary-tile.intel.active    { box-shadow: 0 0 0 1.5px rgba(167,139,250,0.5), 0 8px 32px rgba(0,0,0,0.3) !important; border-color: rgba(167,139,250,0.5) !important; }
+.summary-tile:nth-child(2).active { box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.8), 0 8px 32px rgba(0,0,0,0.3) !important; border-color: rgba(248, 113, 113, 1) !important; }
+.summary-tile:nth-child(3).active { box-shadow: 0 0 0 2px rgba(251, 146, 60, 0.8),  0 8px 32px rgba(0,0,0,0.3) !important; border-color: rgba(251, 146, 60, 1) !important; }
+.summary-tile.medium.active   { box-shadow: 0 0 0 2px rgba(163, 230, 53, 0.8),  0 8px 32px rgba(0,0,0,0.3) !important; border-color: rgba(163, 230, 53, 1) !important; }
+.summary-tile.intel.active    { box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.8), 0 8px 32px rgba(0,0,0,0.3) !important; border-color: rgba(129, 140, 248, 1) !important; }
 
 /* ── Page tabs ─────────────────────────────────────────────────── */
 .page-tabs {
@@ -758,6 +751,7 @@
   line-height: 1.5;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   transition: color 160ms ease;
 }
 

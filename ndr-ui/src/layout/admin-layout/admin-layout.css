@@ -871,33 +871,81 @@
   overflow-y: auto;
 }
 
-.sa-brand {
-  padding: 20px 18px 16px;
-  border-bottom: 1px solid rgba(79,140,255,0.08);
-}
-
-.sa-brand-title {
-  display: block;
-  font-size: 18px;
-  font-weight: 700;
-  color: #f0f4ff;
-  letter-spacing: 0.02em;
-  margin-bottom: 8px;
-}
-
-.sa-brand-badge {
-  display: inline-flex;
+/* ── Brand block ──────────────────────────────────────────── */
+.brand-block {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
+  gap: 10px;
+  padding: 24px 20px 32px 20px;
+  border-bottom: none;
+  background: linear-gradient(180deg, #ffffff 0%, #eefbf3 60%, #090e17 100%);
+}
+
+.brand-wordmark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.brand-name {
+  display: block;
+  background: linear-gradient(110deg, #064e3b 0%, #15803d 60%, #22c55e 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #7FB1FF;
-  background: rgba(79,140,255,0.10);
-  border: 1px solid rgba(79,140,255,0.22);
-  border-radius: 20px;
-  padding: 3px 10px;
+  line-height: 1;
+  text-align: center;
+}
+
+.brand-tagline {
+  display: block;
+  color: #166534;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  text-align: center;
+}
+
+.brand-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.05);
+  border-radius: 6px;
+  padding: 8px 14px;
+  width: fit-content;
+  margin-top: 4px;
+}
+
+.brand-badge-text {
+  color: #0f172a;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.brand-badge-logo {
+  height: 24px;
+  object-fit: contain;
 }
 
 .sa-nav {
@@ -1018,9 +1066,22 @@
   font-weight: 600;
 }
 
+/* ── BASE SHELL & GLOBAL OVERRIDES ────────────────────────────────── */
+body:has(.sa-sidebar) .topbar {
+  padding-left: 220px !important;
+}
+
+body:has(.sa-sidebar) .sa-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 120;
+}
+
 .sa-shell {
   min-height: calc(100vh + 240px);
-  padding: 24px 32px 80px;
+  padding: 24px 32px 80px 252px;
   background-color: #020408;
   background-image:
     radial-gradient(circle at 10% 20%, rgba(59,130,246,0.10) 0%, transparent 45%),

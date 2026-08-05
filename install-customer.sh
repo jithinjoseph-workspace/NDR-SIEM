@@ -22,7 +22,7 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
     sudo mkdir -p "$INSTALL_DIR"
-    sudo chmod 777 "$INSTALL_DIR"
+    sudo chmod 755 "$INSTALL_DIR"
 
     echo "  Downloading config files via API..."
     GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
@@ -266,13 +266,13 @@ TENANT_ID=default
 CLICKHOUSE_URL=http://ndr-nginx:8123
 CLICKHOUSE_URL_SECONDARY=http://clickhouse2:8123
 CLICKHOUSE_USER=ndr
-CLICKHOUSE_PASSWORD=ndr123
+CLICKHOUSE_PASSWORD=$(openssl rand -hex 16 2>/dev/null || echo "$(date +%s%N | sha256sum | head -c 32)")
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=${JWT_SECRET_EARLY}
 NDR_AGENT_SECRET=${NDR_AGENT_SECRET_EARLY}
 CORS_ORIGIN=https://${HOST_IP_EARLY}:3000
 ARKIME_URL=http://${HOST_IP_EARLY}:8005
-ARKIME_PASS=admin
+ARKIME_PASS=$(openssl rand -hex 12 2>/dev/null || echo "$(date +%s%N | sha256sum | head -c 24)")
 OPENSEARCH_URL=http://${HOST_IP_EARLY}:9200
 OPENAI_API_KEY=
 GROQ_API_KEY=
@@ -923,7 +923,7 @@ JWT_SECRET=$JWT_SECRET
 NDR_AGENT_SECRET=$NDR_AGENT_SECRET
 CORS_ORIGIN=https://${HOST_IP}:3000
 ARKIME_URL=http://${HOST_IP}:8005
-ARKIME_PASS=admin
+ARKIME_PASS=$ARKIME_PASS
 OPENSEARCH_URL=http://${HOST_IP}:9200
 OPENAI_API_KEY=$OPENAI_API_KEY
 GROQ_API_KEY=
@@ -938,17 +938,16 @@ log ".env generated"
 # ── Sudoers ───────────────────────────────────
 log "Configuring sudo permissions..."
 cat << SUDOERS | sudo tee /etc/sudoers.d/ndr-stack > /dev/null
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/suricata
-$USERNAME ALL=(ALL) NOPASSWD: /opt/zeek/bin/zeek
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/pkill
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/pgrep
-$USERNAME ALL=(ALL) NOPASSWD: /bin/kill
-$USERNAME ALL=(ALL) NOPASSWD: /bin/rm
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl
-$USERNAME ALL=(ALL) NOPASSWD: /bin/fuser
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tee
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/suricatasc
-$USERNAME ALL=(root) NOPASSWD: /usr/sbin/iptables
+# NDR stack — restricted sudo (each command locked to its specific purpose)
+Cmnd_Alias NDR_SURICATA  = /usr/bin/suricata, /usr/bin/suricatasc
+Cmnd_Alias NDR_ZEEK      = /opt/zeek/bin/zeek
+Cmnd_Alias NDR_PKILL     = /usr/bin/pkill suricata, /usr/bin/pkill -9 suricata, /usr/bin/pkill zeek, /usr/bin/pkill -9 zeek, /usr/bin/pkill -f suricata, /usr/bin/pkill -f zeek
+Cmnd_Alias NDR_PGREP     = /usr/bin/pgrep suricata, /usr/bin/pgrep zeek, /usr/bin/pgrep -f suricata, /usr/bin/pgrep -f zeek
+Cmnd_Alias NDR_SYSTEMCTL = /usr/bin/systemctl daemon-reload, /usr/bin/systemctl start ndr-*, /usr/bin/systemctl stop ndr-*, /usr/bin/systemctl restart ndr-*, /usr/bin/systemctl enable ndr-*, /usr/bin/systemctl disable ndr-*, /usr/bin/systemctl status ndr-*, /usr/bin/systemctl start suricata, /usr/bin/systemctl stop suricata, /usr/bin/systemctl restart suricata, /usr/bin/systemctl start zeek, /usr/bin/systemctl stop zeek
+Cmnd_Alias NDR_TEE       = /usr/bin/tee /etc/suricata/threshold.conf, /usr/bin/tee /etc/systemd/system/ndr-autoscaler.service, /usr/bin/tee /etc/systemd/system/ndr-worker-autoscaler.service
+Cmnd_Alias NDR_IPTABLES  = /usr/sbin/iptables
+$USERNAME ALL=(ALL)  NOPASSWD: NDR_SURICATA, NDR_ZEEK, NDR_PKILL, NDR_PGREP, NDR_SYSTEMCTL, NDR_TEE
+$USERNAME ALL=(root) NOPASSWD: NDR_IPTABLES
 SUDOERS
 sudo chmod 440 /etc/sudoers.d/ndr-stack
 log "Sudo configured"
@@ -1058,7 +1057,7 @@ log "Starting Docker service..."
 sudo systemctl enable docker
 sudo systemctl start docker || true
 sudo usermod -aG docker "$USERNAME"
-sudo chmod 666 /var/run/docker.sock
+# Socket stays at default 660 (root:docker) — engine containers run as root and have access
 
 log "Waiting for Docker to initialize..."
 for i in {1..20}; do

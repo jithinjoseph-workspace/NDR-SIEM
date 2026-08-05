@@ -17,8 +17,6 @@ export class TourService {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css';
-      link.integrity = 'sha384-bovbcpDBo0pTIhd7ws6ebPh1PG31ubAHcX2pv8Tcu5EtFHNl5FBciYFtS/e2SN66';
-      link.crossOrigin = 'anonymous';
       document.head.appendChild(link);
 
       const style = document.createElement('style');
@@ -64,8 +62,6 @@ export class TourService {
 
       const script = document.createElement('script');
       script.src = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js';
-      script.integrity = 'sha384-yPK823YWGKpXfBT8wLqUXmrB5ejcI7sgGBIary/01UavNc1bD92AOUBCBzjXQS/s';
-      script.crossOrigin = 'anonymous';
       script.onload = () => {
         this.driverLoaded = true;
         resolve();
@@ -91,10 +87,21 @@ export class TourService {
   }
 
   async startTour() {
-    await this.loadDriver();
+    try {
+      await this.loadDriver();
+    } catch (e) {
+      console.error('Failed to load interactive tour:', e);
+      alert('Could not load the interactive tour. Please check your connection or ad-blocker.');
+      return;
+    }
 
     // @ts-ignore
-    const driver = window.driver.js.driver;
+    const driver = (window.driver?.js?.driver) || (window.driver) || (window.driverjs);
+    if (!driver) {
+      console.error('Driver.js is not defined on the window object.');
+      alert('Tour script failed to initialize properly.');
+      return;
+    }
 
     this.driverInstance = driver({
       showProgress: true,
@@ -115,13 +122,13 @@ export class TourService {
       onNextClick: (elem: any, step: any, options: any) => {
         const i = options.state.activeIndex;
         if (i === 1) { // search-wrap -> dashboard
-          this.router.navigate(['/dashboard']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
+          this.router.navigate(['/analyst/dashboard']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
         } else if (i === 3) { // chart-frame -> alerts
-          this.router.navigate(['/alerts']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
+          this.router.navigate(['/analyst/alerts']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
         } else if (i === 4) { // alerts-table -> evidence
-          this.router.navigate(['/evidence']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
+          this.router.navigate(['/analyst/evidence']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
         } else if (i === 5) { // bundle-list -> ai-activity
-          this.router.navigate(['/ai-activity']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
+          this.router.navigate(['/analyst/ai-activity']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
         } else {
           this.driverInstance.moveNext();
         }
@@ -129,11 +136,11 @@ export class TourService {
       onPrevClick: (elem: any, step: any, options: any) => {
         const i = options.state.activeIndex;
         if (i === 4) { // alerts-table -> back to dashboard
-          this.router.navigate(['/dashboard']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
+          this.router.navigate(['/analyst/dashboard']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
         } else if (i === 5) { // bundle-list -> back to alerts
-          this.router.navigate(['/alerts']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
+          this.router.navigate(['/analyst/alerts']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
         } else if (i === 6) { // aria-wrapper -> back to evidence
-          this.router.navigate(['/evidence']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
+          this.router.navigate(['/analyst/evidence']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
         } else {
           this.driverInstance.movePrevious();
         }

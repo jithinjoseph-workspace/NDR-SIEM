@@ -531,8 +531,7 @@ export class Alerts implements OnInit, OnDestroy {
     }).subscribe({
       next: (res: any) => {
         this.showToast(`Incident created — ${title}`);
-        this.switchTab('incidents');
-        this.loadIncidents();
+        this.router.navigate(['/analyst/soar']);
       },
       error: () => this.showToast(`Failed to create incident`),
     });
@@ -573,8 +572,7 @@ export class Alerts implements OnInit, OnDestroy {
     }).subscribe({
       next: () => {
         this.showToast(`Incident created — ${g.count} alerts bundled`);
-        this.switchTab('incidents');
-        this.loadIncidents();
+        this.router.navigate(['/analyst/soar']);
       },
       error: () => this.showToast(`Failed to create incident`),
     });

@@ -35,8 +35,7 @@ sudo systemctl start ndr-agent 2>/dev/null || \
     nohup python3 $INSTALL_DIR/scripts/ndr-agent.py > /tmp/ndr-agent.log 2>&1 &
 sleep 2
 
-# Fix Docker socket permissions
-sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
+# Engine containers run as root and access docker socket via group ownership (660)
 
 # ── Clear Vector checkpoints BEFORE starting Docker ──────────────
 # Must happen before docker compose up so Vector starts with no memory

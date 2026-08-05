@@ -157,7 +157,7 @@ services:
       - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-ndr123}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - INSTANCE_ID=1
       - REDIS_URL=redis://ndr-redis:6379
       - INSTALL_DIR=${INSTALL_DIR}
@@ -220,7 +220,7 @@ services:
       - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-ndr123}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - INSTANCE_ID=2
       - REDIS_URL=redis://ndr-redis:6379
       - INSTALL_DIR=${INSTALL_DIR}
@@ -283,7 +283,7 @@ services:
       - NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-ndr123}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - INSTANCE_ID=3
       - REDIS_URL=redis://ndr-redis:6379
       - INSTALL_DIR=${INSTALL_DIR}
@@ -425,6 +425,8 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    environment:
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
     volumes:
       - clickhouse1-data:/var/lib/clickhouse
       - clickhouse1-logs:/var/log/clickhouse-server
@@ -453,6 +455,8 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    environment:
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
     volumes:
       - clickhouse2-data:/var/lib/clickhouse
       - clickhouse2-logs:/var/log/clickhouse-server
@@ -486,7 +490,7 @@ services:
         condition: service_healthy
       clickhouse2:
         condition: service_healthy
-    entrypoint: ["bash", "-c", "clickhouse-client --host clickhouse1 --port 9000 --user ndr --password ${CLICKHOUSE_PASSWORD:-ndr123} --multiquery < /init.sql && echo '[NDR] ClickHouse schema ready'"]
+    entrypoint: ["bash", "-c", "clickhouse-client --host clickhouse1 --port 9000 --user ndr --password ${CLICKHOUSE_PASSWORD} --multiquery < /init.sql && echo '[NDR] ClickHouse schema ready'"]
     restart: on-failure
 
 volumes:

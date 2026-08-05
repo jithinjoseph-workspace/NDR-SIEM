@@ -1,7 +1,7 @@
 <clickhouse>
     <users>
         <ndr>
-            <password>ndr123</password>
+            <password from_env="CLICKHOUSE_PASSWORD"/>
             <networks>
                 <ip>::/0</ip>
             </networks>

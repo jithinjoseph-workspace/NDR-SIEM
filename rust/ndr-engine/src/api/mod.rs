@@ -438,11 +438,23 @@ pub async fn auth_middleware(
                 // or explicit logout. Falls back to allow if Redis is unavailable.
                 if let Some(jti) = &claims.jti {
                     let session_key = format!("ndr:session:{}", jti);
-                    let exists: bool = redis::cmd("EXISTS")
+                    let result: Result<bool, _> = redis::cmd("EXISTS")
                         .arg(&session_key)
                         .query_async(&mut rc)
-                        .await
-                        .unwrap_or(true); // Redis down → allow through
+                        .await;
+                    let exists = match result {
+                        Ok(v) => v,
+                        Err(_) => {
+                            // Redis unavailable — fail closed: reject rather than allow
+                            return axum::response::Response::builder()
+                                .status(503)
+                                .header("Content-Type", "application/json")
+                                .body(axum::body::Body::from(
+                                    r#"{"status":"error","code":"SERVICE_UNAVAILABLE","message":"Session verification unavailable — please try again"}"#
+                                ))
+                                .unwrap();
+                        }
+                    };
                     if !exists {
                         return axum::response::Response::builder()
                             .status(401)
@@ -4631,7 +4643,6 @@ pub async fn login(
                 StatusCode::OK,
                 Json(json!({
                     "status": "ok",
-                    "token": token,
                     "user": {
                         "id": user["id"].as_str().unwrap_or(""),
                         "username": username,

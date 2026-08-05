@@ -205,7 +205,7 @@ export class Login implements OnDestroy {
     this.auth.login(this.username, this.password).subscribe({
       next: (res: any) => {
         this.loading = false;
-        if (res.token) {
+        if (res.status === 'ok' && res.user) {
           const role = res.user?.role;
           if (role === 'admin' || role === 'super_admin') {
             this.router.navigate(['/admin']).then(() => {

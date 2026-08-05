@@ -49,14 +49,14 @@ export class Navbar implements OnInit, OnDestroy {
   }
 
   suggestions = [
-    { label: 'Network Logs', hint: 'View all events', route: '/logs', permission: 'logs' },
-    { label: 'Alerts', hint: 'View correlation hits', route: '/alerts', permission: 'alerts' },
-    { label: 'Rules', hint: 'Manage SIGMA rules', route: '/rules', permission: 'rules' },
-    { label: 'Threat Intel', hint: 'IOC lookup', route: '/intel', permission: 'intel' },
+    { label: 'Network Logs', hint: 'View all events', route: '/analyst/logs', permission: 'logs' },
+    { label: 'Alerts', hint: 'View correlation hits', route: '/analyst/alerts', permission: 'alerts' },
+    { label: 'Rules', hint: 'Manage SIGMA rules', route: '/analyst/rules', permission: 'rules' },
+    { label: 'Threat Intel', hint: 'IOC lookup', route: '/analyst/intel', permission: 'intel' },
     { label: 'Attack Map', hint: 'Global threat map', route: '/analyst/threat-map', permission: 'intel' },
-    { label: 'Network Map', hint: 'Topology view', route: '/network-map', permission: 'network-map' },
-    { label: 'System Health', hint: 'Service status', route: '/health', permission: 'health' },
-    { label: 'Live Stream', hint: 'Real-time events', route: '/live', permission: 'live' },
+    { label: 'Network Map', hint: 'Topology view', route: '/analyst/network-map', permission: 'network-map' },
+    { label: 'System Health', hint: 'Service status', route: '/analyst/health', permission: 'health' },
+    { label: 'Live Stream', hint: 'Real-time events', route: '/analyst/live', permission: 'live' },
   ];
 
   filteredSuggestions: any[] = [];
@@ -169,20 +169,20 @@ export class Navbar implements OnInit, OnDestroy {
     );
 
     const ipPattern = /^[\d\.:a-f]+$/i;
-    if (ipPattern.test(term) && this.canAccessRoute('/logs', 'logs')) {
+    if (ipPattern.test(term) && this.canAccessRoute('/analyst/logs', 'logs')) {
       this.filteredSuggestions.unshift({
         label: `Search IP: ${this.searchText}`,
         hint: 'Search in Network Logs',
-        route: `/logs?search=${this.searchText}`,
+        route: `/analyst/logs?search=${this.searchText}`,
         permission: 'logs',
       });
     }
 
-    if (term.length > 2 && this.canAccessRoute('/rules', 'rules')) {
+    if (term.length > 2 && this.canAccessRoute('/analyst/rules', 'rules')) {
       this.filteredSuggestions.push({
         label: `Search rules: "${this.searchText}"`,
         hint: 'Find SIGMA rules',
-        route: `/rules?search=${this.searchText}`,
+        route: `/analyst/rules?search=${this.searchText}`,
         permission: 'rules',
       });
     }
@@ -205,21 +205,21 @@ export class Navbar implements OnInit, OnDestroy {
     if (!term) return;
 
     if (term.match(/^\d+\.\d+\.\d+\.\d+/) || term.includes(':')) {
-      this.navigateIfAllowed('/logs', 'logs', { search: this.searchText });
+      this.navigateIfAllowed('/analyst/logs', 'logs', { search: this.searchText });
     } else if (term.includes('alert') || term.includes('hit')) {
-      this.navigateIfAllowed('/alerts', 'alerts');
+      this.navigateIfAllowed('/analyst/alerts', 'alerts');
     } else if (term.includes('rule') || term.includes('sigma')) {
-      this.navigateIfAllowed('/rules', 'rules');
+      this.navigateIfAllowed('/analyst/rules', 'rules');
     } else if (term.includes('threat') || term.includes('intel') || term.includes('ioc')) {
-      this.navigateIfAllowed('/intel', 'intel');
+      this.navigateIfAllowed('/analyst/intel', 'intel');
     } else if (term.includes('health') || term.includes('status')) {
-      this.navigateIfAllowed('/health', 'health');
+      this.navigateIfAllowed('/analyst/health', 'health');
     } else if (term.includes('live') || term.includes('stream')) {
-      this.navigateIfAllowed('/live', 'live');
+      this.navigateIfAllowed('/analyst/live', 'live');
     } else if (term.includes('map') || term.includes('topology')) {
-      this.navigateIfAllowed('/network-map', 'network-map');
+      this.navigateIfAllowed('/analyst/network-map', 'network-map');
     } else {
-      this.navigateIfAllowed('/logs', 'logs', { search: this.searchText });
+      this.navigateIfAllowed('/analyst/logs', 'logs', { search: this.searchText });
     }
 
     this.showSuggestions = false;
@@ -249,7 +249,7 @@ export class Navbar implements OnInit, OnDestroy {
 
   viewThreatIntel() {
     this.showNotifications = false;
-    this.navigateIfAllowed('/intel', 'intel');
+    this.navigateIfAllowed('/analyst/intel', 'intel');
   }
 
   announcementTypeLabel(type: string | undefined) {
@@ -294,7 +294,7 @@ export class Navbar implements OnInit, OnDestroy {
     if (this.auth.isTenantAdmin()) {
       this.router.navigate(['/tenant-admin/settings']);
     } else {
-      this.router.navigate(['/settings']);
+      this.router.navigate(['/analyst/settings']);
     }
   }
 
@@ -303,7 +303,7 @@ export class Navbar implements OnInit, OnDestroy {
     if (this.auth.isTenantAdmin()) {
       this.router.navigate(['/tenant-admin/support']);
     } else {
-      this.router.navigate(['/support']);
+      this.router.navigate(['/analyst/support']);
     }
   }
 
@@ -325,8 +325,8 @@ export class Navbar implements OnInit, OnDestroy {
     const user = this.auth.getUser();
     if (!user) return false;
 
-    const analystRoutes = ['/logs', '/alerts', '/rules', '/intel', '/network-map', '/health', '/live', '/threat-map', '/analyst/threat-map'];
-    if (analystRoutes.includes(route) || route.startsWith('/logs?') || route.startsWith('/rules?')) {
+    const analystRoutes = ['/analyst/logs', '/analyst/alerts', '/analyst/rules', '/analyst/intel', '/analyst/network-map', '/analyst/health', '/analyst/live', '/analyst/threat-map'];
+    if (analystRoutes.includes(route) || route.startsWith('/analyst/logs?') || route.startsWith('/analyst/rules?')) {
       if (this.auth.isAdmin() || user.role === 'tenant_admin') {
         return false;
       }
