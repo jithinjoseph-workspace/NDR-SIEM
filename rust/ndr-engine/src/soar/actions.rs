@@ -161,11 +161,68 @@ pub async fn execute_action(
                 let email = match (|| -> Option<lettre::Message> {
                     let f = from_addr.parse().ok()?;
                     let t = to_addr.parse().ok()?;
+
+                    use lettre::message::{MultiPart, SinglePart, header::ContentType, header::ContentDisposition, header::ContentId};
+
+                    let html_body = format!(
+                        r#"<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0d1420; color: #f8fafc; margin: 0; padding: 20px; }}
+        .container {{ max-width: 600px; margin: 0 auto; background: linear-gradient(180deg, #ffffff 0%, #eefbf3 60%, #0d1420 100%); padding: 32px 24px; border-radius: 8px; text-align: center; }}
+        .header {{ margin-bottom: 24px; }}
+        .title {{ margin: 0; font-size: 24px; font-weight: 800; color: #064e3b; letter-spacing: 0.08em; text-transform: uppercase; }}
+        .tagline {{ margin: 4px 0 0 0; font-size: 10px; font-weight: 700; color: #166534; letter-spacing: 0.28em; text-transform: uppercase; }}
+        .alert-box {{ background: rgba(255, 255, 255, 0.95); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 24px; margin-bottom: 32px; text-align: left; color: #0f172a; box-shadow: 0 4px 12px rgba(34,197,94,0.05); }}
+        .alert-title {{ margin-top: 0; color: #b91c1c; font-size: 18px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 16px; }}
+        .detail {{ margin: 8px 0; font-size: 14px; line-height: 1.5; }}
+        .label {{ font-weight: 700; color: #475569; width: 120px; display: inline-block; }}
+        .badge-container {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 6px; padding: 8px 14px; box-shadow: 0 4px 12px rgba(34,197,94,0.05); }}
+        .badge-text {{ color: #0f172a; font-size: 9px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.85; margin: 0; padding-right: 8px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">PromaAlpha</h1>
+            <p class="tagline">NDR Platform</p>
+        </div>
+        <div class="alert-box">
+            <h2 class="alert-title">🚨 NDR Alert: {}</h2>
+            <div class="detail"><span class="label">Source IP:</span> {}</div>
+            <div class="detail"><span class="label">Dest IP:</span> {}</div>
+            <div class="detail"><span class="label">Risk Score:</span> {}/100</div>
+            <div class="detail"><span class="label">Threat Intel:</span> {}</div>
+            <div class="detail"><span class="label">Tags:</span> {}</div>
+        </div>
+        <div class="badge-container">
+            <span class="badge-text">powered by</span>
+            <img src="cid:promasecure_logo" alt="PromaSecure" style="height: 24px;" />
+        </div>
+    </div>
+</body>
+</html>"#,
+                        risk.severity.as_str(), src, dst, risk.score as u32,
+                        if enrichment.is_malicious { "⚠️ Malicious" } else { "Clean" },
+                        if risk.tags.is_empty() { "None".to_string() } else { risk.tags.join(", ") }
+                    );
+
+                    let logo_part = SinglePart::builder()
+                        .header(ContentType::parse("image/png").unwrap())
+                        .header(ContentDisposition::inline())
+                        .header(ContentId::from("<promasecure_logo>".to_string()))
+                        .body(include_bytes!("../assets/promasecure.png").to_vec());
+
+                    let multi = MultiPart::related()
+                        .singlepart(SinglePart::html(html_body))
+                        .singlepart(logo_part);
+
                     Message::builder()
                         .from(f)
                         .to(t)
-                        .subject(format!("NDR Alert: {}", risk.severity.as_str()))
-                        .body(format!("Alert for {} -> {}. Score: {}", src, dst, risk.score))
+                        .subject(format!("PromaAlpha NDR Alert: {}", risk.severity.as_str()))
+                        .multipart(multi)
                         .ok()
                 })() {
                     Some(e) => e,

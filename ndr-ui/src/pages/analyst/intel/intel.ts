@@ -265,11 +265,15 @@ export class Intel implements OnInit, OnDestroy {
       'Source IP,Destination IP,Hits,Last Seen,Status',
       ...rows.map(r => `${r.src_ip},${r.dst_ip},${r.hits},${this.getTimestamp(r.last_seen)},THREAT DETECTED`)
     ].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const a    = document.createElement('a');
-    a.href     = URL.createObjectURL(blob);
-    a.download = `threat-intel-${new Date().toISOString().slice(0,10)}.csv`;
+    const blob      = new Blob([csv], { type: 'text/csv' });
+    const objectUrl = URL.createObjectURL(blob);
+    const a         = document.createElement('a');
+    a.href          = objectUrl;
+    a.download      = `threat-intel-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objectUrl);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

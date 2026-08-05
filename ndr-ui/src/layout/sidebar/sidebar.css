@@ -56,67 +56,75 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 10px;
-  padding: 20px 18px 16px;
-  border-bottom: 1px solid rgba(34, 197, 94, 0.08);
+  padding: 24px 20px 32px 20px;
+  border-bottom: none;
+  background: linear-gradient(180deg, #ffffff 0%, #eefbf3 60%, #0d1420 100%);
 }
 
 .brand-wordmark {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
 }
 
 .brand-name {
   display: block;
-  background: linear-gradient(110deg, #ffffff 0%, #86efac 58%, #22c55e 100%);
+  background: linear-gradient(110deg, #064e3b 0%, #15803d 60%, #22c55e 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   line-height: 1;
+  text-align: center;
 }
 
 .brand-tagline {
   display: block;
-  color: rgba(34, 197, 94, 0.55);
+  color: #166534;
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.24em;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
+  opacity: 0.85;
+  text-align: center;
 }
 
 .brand-badge {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(34, 197, 94, 0.08);
-  border: 1px solid rgba(34, 197, 94, 0.2);
-  border-radius: 3px;
-  padding: 4px 9px;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.05);
+  border-radius: 6px;
+  padding: 8px 14px;
   width: fit-content;
+  margin-top: 4px;
 }
 
 .brand-badge-text {
-  color: rgba(255, 255, 255, 0.3);
+  color: #0f172a;
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
+  opacity: 0.85;
 }
 
 .brand-badge-logo {
-  height: 16px;
+  height: 24px;
   object-fit: contain;
-  /* dim the white logo to match dark theme */
-  filter: brightness(0.55) saturate(0.7);
-  opacity: 0.75;
+  /* Exact original logo colors are preserved */
 }
 
 /* ── Nav list ─────────────────────────────────────────────── */

@@ -28,6 +28,8 @@
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 18px;
+  position: relative;
+  z-index: 10;
 }
 
 .eyebrow {
@@ -71,57 +73,79 @@
   gap: 10px;
 }
 
-.export-menu {
-  position: relative;
-}
-
-.primary-action,
-.secondary-action,
 .panel-link {
   min-height: 38px;
   border-radius: 7px;
   font-size: 12px;
   font-weight: 800;
-  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
-}
-
-.primary-action {
-  background: linear-gradient(135deg, #16a34a 0%, #22c55e 60%, #4ade80 100%);
-  color: #052e16;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 0 20px;
-  font-family: var(--font-mono);
-  box-shadow:
-    0 0 20px rgba(34, 197, 94, 0.35),
-    0 0 0 1px rgba(74, 222, 128, 0.3),
-    0 4px 12px rgba(0, 0, 0, 0.4);
-  transition: transform 160ms ease, box-shadow 160ms ease;
-}
-
-.primary-action:hover {
-  background: linear-gradient(135deg, #22c55e 0%, #4ade80 60%, #86efac 100%);
-  box-shadow:
-    0 0 32px rgba(34, 197, 94, 0.55),
-    0 0 0 1px rgba(74, 222, 128, 0.5),
-    0 8px 20px rgba(0, 0, 0, 0.5);
-  transform: translateY(-2px);
-}
-
-.secondary-action,
-.panel-link {
   border: 1px solid rgba(34, 197, 94, 0.15);
   background: rgba(0, 10, 22, 0.8);
   color: #b890a8;
   padding: 0 14px;
   font-family: var(--font-mono);
   letter-spacing: 0.03em;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
-.primary-action:hover,
-.secondary-action:hover,
 .panel-link:hover {
   transform: translateY(-1px);
+}
+
+/* ── Export menu ──────────────────────────────────────────────────────────── */
+.export-menu {
+  position: relative;
+}
+
+.export-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.export-trigger:hover {
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(30, 41, 59, 0.9);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.export-menu:hover .export-trigger {
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(30, 41, 59, 0.9);
+}
+
+.export-trigger-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.export-chevron {
+  width: 10px;
+  height: 6px;
+  flex-shrink: 0;
+  opacity: 0.5;
+  margin-left: 2px;
+  transition: transform 200ms ease, opacity 150ms ease;
+}
+
+.export-menu:hover .export-chevron {
+  transform: rotate(180deg);
+  opacity: 0.8;
 }
 
 /* ── AI Report Button ─────────────────────────────────────────────────────── */
@@ -172,50 +196,138 @@
   color: #dcfce7;
 }
 
-.chevron {
-  margin-left: 8px;
-  color: #98a3b8;
-  font-size: 10px;
-}
-
 .export-dropdown {
   position: absolute;
   right: 0;
-  top: calc(100% + 8px);
-  z-index: 20;
-  display: none;
-  width: 168px;
-  overflow: visible;
-  border: 1px solid rgba(110, 117, 136, 0.2);
-  border-radius: 8px;
-  background: #0f1e32;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  top: calc(100% + 6px);
+  z-index: 1000;
+  width: 224px;
+  padding: 6px;
+  border-radius: 10px;
+  background: #0d1525;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  box-shadow:
+    0 4px 6px rgba(0,0,0,0.2),
+    0 20px 60px rgba(0,0,0,0.5),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px) scale(0.97);
+  transform-origin: top right;
+  transition: opacity 160ms ease, transform 160ms ease, visibility 0s 160ms;
 }
 
+/* bridge gap so hover stays active when moving cursor to dropdown */
 .export-dropdown::before {
   content: '';
   position: absolute;
-  top: -8px;
+  top: -6px;
   left: 0;
   right: 0;
-  height: 8px;
+  height: 6px;
 }
 
 .export-menu:hover .export-dropdown {
-  display: block;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+  transition: opacity 160ms ease, transform 160ms ease, visibility 0s 0s;
 }
 
-.export-dropdown button {
+.export-dropdown-header {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.4);
+}
+
+.export-divider {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.08);
+  margin: 4px 6px;
+}
+
+.export-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 10px 12px;
-  color: #cbd4e6;
-  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 7px;
   text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
 }
 
-.export-dropdown button:hover {
-  background: rgba(34, 197, 94, 0.08);
-  color: #fff;
+.export-item:hover {
+  background: rgba(148, 163, 184, 0.07);
+}
+
+.export-item:hover .export-item-name {
+  color: #f1f5f9;
+}
+
+.export-item-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 30px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  letter-spacing: 0.05em;
+}
+
+.export-icon-xlsx {
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.export-icon-pdf {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.export-icon-csv {
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.18);
+}
+
+.export-icon-json {
+  background: rgba(139, 92, 246, 0.1);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  font-size: 8px;
+  letter-spacing: 0;
+}
+
+.export-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.export-item-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  line-height: 1;
+  transition: color 120ms ease;
+}
+
+.export-item-desc {
+  font-size: 10px;
+  color: rgba(148, 163, 184, 0.5);
+  line-height: 1;
 }
 
 .status-strip {
@@ -942,9 +1054,9 @@
     width: 100%;
   }
 
-  .primary-action,
-  .secondary-action {
+  .export-trigger {
     flex: 1;
+    justify-content: center;
   }
 
   .metrics-grid {

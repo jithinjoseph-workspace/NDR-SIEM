@@ -245,13 +245,15 @@ export class Api {
 
         const contentDisposition = response.headers.get('content-disposition');
         const filename = contentDisposition?.match(/filename="(.+)"/)?.[1]
-          ?? `ndr-report.${format === 'pdf' ? 'html' : format}`;
+          ?? `ndr-report.${format}`;
 
         const objectUrl = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = objectUrl;
         link.download = filename;
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
         URL.revokeObjectURL(objectUrl);
       });
   }
@@ -266,13 +268,15 @@ export class Api {
 
         const contentDisposition = response.headers.get('content-disposition');
         const filename = contentDisposition?.match(/filename="(.+)"/)?.[1]
-          ?? `ndr-logs.${format === 'pdf' ? 'html' : format}`;
+          ?? `ndr-logs.${format}`;
 
         const objectUrl = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = objectUrl;
         link.download = filename;
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
         URL.revokeObjectURL(objectUrl);
       });
   }

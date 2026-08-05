@@ -679,13 +679,15 @@ export class UsersSection implements OnInit, OnDestroy {
     if (data.length === 0) { this.showMessage('No users to export', 'error'); return; }
     const headers = Object.keys(data[0]);
     const csv = [headers.join(','), ...data.map(row => headers.map(h => `"${(row as any)[h]}"`).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.setAttribute('href', URL.createObjectURL(blob));
+    const blob      = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link      = document.createElement('a');
+    link.setAttribute('href', objectUrl);
     link.setAttribute('download', `tenant_users_export_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(objectUrl);
   }
 
   showMessage(message: string, type: 'success' | 'error') {

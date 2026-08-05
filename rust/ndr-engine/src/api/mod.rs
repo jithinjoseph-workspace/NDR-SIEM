@@ -4546,44 +4546,49 @@ pub async fn login(
                 let _: redis::RedisResult<bool> = mux.expire(&user_set_key, 86400usize).await;
                 let _: redis::RedisResult<i64>  = mux.sadd(&tenant_set_key, &jti).await;
 
-                // New-device detection: check previous sessions for this user.
-                // If no existing session matches the current device string → new device → alert tenant admin.
-                let prev_jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
-                let mut seen_before = false;
-                for prev_jti in &prev_jtis {
-                    if prev_jti == &jti { continue; } // skip the one we just added
-                    let prev_key = format!("ndr:session:{}", prev_jti);
-                    let prev_device: Option<String> = mux.hget(&prev_key, "device").await.unwrap_or(None);
-                    if prev_device.as_deref() == Some(device.as_str()) {
-                        seen_before = true;
-                        break;
-                    }
-                }
-                if !seen_before {
-                    let state_clone = state.clone();
+                // New-device detection runs fully in background — never blocks login response.
+                {
+                    let state_clone     = state.clone();
                     let username_clone  = username.clone();
                     let tenant_clone    = tenant_id.to_string();
                     let device_clone    = device.clone();
                     let ip_clone        = ip.clone();
                     let login_ts_clone  = login_ts.clone();
+                    let user_set_key_c  = user_set_key.clone();
+                    let jti_clone       = jti.clone();
+                    let mut mux2        = state.redis_mux.clone();
                     tokio::spawn(async move {
-                        if let Ok(Some(admin_gmail)) = state_clone.ch_storage
-                            .get_tenant_admin_gmail(&tenant_clone).await
-                        {
-                            let subject = format!("New device login — {}", username_clone);
-                            let body = format!(
-                                "Hello,\n\n\
-                                A new device just signed in to your NDR tenant.\n\n\
-                                User:    {}\n\
-                                Device:  {}\n\
-                                IP:      {}\n\
-                                Time:    {}\n\n\
-                                If this was you, no action is needed.\n\
-                                If this was not you, please contact your administrator immediately.\n\n\
-                                — Proma Secure NDR",
-                                username_clone, device_clone, ip_clone, login_ts_clone
-                            );
-                            let _ = send_system_email(&state_clone, &admin_gmail, &subject, &body).await;
+                        use redis::AsyncCommands;
+                        let prev_jtis: Vec<String> = mux2.smembers(&user_set_key_c).await.unwrap_or_default();
+                        let mut seen_before = false;
+                        for prev_jti in &prev_jtis {
+                            if prev_jti == &jti_clone { continue; }
+                            let prev_key = format!("ndr:session:{}", prev_jti);
+                            let prev_device: Option<String> = mux2.hget(&prev_key, "device").await.unwrap_or(None);
+                            if prev_device.as_deref() == Some(device_clone.as_str()) {
+                                seen_before = true;
+                                break;
+                            }
+                        }
+                        if !seen_before {
+                            if let Ok(Some(admin_gmail)) = state_clone.ch_storage
+                                .get_tenant_admin_gmail(&tenant_clone).await
+                            {
+                                let subject = format!("New device login — {}", username_clone);
+                                let body = format!(
+                                    "Hello,\n\n\
+                                    A new device just signed in to your NDR tenant.\n\n\
+                                    User:    {}\n\
+                                    Device:  {}\n\
+                                    IP:      {}\n\
+                                    Time:    {}\n\n\
+                                    If this was you, no action is needed.\n\
+                                    If this was not you, please contact your administrator immediately.\n\n\
+                                    — Proma Secure NDR",
+                                    username_clone, device_clone, ip_clone, login_ts_clone
+                                );
+                                let _ = send_system_email(&state_clone, &admin_gmail, &subject, &body).await;
+                            }
                         }
                     });
                 }
@@ -4592,7 +4597,23 @@ pub async fn login(
             let ai_enabled = if role == "super_admin" {
                 true
             } else {
-                state.ch_storage.get_tenant_ai_enabled(tenant_id).await
+                // Check Redis cache first to avoid ClickHouse round-trip on every login
+                let ai_cache_key = format!("ndr:ai_enabled:{}", tenant_id);
+                let cached: Option<u8> = {
+                    use redis::AsyncCommands;
+                    let mut mux = state.redis_mux.clone();
+                    mux.get(&ai_cache_key).await.unwrap_or(None)
+                };
+                match cached {
+                    Some(v) => v == 1,
+                    None => {
+                        let val = state.ch_storage.get_tenant_ai_enabled(tenant_id).await;
+                        let mut mux = state.redis_mux.clone();
+                        use redis::AsyncCommands;
+                        let _: redis::RedisResult<()> = mux.set_ex(&ai_cache_key, if val { 1u8 } else { 0u8 }, 300usize).await;
+                        val
+                    }
+                }
             };
             // Clear failed-attempt counter on successful login
             {
@@ -10998,12 +11019,57 @@ pub async fn send_system_email(state: &AppState, to_email: &str, subject: &str, 
 
     use lettre::{Message, SmtpTransport, Transport};
     use lettre::transport::smtp::authentication::Credentials;
+    use lettre::message::{MultiPart, SinglePart, header::ContentType, header::ContentDisposition, header::ContentId};
+
+    let html_body = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0d1420; color: #f8fafc; margin: 0; padding: 20px; }}
+        .container {{ max-width: 600px; margin: 0 auto; background: linear-gradient(180deg, #ffffff 0%, #eefbf3 60%, #0d1420 100%); padding: 32px 24px; border-radius: 8px; text-align: center; }}
+        .header {{ margin-bottom: 24px; }}
+        .title {{ margin: 0; font-size: 24px; font-weight: 800; color: #064e3b; letter-spacing: 0.08em; text-transform: uppercase; }}
+        .tagline {{ margin: 4px 0 0 0; font-size: 10px; font-weight: 700; color: #166534; letter-spacing: 0.28em; text-transform: uppercase; }}
+        .message-box {{ background: rgba(255, 255, 255, 0.95); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 24px; margin-bottom: 32px; text-align: left; color: #0f172a; box-shadow: 0 4px 12px rgba(34,197,94,0.05); font-size: 14px; line-height: 1.6; white-space: pre-wrap; }}
+        .badge-container {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 6px; padding: 8px 14px; box-shadow: 0 4px 12px rgba(34,197,94,0.05); }}
+        .badge-text {{ color: #0f172a; font-size: 9px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.85; margin: 0; padding-right: 8px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">PromaAlpha</h1>
+            <p class="tagline">NDR Platform</p>
+        </div>
+        <div class="message-box">
+{}
+        </div>
+        <div class="badge-container">
+            <span class="badge-text">powered by</span>
+            <img src="cid:promasecure_logo" alt="PromaSecure" style="height: 24px;" />
+        </div>
+    </div>
+</body>
+</html>"#,
+        body
+    );
+
+    let logo_part = SinglePart::builder()
+        .header(ContentType::parse("image/png").unwrap())
+        .header(ContentDisposition::inline())
+        .header(ContentId::from("<promasecure_logo>".to_string()))
+        .body(include_bytes!("../assets/promasecure.png").to_vec());
+
+    let multi = MultiPart::related()
+        .singlepart(SinglePart::html(html_body))
+        .singlepart(logo_part);
 
     let email = Message::builder()
-        .from(format!("NDR Security <{}>", smtp_user).parse().map_err(|e| format!("Invalid from address: {}", e))?)
+        .from(format!("PromaAlpha NDR <{}>", smtp_user).parse().map_err(|e| format!("Invalid from address: {}", e))?)
         .to(to_email.parse().map_err(|e| format!("Invalid to address: {}", e))?)
         .subject(subject)
-        .body(body.to_string())
+        .multipart(multi)
         .map_err(|e| format!("Failed to build email: {}", e))?;
 
     let creds = Credentials::new(smtp_user.clone(), smtp_pass.clone());
