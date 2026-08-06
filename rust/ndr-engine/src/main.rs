@@ -981,7 +981,7 @@ async fn main() {
 /// Runs once per day. Queries every tenant DB for expired sessions.
 async fn cleanup_expired_pcaps(ch: &storage::clickhouse::ClickhouseStorage) {
     #[derive(clickhouse::Row, serde::Deserialize)]
-    struct ExpiredRow { file_path: String, session_id: String, #[allow(dead_code)] tenant_id: String }
+    struct ExpiredRow { file_path: String, #[allow(dead_code)] session_id: String, #[allow(dead_code)] tenant_id: String }
 
     // Get all tenant DBs from the tenants table
     #[derive(clickhouse::Row, serde::Deserialize)]

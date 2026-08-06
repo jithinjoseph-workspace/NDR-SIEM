@@ -5,14 +5,7 @@ use axum::Json;
 use serde::Serialize;
 use serde_json::Value;
 
-/// Standard API response envelope.
-///
-/// Success:  `ApiResponse::ok(payload)`
-/// Error:    `ApiResponse::err("reason")`
-///
-/// Wire format:
-///   { "result": true,  "data": <T>,  "error": null }
-///   { "result": false, "data": null, "error": "reason" }
+#[allow(dead_code)]
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub result: bool,
@@ -30,19 +23,15 @@ impl<T: Serialize> ApiResponse<T> {
     }
 }
 
-/// Convenience alias when the data payload is a raw JSON Value.
+#[allow(dead_code)]
 pub type JsonResponse = Json<ApiResponse<Value>>;
 
-/// Quick helpers — use these in handlers that already build a serde_json::Value.
-///
-/// ```rust
-/// return ok(json!({ "hits": rows }));
-/// return err("tenant not found");
-/// ```
+#[allow(dead_code)]
 pub fn ok(data: Value) -> JsonResponse {
     ApiResponse::ok(data)
 }
 
+#[allow(dead_code)]
 pub fn err_response(message: impl Into<String>) -> JsonResponse {
     ApiResponse::<Value>::err(message)
 }

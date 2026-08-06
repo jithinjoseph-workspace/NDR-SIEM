@@ -323,16 +323,14 @@ pub async fn verify_user(
     username: &str,
     password: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let esc = sql_escape(username);
-
     let rows = self.client
-        .query(&format!(
+        .query(
             "SELECT id, username, password_hash, role, tenant_id, permissions, active, gmail, secret_code \
              FROM ndr.users \
-             WHERE username = '{}' \
-             ORDER BY created_at DESC LIMIT 1",
-            esc
-        ))
+             WHERE username = ? \
+             ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(username)
         .fetch_all::<(String, String, String, String, String, String, u8, String, String)>()
         .await?;
 
@@ -384,16 +382,14 @@ pub async fn get_users_by_tenant(
     &self,
     tenant_id: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let tenant_id = sql_escape(tenant_id);
-    let query = format!(
-        "SELECT id, username, role, tenant_id, permissions, active, toString(created_at)
-         FROM ndr.users FINAL
-         WHERE tenant_id = '{}'
-         ORDER BY created_at",
-        tenant_id
-    );
     let result = self.client
-        .query(&query)
+        .query(
+            "SELECT id, username, role, tenant_id, permissions, active, toString(created_at)
+             FROM ndr.users FINAL
+             WHERE tenant_id = ?
+             ORDER BY created_at"
+        )
+        .bind(tenant_id)
         .fetch_all::<(String,String,String,String,String,u8,String)>()
         .await?;
     Ok(result.iter().map(|r| json!({
@@ -411,16 +407,14 @@ pub async fn get_user_identity(
     &self,
     id: &str,
 ) -> anyhow::Result<Option<(String, String, String)>> {
-    let id = sql_escape(id);
-    let query = format!(
-        "SELECT username, role, tenant_id
-         FROM ndr.users
-         WHERE id = '{}'
-         ORDER BY created_at DESC LIMIT 1",
-        id
-    );
     let result = self.client
-        .query(&query)
+        .query(
+            "SELECT username, role, tenant_id
+             FROM ndr.users
+             WHERE id = ?
+             ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(id)
         .fetch_all::<(String, String, String)>()
         .await?;
     Ok(result.first().cloned())
@@ -430,16 +424,14 @@ pub async fn get_user_by_id(
     &self,
     id: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let id = sql_escape(id);
-    let query = format!(
-        "SELECT id, username, role, tenant_id, permissions, toString(created_at)
-         FROM ndr.users
-         WHERE id = '{}'
-         ORDER BY created_at DESC LIMIT 1",
-        id
-    );
     let result = self.client
-        .query(&query)
+        .query(
+            "SELECT id, username, role, tenant_id, permissions, toString(created_at)
+             FROM ndr.users
+             WHERE id = ?
+             ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(id)
         .fetch_all::<(String, String, String, String, String, String)>()
         .await?;
 
@@ -457,17 +449,15 @@ pub async fn get_user_by_username(
     &self,
     username: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let username = sql_escape(username);
-    let query = format!(
-        "SELECT id, username, role, tenant_id, permissions, toString(created_at), \
-                gmail, secret_code
-         FROM ndr.users
-         WHERE username = '{}'
-         ORDER BY created_at DESC LIMIT 1",
-        username
-    );
     let result = self.client
-        .query(&query)
+        .query(
+            "SELECT id, username, role, tenant_id, permissions, toString(created_at), \
+                    gmail, secret_code
+             FROM ndr.users
+             WHERE username = ?
+             ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(username)
         .fetch_all::<(String, String, String, String, String, String, String, String)>()
         .await?;
 
@@ -493,20 +483,21 @@ pub async fn create_user(
     gmail: &str,
     secret_code: &str,
 ) -> anyhow::Result<()> {
-    let username     = sql_escape(username);
-    let password_hash = sql_escape(password_hash);
-    let role         = sql_escape(role);
-    let tenant_id    = sql_escape(tenant_id);
-    let permissions  = sql_escape(permissions);
-    let gmail        = sql_escape(gmail);
-    let secret_code  = sql_escape(secret_code);
-    let query = format!(
-        "INSERT INTO ndr.users \
-         (username, password_hash, role, tenant_id, permissions, active, gmail, secret_code) \
-         VALUES ('{}','{}','{}','{}','{}',1,'{}','{}')",
-        username, password_hash, role, tenant_id, permissions, gmail, secret_code
-    );
-    self.client.query(&query).execute().await?;
+    self.client
+        .query(
+            "INSERT INTO ndr.users \
+             (username, password_hash, role, tenant_id, permissions, active, gmail, secret_code) \
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?)"
+        )
+        .bind(username)
+        .bind(password_hash)
+        .bind(role)
+        .bind(tenant_id)
+        .bind(permissions)
+        .bind(gmail)
+        .bind(secret_code)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -515,14 +506,15 @@ pub async fn update_user_permissions(
     id: &str,
     permissions: &str,
 ) -> anyhow::Result<()> {
-    let id = sql_escape(id);
-    let permissions = sql_escape(permissions);
     // mutations_sync=1: wait until mutation is applied on disk before returning.
-    let query = format!(
-        "ALTER TABLE ndr.users UPDATE permissions = '{}' WHERE id = '{}' SETTINGS mutations_sync=1",
-        permissions, id
-    );
-    self.client.query(&query).execute().await?;
+    self.client
+        .query(
+            "ALTER TABLE ndr.users UPDATE permissions = ? WHERE id = ? SETTINGS mutations_sync=1"
+        )
+        .bind(permissions)
+        .bind(id)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -535,40 +527,47 @@ pub async fn update_user(
     active: bool,
     password_hash: Option<&str>,
 ) -> anyhow::Result<()> {
-    let esc_id          = sql_escape(id);
-    let esc_role        = sql_escape(role);
-    let esc_tenant_id   = sql_escape(tenant_id);
-    let esc_permissions = sql_escape(permissions);
-    let active_flag     = if active { 1 } else { 0 };
+    let active_flag: u8 = if active { 1 } else { 0 };
 
     // mutations_sync=1: block until the mutation is applied on disk.
     // Without this, ALTER TABLE UPDATE is async — a disabled user could still
     // log in for seconds/minutes until ClickHouse applies the background mutation.
-    let query = match password_hash {
+    match password_hash {
         Some(hash) => {
-            let esc_hash = sql_escape(hash);
-            format!(
-                "ALTER TABLE ndr.users \
-                 UPDATE role = '{}', tenant_id = '{}', permissions = '{}', \
-                 active = {}, password_hash = '{}' \
-                 WHERE id = '{}' \
-                 SETTINGS mutations_sync=1",
-                esc_role, esc_tenant_id, esc_permissions,
-                active_flag, esc_hash, esc_id
-            )
+            self.client
+                .query(
+                    "ALTER TABLE ndr.users \
+                     UPDATE role = ?, tenant_id = ?, permissions = ?, \
+                     active = ?, password_hash = ? \
+                     WHERE id = ? \
+                     SETTINGS mutations_sync=1"
+                )
+                .bind(role)
+                .bind(tenant_id)
+                .bind(permissions)
+                .bind(active_flag)
+                .bind(hash)
+                .bind(id)
+                .execute()
+                .await?;
         }
         None => {
-            format!(
-                "ALTER TABLE ndr.users \
-                 UPDATE role = '{}', tenant_id = '{}', permissions = '{}', active = {} \
-                 WHERE id = '{}' \
-                 SETTINGS mutations_sync=1",
-                esc_role, esc_tenant_id, esc_permissions, active_flag, esc_id
-            )
+            self.client
+                .query(
+                    "ALTER TABLE ndr.users \
+                     UPDATE role = ?, tenant_id = ?, permissions = ?, active = ? \
+                     WHERE id = ? \
+                     SETTINGS mutations_sync=1"
+                )
+                .bind(role)
+                .bind(tenant_id)
+                .bind(permissions)
+                .bind(active_flag)
+                .bind(id)
+                .execute()
+                .await?;
         }
-    };
-
-    self.client.query(&query).execute().await?;
+    }
     Ok(())
 }
 
@@ -577,17 +576,19 @@ pub async fn set_user_active(
     id: &str,
     active: bool,
 ) -> anyhow::Result<()> {
-    let id = sql_escape(id);
+    let active_flag: u8 = if active { 1 } else { 0 };
     // mutations_sync=1: force synchronous mutation so the active flag is
     // immediately enforced on the next query. Without this, ALTER TABLE UPDATE
     // is a background operation — disabled users could still log in for
     // seconds or minutes after being disabled.
-    let query = format!(
-        "ALTER TABLE ndr.users UPDATE active = {} WHERE id = '{}' SETTINGS mutations_sync=1",
-        if active { 1 } else { 0 },
-        id
-    );
-    self.client.query(&query).execute().await?;
+    self.client
+        .query(
+            "ALTER TABLE ndr.users UPDATE active = ? WHERE id = ? SETTINGS mutations_sync=1"
+        )
+        .bind(active_flag)
+        .bind(id)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -599,13 +600,12 @@ pub async fn is_user_active(
     &self,
     username: &str,
 ) -> anyhow::Result<bool> {
-    let esc = sql_escape(username);
     let rows = self.client
-        .query(&format!(
+        .query(
             "SELECT active FROM ndr.users \
-             WHERE username = '{}' ORDER BY created_at DESC LIMIT 1",
-            esc
-        ))
+             WHERE username = ? ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(username)
         .fetch_all::<u8>()
         .await?;
 
@@ -618,13 +618,12 @@ pub async fn set_user_password(
     id: &str,
     password_hash: &str,
 ) -> anyhow::Result<()> {
-    let id = sql_escape(id);
-    let hash = sql_escape(password_hash);
-    let query = format!(
-        "ALTER TABLE ndr.users UPDATE password_hash = '{}' WHERE id = '{}'",
-        hash, id
-    );
-    self.client.query(&query).execute().await?;
+    self.client
+        .query("ALTER TABLE ndr.users UPDATE password_hash = ? WHERE id = ?")
+        .bind(password_hash)
+        .bind(id)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -632,12 +631,11 @@ pub async fn set_user_password(
 pub async fn delete_user(
     &self, id: &str
 ) -> anyhow::Result<()> {
-    let id = sql_escape(id);
-    let query = format!(
-        "ALTER TABLE ndr.users DELETE WHERE id = '{}'",
-        id
-    );
-    self.client.query(&query).execute().await?;
+    self.client
+        .query("ALTER TABLE ndr.users DELETE WHERE id = ?")
+        .bind(id)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -651,16 +649,15 @@ pub async fn verify_tenant_admin_secret(
     username: &str,
     secret_code: &str,
 ) -> anyhow::Result<Option<String>> {
-    let esc_user   = sql_escape(username);
-    let esc_code   = sql_escape(secret_code);
     let rows = self.client
-        .query(&format!(
+        .query(
             "SELECT gmail FROM ndr.users \
-             WHERE username = '{}' AND role = 'tenant_admin' \
-             AND secret_code = '{}' AND active = 1 \
-             ORDER BY created_at DESC LIMIT 1",
-            esc_user, esc_code
-        ))
+             WHERE username = ? AND role = 'tenant_admin' \
+             AND secret_code = ? AND active = 1 \
+             ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(username)
+        .bind(secret_code)
         .fetch_all::<String>()
         .await?;
     Ok(rows.into_iter().next())
@@ -671,14 +668,13 @@ pub async fn get_gmail_for_user(
     &self,
     username: &str,
 ) -> anyhow::Result<Option<String>> {
-    let esc = sql_escape(username);
     let rows = self.client
-        .query(&format!(
+        .query(
             "SELECT gmail FROM ndr.users \
-             WHERE username = '{}' AND role = 'tenant_admin' AND active = 1 \
-             ORDER BY created_at DESC LIMIT 1",
-            esc
-        ))
+             WHERE username = ? AND role = 'tenant_admin' AND active = 1 \
+             ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(username)
         .fetch_all::<String>()
         .await?;
     Ok(rows.into_iter().next())
@@ -689,15 +685,14 @@ pub async fn get_tenant_admin_gmail(
     &self,
     tenant_id: &str,
 ) -> anyhow::Result<Option<String>> {
-    let esc = sql_escape(tenant_id);
     let rows = self.client
-        .query(&format!(
+        .query(
             "SELECT gmail FROM ndr.users \
-             WHERE tenant_id = '{}' AND role = 'tenant_admin' AND active = 1 \
+             WHERE tenant_id = ? AND role = 'tenant_admin' AND active = 1 \
              AND gmail != '' \
-             ORDER BY created_at DESC LIMIT 1",
-            esc
-        ))
+             ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(tenant_id)
         .fetch_all::<String>()
         .await?;
     Ok(rows.into_iter().next())
@@ -710,15 +705,17 @@ pub async fn reset_password_by_username_direct(
     username: &str,
     new_hash: &str,
 ) -> anyhow::Result<()> {
-    let esc_user = sql_escape(username);
-    let esc_hash = sql_escape(new_hash);
-    self.client.query(&format!(
-        "ALTER TABLE ndr.users \
-         UPDATE password_hash = '{}' \
-         WHERE username = '{}' \
-         SETTINGS mutations_sync=1",
-        esc_hash, esc_user
-    )).execute().await?;
+    self.client
+        .query(
+            "ALTER TABLE ndr.users \
+             UPDATE password_hash = ? \
+             WHERE username = ? \
+             SETTINGS mutations_sync=1"
+        )
+        .bind(new_hash)
+        .bind(username)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -728,15 +725,17 @@ pub async fn update_user_gmail(
     id: &str,
     gmail: &str,
 ) -> anyhow::Result<()> {
-    let esc_id    = sql_escape(id);
-    let esc_gmail = sql_escape(gmail);
-    self.client.query(&format!(
-        "ALTER TABLE ndr.users \
-         UPDATE gmail = '{}' \
-         WHERE id = '{}' \
-         SETTINGS mutations_sync=1",
-        esc_gmail, esc_id
-    )).execute().await?;
+    self.client
+        .query(
+            "ALTER TABLE ndr.users \
+             UPDATE gmail = ? \
+             WHERE id = ? \
+             SETTINGS mutations_sync=1"
+        )
+        .bind(gmail)
+        .bind(id)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -745,15 +744,17 @@ pub async fn update_user_secret_code(
     id: &str,
     code: &str,
 ) -> anyhow::Result<()> {
-    let esc_id   = sql_escape(id);
-    let esc_code = sql_escape(code);
-    self.client.query(&format!(
-        "ALTER TABLE ndr.users \
-         UPDATE secret_code = '{}' \
-         WHERE id = '{}' \
-         SETTINGS mutations_sync=1",
-        esc_code, esc_id
-    )).execute().await?;
+    self.client
+        .query(
+            "ALTER TABLE ndr.users \
+             UPDATE secret_code = ? \
+             WHERE id = ? \
+             SETTINGS mutations_sync=1"
+        )
+        .bind(code)
+        .bind(id)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -775,11 +776,9 @@ pub async fn get_tenants(
 
 
 pub async fn get_tenant_ai_enabled(&self, tenant_id: &str) -> bool {
-    let id = sql_escape(tenant_id);
     self.client
-        .query(&format!(
-            "SELECT ai_enabled FROM ndr.tenants FINAL WHERE id = '{}' LIMIT 1", id
-        ))
+        .query("SELECT ai_enabled FROM ndr.tenants FINAL WHERE id = ? LIMIT 1")
+        .bind(tenant_id)
         .fetch_all::<u8>()
         .await
         .unwrap_or_default()
@@ -789,14 +788,17 @@ pub async fn get_tenant_ai_enabled(&self, tenant_id: &str) -> bool {
 }
 
 pub async fn set_tenant_ai_enabled(&self, tenant_id: &str, enabled: bool) -> anyhow::Result<()> {
-    let id = sql_escape(tenant_id);
-    self.client.query(&format!(
-        "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
-         SELECT id, name, active, {val}, now(), created_at \
-         FROM ndr.tenants FINAL WHERE id = '{id}'",
-        val = if enabled { 1 } else { 0 },
-        id  = id,
-    )).execute().await?;
+    let val: u8 = if enabled { 1 } else { 0 };
+    self.client
+        .query(
+            "INSERT INTO ndr.tenants (id, name, active, ai_enabled, updated_at, created_at) \
+             SELECT id, name, active, ?, now(), created_at \
+             FROM ndr.tenants FINAL WHERE id = ?"
+        )
+        .bind(val)
+        .bind(tenant_id)
+        .execute()
+        .await?;
     Ok(())
 }
 
@@ -814,12 +816,11 @@ pub async fn is_tenant_active(
     &self,
     id: &str,
 ) -> anyhow::Result<bool> {
-    let id = sql_escape(id);
     let rows = self.client
-        .query(&format!(
-            "SELECT active FROM ndr.tenants WHERE id = '{}' ORDER BY updated_at DESC LIMIT 1",
-            id
-        ))
+        .query(
+            "SELECT active FROM ndr.tenants WHERE id = ? ORDER BY updated_at DESC LIMIT 1"
+        )
+        .bind(id)
         .fetch_all::<u8>()
         .await?;
 
@@ -831,15 +832,15 @@ pub async fn create_tenant(
     id: &str,
     name: &str,
 ) -> anyhow::Result<()> {
-    let id = sql_escape(id);
-    let name = sql_escape(name);
     // 1. Insert into main tenants table
-    let query = format!(
-        "INSERT INTO ndr.tenants (id, name, active, updated_at) \
-         VALUES ('{}','{}',1,now())",
-        id, name
-    );
-    self.client.query(&query).execute().await?;
+    self.client
+        .query(
+            "INSERT INTO ndr.tenants (id, name, active, updated_at) VALUES (?, ?, 1, now())"
+        )
+        .bind(id)
+        .bind(name)
+        .execute()
+        .await?;
 
     // 2. Create dedicated database for tenant on all cluster nodes
     let db_name = format!("ndr_{}", id.replace("-", "_"));

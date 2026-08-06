@@ -315,6 +315,7 @@ fn parse_selection_group(val: &serde_yaml::Value) -> SelectionGroup {
 
 // ── Loader ────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn load_rules_from_dir(dir: impl AsRef<Path>) -> Vec<SigmaRule> {
     let mut rules = Vec::new();
     let dir = dir.as_ref();
@@ -335,6 +336,7 @@ pub fn load_rules_from_dir(dir: impl AsRef<Path>) -> Vec<SigmaRule> {
     rules
 }
 
+#[allow(dead_code)]
 fn parse_rule_file(path: &Path) -> anyhow::Result<SigmaRule> {
     let content = std::fs::read_to_string(path)?;
     parse_rule_content(&content)

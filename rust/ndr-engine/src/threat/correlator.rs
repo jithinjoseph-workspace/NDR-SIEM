@@ -38,12 +38,13 @@ async fn run_correlation(
 
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct ThreatRow {
-        ioc_type:       String,
-        ioc_value:      String,
-        attack_type:    String,
-        severity:       String,
-        description:    String,
-        threat_pattern: String,
+        ioc_type:                String,
+        ioc_value:               String,
+        attack_type:             String,
+        severity:                String,
+        description:             String,
+        #[allow(dead_code)]
+        threat_pattern:          String,
     }
 
     let threat_rows = ch.client

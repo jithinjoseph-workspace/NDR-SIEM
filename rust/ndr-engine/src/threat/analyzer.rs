@@ -27,13 +27,15 @@ fn sql_quote(s: &str) -> String {
 
 #[derive(Debug, Clone)]
 pub struct IocMatch {
-    pub ip:          String, // IP address, domain, or hash depending on ioc_type
-    pub ioc_type:    String, // "ip" | "domain" | "hash"
-    pub source:      String,
-    pub attack_type: String,
-    pub severity:    String,
-    pub description: String,
-    pub direction:   String, // "src" | "dst"
+    pub ip:                  String,
+    #[allow(dead_code)]
+    pub ioc_type:            String,
+    pub source:              String,
+    pub attack_type:         String,
+    #[allow(dead_code)]
+    pub severity:            String,
+    pub description:         String,
+    pub direction:           String,
 }
 
 /// Cross-reference IPs seen in tenant traffic against ndr.threat_intel.

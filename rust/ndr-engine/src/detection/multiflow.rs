@@ -168,6 +168,7 @@ struct OneCount {
     cnt:    u64,
 }
 
+#[allow(dead_code)]
 #[derive(Row, Serialize, Deserialize)]
 struct PairCount {
     src_ip: String,

@@ -7941,7 +7941,8 @@ pub async fn pcap_download_stored(
 /// Arkime viewer is down — extract session from /opt/arkime/raw/ using IPs from query params.
 /// Handles Arkime's .pcap.zst compressed files via zstd + tcpdump pipeline.
 /// session_id prefix (e.g. "260802-...") is used to find the right date's files first.
-async fn pcap_from_raw_arkime(_state: &AppState, session_id: &str) -> Option<Vec<u8>> {
+#[allow(dead_code)]
+async fn pcap_from_raw_arkime(_state: &AppState, _session_id: &str) -> Option<Vec<u8>> {
     // caller passes IPs via query params — see call site
     None // IPs not available here; see pcap_from_raw_direct called at the Err branch
 }
@@ -10575,7 +10576,8 @@ pub async fn list_active_blocks(
 
 #[derive(serde::Deserialize)]
 pub struct RevokeBlockBody {
-    pub id:        String,
+    pub id:                    String,
+    #[allow(dead_code)]
     pub sensor_id: Option<String>,
 }
 
