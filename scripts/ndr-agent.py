@@ -400,7 +400,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "Unauthorized"}, 401)
             return
         if self.path == "/agent/status":
-            zeek = subprocess.run("sudo pgrep -x zeek", shell=True, capture_output=True).returncode == 0
+            zeek = subprocess.run(["pgrep", "-x", "zeek"], capture_output=True).returncode == 0
             suri = subprocess.run("ps aux | grep -v grep | grep -v ndr-agent | grep -c suricata",
                 shell=True, capture_output=True, text=True).stdout.strip() != "0"
             
@@ -464,20 +464,26 @@ class AgentHandler(BaseHTTPRequestHandler):
             os.makedirs(f"{LOGDIR}/suricata", exist_ok=True)
             os.makedirs(f"{LOGDIR}/zeek", exist_ok=True)
             # Kill existing processes
-            subprocess.run(["sudo", "pkill", "-9", "-f", "suricata"], capture_output=True)
-            subprocess.run(["sudo", "pkill", "-9", "-f", "zeek"], capture_output=True)
+            subprocess.run(["sudo", "pkill", "-f", "suricata"], capture_output=True)
+            subprocess.run(["sudo", "pkill", "-f", "zeek"], capture_output=True)
             time.sleep(2)
-    
+
             # Clean ALL stale PID files
-            subprocess.run(["sudo", "rm", "-f", "/var/run/suricata.pid"], capture_output=True)
-            subprocess.run(["sudo", "rm", "-f", "/run/suricata.pid"], capture_output=True)
-            subprocess.run(["sudo", "rm", "-f", "/var/run/suricata/suricata.pid"], capture_output=True)
+            for pid_path in ["/var/run/suricata.pid", "/run/suricata.pid", "/var/run/suricata/suricata.pid"]:
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
+            for pid_path in ["/tmp/suricata.pid"]:
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
             
             # Clear Vector checkpoints so it reads from current position
-            subprocess.run(["sudo", "rm", "-rf",
-                f"{HOME_DIR}/.vector/data/suricata",
-                f"{HOME_DIR}/.vector/data/zeek"],
-                capture_output=True)            
+            import shutil
+            for vpath in [f"{HOME_DIR}/.vector/data/suricata", f"{HOME_DIR}/.vector/data/zeek"]:
+                shutil.rmtree(vpath, ignore_errors=True)
             os.makedirs(f"{HOME_DIR}/.vector/data/suricata", exist_ok=True)
             os.makedirs(f"{HOME_DIR}/.vector/data/zeek", exist_ok=True)
             # Write subnet CIDRs to ipam.log for IPAM engine
@@ -520,17 +526,19 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json({"status": "started", "interface": iface})
         elif self.path == "/agent/stop":
             subprocess.run(["sudo", "systemctl", "stop", "suricata"], capture_output=True)
-            subprocess.run(["sudo", "pkill", "-9", "-f", "suricata"], capture_output=True)
-            subprocess.run(["sudo", "pkill", "-9", "-f", "zeek"], capture_output=True)
-            # Clean pid files
-            subprocess.run(["sudo", "rm", "-f", "/var/run/suricata.pid"], capture_output=True)
-            subprocess.run(["sudo", "rm", "-f", "/run/suricata.pid"], capture_output=True)
-            subprocess.run(["sudo", "rm", "-f", "/tmp/suricata.pid"], capture_output=True)
+            subprocess.run(["sudo", "pkill", "-f", "suricata"], capture_output=True)
+            subprocess.run(["sudo", "pkill", "-f", "zeek"], capture_output=True)
+            # Clean pid files (user can remove /tmp; system paths via os.remove)
+            for pid_path in ["/var/run/suricata.pid", "/run/suricata.pid",
+                             "/tmp/suricata.pid", "/var/run/suricata/suricata.pid"]:
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
             # Clear Vector checkpoints to prevent replay
-            subprocess.run(["sudo", "rm", "-rf",
-                f"{HOME_DIR}/.vector/data/suricata",
-                f"{HOME_DIR}/.vector/data/zeek"],
-                capture_output=True)
+            import shutil
+            for vpath in [f"{HOME_DIR}/.vector/data/suricata", f"{HOME_DIR}/.vector/data/zeek"]:
+                shutil.rmtree(vpath, ignore_errors=True)
             os.makedirs(f"{HOME_DIR}/.vector/data/suricata", exist_ok=True)
             os.makedirs(f"{HOME_DIR}/.vector/data/zeek", exist_ok=True)
             # Stop Arkime

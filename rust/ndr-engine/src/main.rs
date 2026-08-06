@@ -29,20 +29,7 @@ use axum::http::HeaderValue;
 use tower_http::decompression::RequestDecompressionLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
 
-async fn security_headers(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let mut res = next.run(req).await;
-    let h = res.headers_mut();
-    h.insert("X-Frame-Options",        HeaderValue::from_static("SAMEORIGIN"));
-    h.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
-    h.insert("Content-Security-Policy", HeaderValue::from_static(
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-         connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self';"
-    ));
-    res
-}
+
 use enrichment::{AsnLookup, AssetIdentifier, EnrichmentPipeline, GeoIpLookup, ThreatIntel};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -832,7 +819,7 @@ async fn main() {
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
         .layer(axum::middleware::from_fn(ratelimit::rate_limit_middleware))
-        .layer(axum::middleware::from_fn(security_headers))
+
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB for PCAP uploads
         .layer(RequestDecompressionLayer::new())
         .layer(cors);

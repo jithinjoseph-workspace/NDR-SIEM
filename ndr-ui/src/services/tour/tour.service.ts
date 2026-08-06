@@ -1,75 +1,15 @@
 import { Injectable } from '@angular/core';
 import { Router } from '@angular/router';
+import { driver } from 'driver.js';
+import 'driver.js/dist/driver.css';
 
 @Injectable({
   providedIn: 'root'
 })
 export class TourService {
-  private driverLoaded = false;
   private driverInstance: any;
 
   constructor(private router: Router) { }
-
-  private async loadDriver(): Promise<void> {
-    if (this.driverLoaded) return Promise.resolve();
-
-    return new Promise((resolve, reject) => {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css';
-      document.head.appendChild(link);
-
-      const style = document.createElement('style');
-      style.textContent = `
-        @keyframes aiPulse {
-          0% { box-shadow: 0 0 0 0 rgba(105, 246, 184, 0.4); }
-          70% { box-shadow: 0 0 0 10px rgba(105, 246, 184, 0); }
-          100% { box-shadow: 0 0 0 0 rgba(105, 246, 184, 0); }
-        }
-        @keyframes aiFloat {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-3px); }
-        }
-        .driver-popover {
-          border-radius: 12px !important;
-          padding: 16px !important;
-          max-width: 380px !important;
-          background: #08101f !important;
-          border: 1px solid rgba(105, 246, 184, 0.2) !important;
-          color: #f7f9ff !important;
-          box-shadow: 0 20px 40px rgba(0,0,0,0.4) !important;
-        }
-        .driver-popover-title {
-          display: none !important;
-        }
-        .driver-popover-navigation-btns {
-          border-top: 1px solid rgba(255,255,255,0.1) !important;
-          margin-top: 12px !important;
-          padding-top: 12px !important;
-        }
-        .driver-popover-next-btn, .driver-popover-prev-btn {
-          background: #69f6b8 !important;
-          color: #08101f !important;
-          text-shadow: none !important;
-          font-weight: 700 !important;
-          border: none !important;
-        }
-        .driver-popover-close-btn {
-          color: #8792a7 !important;
-        }
-      `;
-      document.head.appendChild(style);
-
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js';
-      script.onload = () => {
-        this.driverLoaded = true;
-        resolve();
-      };
-      script.onerror = reject;
-      document.body.appendChild(script);
-    });
-  }
 
   private getStepHtml(title: string, desc: string): string {
     return `
@@ -87,22 +27,6 @@ export class TourService {
   }
 
   async startTour() {
-    try {
-      await this.loadDriver();
-    } catch (e) {
-      console.error('Failed to load interactive tour:', e);
-      alert('Could not load the interactive tour. Please check your connection or ad-blocker.');
-      return;
-    }
-
-    // @ts-ignore
-    const driver = (window.driver?.js?.driver) || (window.driver) || (window.driverjs);
-    if (!driver) {
-      console.error('Driver.js is not defined on the window object.');
-      alert('Tour script failed to initialize properly.');
-      return;
-    }
-
     this.driverInstance = driver({
       showProgress: true,
       animate: true,
@@ -111,7 +35,6 @@ export class TourService {
       nextBtnText: 'Next',
       prevBtnText: 'Back',
       onDestroyed: () => {
-        // Fix navbar scroll issue by completely resetting ALL scrollable containers
         window.scrollTo(0, 0);
         document.body.scrollTop = 0;
         document.documentElement.scrollTop = 0;
@@ -121,13 +44,13 @@ export class TourService {
       },
       onNextClick: (elem: any, step: any, options: any) => {
         const i = options.state.activeIndex;
-        if (i === 1) { // search-wrap -> dashboard
+        if (i === 1) {
           this.router.navigate(['/analyst/dashboard']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
-        } else if (i === 3) { // chart-frame -> alerts
+        } else if (i === 3) {
           this.router.navigate(['/analyst/alerts']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
-        } else if (i === 4) { // alerts-table -> evidence
+        } else if (i === 4) {
           this.router.navigate(['/analyst/evidence']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
-        } else if (i === 5) { // bundle-list -> ai-activity
+        } else if (i === 5) {
           this.router.navigate(['/analyst/ai-activity']).then(() => setTimeout(() => this.driverInstance.moveNext(), 400));
         } else {
           this.driverInstance.moveNext();
@@ -135,11 +58,11 @@ export class TourService {
       },
       onPrevClick: (elem: any, step: any, options: any) => {
         const i = options.state.activeIndex;
-        if (i === 4) { // alerts-table -> back to dashboard
+        if (i === 4) {
           this.router.navigate(['/analyst/dashboard']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
-        } else if (i === 5) { // bundle-list -> back to alerts
+        } else if (i === 5) {
           this.router.navigate(['/analyst/alerts']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
-        } else if (i === 6) { // aria-wrapper -> back to evidence
+        } else if (i === 6) {
           this.router.navigate(['/analyst/evidence']).then(() => setTimeout(() => this.driverInstance.movePrevious(), 400));
         } else {
           this.driverInstance.movePrevious();
