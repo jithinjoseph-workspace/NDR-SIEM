@@ -4343,6 +4343,32 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
     }
 }
 
+fn is_safe_username(username: &str) -> bool {
+    !username.is_empty() && username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '@' || c == '.' || c == '-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_safe_username() {
+        assert!(is_safe_username("john.doe"));
+        assert!(is_safe_username("user123"));
+        assert!(is_safe_username("admin@company.com"));
+        assert!(is_safe_username("test-user_name"));
+
+        assert!(!is_safe_username("../../../etc/passwd"));
+        assert!(!is_safe_username("..\\..\\windows\\system32"));
+        assert!(!is_safe_username("/root/secret"));
+        assert!(!is_safe_username("C:\\Users\\admin"));
+        assert!(!is_safe_username("user name"));
+        assert!(!is_safe_username("admin' OR 1=1--"));
+        assert!(!is_safe_username("admin; ls -la"));
+        assert!(!is_safe_username(""));
+    }
+}
+
 // GET /api/auth/check-username?username=xxx
 // Public, read-only — only confirms existence, never reveals password or role.
 pub async fn check_username(
@@ -4350,9 +4376,11 @@ pub async fn check_username(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     let username = params.get("username").map(|s| s.trim().to_string()).unwrap_or_default();
-    if username.is_empty() {
+
+    if !is_safe_username(&username) {
         return Json(json!({ "exists": false }));
     }
+
     match state.ch_storage.get_user_by_username(&username).await {
         Ok(Some(_)) => Json(json!({ "exists": true })),
         _           => Json(json!({ "exists": false })),
@@ -4419,6 +4447,16 @@ pub async fn login(
             Json(json!({
                 "status": "error",
                 "message": "Username and password required"
+            }))
+        ).into_response();
+    }
+
+    if !is_safe_username(&username) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "status": "error",
+                "message": "Invalid username or password"
             }))
         ).into_response();
     }
