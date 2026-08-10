@@ -9,127 +9,126 @@
 
   <div class="login-wrapper">
 
-    <!-- Brand -->
-    <div class="login-brand">
-      <div class="login-logo">
-        <!-- Shield SVG icon -->
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-        </svg>
-      </div>
-      <h1 class="login-title" style="text-transform: none; font-size: 32px; letter-spacing: 0.02em;">PromaAlpha</h1>
-      <div style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; background-color: white; padding: 6px 14px; border-radius: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-        <span style="font-size: 11px; color: #000; background-color: white; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">powered by</span>
-        <img src="/assets/images/promasecure.png" alt="PromaSecure" style="height: 22px; object-fit: contain;" />
-      </div>
-    </div>
+    <!-- Premium White Wrapper -->
+    <div class="premium-white-wrapper"
+      style="background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(14,23,38,0.15) 100%); border-radius: 28px; padding: 40px 32px; box-shadow: 0 32px 64px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.8); display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 480px; margin: 0 auto 30px auto; backdrop-filter: blur(20px);">
 
-    <!-- Card -->
-    <div class="login-card">
-      <h2 class="login-card-heading">Sign in to your account</h2>
-
-      <!-- Error banner -->
-      <div *ngIf="error" class="login-error" role="alert">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        <span>{{ error }}</span>
-      </div>
-
-      <!-- Login Form (Required for browser autofill) -->
-      <form (ngSubmit)="login()">
-        <!-- Username field -->
-        <div class="login-field">
-        <label class="login-label" for="login-username">Username</label>
-        <div class="login-input-wrap">
-          <svg class="field-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-            fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-          <input
-            id="login-username"
-            [(ngModel)]="username"
-            name="username"
-            placeholder="Enter username"
-            autocomplete="username"
-            class="login-input" />
+      <!-- Brand -->
+      <div class="login-brand"
+        style="margin-bottom: 32px; display: flex; flex-direction: column; align-items: center; width: 100%;">
+        <div class="login-logo-img" style="display: flex; justify-content: center; margin-bottom: 20px; width: 100%;">
+          <img src="/assets/images/ProVigilAI.png" alt="ProVigil Logo"
+            style="height: 130px; object-fit: contain; mix-blend-mode: multiply; filter: contrast(1.1); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);"
+            onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" />
+        </div>
+        <div
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 10px; background-color: #f8fafc; padding: 8px 20px; border-radius: 30px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.04); transition: all 0.3s ease;"
+          onmouseover="this.style.boxShadow='0 6px 16px rgba(0,0,0,0.08)'; this.style.backgroundColor='#ffffff'; this.style.borderColor='#cbd5e1';"
+          onmouseout="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.04)'; this.style.backgroundColor='#f8fafc'; this.style.borderColor='#e2e8f0';">
+          <span
+            style="font-size: 11px; color: #475569; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;">powered
+            by</span>
+          <img src="/assets/images/promasecure.png" alt="PromaSecure" style="height: 26px; object-fit: contain;" />
         </div>
       </div>
 
 
-      <!-- Password field -->
-      <div class="login-field">
-        <label class="login-label" for="login-password">Password</label>
-        <div class="login-input-wrap">
-          <svg class="field-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-            fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+      <!-- Card -->
+      <div class="login-card" style="background-color: #08101f; border-color: rgba(255,255,255,0.1);">
+        <h2 class="login-card-heading">Sign in to your account</h2>
+
+        <!-- Error banner -->
+        <div *ngIf="error" class="login-error" role="alert">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
-          <input
-            id="login-password"
-            [(ngModel)]="password"
-            name="password"
-            [type]="showPassword ? 'text' : 'password'"
-            placeholder="Enter password"
-            autocomplete="current-password"
-            class="login-input login-input--password" />
-          <button
-            type="button"
-            (click)="showPassword = !showPassword"
-            class="toggle-pw"
-            [attr.aria-label]="showPassword ? 'Hide password' : 'Show password'">
-            <!-- Eye open -->
-            <svg *ngIf="!showPassword" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </svg>
-            <!-- Eye closed -->
-            <svg *ngIf="showPassword" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-              <line x1="1" y1="1" x2="23" y2="23"/>
-            </svg>
+          <span>{{ error }}</span>
+        </div>
+
+        <!-- Login Form (Required for browser autofill) -->
+        <form (ngSubmit)="login()">
+          <!-- Username field -->
+          <div class="login-field">
+            <label class="login-label" for="login-username">Username</label>
+            <div class="login-input-wrap">
+              <svg class="field-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+              <input id="login-username" [(ngModel)]="username" name="username" placeholder="Enter username"
+                autocomplete="username" class="login-input" />
+            </div>
+          </div>
+
+
+          <!-- Password field -->
+          <div class="login-field">
+            <label class="login-label" for="login-password">Password</label>
+            <div class="login-input-wrap">
+              <svg class="field-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              <input id="login-password" [(ngModel)]="password" name="password"
+                [type]="showPassword ? 'text' : 'password'" placeholder="Enter password" autocomplete="current-password"
+                class="login-input login-input--password" />
+              <button type="button" (click)="showPassword = !showPassword" class="toggle-pw"
+                [attr.aria-label]="showPassword ? 'Hide password' : 'Show password'">
+                <!-- Eye open -->
+                <svg *ngIf="!showPassword" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                <!-- Eye closed -->
+                <svg *ngIf="showPassword" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                  <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Submit -->
+          <button type="submit" id="login-submit" [disabled]="loading" class="login-btn"
+            [class.login-btn--loading]="loading">
+            <span *ngIf="!loading">Sign In</span>
+            <span *ngIf="loading" class="login-spinner-wrap">
+              <svg class="login-spinner" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                <path
+                  d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+              </svg>
+              Signing in...
+            </span>
           </button>
-        </div>
+
+          <!-- Forgot Password Link -->
+          <div class="login-forgot-link">
+            <a href="javascript:void(0)" (click)="openForgotModal()">Forgot password?</a>
+          </div>
+        </form>
+
       </div>
 
-      <!-- Submit -->
-      <button
-        type="submit"
-        id="login-submit"
-        [disabled]="loading"
-        class="login-btn"
-        [class.login-btn--loading]="loading">
-        <span *ngIf="!loading">Sign In</span>
-        <span *ngIf="loading" class="login-spinner-wrap">
-          <svg class="login-spinner" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-            fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-          </svg>
-          Signing in...
-        </span>
-      </button>
-
-      <!-- Forgot Password Link -->
-      <div class="login-forgot-link">
-        <a href="javascript:void(0)" (click)="openForgotModal()">Forgot password?</a>
-      </div>
-      </form>
-
-    </div>
+    </div> <!-- Close premium-white-wrapper -->
 
     <!-- ── Forgot Password Modal ──────────────────────────────────────── -->
     <div *ngIf="showForgotModal" class="forgot-modal-backdrop">
       <div class="forgot-modal">
         <button class="forgot-close" (click)="closeForgotModal()" aria-label="Close">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
         </button>
 
         <!-- Step Indicator -->
@@ -142,7 +141,12 @@
         </div>
 
         <div *ngIf="forgotError" class="login-error" style="margin-top:16px;">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
           <span>{{ forgotError }}</span>
         </div>
 
@@ -156,7 +160,8 @@
           </div>
           <div class="login-field">
             <label class="login-label">Secret Code</label>
-            <input class="login-input" [(ngModel)]="forgotData.secretCode" placeholder="6-character code" maxlength="6" style="text-transform: uppercase;" />
+            <input class="login-input" [(ngModel)]="forgotData.secretCode" placeholder="6-character code" maxlength="6"
+              style="text-transform: uppercase;" />
           </div>
           <button class="login-btn" (click)="submitSecretCode()" [disabled]="forgotLoading">
             <span *ngIf="!forgotLoading">Next</span>
@@ -189,11 +194,13 @@
           </div>
           <div class="login-field">
             <label class="login-label">New Password</label>
-            <input class="login-input" type="password" [(ngModel)]="forgotData.newPassword" placeholder="New password" />
+            <input class="login-input" type="password" [(ngModel)]="forgotData.newPassword"
+              placeholder="New password" />
           </div>
           <div class="login-field">
             <label class="login-label">Confirm Password</label>
-            <input class="login-input" type="password" [(ngModel)]="forgotData.confirmPassword" placeholder="Confirm password" />
+            <input class="login-input" type="password" [(ngModel)]="forgotData.confirmPassword"
+              placeholder="Confirm password" />
           </div>
           <button class="login-btn" (click)="submitOtp()" [disabled]="forgotLoading">
             <span *ngIf="!forgotLoading">Reset Password</span>
@@ -203,7 +210,8 @@
 
         <!-- Step 4: Success -->
         <div *ngIf="forgotStep === 4" class="forgot-step-content success-step">
-          <svg class="success-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="success-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#10b981"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
             <polyline points="22 4 12 14.01 9 11.01"></polyline>
           </svg>
