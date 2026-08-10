@@ -15,7 +15,7 @@ export class TourService {
   private async loadDriver(): Promise<void> {
     if (this.driverLoaded) return Promise.resolve();
 
-    return new Promise((resolve, _reject) => {
+    return new Promise((resolve, reject) => {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css';
