@@ -15,62 +15,47 @@ export class TourService {
   private async loadDriver(): Promise<void> {
     if (this.driverLoaded) return Promise.resolve();
 
-    return new Promise((resolve, reject) => {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css';
-      document.head.appendChild(link);
-
-      const style = document.createElement('style');
-      style.textContent = `
-        @keyframes aiPulse {
-          0% { box-shadow: 0 0 0 0 rgba(105, 246, 184, 0.4); }
-          70% { box-shadow: 0 0 0 10px rgba(105, 246, 184, 0); }
-          100% { box-shadow: 0 0 0 0 rgba(105, 246, 184, 0); }
-        }
-        @keyframes aiFloat {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-3px); }
-        }
-        .driver-popover {
-          border-radius: 12px !important;
-          padding: 16px !important;
-          max-width: 380px !important;
-          background: #08101f !important;
-          border: 1px solid rgba(105, 246, 184, 0.2) !important;
-          color: #f7f9ff !important;
-          box-shadow: 0 20px 40px rgba(0,0,0,0.4) !important;
-        }
-        .driver-popover-title {
-          display: none !important;
-        }
-        .driver-popover-navigation-btns {
-          border-top: 1px solid rgba(255,255,255,0.1) !important;
-          margin-top: 12px !important;
-          padding-top: 12px !important;
-        }
-        .driver-popover-next-btn, .driver-popover-prev-btn {
-          background: #69f6b8 !important;
-          color: #08101f !important;
-          text-shadow: none !important;
-          font-weight: 700 !important;
-          border: none !important;
-        }
-        .driver-popover-close-btn {
-          color: #8792a7 !important;
-        }
-      `;
-      document.head.appendChild(style);
-
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js';
-      script.onload = () => {
-        this.driverLoaded = true;
-        resolve();
-      };
-      script.onerror = reject;
-      document.body.appendChild(script);
-    });
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes aiPulse {
+        0% { box-shadow: 0 0 0 0 rgba(105, 246, 184, 0.4); }
+        70% { box-shadow: 0 0 0 10px rgba(105, 246, 184, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(105, 246, 184, 0); }
+      }
+      @keyframes aiFloat {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-3px); }
+      }
+      .driver-popover {
+        border-radius: 12px !important;
+        padding: 16px !important;
+        max-width: 380px !important;
+        background: #08101f !important;
+        border: 1px solid rgba(105, 246, 184, 0.2) !important;
+        color: #f7f9ff !important;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.4) !important;
+      }
+      .driver-popover-title {
+        display: none !important;
+      }
+      .driver-popover-navigation-btns {
+        border-top: 1px solid rgba(255,255,255,0.1) !important;
+        margin-top: 12px !important;
+        padding-top: 12px !important;
+      }
+      .driver-popover-next-btn, .driver-popover-prev-btn {
+        background: #69f6b8 !important;
+        color: #08101f !important;
+        text-shadow: none !important;
+        font-weight: 700 !important;
+        border: none !important;
+      }
+      .driver-popover-close-btn {
+        color: #8792a7 !important;
+      }
+    `;
+    document.head.appendChild(style);
+    this.driverLoaded = true;
   }
 
   private getStepHtml(title: string, desc: string): string {
@@ -140,11 +125,8 @@ export class TourService {
       },
       steps: [
         {
-          element: '.sidebar-shell',
           popover: {
-            description: this.getStepHtml('Welcome to NDR!', 'I am ARIA, your AI guide. This sidebar contains your main navigation.'),
-            side: 'right',
-            align: 'start'
+            description: this.getStepHtml('Welcome to NDR!', 'I am ARIA, your AI guide. This sidebar on the left contains your main navigation.'),
           }
         },
         {

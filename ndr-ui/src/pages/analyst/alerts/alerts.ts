@@ -475,15 +475,25 @@ export class Alerts implements OnInit, OnDestroy {
 
   filterByHost(ip: string) {
     if (this.activeHostFilter === ip) {
-      // Toggle off
       this.activeHostFilter = '';
       this.filterSearch = '';
-    } else {
-      this.activeHostFilter = ip;
-      this.filterSearch = ip;
+      this.loadAlerts();
+      return;
     }
-    this.rebuild();
+    this.activeHostFilter = ip;
+    this.filterSearch = ip;
+    // Fetch all alerts for this specific IP from the backend (bypasses the 200-alert window)
+    this.loading = true;
     this.cdr.detectChanges();
+    this.api.getAlerts(ip).subscribe({
+      next: (data: any[]) => {
+        this.allAlerts = data.map(h => this.formatHit(h));
+        this.rebuild();
+        this.loading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => { this.loading = false; this.cdr.detectChanges(); },
+    });
   }
 
   severityColor(sev: string): string {

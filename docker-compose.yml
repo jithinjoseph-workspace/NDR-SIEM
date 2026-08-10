@@ -371,6 +371,13 @@ services:
     volumes:
       - ${INSTALL_DIR}/config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ${INSTALL_DIR}/config/nginx/ssl:/etc/nginx/ssl:ro   # TLS cert & key
+    # Periodic reload (every 30s) re-resolves upstream block hostnames so rebuilt
+    # engine containers are picked up without a manual `nginx -s reload`.
+    # ndr-ui 502s are already fixed by the set $ndr_ui variable in nginx.conf.
+    command: >-
+      /bin/sh -c "nginx -g 'daemon off;' & NGX=$$!;
+      while sleep 30; do kill -0 $$NGX 2>/dev/null || break; nginx -s reload 2>/dev/null; done &
+      wait $$NGX"
     depends_on:
       ndr-ui:
         condition: service_healthy

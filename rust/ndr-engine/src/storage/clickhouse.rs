@@ -2752,10 +2752,13 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     }
 
     pub async fn get_recent_hits_by_tenant(
-        &self, limit: u64, tenant_id: &str, sensor_ids: &[String], hours: u32,
+        &self, limit: u64, tenant_id: &str, sensor_ids: &[String], hours: u32, ip_filter: Option<&str>,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
-        let time_filter = if hours == 0 {
+        let time_filter = if ip_filter.is_some() {
+            // Searching by IP: skip time window so all historical hits are visible
+            String::new()
+        } else if hours == 0 {
             "AND timestamp > now() - INTERVAL 30 DAY".to_string()
         } else {
             format!("AND timestamp > now() - INTERVAL {} HOUR", hours)
@@ -2765,6 +2768,11 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         } else {
             let list = sensor_ids.iter().map(|s| format!("'{}'", sql_escape(s))).collect::<Vec<_>>().join(",");
             format!("AND sensor_id IN ({})", list)
+        };
+        let ip_filter_sql = if let Some(ip) = ip_filter {
+            format!("AND (src_ip = '{}' OR dst_ip = '{}')", sql_escape(ip), sql_escape(ip))
+        } else {
+            String::new()
         };
         // Pre-fetch active group suppressions (src_ip + tag) to build ARM 2 filter.
         // ClickHouse does not support correlated subqueries, so we resolve them in Rust
@@ -2809,6 +2817,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
              WHERE 1=1 \
                {tf} \
                {sf} \
+               {ipf} \
                AND community_id NOT IN ( \
                  SELECT community_id FROM ndr.ai_suppressions FINAL \
                  WHERE active = 1 AND community_id != '' \
@@ -2820,6 +2829,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             db  = db_name,
             tf  = time_filter,
             sf  = sensor_filter,
+            ipf = ip_filter_sql,
             tid = sql_escape(tenant_id),
             gf  = group_filter,
             lim = limit))

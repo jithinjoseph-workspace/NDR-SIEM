@@ -102,8 +102,9 @@ export class Api {
     return this.http.get(`${this.baseUrl}/health`);
   }
 
-  getAlerts(): Observable<any[]> {
-    return this.http.get<any[]>(`${this.baseUrl}/hits`); // assuming hits endpoint exists or we'll add it
+  getAlerts(srcIp?: string): Observable<any[]> {
+    const params = srcIp ? { params: { src_ip: srcIp } } : {};
+    return this.http.get<any[]>(`${this.baseUrl}/hits`, params);
   }
 
   getInterfaces(): Observable<string[]> {

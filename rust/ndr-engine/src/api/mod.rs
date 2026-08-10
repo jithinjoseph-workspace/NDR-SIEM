@@ -2082,11 +2082,21 @@ pub async fn get_protocols(State(state): State<AppState>, headers: axum::http::H
     Json(json!({ "protocols": protos }))
 }
 
-pub async fn get_hits(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+#[derive(serde::Deserialize, Default)]
+pub struct HitsQuery {
+    pub src_ip: Option<String>,
+}
+
+pub async fn get_hits(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<HitsQuery>,
+) -> Json<Value> {
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
     let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
-    match state.ch_storage.get_recent_hits_by_tenant(200, &tenant_id, &sensor_ids, 0).await {
+    let limit = if query.src_ip.is_some() { 500 } else { 200 };
+    match state.ch_storage.get_recent_hits_by_tenant(limit, &tenant_id, &sensor_ids, 0, query.src_ip.as_deref()).await {
         Ok(hits) => Json(json!(hits)),
         Err(e) => {
             tracing::warn!("Hits query error: {}", e);
@@ -3590,7 +3600,7 @@ pub async fn export_report(
 
     let stats    = state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or(json!({}));
-    let hits     = state.ch_storage.get_recent_hits_by_tenant(500, &tenant_id, &sensor_ids, hours).await
+    let hits     = state.ch_storage.get_recent_hits_by_tenant(500, &tenant_id, &sensor_ids, hours, None).await
         .unwrap_or_default();
     let top_ips  = state.ch_storage.get_top_src_ips_by_tenant(10, &tenant_id, &sensor_ids).await
         .unwrap_or_default();

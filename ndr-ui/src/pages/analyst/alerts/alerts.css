@@ -572,7 +572,7 @@
 }
 
 .alerts-table-wrap {
-  overflow-x: hidden;
+  overflow-x: auto;
   padding: 0.5rem 1rem 1rem;
 }
 
