@@ -942,8 +942,9 @@ Cmnd_Alias NDR_SYSTEMCTL = /usr/bin/systemctl daemon-reload, /usr/bin/systemctl 
 Cmnd_Alias NDR_TEE       = /usr/bin/tee /etc/suricata/threshold.conf, /usr/bin/tee -a /etc/suricata/threshold.conf, /usr/bin/tee /etc/suricata/ndr-sensor-suppress.conf, /usr/bin/tee -a /etc/suricata/ndr-sensor-suppress.conf, /usr/bin/tee /opt/zeek/share/zeek/site/ndr-arp.zeek, /usr/bin/tee -a /opt/zeek/share/zeek/site/local.zeek, /usr/bin/tee /etc/systemd/system/ndr-autoscaler.service, /usr/bin/tee /etc/systemd/system/ndr-worker-autoscaler.service
 Cmnd_Alias NDR_CAT       = /usr/bin/cat /opt/zeek/share/zeek/site/local.zeek, /usr/bin/cat /etc/suricata/threshold.conf
 Cmnd_Alias NDR_LOGROTATE = /usr/sbin/logrotate -f /etc/logrotate.d/suricata-ndr, /usr/sbin/logrotate -f /etc/logrotate.d/zeek-ndr
+Cmnd_Alias NDR_RM        = /usr/bin/rm -f /var/run/suricata.pid, /usr/bin/rm -f /run/suricata.pid, /usr/bin/rm -f /var/run/suricata/suricata.pid
 Cmnd_Alias NDR_IPTABLES  = /usr/sbin/iptables
-$USERNAME ALL=(ALL)  NOPASSWD: NDR_SURICATA, NDR_ZEEK, NDR_PKILL, NDR_PGREP, NDR_SYSTEMCTL, NDR_TEE, NDR_CAT, NDR_LOGROTATE
+$USERNAME ALL=(ALL)  NOPASSWD: NDR_SURICATA, NDR_ZEEK, NDR_PKILL, NDR_PGREP, NDR_SYSTEMCTL, NDR_TEE, NDR_CAT, NDR_LOGROTATE, NDR_RM
 $USERNAME ALL=(root) NOPASSWD: NDR_IPTABLES
 SUDOERS
 sudo chmod 440 /etc/sudoers.d/ndr-stack

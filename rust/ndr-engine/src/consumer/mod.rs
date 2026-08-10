@@ -152,22 +152,19 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             subnet_role:    String::new(),
                             ja3_os:         String::new(),
                         };
-                        let ch2 = ch_flush.clone();
-                        tokio::spawn(async move {
-                            let mut final_asset = asset;
-                            if let Ok(Some(existing)) = ch2.get_asset_by_ip(&final_asset.tenant_id.clone(), &ip).await {
-                                if existing.trusted != 0 { final_asset.trusted = existing.trusted; }
-                                if existing.threat_flagged != 0 { final_asset.threat_flagged = existing.threat_flagged; }
-                                if !existing.role.is_empty() { final_asset.role = existing.role; }
-                                if existing.criticality != 0 { final_asset.criticality = existing.criticality; }
-                                if existing.open_ports != "[]" && !existing.open_ports.is_empty() { final_asset.open_ports = existing.open_ports; }
-                                if !existing.subnet_role.is_empty() { final_asset.subnet_role = existing.subnet_role; }
-                                if !existing.ja3_os.is_empty() { final_asset.ja3_os = existing.ja3_os; }
-                            }
-                            if let Err(e) = ch2.upsert_asset(&final_asset).await {
-                                warn!("Asset flush error {}: {}", ip, e);
-                            }
-                        });
+                        let mut final_asset = asset;
+                        if let Ok(Some(existing)) = ch_flush.get_asset_by_ip(&final_asset.tenant_id.clone(), &ip).await {
+                            if existing.trusted != 0 { final_asset.trusted = existing.trusted; }
+                            if existing.threat_flagged != 0 { final_asset.threat_flagged = existing.threat_flagged; }
+                            if !existing.role.is_empty() { final_asset.role = existing.role; }
+                            if existing.criticality != 0 { final_asset.criticality = existing.criticality; }
+                            if existing.open_ports != "[]" && !existing.open_ports.is_empty() { final_asset.open_ports = existing.open_ports; }
+                            if !existing.subnet_role.is_empty() { final_asset.subnet_role = existing.subnet_role; }
+                            if !existing.ja3_os.is_empty() { final_asset.ja3_os = existing.ja3_os; }
+                        }
+                        if let Err(e) = ch_flush.upsert_asset(&final_asset).await {
+                            warn!("Asset flush error {}: {}", ip, e);
+                        }
                     }
                 }
             }

@@ -1178,8 +1178,10 @@ pub async fn delete_announcement(
             .unwrap_or_else(|_| "http://localhost:8123".to_string());
         let user = std::env::var("CLICKHOUSE_USER")
             .unwrap_or_else(|_| "ndr".to_string());
-        let password = std::env::var("CLICKHOUSE_PASSWORD")
-            .unwrap_or_else(|_| "ndr123".to_string());
+        let password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| {
+            tracing::error!("CLICKHOUSE_PASSWORD not set — connection will likely fail");
+            String::new()
+        });
         Self {
             client: Client::default()
                 .with_url(url)

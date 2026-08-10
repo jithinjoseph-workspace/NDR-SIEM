@@ -1,27 +1,75 @@
 #!/bin/bash
-# NDR Sensor Installation Script v2 — Fixed
-# Fixes: Arkime viewer, Vector Kafka sink,
-#        all Zeek sources, retry logic,
-#        OpenSearch wait, mark_fulfilled
+# NDR Sensor Installation Script
+# Installs Agent-Z (Zeek), Agent-S (Suricata), Packet Recorder (Arkime),
+# Vector telemetry pipeline, auditd endpoint visibility, and ndr-agent service.
 set -e
 
+# ── Colors ────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
-log()  { echo -e "${GREEN}[NDR]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error(){ echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
-info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+# ── Log helpers ───────────────────────────────────
+log()  { echo -e "  ${GREEN}[+]${NC} $1"; }
+warn() { echo -e "  ${YELLOW}[!]${NC} $1"; }
+error(){ echo -e "  ${RED}[x]${NC} $1"; exit 1; }
+info() { echo -e "  ${BLUE}[>]${NC} $1"; }
+hdr()  {
+    echo -e ""
+    echo -e "  ${CYAN}${BOLD}┌─────────────────────────────────────────────┐${NC}"
+    printf  "  ${CYAN}${BOLD}│${NC}  %-43s${CYAN}${BOLD}│${NC}\n" "$1"
+    echo -e "  ${CYAN}${BOLD}└─────────────────────────────────────────────┘${NC}"
+}
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║     NDR Stack — Sensor Installation      ║"
-echo "║     Network Detection & Response         ║"
-echo "╚══════════════════════════════════════════╝"
-echo ""
+# ── Progress bar ──────────────────────────────────
+TOTAL_STEPS=15
+CURRENT_STEP=0
+
+step() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    local label="$1" BAR_WIDTH=36
+    local filled=$(( (CURRENT_STEP * BAR_WIDTH) / TOTAL_STEPS ))
+    local pct=$(( (CURRENT_STEP * 100) / TOTAL_STEPS ))
+    local bar="" i
+    for ((i=0; i<filled; i++));         do bar+="▓"; done
+    for ((i=filled; i<BAR_WIDTH; i++)); do bar+="░"; done
+    printf "\n  ${CYAN}[%s]${NC}  ${BOLD}%3d%%${NC}  ${DIM}%d/%d${NC}\n" \
+        "$bar" "$pct" "$CURRENT_STEP" "$TOTAL_STEPS"
+    hdr "$label"
+}
+
+# ── Spinner ───────────────────────────────────────
+spinner() {
+    local pid=$1 msg=$2
+    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local i=0
+    while kill -0 $pid 2>/dev/null; do
+        printf "\r  ${CYAN}${frames[$i]}${NC}  %s..." "$msg"
+        i=$(( (i+1) % 10 ))
+        sleep 0.1
+    done
+    printf "\r  ${GREEN}[+]${NC}  %s — done       \n" "$msg"
+}
+
+# ── Banner ────────────────────────────────────────
+clear
+printf "\n"
+printf "  ${CYAN}╔══════════════════════════════════════════════╗${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${BOLD}P R O M A   S E N S O R   v 1 . 0${NC}        ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    Network Detection & Response Platform      ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    Agent-Z  ·  Agent-S  ·  Packet Recorder   ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${DIM}◆  Powered by Proma Secure  ◆${NC}              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}╚══════════════════════════════════════════════╝${NC}\n"
+printf "\n"
 
 # ── Parse arguments ──────────────────────────────
 CLOUD_URL=""
@@ -121,19 +169,19 @@ echo "$SENSOR_IP" > "$(dirname "$0")/../.runtime/ndr_sensor_ip"
 
 # ── Select deployment mode ────────────────────────
 if [ -z "$SENSOR_MODE" ]; then
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  Deployment Mode"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  1) TAP / SPAN  — sensor is a passive network probe"
-  echo "                   (traffic is mirrored to this VM)"
-  echo "                   Sensor's own IP is excluded from alerts."
-  echo ""
-  echo "  2) Cloud Agent — sensor is installed ON the server"
-  echo "                   being monitored (EC2, GCP VM, etc.)"
-  echo "                   Server's own traffic IS what we monitor."
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  read -rp "Select mode [1/2]: " MODE_NUM < /dev/tty
+  printf "\n"
+  printf "  ${CYAN}┌──────────────────────────────────────────────┐${NC}\n"
+  printf "  ${CYAN}│${NC}  ${BOLD}Select Deployment Mode${NC}                        ${CYAN}│${NC}\n"
+  printf "  ${CYAN}├──────────────────────────────────────────────┤${NC}\n"
+  printf "  ${CYAN}│${NC}  ${GREEN}[1]${NC} TAP / SPAN  — passive network probe         ${CYAN}│${NC}\n"
+  printf "  ${CYAN}│${NC}       Traffic mirrored to this VM             ${CYAN}│${NC}\n"
+  printf "  ${CYAN}│${NC}       Sensor IP excluded from Agent-S alerts  ${CYAN}│${NC}\n"
+  printf "  ${CYAN}│${NC}                                              ${CYAN}│${NC}\n"
+  printf "  ${CYAN}│${NC}  ${BLUE}[2]${NC} Cloud Agent — installed ON monitored host   ${CYAN}│${NC}\n"
+  printf "  ${CYAN}│${NC}       Server's own traffic is what we monitor ${CYAN}│${NC}\n"
+  printf "  ${CYAN}└──────────────────────────────────────────────┘${NC}\n"
+  printf "\n"
+  read -rp "  Enter choice (1/2) [default: 1]: " MODE_NUM < /dev/tty
   case "${MODE_NUM:-1}" in
     1) SENSOR_MODE="tap"   ;;
     2) SENSOR_MODE="agent" ;;
@@ -147,11 +195,11 @@ echo "$SENSOR_MODE" > "$(dirname "$0")/../.runtime/ndr_mode"
 [ -f /etc/os-release ] || error "Unsupported OS"
 source /etc/os-release
 log "OS: $PRETTY_NAME"
-[ "$EUID" -eq 0 ] || \
-  error "Run as root: sudo $0"
+[ "$EUID" -eq 0 ] || error "Run as root: sudo $0"
 
 # ── Stop existing services ────────────────────────
-log "Stopping existing services..."
+step "Preparing Environment"
+log "Stopping any existing services..."
 pkill -f agent.py       2>/dev/null || true
 systemctl stop ndr-vector   2>/dev/null || true
 systemctl stop ndr-agent    2>/dev/null || true
@@ -165,28 +213,29 @@ rm -f /tmp/suricata.pid \
 sleep 2
 
 # ── Install dependencies ──────────────────────────
-log "Installing dependencies..."
+step "Installing Dependencies"
+log "Updating package lists..."
 apt-get update -qq
-apt-get install -y -qq \
+(apt-get install -y -qq \
   curl wget git python3 python3-pip python3-requests \
   apt-transport-https gnupg2 \
   software-properties-common \
   libpcre3 libpcre3-dev \
   ethtool docker.io \
-  arp-scan iputils-arping snmp > /dev/null 2>&1 || true
+  arp-scan iputils-arping snmp > /dev/null 2>&1 || true) &
+spinner $! "Installing base packages"
 
 # scapy needed for ARP isolation on the sensor
 pip3 install scapy --break-system-packages -q 2>/dev/null || pip3 install scapy -q 2>/dev/null || true
+log "Dependencies installed"
 
 # Allow sensor agent to run iptables without a password
 echo "${SENSOR_USER:-root} ALL=(root) NOPASSWD: /usr/sbin/iptables" \
   > /etc/sudoers.d/ndr-iptables
 chmod 440 /etc/sudoers.d/ndr-iptables
 
-log "Installing tshark (>= 3.4 required for community-id filter) and zstd..."
-# communityid.id dissector requires tshark >= 3.4.0 AND --enable-protocol communityid.
-# Distro default apt is often frozen on 3.2.x.
-# Check existing version first — upgrade only if needed.
+step "Capture Utilities"
+log "Checking packet capture tools..."
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   software-properties-common zstd > /dev/null 2>&1 || true
@@ -235,49 +284,62 @@ log "zstd:   $(zstd --version 2>/dev/null | head -1 || echo 'not installed')"
 
 pip3 install requests --quiet 2>/dev/null || true
 
-# ── Install Zeek ──────────────────────────────────
-log "Installing Zeek..."
+# ── Install Agent-Z ───────────────────────────────
+step "Agent-Z  (Network Analyzer)"
+log "Installing Agent-Z..."
 if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
-  UBUNTU_MAJOR=$(lsb_release -rs | cut -d. -f1)
-  log "Ubuntu $UBUNTU_MAJOR detected"
-
-  if [ "$UBUNTU_MAJOR" = "22" ]; then
-    echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_22.04/ /" \
-      > /etc/apt/sources.list.d/security:zeek.list
-    curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_22.04/Release.key" \
-      | gpg --dearmor \
-      > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>/dev/null
-  elif [ "$UBUNTU_MAJOR" = "24" ]; then
-    echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/ /" \
-      > /etc/apt/sources.list.d/security:zeek.list
-    curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_24.04/Release.key" \
-      | gpg --dearmor \
-      > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>/dev/null
+  OS_VERSION=$(lsb_release -rs 2>/dev/null || echo "22.04")
+  ZEEK_UBUNTU_VER="$OS_VERSION"
+  for TRY_VER in "$OS_VERSION" "24.04" "22.04"; do
+    ZEEK_KEY_URL="https://download.opensuse.org/repositories/security:zeek/xUbuntu_${TRY_VER}/Release.key"
+    if curl -fsSL --max-time 10 "$ZEEK_KEY_URL" -o /dev/null 2>/dev/null; then
+      ZEEK_UBUNTU_VER="$TRY_VER"
+      break
+    fi
+  done
+  log "Using Agent-Z repo for Ubuntu ${ZEEK_UBUNTU_VER}"
+  echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${ZEEK_UBUNTU_VER}/ /" \
+    > /etc/apt/sources.list.d/security:zeek.list
+  curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
+    | gpg --dearmor \
+    > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>/dev/null
+  apt-get update -qq
+  if apt-get install -y -qq zeek > /dev/null; then
+    log "Agent-Z installed"
+  else
+    warn "Agent-Z install failed — check repo availability for Ubuntu ${ZEEK_UBUNTU_VER}"
   fi
-
-  apt-get update -qq
-  apt-get install -y -qq zeek > /dev/null
-  echo 'export PATH=$PATH:/opt/zeek/bin' \
-    >> /etc/profile
+  echo 'export PATH=$PATH:/opt/zeek/bin' >> /etc/profile
   export PATH=$PATH:/opt/zeek/bin
+else
+  log "Agent-Z already installed"
 fi
-log "✅ Zeek: $(/opt/zeek/bin/zeek --version \
-  2>&1 | head -1)"
+log "✅ Agent-Z: $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
 
-# ── Install Suricata ──────────────────────────────
-log "Installing Suricata..."
+# ── Install Agent-S ───────────────────────────────
+step "Agent-S  (Threat Detection)"
+log "Installing Agent-S..."
 if ! command -v suricata &>/dev/null; then
-  add-apt-repository -y \
-    ppa:oisf/suricata-stable > /dev/null 2>&1
-  apt-get update -qq
-  apt-get install -y -qq suricata > /dev/null
+  apt-get update -qq 2>/dev/null || true
+  if apt-get install -y suricata 2>/dev/null; then
+    log "Agent-S installed from repository"
+  else
+    warn "Agent-S install failed — skipping"
+  fi
+  systemctl disable suricata 2>/dev/null || true
+  systemctl stop suricata 2>/dev/null || true
+  log "Agent-S ready"
+else
+  log "Agent-S already installed"
+  systemctl disable suricata 2>/dev/null || true
+  systemctl stop suricata 2>/dev/null || true
 fi
 suricata-update > /dev/null 2>&1 || true
-log "✅ Suricata: $(suricata --version \
-  2>&1 | head -1)"
+log "✅ Agent-S: $(suricata --version 2>&1 | head -1)"
 
-# ── Install Arkime ────────────────────────────────
-log "Installing Arkime..."
+# ── Packet Recorder ───────────────────────────────
+step "Packet Recorder"
+log "Installing Packet Recorder..."
 ARKIME_VERSION="5.1.0"
 UBUNTU_MAJOR=$(lsb_release -rs | cut -d. -f1)
 
@@ -312,8 +374,9 @@ log "✅ Arkime: $(\
   /opt/arkime/bin/capture --version \
   2>/dev/null | head -1)"
 
-# ── Install Vector ────────────────────────────────
-log "Installing Vector..."
+# ── Log Collector ─────────────────────────────────
+step "Log Collector"
+log "Installing Log Collector..."
 if ! command -v vector &>/dev/null; then
   ARCH=$(dpkg --print-architecture)
   VECTOR_VER="0.32.1"
@@ -340,15 +403,17 @@ if ! command -v vector &>/dev/null; then
     rm -f /tmp/vector.deb
   }
 fi
-log "✅ Vector: $(vector --version 2>/dev/null)"
+log "✅ Log Collector: $(vector --version 2>/dev/null)"
 
-# ── Install auditd for Linux endpoint telemetry ───
-log "Installing auditd for endpoint visibility..."
+# ── Endpoint Visibility ───────────────────────────
+step "Endpoint Visibility"
+log "Installing endpoint audit agent..."
 apt-get install -y -qq auditd audispd-plugins > /dev/null 2>&1 || true
-log "✅ auditd: $(auditd --version 2>/dev/null | head -1 || echo installed)"
+log "✅ Endpoint audit agent ready"
 
 # ── Create directories ────────────────────────────
-log "Creating directories..."
+step "Directories & Configuration"
+log "Creating runtime directories..."
 mkdir -p /opt/arkime/raw \
          /opt/arkime/logs \
          /opt/arkime/etc \
@@ -393,7 +458,8 @@ NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
 INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
-# ── Start local OpenSearch for Arkime ────────────
+# ── Search Backend ────────────────────────────────
+step "Search Backend"
 # Start OpenSearch FIRST, wait fully,
 # THEN configure and start Arkime
 log "Starting local OpenSearch for Arkime..."
@@ -484,8 +550,9 @@ if [ $TRIES -ge $MAX_TRIES ]; then
   warn "Arkime may not work correctly"
 fi
 
-# ── Configure Arkime ──────────────────────────────
-log "Configuring Arkime..."
+# ── Configure Packet Recorder ─────────────────────
+step "Packet Recorder  · Configuration"
+log "Configuring Packet Recorder..."
 ARKIME_PASS=$(echo "$API_KEY" | \
   sha256sum | cut -c1-16)
 
@@ -553,8 +620,9 @@ LimitMEMLOCK=infinity
 WantedBy=multi-user.target
 EOF
 
-# ── Configure Zeek ────────────────────────────────
-log "Configuring Zeek..."
+# ── Configure Agent-Z ─────────────────────────────
+step "Agent-Z  · Configuration"
+log "Configuring Agent-Z..."
 export PATH=$PATH:/opt/zeek/bin
 
 if [ -f /opt/zeek/etc/node.cfg ]; then
@@ -572,35 +640,58 @@ StatsLogEnable = 0
 LogDir = /var/log/ndr/zeek
 EOF
 
-  cat > /opt/zeek/share/zeek/site/local.zeek \
-    << 'ZEEKCONF'
+  ZEEK_SITE=/opt/zeek/share/zeek/site
+  ZEEK_BASE=/opt/zeek/share/zeek
+
+  zeek_load() {
+    local s="$1"
+    for d in "$ZEEK_BASE" "$ZEEK_BASE/policy" "$ZEEK_BASE/base"; do
+      [ -f "$d/$s.zeek" ] || [ -f "$d/$s" ] && { echo "@load $s"; return; }
+    done
+    if [[ "$s" == *"detect-sql-injection"* ]]; then
+      local alt="${s/detect-sql-injection/detect-sqli}"
+      for d in "$ZEEK_BASE" "$ZEEK_BASE/policy" "$ZEEK_BASE/base"; do
+        [ -f "$d/$alt.zeek" ] || [ -f "$d/$alt" ] && { echo "@load $alt"; return; }
+      done
+    fi
+    warn "  Agent-Z: skipping missing script: $s"
+  }
+
+  tee "$ZEEK_SITE/local.zeek" > /dev/null << ZEEKCONF
+# NDR Agent-Z Configuration
 @load policy/tuning/json-logs.zeek
 @load policy/protocols/conn/community-id-logging
-@load protocols/ssh/detect-bruteforcing
-@load protocols/ssl/validate-certs
-@load misc/detect-traceroute
-@load frameworks/files/hash-all-files
+$(zeek_load protocols/ssh/detect-bruteforcing)
+$(zeek_load protocols/ssl/validate-certs)
+$(zeek_load protocols/http/detect-sql-injection)
+$(zeek_load protocols/http/detect-webapps)
+$(zeek_load misc/detect-traceroute)
+$(zeek_load frameworks/files/hash-all-files)
+$(zeek_load frameworks/files/detect-MHR)
+$(zeek_load policy/frameworks/software/vulnerable)
+$(zeek_load policy/frameworks/software/version-changes)
+$(zeek_load policy/frameworks/software/windows-version-detection)
 @load policy/protocols/conn/known-hosts
 @load policy/protocols/conn/known-services
-@load policy/frameworks/software/vulnerable
-@load policy/frameworks/software/version-changes
-@load policy/frameworks/software/windows-version-detection
 @load policy/tuning/track-all-assets.zeek
 @load policy/protocols/http/software.zeek
 @load policy/protocols/dhcp/software.zeek
 @load policy/protocols/ssh/software.zeek
 @load ndr-arp
+
+redef tcp_inactivity_timeout  = 15 secs;
+redef udp_inactivity_timeout  = 15 secs;
+redef icmp_inactivity_timeout = 10 secs;
 ZEEKCONF
 
-  # TAP mode only: exclude sensor's own IP from Zeek conn.log
-  # In agent mode the server's traffic IS what we want to see — don't suppress
+  # TAP mode only: exclude sensor's own IP from Agent-Z conn.log
   if [ "$SENSOR_MODE" = "tap" ] && [ -n "$SENSOR_IP" ]; then
     echo "redef Site::local_nets += { ${SENSOR_IP}/32 };" \
-      >> /opt/zeek/share/zeek/site/local.zeek
-    log "  ✅ Zeek: sensor $SENSOR_IP added to Site::local_nets (TAP mode)"
+      >> "$ZEEK_SITE/local.zeek"
+    log "Agent-Z: sensor $SENSOR_IP added to local_nets (TAP mode)"
   fi
 
-  cat > /opt/zeek/share/zeek/site/ndr-arp.zeek << 'ARPSCRIPT'
+  tee "$ZEEK_SITE/ndr-arp.zeek" > /dev/null << 'ARPSCRIPT'
 module ARP;
 
 export {
@@ -616,6 +707,12 @@ export {
     };
 }
 
+# NDR sensor self-exclusion — ndr-agent rewrites this file at every Start
+# with the real sensor MAC and IP so ARP isolation doesn't self-alert.
+# Empty sets here are safe: Zeek loads them only if agent hasn't started yet.
+const NDR_SENSOR_MACS: set[string] = {};
+const NDR_SENSOR_IPS:  set[addr]   = {};
+
 event zeek_init() &priority=5
 {
     Log::create_stream(ARP::LOG, [$columns=Info, $path="arp"]);
@@ -625,6 +722,8 @@ event arp_request(mac_src: string, mac_dst: string,
                   SPA: addr, SHA: string,
                   TPA: addr, THA: string)
 {
+    if (SHA in NDR_SENSOR_MACS) return;
+    if (SPA in NDR_SENSOR_IPS)  return;
     Log::write(ARP::LOG, Info(
         $ts        = network_time(),
         $operation = "request",
@@ -639,6 +738,8 @@ event arp_reply(mac_src: string, mac_dst: string,
                 SPA: addr, SHA: string,
                 TPA: addr, THA: string)
 {
+    if (SHA in NDR_SENSOR_MACS) return;
+    if (SPA in NDR_SENSOR_IPS)  return;
     Log::write(ARP::LOG, Info(
         $ts        = network_time(),
         $operation = "reply",
@@ -650,54 +751,54 @@ event arp_reply(mac_src: string, mac_dst: string,
 }
 ARPSCRIPT
 
-  /opt/zeek/bin/zkg install \
-    zeek/corelight/zeek-community-id \
+  tee "$ZEEK_SITE/ndr-suppress.zeek" > /dev/null << 'ZEEKSUPPRESS'
+# NDR Agent-Z suppression filters — managed dynamically by NDR engine
+# Hooks are appended here via suppress_sid commands; do not edit manually
+ZEEKSUPPRESS
+  if ! grep -q "ndr-suppress" "$ZEEK_SITE/local.zeek" 2>/dev/null; then
+    echo "@load ndr-suppress" >> "$ZEEK_SITE/local.zeek"
+  fi
+  log "Agent-Z suppression filter ready"
+
+  /opt/zeek/bin/zkg install zeek/corelight/zeek-community-id \
     --force > /dev/null 2>&1 || true
 
-  log "✅ Zeek configured"
+  log "✅ Agent-Z configured"
 fi
 
-# ── Configure Suricata ────────────────────────────
-log "Configuring Suricata..."
+# ── Configure Agent-S ─────────────────────────────
+step "Agent-S  · Configuration"
+log "Configuring Agent-S..."
 if [ -f /etc/suricata/suricata.yaml ]; then
   cp /etc/suricata/suricata.yaml \
      /etc/suricata/suricata.yaml.bak \
      2>/dev/null || true
 
-  # FIX: Verify these sed commands work
-  # by checking the result afterward
-  sed -i \
-    's/community-id: false/community-id: true/g' \
+  sed -i 's/community-id: false/community-id: true/g' \
     /etc/suricata/suricata.yaml
 
-  # Set log dir
   sed -i \
     "s|default-log-dir: /var/log/suricata|default-log-dir: /var/log/ndr/suricata|g" \
     /etc/suricata/suricata.yaml
 
-  # Verify community-id is set
-  if grep -q "community-id: true" \
-      /etc/suricata/suricata.yaml; then
-    log "✅ Suricata community-id: confirmed"
+  if grep -q "community-id: true" /etc/suricata/suricata.yaml; then
+    log "Agent-S community-id: confirmed"
   else
     warn "community-id sed failed — patching manually"
-    # Manual patch if yaml structure differs
     python3 << PYFIX
 import re
 with open('/etc/suricata/suricata.yaml','r') as f:
     content = f.read()
-# Replace any community-id false variant
-content = re.sub(
-    r'community-id:\s*false',
-    'community-id: true',
-    content)
+content = re.sub(r'community-id:\s*false', 'community-id: true', content)
 with open('/etc/suricata/suricata.yaml','w') as f:
     f.write(content)
-print("[NDR] Suricata community-id patched via python")
+print("[NDR] Agent-S community-id patched")
 PYFIX
   fi
 
-  log "✅ Suricata configured on $IFACE"
+  log "Agent-S updating threat rules..."
+  suricata-update > /dev/null 2>&1 || true
+  log "✅ Agent-S configured on $IFACE"
 
   # Tune AF-PACKET ring buffer for zero-drop capture
   python3 << 'AFPACKET_TUNE'
@@ -722,14 +823,11 @@ content = re.sub(r'(threads:\s*)\w+',     r'\g<1>auto',  content)
 with open('/etc/suricata/suricata.yaml', 'w') as f:
     f.write(content)
 
-print("[NDR] ✅ Suricata AF-PACKET tuned: ring-size=2048, mmap=yes, tpacket-v3=yes, threads=auto")
+print("[NDR] ✅ Agent-S AF-PACKET tuned: ring-size=2048, mmap=yes, tpacket-v3=yes, threads=auto")
 AFPACKET_TUNE
 fi
 
-# ── Suppress known false-positive Suricata SIDs ───────
-# These rules fire on legitimate NDR sensor traffic and
-# would otherwise generate constant noise.
-log "Writing Suricata false-positive suppressions..."
+log "Writing Agent-S false-positive suppressions..."
 THRESHOLD_FILE="/etc/suricata/threshold.conf"
 touch "$THRESHOLD_FILE"
 
@@ -822,10 +920,11 @@ AUDITEOF
 augenrules --load > /dev/null 2>&1 || auditctl -R /etc/audit/rules.d/ndr.rules > /dev/null 2>&1 || true
 systemctl enable auditd > /dev/null 2>&1 || true
 systemctl restart auditd 2>/dev/null || service auditd restart 2>/dev/null || true
-log "✅ auditd rules loaded ($(auditctl -l 2>/dev/null | grep -c '\-a\|\-w') rules active)"
+log "✅ Endpoint audit rules loaded"
 
-# ── Configure Vector with ALL log sources + HTTP sink ─
-log "Configuring Vector → HTTP @ $CLOUD_URL/api/ingest"
+# ── Configure Log Collector ────────────────────────
+step "Log Collector  · Configuration"
+log "Configuring Log Collector pipeline..."
 HOSTNAME_VAL=$(hostname)
 
 cat > /etc/ndr/vector.toml << EOF
@@ -1177,7 +1276,8 @@ max_size = 536870912
 when_full = "drop_newest"
 EOF
 
-# ── FIX: agent.py with correct Arkime check ───────
+# ── Sensor Agent ──────────────────────────────────
+step "Sensor Agent  · Service"
 log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
@@ -2591,14 +2691,14 @@ systemctl enable \
   arkime-capture \
   2>/dev/null || true
 
-# ── Start services ────────────────────────────────
-log "Starting Arkime services..."
+# ── Start all services ────────────────────────────
+log "Starting Packet Recorder..."
 systemctl start arkime-capture 2>/dev/null || true
 
-log "Starting Vector..."
+log "Starting Log Collector..."
 systemctl start ndr-vector 2>/dev/null || true
 
-log "Starting NDR agent..."
+log "Starting Sensor Agent..."
 systemctl start ndr-agent 2>/dev/null || true
 
 # ── Register with cloud ───────────────────────────
@@ -2617,55 +2717,49 @@ REG=$(curl -s -X POST \
 
 echo "$REG" | grep -q '"status":"ok"' && \
   log "✅ Registered with cloud" || \
-  warn "Registration: $REG"
+  warn "Cloud registration: $REG"
 
-# ── Verify everything ─────────────────────────────
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║    ✅ NDR Sensor Installation Done!      ║"
-echo "╠══════════════════════════════════════════╣"
-printf "║  Tenant:    %-28s ║\n" "$TENANT_ID"
-printf "║  Interface: %-28s ║\n" "$IFACE"
-printf "║  Cloud:     %-28s ║\n" "${CLOUD_URL:0:28}"
-printf "║  Kafka:     %-28s ║\n" "${KAFKA_BOOTSTRAP:0:28}"
-echo "╠══════════════════════════════════════════╣"
-
-log "Waiting for capture engines to initialize (up to 30s)..."
+# ── Verify services ───────────────────────────────
+log "Waiting for engines to initialize (up to 30s)..."
 for i in {1..15}; do
-  Z=$(pgrep -f "zeek" > /dev/null 2>&1 && echo "✅" || echo "❌")
-  S=$(pgrep -f "suricata" > /dev/null 2>&1 && echo "✅" || echo "❌")
-  if [ "$Z" == "✅" ] && [ "$S" == "✅" ]; then
-    break
-  fi
+  Z=$(pgrep -f "zeek"     > /dev/null 2>&1 && echo "✅ Running" || echo "❌ Stopped")
+  S=$(pgrep -f "suricata" > /dev/null 2>&1 && echo "✅ Running" || echo "❌ Stopped")
+  [[ "$Z" == "✅ Running" ]] && [[ "$S" == "✅ Running" ]] && break
   sleep 2
 done
-V=$(pgrep -f "vector" > /dev/null 2>&1 && \
-    echo "✅" || echo "❌")
-AC=$(pgrep -f "arkime/bin/capture" \
-    > /dev/null 2>&1 && echo "✅" || echo "❌")
+V=$(pgrep -f "vector"          > /dev/null 2>&1 && echo "✅ Running" || echo "❌ Stopped")
+P=$(pgrep -f "arkime/bin/capture" > /dev/null 2>&1 && echo "✅ Running" || echo "❌ Stopped")
 
-printf "║  Zeek:         %s                           ║\n" "$Z"
-printf "║  Suricata:     %s                           ║\n" "$S"
-printf "║  Vector:       %s → HTTP                    ║\n" "$V"
-printf "║  Arkime cap:   %s                           ║\n" "$AC"
-echo "╚══════════════════════════════════════════╝"
-echo ""
-log "Config:  /etc/ndr/sensor.conf"
-log "Logs:    journalctl -u ndr-agent -f"
-log "Zeek:    /var/log/ndr/zeek/"
-log "Sur:     /var/log/ndr/suricata/eve.json"
+# ── Completion banner ─────────────────────────────
+printf "\n"
+printf "  ${CYAN}╔══════════════════════════════════════════════╗${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${GREEN}${BOLD}✓  Sensor Installation Complete${NC}            ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
+printf "  ${CYAN}║${NC}  ${DIM}Tenant   :${NC}  %-32s${CYAN}║${NC}\n" "$TENANT_ID"
+printf "  ${CYAN}║${NC}  ${DIM}Interface:${NC}  %-32s${CYAN}║${NC}\n" "$IFACE"
+printf "  ${CYAN}║${NC}  ${DIM}Mode     :${NC}  %-32s${CYAN}║${NC}\n" "$SENSOR_MODE"
+printf "  ${CYAN}║${NC}  ${DIM}Cloud    :${NC}  %-32s${CYAN}║${NC}\n" "${CLOUD_URL:0:30}"
+printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  Agent-Z  (Network Analyzer) :  %-12s  ${CYAN}║${NC}\n" "$Z"
+printf "  ${CYAN}║${NC}  Agent-S  (Threat Detection) :  %-12s  ${CYAN}║${NC}\n" "$S"
+printf "  ${CYAN}║${NC}  Log Collector               :  %-12s  ${CYAN}║${NC}\n" "$V"
+printf "  ${CYAN}║${NC}  Packet Recorder             :  %-12s  ${CYAN}║${NC}\n" "$P"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
+printf "  ${CYAN}║${NC}  ${DIM}Logs :${NC}  journalctl -u ndr-agent -f           ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  ${DIM}Conf :${NC}  /etc/ndr/sensor.conf                 ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${DIM}◆  Powered by Proma Secure  ◆${NC}              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
+printf "  ${CYAN}╚══════════════════════════════════════════════╝${NC}\n"
+printf "\n"
 
-if [ "$Z" != "✅" ] || [ "$S" != "✅" ]; then
+if [[ "$Z" != "✅ Running" ]] || [[ "$S" != "✅ Running" ]]; then
+  warn "One or more engines did not start — check logs below:"
   echo ""
-  echo "--- DEBUG LOGS (PLEASE SHOW ME THIS) ---"
-  journalctl -u ndr-agent -n 50 --no-pager
-  echo "--- ZEEK LOG (/var/log/ndr/zeek/startup.log) ---"
-  cat /var/log/ndr/zeek/startup.log 2>/dev/null || echo "(no zeek log)"
-  echo "--- SURICATA LOG (/var/log/ndr/suricata/startup.log) ---"
-  cat /var/log/ndr/suricata/startup.log 2>/dev/null || echo "(no suricata log)"
-  echo "--- SURICATA INTERNAL LOG ---"
-  tail -n 20 /var/log/ndr/suricata/suricata.log 2>/dev/null || echo "(no internal suricata log)"
-  echo "--- ZEEK INTERNAL LOG ---"
-  tail -n 20 /var/log/ndr/zeek/reporter.log 2>/dev/null || echo "(no reporter log)"
-  echo "----------------------------------------"
+  journalctl -u ndr-agent -n 30 --no-pager 2>/dev/null || true
+  cat /var/log/ndr/zeek/startup.log 2>/dev/null || true
 fi

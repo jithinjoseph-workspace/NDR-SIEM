@@ -85,11 +85,17 @@ fn generate_jwt(username: &str, role: &str,
         sensor_ids,
         jti: jti.clone(),
     };
-    let token = encode(
+    let token = match encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(secret.as_bytes())
-    ).unwrap_or_default();
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("JWT encode failed: {} — returning empty session", e);
+            return (String::new(), String::new());
+        }
+    };
     (token, jti)
 }
 

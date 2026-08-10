@@ -501,11 +501,22 @@ async fn main() {
         });
     }
 
-    // ── Kafka consumer (replaces HTTP /event endpoint) ────────────────────
+    // ── Kafka consumer — auto-restarts on panic or error ─────────────────
     {
         let consumer_state = state.clone();
         tokio::spawn(async move {
-            consumer::start_consumer(Arc::new(consumer_state)).await;
+            loop {
+                let s = Arc::new(consumer_state.clone());
+                let result = tokio::spawn(async move {
+                    consumer::start_consumer(s).await;
+                }).await;
+                if let Err(e) = result {
+                    tracing::error!("Kafka consumer crashed: {:?} — restarting in 5s", e);
+                } else {
+                    tracing::warn!("Kafka consumer exited unexpectedly — restarting in 5s");
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
         });
     }
 
@@ -635,7 +646,10 @@ async fn main() {
                 AllowOrigin::list(origins)
             }
         }
-        _ => AllowOrigin::any(), // dev fallback
+        _ => {
+            tracing::warn!("CORS_ORIGIN not set — allowing all origins (POC/dev mode only)");
+            AllowOrigin::any()
+        }
     };
 
     let cors = CorsLayer::new()

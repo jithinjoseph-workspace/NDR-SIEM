@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json, subprocess, os, re, time, threading, ipaddress, socket
+import socketserver
+import json, subprocess, os, re, time, threading, ipaddress, socket, shutil
 from pathlib import Path
 
 SENSOR_ID = os.environ.get("SENSOR_ID", "")
@@ -168,6 +169,10 @@ os.makedirs(f"{LOGDIR}/suricata", exist_ok=True)
 os.makedirs(f"{LOGDIR}/zeek", exist_ok=True)
 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
+# Singleton probe thread — prevents arp_probe_unknown from accumulating on repeated starts
+_probe_stop = threading.Event()
+_probe_thread: threading.Thread | None = None
+
 
 def bootstrap_from_arp_cache():
     """On startup, read the kernel ARP cache and write entries to arp.log
@@ -311,8 +316,8 @@ def arp_probe_unknown():
     that have no ARP entry — so Zeek captures the reply and enriches the asset.
     Uses arping (Layer 2) instead of ping to avoid creating ghost placeholders."""
     conn_log = f"{LOGDIR}/zeek/conn.log"
-    while True:
-        time.sleep(300)
+    while not _probe_stop.is_set():
+        _probe_stop.wait(300)
         try:
             iface = IFACE_FILE.read_text().strip() if IFACE_FILE.exists() else "eth0"
 
@@ -455,6 +460,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, 404)
 
     def do_POST(self):
+        global _probe_stop, _probe_thread
         if not self._check_auth():
             self.send_json({"error": "Unauthorized"}, 401)
             return
@@ -468,20 +474,16 @@ class AgentHandler(BaseHTTPRequestHandler):
             subprocess.run(["sudo", "pkill", "-f", "zeek"], capture_output=True)
             time.sleep(2)
 
-            # Clean ALL stale PID files
+            # Clean stale PID files — /tmp is user-writable; /var/run needs sudo
+            try:
+                os.remove("/tmp/suricata.pid")
+            except OSError:
+                pass
             for pid_path in ["/var/run/suricata.pid", "/run/suricata.pid", "/var/run/suricata/suricata.pid"]:
-                try:
-                    os.remove(pid_path)
-                except OSError:
-                    pass
-            for pid_path in ["/tmp/suricata.pid"]:
-                try:
-                    os.remove(pid_path)
-                except OSError:
-                    pass
+                subprocess.run(["sudo", "rm", "-f", pid_path], capture_output=True)
             
             # Clear Vector checkpoints so it reads from current position
-            import shutil
+
             for vpath in [f"{HOME_DIR}/.vector/data/suricata", f"{HOME_DIR}/.vector/data/zeek"]:
                 shutil.rmtree(vpath, ignore_errors=True)
             os.makedirs(f"{HOME_DIR}/.vector/data/suricata", exist_ok=True)
@@ -520,23 +522,37 @@ class AgentHandler(BaseHTTPRequestHandler):
 
             # Full subnet ARP scan on start — only real devices reply
             threading.Thread(target=arp_scan, args=(iface,), daemon=True).start()
-            # Ongoing loop: ARP-probe unknown devices every 5 min
-            threading.Thread(target=arp_probe_unknown, daemon=True).start()
+            # Ongoing loop: ARP-probe unknown devices every 5 min (singleton)
+            if _probe_thread is None or not _probe_thread.is_alive():
+                _probe_stop.clear()
+                _probe_thread = threading.Thread(target=arp_probe_unknown, daemon=True)
+                _probe_thread.start()
+
+            # Wait up to 5s for both processes to appear before responding
+            # so the UI status poll immediately after start sees "running"
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                zeek_up = subprocess.run(["pgrep", "-x", "zeek"], capture_output=True).returncode == 0
+                suri_up = subprocess.run(["pgrep", "-x", "suricata"], capture_output=True).returncode == 0
+                if zeek_up and suri_up:
+                    break
+                time.sleep(0.5)
 
             self.send_json({"status": "started", "interface": iface})
         elif self.path == "/agent/stop":
+            _probe_stop.set()
             subprocess.run(["sudo", "systemctl", "stop", "suricata"], capture_output=True)
             subprocess.run(["sudo", "pkill", "-f", "suricata"], capture_output=True)
             subprocess.run(["sudo", "pkill", "-f", "zeek"], capture_output=True)
-            # Clean pid files (user can remove /tmp; system paths via os.remove)
-            for pid_path in ["/var/run/suricata.pid", "/run/suricata.pid",
-                             "/tmp/suricata.pid", "/var/run/suricata/suricata.pid"]:
-                try:
-                    os.remove(pid_path)
-                except OSError:
-                    pass
+            # Clean stale PID files — /tmp is user-writable; /var/run needs sudo
+            try:
+                os.remove("/tmp/suricata.pid")
+            except OSError:
+                pass
+            for pid_path in ["/var/run/suricata.pid", "/run/suricata.pid", "/var/run/suricata/suricata.pid"]:
+                subprocess.run(["sudo", "rm", "-f", pid_path], capture_output=True)
             # Clear Vector checkpoints to prevent replay
-            import shutil
+
             for vpath in [f"{HOME_DIR}/.vector/data/suricata", f"{HOME_DIR}/.vector/data/zeek"]:
                 shutil.rmtree(vpath, ignore_errors=True)
             os.makedirs(f"{HOME_DIR}/.vector/data/suricata", exist_ok=True)
@@ -1059,7 +1075,10 @@ def _cleanup_stale_iptables():
 if __name__ == "__main__":
     _cleanup_stale_iptables()
     threading.Thread(target=suppression_sync_loop, daemon=True).start()
+    class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
     bind_host = _docker_bridge_ip()
-    server = HTTPServer((bind_host, 3001), AgentHandler)
+    server = ThreadedHTTPServer((bind_host, 3001), AgentHandler)
     print(f"NDR Host Agent listening on {bind_host}:3001  sensor_id={SENSOR_ID!r}  tenant_id={TENANT_ID!r}")
     server.serve_forever()

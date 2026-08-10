@@ -292,7 +292,10 @@ pub async fn fetch_live_investigation(
 
     let ch_url  = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
     let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "ndr".to_string());
-    let ch_pass = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| "ndr123".to_string());
+    let ch_pass = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| {
+        tracing::error!("CLICKHOUSE_PASSWORD not set");
+        String::new()
+    });
     let db = tenant_db(tenant_id);
 
     // ── Connection record — best available from either sensor ────────────────

@@ -1,4 +1,5 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener, inject } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -26,6 +27,7 @@ export class Navbar implements OnInit, OnDestroy {
   SettingsIcon = Settings;
   LogOutIcon = LogOut;
 
+  private subs = new Subscription();
   systemStatus = 'OPERATIONAL';
   searchText = '';
   showSuggestions = false;
@@ -139,21 +141,21 @@ export class Navbar implements OnInit, OnDestroy {
     this.loadActiveAnnouncements();
     this.announcementInterval = setInterval(() => this.loadActiveAnnouncements(), 60000);
 
-    this.ws.lastAgentStatus$.subscribe(data => {
+    this.subs.add(this.ws.lastAgentStatus$.subscribe(data => {
       if (!data) return;
       this.applySystemStatus(data);
       this.cdr.detectChanges();
-    });
+    }));
 
-    this.notifications.unreadCount$.subscribe(count => {
+    this.subs.add(this.notifications.unreadCount$.subscribe(count => {
       this.alertCount = count;
       this.cdr.detectChanges();
-    });
+    }));
 
-    this.notifications.alerts$.subscribe(alerts => {
+    this.subs.add(this.notifications.alerts$.subscribe(alerts => {
       this.recentAlerts = alerts.slice(0, 5);
       this.cdr.detectChanges();
-    });
+    }));
   }
 
   onSearchInput() {
@@ -315,6 +317,7 @@ export class Navbar implements OnInit, OnDestroy {
   ngOnDestroy() {
     if (this.statusInterval) clearInterval(this.statusInterval);
     if (this.announcementInterval) clearInterval(this.announcementInterval);
+    this.subs.unsubscribe();
   }
 
   private canOpenPermission(permission: string) {

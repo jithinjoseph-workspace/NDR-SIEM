@@ -27,6 +27,15 @@ export class TourService {
   }
 
   async startTour() {
+    try {
+      this._runTour();
+    } catch (e) {
+      console.error('Tour failed to start:', e);
+      alert('Tour could not start. Please navigate to the main dashboard and try again.');
+    }
+  }
+
+  private _runTour() {
     this.driverInstance = driver({
       showProgress: true,
       animate: true,
@@ -136,3 +145,4 @@ export class TourService {
     this.driverInstance.drive();
   }
 }
+

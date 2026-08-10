@@ -145,6 +145,7 @@ services:
   ndr-engine-1:
     build: ./rust
     container_name: ndr-engine-1
+    restart: unless-stopped
     mem_limit: 1536m
     stop_grace_period: 5s
     networks:
@@ -196,7 +197,7 @@ services:
       kafka-init:
         condition: service_completed_successfully
       ndr-redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse1:
         condition: service_healthy
       clickhouse2:
@@ -207,6 +208,7 @@ services:
   ndr-engine-2:
     build: ./rust
     container_name: ndr-engine-2
+    restart: unless-stopped
     mem_limit: 1536m
     stop_grace_period: 5s
     networks:
@@ -258,7 +260,7 @@ services:
       kafka-init:
         condition: service_completed_successfully
       ndr-redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse1:
         condition: service_healthy
       clickhouse2:
@@ -269,6 +271,7 @@ services:
   ndr-engine-3:
     build: ./rust
     container_name: ndr-engine-3
+    restart: unless-stopped
     mem_limit: 1536m
     stop_grace_period: 5s
     networks:
@@ -320,7 +323,7 @@ services:
       kafka-init:
         condition: service_completed_successfully
       ndr-redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse1:
         condition: service_healthy
       clickhouse2:
@@ -331,10 +334,16 @@ services:
   ndr-redis:
     image: redis:7
     container_name: ndr-redis
+    mem_limit: 300m
     ports:
       - "127.0.0.1:6379:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   # Angular UI — builds the SPA and serves it via nginx on port 80
   ndr-ui:
