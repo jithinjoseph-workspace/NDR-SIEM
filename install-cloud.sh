@@ -52,7 +52,7 @@ INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
 
 log "Installing to: $INSTALL_DIR"
 log "Running as:    $USERNAME"
-log "Mode:          cloud (no Zeek/Suricata/Arkime/OpenSearch)"
+log "Mode:          cloud (no Agent-Z/Agent-S/Arkime/OpenSearch)"
 
 # ── Check OS ──────────────────────────────────
 . /etc/os-release
@@ -183,6 +183,21 @@ else
     JWT_SECRET=$(openssl rand -hex 32)
 fi
 
+# ── RSA license key pair (generated once; private key stays on this server) ──
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^LICENSE_PRIVATE_KEY=." "$INSTALL_DIR/.env"; then
+    LICENSE_PRIVATE_KEY=$(grep "^LICENSE_PRIVATE_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+    LICENSE_PUBLIC_KEY=$(grep "^LICENSE_PUBLIC_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$LICENSE_PRIVATE_KEY" ]; then
+    log "Generating RSA-2048 key pair for license signing..."
+    _TMP_KEY=$(mktemp)
+    openssl genrsa -out "$_TMP_KEY" 2048 2>/dev/null
+    LICENSE_PRIVATE_KEY=$(base64 -w0 < "$_TMP_KEY")
+    LICENSE_PUBLIC_KEY=$(openssl rsa -in "$_TMP_KEY" -pubout 2>/dev/null | base64 -w0)
+    rm -f "$_TMP_KEY"
+    log "RSA key pair generated"
+fi
+
 # Prompt for Groq API key
 GROQ_API_KEY=""
 if [ -f "$INSTALL_DIR/.env" ]; then
@@ -217,9 +232,11 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
+LICENSE_PRIVATE_KEY=$LICENSE_PRIVATE_KEY
+LICENSE_PUBLIC_KEY=$LICENSE_PUBLIC_KEY
 ENVEOF
 log "✅ Cloud .env generated"
-info "  CLOUD_MODE=true — Zeek/Suricata/Arkime/OpenSearch are disabled"
+info "  CLOUD_MODE=true — Agent-Z/Agent-S/Arkime/OpenSearch are disabled"
 if [ -n "$GROQ_API_KEY" ]; then
     info "  AI: Groq llama-3.3-70b-versatile (fallback). Add providers in Settings for full control."
 else
@@ -435,8 +452,8 @@ fi
 # Skipped services confirmation
 log "  ⏭️  OpenSearch    — skipped (cloud mode)"
 log "  ⏭️  Vector        — skipped (cloud mode)"
-log "  ⏭️  Zeek          — not installed (cloud mode)"
-log "  ⏭️  Suricata      — not installed (cloud mode)"
+log "  ⏭️  Agent-Z       — not installed (cloud mode)"
+log "  ⏭️  Agent-S       — not installed (cloud mode)"
 log "  ⏭️  Arkime        — not installed (cloud mode)"
 
 # ── Final Summary ─────────────────────────────

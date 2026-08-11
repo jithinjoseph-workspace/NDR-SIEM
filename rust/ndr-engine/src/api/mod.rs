@@ -2646,6 +2646,8 @@ pub struct GenerateLicenseRequest {
     pub features:     Vec<String>,
     pub max_sensors:  u32,
     pub expires_days: u32,
+    #[serde(default)]
+    pub admin_user:   String,
 }
 
 pub async fn generate_license(
@@ -2673,6 +2675,7 @@ pub async fn generate_license(
                 &body.features,
                 body.max_sensors,
                 body.expires_days,
+                &body.admin_user,
                 &token,
             ).await;
             Json(json!({ "token": token, "status": "ok" })).into_response()
@@ -2689,7 +2692,10 @@ pub async fn get_license_public_key(
     if state.license_public_key.is_empty() {
         return Json(json!({ "error": "LICENSE_PUBLIC_KEY not configured" })).into_response();
     }
-    Json(json!({ "public_key": state.license_public_key })).into_response()
+    // Return the original base64-encoded value from env (single line) so the
+    // customer can paste it directly into install-customer.sh without .env breakage.
+    let b64 = std::env::var("LICENSE_PUBLIC_KEY").unwrap_or_default();
+    Json(json!({ "public_key": b64 })).into_response()
 }
 
 pub async fn list_licenses(
@@ -2702,6 +2708,18 @@ pub async fn list_licenses(
     match state.ch_storage.list_licenses(tenant_id).await {
         Ok(rows) => Json(json!({ "licenses": rows })).into_response(),
         Err(e)   => Json(json!({ "error": e.to_string() })).into_response(),
+    }
+}
+
+pub async fn delete_license(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> axum::response::Response {
+    if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
+    match state.ch_storage.delete_license(&id).await {
+        Ok(_)  => Json(json!({ "status": "ok" })).into_response(),
+        Err(e) => Json(json!({ "error": e.to_string() })).into_response(),
     }
 }
 

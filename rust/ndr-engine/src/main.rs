@@ -753,6 +753,7 @@ async fn main() {
         .route("/api/license/generate",      post(api::generate_license))
         .route("/api/license/public-key",    get(api::get_license_public_key))
         .route("/api/licenses",              get(api::list_licenses))
+        .route("/api/licenses/:id",          axum::routing::delete(api::delete_license))
         .route("/api/tenant/features",       get(api::get_tenant_features))
         .route("/api/tenant/features/:id",   post(api::set_tenant_features))
         .route("/api/soar/status",  get(api::get_soar_status))

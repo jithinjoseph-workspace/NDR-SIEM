@@ -6803,11 +6803,16 @@ pub async fn get_ioc_hits(
                 tenant_name String,
                 features    String,
                 max_sensors UInt32,
+                admin_user  String DEFAULT '',
                 issued_at   DateTime DEFAULT now(),
                 expires_at  DateTime,
                 token       String
             ) ENGINE = ReplacingMergeTree(issued_at)
             ORDER BY (tenant_id, id)"
+        ).execute().await;
+        // Add column to existing tables that were created before this field existed
+        let _ = self.client.query(
+            "ALTER TABLE ndr.licenses ADD COLUMN IF NOT EXISTS admin_user String DEFAULT ''"
         ).execute().await;
     }
 
@@ -6818,18 +6823,20 @@ pub async fn get_ioc_hits(
         features:     &[String],
         max_sensors:  u32,
         expires_days: u32,
+        admin_user:   &str,
         token:        &str,
     ) -> anyhow::Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         let features_str = features.join(",");
         self.client.query(&format!(
-            "INSERT INTO ndr.licenses (id, tenant_id, tenant_name, features, max_sensors, issued_at, expires_at, token) \
-             VALUES ('{}', '{}', '{}', '{}', {}, now(), now() + INTERVAL {} DAY, '{}')",
+            "INSERT INTO ndr.licenses (id, tenant_id, tenant_name, features, max_sensors, admin_user, issued_at, expires_at, token) \
+             VALUES ('{}', '{}', '{}', '{}', {}, '{}', now(), now() + INTERVAL {} DAY, '{}')",
             sql_escape(&id),
             sql_escape(tenant_id),
             sql_escape(tenant_name),
             sql_escape(&features_str),
             max_sensors,
+            sql_escape(admin_user),
             expires_days,
             sql_escape(token),
         )).execute().await?;
@@ -6842,7 +6849,7 @@ pub async fn get_ioc_hits(
             .unwrap_or_default();
         let rows = self.client
             .query(&format!(
-                "SELECT id, tenant_id, tenant_name, features, max_sensors, \
+                "SELECT id, tenant_id, tenant_name, features, max_sensors, admin_user, \
                  formatDateTime(issued_at, '%Y-%m-%dT%H:%i:%SZ') as issued_at, \
                  formatDateTime(expires_at, '%Y-%m-%dT%H:%i:%SZ') as expires_at, \
                  token \
@@ -6850,7 +6857,7 @@ pub async fn get_ioc_hits(
                  {} ORDER BY issued_at DESC LIMIT 200",
                 where_clause
             ))
-            .fetch_all::<(String, String, String, String, u32, String, String, String)>()
+            .fetch_all::<(String, String, String, String, u32, String, String, String, String)>()
             .await?;
         Ok(rows.into_iter().map(|r| {
             let features: Vec<&str> = r.3.split(',').filter(|s| !s.is_empty()).collect();
@@ -6860,11 +6867,23 @@ pub async fn get_ioc_hits(
                 "tenant_name": r.2,
                 "features":    features,
                 "max_sensors": r.4,
-                "issued_at":   r.5,
-                "expires_at":  r.6,
-                "token":       r.7,
+                "admin_user":  r.5,
+                "issued_at":   r.6,
+                "expires_at":  r.7,
+                "token":       r.8,
             })
         }).collect())
+    }
+
+    pub async fn delete_license(&self, id: &str) -> anyhow::Result<()> {
+        self.client
+            .query(&format!(
+                "ALTER TABLE ndr.licenses DELETE WHERE id = '{}'",
+                sql_escape(id)
+            ))
+            .execute()
+            .await?;
+        Ok(())
     }
 }
 

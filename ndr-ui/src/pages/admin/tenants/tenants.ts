@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
-  Edit, Plus, RefreshCw, Search, X, KeyRound, Copy,
+  Edit, Plus, RefreshCw, Search, X, KeyRound, Copy, Trash2,
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
@@ -25,6 +25,7 @@ export class Tenants implements OnInit {
   XIcon       = X;
   KeyIcon     = KeyRound;
   CopyIcon    = Copy;
+  TrashIcon   = Trash2;
 
   currentUser: any = {};
 
@@ -320,16 +321,24 @@ export class Tenants implements OnInit {
       features,
       max_sensors:  this.licenseForm.max_sensors,
       expires_days: this.licenseForm.expires_days,
+      admin_user:   this.licenseForm.admin_user.trim(),
     }).subscribe({
       next: (data: any) => {
         this.generatedToken    = data.token ?? '';
         this.generatingLicense = false;
         this.installCopied     = false;
-        // Reload license list to include the one just generated
+        // Reload license list
         this.api.getLicenses(this.licenseTenant?.id).subscribe({
           next: (r: any) => { this.issuedLicenses = r.licenses ?? []; this.cdr.detectChanges(); },
           error: () => {},
         });
+        // Reload public key if it didn't load when modal opened
+        if (!this.licensePublicKey) {
+          this.api.getLicensePublicKey().subscribe({
+            next: (r: any) => { this.licensePublicKey = r.public_key ?? ''; this.cdr.detectChanges(); },
+            error: () => {},
+          });
+        }
         this.cdr.detectChanges();
       },
       error: () => {
@@ -347,12 +356,14 @@ export class Tenants implements OnInit {
       : `${this.licenseForm.expires_days} days`;
     const useMaxSensors = license?.max_sensors ?? this.licenseForm.max_sensors;
     const useFeatures = license?.features ?? this.licenseTenant?.features ?? ['ndr', 'ai'];
-    const useAdminUser = this.licenseForm.admin_user.trim();
+    // Admin user: prefer history record, fall back to current form value
+    const useAdminUser = (license?.admin_user || this.licenseForm.admin_user).trim();
     const useAdminPass = this.licenseForm.admin_pass;
     const installCmd = `bash <(curl -fsSL https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime/install-customer.sh)`;
+    const pubKeyLine = this.licensePublicKey || '(load the portal and copy the public key from the License modal)';
     const credLines = useAdminUser
-      ? [`   Tenant admin username : ${useAdminUser}`, `   Tenant admin password : ${useAdminPass || '(set separately)'}`]
-      : [`   Tenant admin username : (set TENANT_ADMIN_USER in .env)`, `   Tenant admin password : (set TENANT_ADMIN_PASS in .env)`];
+      ? [`   Tenant admin username : ${useAdminUser}`, `   Tenant admin password : ${useAdminPass || '(enter when prompted)'}`]
+      : [`   Tenant admin username : (enter when prompted)`, `   Tenant admin password : (enter when prompted)`];
     const instructions = [
       `=== ProVigilAI Install Package for ${this.licenseTenant?.name} ===`,
       ``,
@@ -360,7 +371,7 @@ export class Tenants implements OnInit {
       `   ${installCmd}`,
       ``,
       `2. When prompted, enter:`,
-      `   License public key    : (paste the key shown in the portal)`,
+      `   License public key    : ${pubKeyLine}`,
       `   License token         : ${useToken}`,
       ...credLines,
       ``,
@@ -373,6 +384,17 @@ export class Tenants implements OnInit {
       this.installCopied = true;
       setTimeout(() => { this.installCopied = false; this.cdr.detectChanges(); }, 2500);
       this.cdr.detectChanges();
+    });
+  }
+
+  deleteLicense(lic: any) {
+    if (!confirm(`Delete this license (issued ${lic.issued_at?.slice(0,10)})?`)) return;
+    this.api.deleteLicense(lic.id).subscribe({
+      next: () => {
+        this.issuedLicenses = this.issuedLicenses.filter(l => l.id !== lic.id);
+        this.cdr.detectChanges();
+      },
+      error: () => this.showMsg('Failed to delete license', 'error'),
     });
   }
 

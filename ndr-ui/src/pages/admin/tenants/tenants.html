@@ -269,6 +269,12 @@
           <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>
           Copy
         </button>
+        <button class="secondary-action compact-action" type="button"
+                style="font-size:0.7rem;color:#ef4444;"
+                title="Delete this license"
+                (click)="deleteLicense(lic)">
+          <lucide-icon [name]="TrashIcon" class="w-3 h-3"></lucide-icon>
+        </button>
       </div>
 
       <div class="modal-actions" style="margin-top:0.75rem;">

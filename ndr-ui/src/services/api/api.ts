@@ -504,6 +504,7 @@ export class Api {
   generateLicense(payload: {
     tenant_id: string; tenant_name: string;
     features: string[]; max_sensors: number; expires_days: number;
+    admin_user?: string;
   }): Observable<any> {
     return this.http.post(`${this.baseUrl}/license/generate`, payload);
   }
@@ -517,6 +518,10 @@ export class Api {
       ? `${this.baseUrl}/licenses?tenant_id=${encodeURIComponent(tenantId)}`
       : `${this.baseUrl}/licenses`;
     return this.http.get(url);
+  }
+
+  deleteLicense(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/licenses/${encodeURIComponent(id)}`);
   }
 
   getAnnouncements(): Observable<Announcement[]> {

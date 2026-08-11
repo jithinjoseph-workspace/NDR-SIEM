@@ -692,7 +692,18 @@ if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_PUBLIC_KEY" "$INSTALL_DIR/.env
 fi
 if [ -z "$LICENSE_PUBLIC_KEY" ]; then
     printf "\n"
-    read -p "  License public key (base64, provided by your NDR vendor): " -r LICENSE_PUBLIC_KEY
+    printf "  License public key (paste base64 or PEM block, then press Enter twice):\n  "
+    _RAW_KEY=""
+    while IFS= read -r _line; do
+        [ -z "$_line" ] && break
+        _RAW_KEY="${_RAW_KEY}${_line}"$'\n'
+    done
+    # If pasted as PEM block, base64-encode it to a single line for .env storage
+    if echo "$_RAW_KEY" | grep -q "BEGIN PUBLIC KEY"; then
+        LICENSE_PUBLIC_KEY=$(printf '%s' "$_RAW_KEY" | base64 -w0)
+    else
+        LICENSE_PUBLIC_KEY=$(printf '%s' "$_RAW_KEY" | tr -d '\n\r ')
+    fi
 fi
 
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_TOKEN" "$INSTALL_DIR/.env"; then
