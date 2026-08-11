@@ -8,6 +8,74 @@ if file "$SELF" | grep -q CRLF; then
     exec bash "$SELF" "$@"
 fi
 
+# ── Bootstrap: download required files if not already present ─────────────────
+# Triggered when running via:  bash <(curl -fsSL .../install-cloud.sh)
+# In that case $0 is /dev/stdin or /dev/fd/N — no docker-compose.yml next to it.
+if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
+    echo ""
+    echo "  NDR Cloud Installer — downloading required files..."
+    echo ""
+    read -rp "  GitHub token (provided by Proma Secure): " GH_TOKEN
+    INSTALL_DIR="${1:-/opt/ndr}"
+    echo "  Installing to: $INSTALL_DIR"
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo chmod 755 "$INSTALL_DIR"
+
+    echo "  Downloading config files via GitHub API..."
+    GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
+import urllib.request, json, os, base64, sys
+
+token    = os.environ["GH_TOKEN"]
+dest     = os.environ["INSTALL_DIR"]
+api_base = "https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
+headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+
+def gh_get(url):
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.read()
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        sys.exit(1)
+
+def download_file(repo_path, local_path):
+    meta = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
+    content = base64.b64decode(meta["content"].replace("\n", ""))
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    with open(local_path, "wb") as f:
+        f.write(content)
+    print(f"    {repo_path}")
+
+def download_dir(repo_path, local_path):
+    os.makedirs(local_path, exist_ok=True)
+    items = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
+    for item in items:
+        target = os.path.join(local_path, item["name"])
+        if item["type"] == "file":
+            meta = json.loads(gh_get(f"{api_base}/contents/{item['path']}?ref=arkime"))
+            content = base64.b64decode(meta["content"].replace("\n", ""))
+            with open(target, "wb") as f:
+                f.write(content)
+            print(f"    {item['path']}")
+        elif item["type"] == "dir":
+            download_dir(item["path"], target)
+
+download_file("docker-compose.yml",  f"{dest}/docker-compose.yml")
+download_file("install-cloud.sh",    f"{dest}/install-cloud.sh")
+download_file("start.sh",            f"{dest}/start.sh")
+download_file("stop.sh",             f"{dest}/stop.sh")
+download_file("status.sh",           f"{dest}/status.sh")
+download_dir("config",               f"{dest}/config")
+download_dir("scripts",              f"{dest}/scripts")
+download_dir("rust/ndr-engine/rules",f"{dest}/rust/ndr-engine/rules")
+PYEOF
+    chmod +x "$INSTALL_DIR/install-cloud.sh"
+    chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
+    echo ""
+    exec bash "$INSTALL_DIR/install-cloud.sh" "$INSTALL_DIR"
+fi
+
 set -e
 
 RED='\033[0;31m'
@@ -48,7 +116,7 @@ log "✅ Public IP: $PUBLIC_IP"
 
 USERNAME=$(whoami)
 HOME_DIR=$HOME
-INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+INSTALL_DIR="${1:-$(cd "$(dirname "$0")" && pwd)}"
 
 log "Installing to: $INSTALL_DIR"
 log "Running as:    $USERNAME"
