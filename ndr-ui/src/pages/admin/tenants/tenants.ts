@@ -46,12 +46,14 @@ export class Tenants implements OnInit {
 
   // License generation
   licenseTenant: any  = null;
-  licenseForm         = { expires_days: 365, max_sensors: 10 };
+  licenseForm         = { expires_days: 365, max_sensors: 10, admin_user: '', admin_pass: '' };
   generatedToken      = '';
   generatingLicense   = false;
   tokenCopied         = false;
-  licenseSecret       = '';
+  licensePublicKey    = '';
   installCopied       = false;
+  issuedLicenses: any[] = [];
+  loadingLicenses     = false;
 
   msg     = '';
   msgType = '';
@@ -287,8 +289,23 @@ export class Tenants implements OnInit {
     this.licenseTenant   = tenant;
     this.generatedToken  = '';
     this.tokenCopied     = false;
-    this.licenseForm     = { expires_days: 365, max_sensors: 10 };
+    this.licenseForm     = { expires_days: 365, max_sensors: 10, admin_user: '', admin_pass: '' };
+    this.issuedLicenses  = [];
+    this.loadingLicenses = true;
     this.cdr.detectChanges();
+    // Load public key + existing licenses in parallel
+    this.api.getLicensePublicKey().subscribe({
+      next: (r: any) => { this.licensePublicKey = r.public_key ?? ''; this.cdr.detectChanges(); },
+      error: () => {},
+    });
+    this.api.getLicenses(tenant.id).subscribe({
+      next: (r: any) => {
+        this.issuedLicenses  = r.licenses ?? [];
+        this.loadingLicenses = false;
+        this.cdr.detectChanges();
+      },
+      error: () => { this.loadingLicenses = false; this.cdr.detectChanges(); },
+    });
   }
 
   closeLicense() { this.licenseTenant = null; this.generatedToken = ''; this.cdr.detectChanges(); }
@@ -308,9 +325,9 @@ export class Tenants implements OnInit {
         this.generatedToken    = data.token ?? '';
         this.generatingLicense = false;
         this.installCopied     = false;
-        // Fetch secret so we can show the full install package
-        this.api.getLicenseSecret().subscribe({
-          next: (s: any) => { this.licenseSecret = s.secret ?? ''; this.cdr.detectChanges(); },
+        // Reload license list to include the one just generated
+        this.api.getLicenses(this.licenseTenant?.id).subscribe({
+          next: (r: any) => { this.issuedLicenses = r.licenses ?? []; this.cdr.detectChanges(); },
           error: () => {},
         });
         this.cdr.detectChanges();
@@ -323,8 +340,19 @@ export class Tenants implements OnInit {
     });
   }
 
-  copyInstallPackage() {
+  copyInstallPackage(token?: string, license?: any) {
+    const useToken = token ?? this.generatedToken;
+    const useExpires = license?.expires_at
+      ? `until ${license.expires_at.slice(0, 10)}`
+      : `${this.licenseForm.expires_days} days`;
+    const useMaxSensors = license?.max_sensors ?? this.licenseForm.max_sensors;
+    const useFeatures = license?.features ?? this.licenseTenant?.features ?? ['ndr', 'ai'];
+    const useAdminUser = this.licenseForm.admin_user.trim();
+    const useAdminPass = this.licenseForm.admin_pass;
     const installCmd = `bash <(curl -fsSL https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime/install-customer.sh)`;
+    const credLines = useAdminUser
+      ? [`   Tenant admin username : ${useAdminUser}`, `   Tenant admin password : ${useAdminPass || '(set separately)'}`]
+      : [`   Tenant admin username : (set TENANT_ADMIN_USER in .env)`, `   Tenant admin password : (set TENANT_ADMIN_PASS in .env)`];
     const instructions = [
       `=== ProVigilAI Install Package for ${this.licenseTenant?.name} ===`,
       ``,
@@ -332,12 +360,13 @@ export class Tenants implements OnInit {
       `   ${installCmd}`,
       ``,
       `2. When prompted, enter:`,
-      `   License secret : ${this.licenseSecret}`,
-      `   License token  : ${this.generatedToken}`,
+      `   License public key    : (paste the key shown in the portal)`,
+      `   License token         : ${useToken}`,
+      ...credLines,
       ``,
-      `Features : ${(this.licenseTenant?.features ?? ['ndr','ai']).join(', ')}`,
-      `Expires  : ${this.licenseForm.expires_days} days`,
-      `Sensors  : up to ${this.licenseForm.max_sensors}`,
+      `Features : ${useFeatures.join(', ')}`,
+      `Expires  : ${useExpires}`,
+      `Sensors  : up to ${useMaxSensors}`,
     ].join('\n');
 
     navigator.clipboard.writeText(instructions).then(() => {

@@ -442,11 +442,11 @@
         <div class="permissions-header">
           <div class="permissions-header-left"><strong>PAGE ACCESS</strong></div>
           <div class="perm-count-badge">
-            <span class="perm-count-num">{{ userForm.permissions.length }}</span><span> of {{ permissionOptions.length }} Enabled</span>
+            <span class="perm-count-num">{{ userForm.permissions.length }}</span><span> of {{ licensedPermissionOptions.length }} Enabled</span>
           </div>
         </div>
         <div class="permissions-scroll-area">
-          <div *ngFor="let cat of permissionCategories" class="perm-category-block">
+          <div *ngFor="let cat of licensedPermissionCategories" class="perm-category-block">
             <div class="perm-category-label">{{ cat.title }}</div>
             <div class="permission-grid">
               <button *ngFor="let p of cat.options" type="button" class="perm-btn"
@@ -469,7 +469,7 @@
             <span class="prog-count">{{ userForm.permissions.length }}</span>&nbsp;Permissions Enabled
           </div>
           <div class="progress-bar">
-            <div class="progress-fill" [style.width.%]="(userForm.permissions.length / permissionOptions.length) * 100">
+            <div class="progress-fill" [style.width.%]="(userForm.permissions.length / licensedPermissionOptions.length) * 100">
               <div class="progress-glow"></div>
             </div>
           </div>

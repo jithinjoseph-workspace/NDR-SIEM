@@ -508,8 +508,15 @@ export class Api {
     return this.http.post(`${this.baseUrl}/license/generate`, payload);
   }
 
-  getLicenseSecret(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/license/secret`);
+  getLicensePublicKey(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/license/public-key`);
+  }
+
+  getLicenses(tenantId?: string): Observable<any> {
+    const url = tenantId
+      ? `${this.baseUrl}/licenses?tenant_id=${encodeURIComponent(tenantId)}`
+      : `${this.baseUrl}/licenses`;
+    return this.http.get(url);
   }
 
   getAnnouncements(): Observable<Announcement[]> {

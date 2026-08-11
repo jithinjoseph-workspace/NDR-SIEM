@@ -282,8 +282,10 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
-LICENSE_SECRET=
+LICENSE_PUBLIC_KEY=
 LICENSE_TOKEN=
+TENANT_ADMIN_USER=
+TENANT_ADMIN_PASS=
 _EARLY_ENV
 log ".env written early (will be updated with final values in network step)"
 
@@ -684,13 +686,13 @@ if [ -z "$OPENAI_API_KEY" ]; then
     read -p "  OpenAI API key for ARIA (press Enter to skip): " -r OPENAI_API_KEY
 fi
 
-# ── License token + secret (from PromaSecure super admin portal) ─────────
-if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_SECRET" "$INSTALL_DIR/.env"; then
-    LICENSE_SECRET=$(grep "^LICENSE_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+# ── License public key + token (from PromaSecure super admin portal) ─────────
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_PUBLIC_KEY" "$INSTALL_DIR/.env"; then
+    LICENSE_PUBLIC_KEY=$(grep "^LICENSE_PUBLIC_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
 fi
-if [ -z "$LICENSE_SECRET" ]; then
+if [ -z "$LICENSE_PUBLIC_KEY" ]; then
     printf "\n"
-    read -p "  License secret (provided by your NDR vendor): " -r LICENSE_SECRET
+    read -p "  License public key (base64, provided by your NDR vendor): " -r LICENSE_PUBLIC_KEY
 fi
 
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_TOKEN" "$INSTALL_DIR/.env"; then
@@ -698,7 +700,28 @@ if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_TOKEN" "$INSTALL_DIR/.env"; th
 fi
 if [ -z "$LICENSE_TOKEN" ]; then
     printf "\n"
-    read -p "  License token (paste the value from your NDR admin portal, press Enter to skip): " -r LICENSE_TOKEN
+    read -p "  License token (paste from your NDR admin portal, press Enter to skip): " -r LICENSE_TOKEN
+fi
+
+# ── Tenant admin credentials (provisioned on first engine boot) ──────────
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^TENANT_ADMIN_USER=." "$INSTALL_DIR/.env"; then
+    TENANT_ADMIN_USER=$(grep "^TENANT_ADMIN_USER=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$TENANT_ADMIN_USER" ]; then
+    printf "\n"
+    read -p "  Tenant admin username (e.g. acme-admin): " -r TENANT_ADMIN_USER
+fi
+
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^TENANT_ADMIN_PASS=." "$INSTALL_DIR/.env"; then
+    TENANT_ADMIN_PASS=$(grep "^TENANT_ADMIN_PASS=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$TENANT_ADMIN_PASS" ]; then
+    printf "\n"
+    read -sp "  Tenant admin password: " TENANT_ADMIN_PASS
+    echo ""
+    read -sp "  Confirm password    : " _PASS_CONFIRM
+    echo ""
+    [ "$TENANT_ADMIN_PASS" != "$_PASS_CONFIRM" ] && err "Passwords do not match — re-run the installer"
 fi
 
 # Auto-extract TENANT_ID from the license token so events are stored under
@@ -747,8 +770,10 @@ BEACON_WINDOW_HOURS=1
 INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
-LICENSE_SECRET=$LICENSE_SECRET
+LICENSE_PUBLIC_KEY=$LICENSE_PUBLIC_KEY
 LICENSE_TOKEN=$LICENSE_TOKEN
+TENANT_ADMIN_USER=$TENANT_ADMIN_USER
+TENANT_ADMIN_PASS=$TENANT_ADMIN_PASS
 ENVEOF
 log ".env generated"
 

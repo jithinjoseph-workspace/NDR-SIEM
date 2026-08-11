@@ -218,8 +218,10 @@ pub struct AppState {
     // Update availability, refreshed every 6h from the GitHub VERSION file.
     // None when running in cloud mode (DEPLOY_MODE=cloud) or before first check.
     pub update_status: Arc<tokio::sync::RwLock<UpdateStatus>>,
-    // Secret used to sign and verify per-tenant license JWTs.
-    pub license_secret: String,
+    // RSA private key PEM — signs license JWTs; never leaves this server.
+    pub license_private_key: String,
+    // RSA public key PEM — verifies tokens; safe to share with customers.
+    pub license_public_key: String,
     // JWT verified at startup from LICENSE_TOKEN env var (on-premise installs).
     // When present, its features take precedence over the database for this tenant.
     pub verified_license: Option<std::sync::Arc<crate::license::LicenseClaims>>,
@@ -2652,16 +2654,54 @@ pub async fn generate_license(
     Json(body): Json<GenerateLicenseRequest>,
 ) -> axum::response::Response {
     if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
+    if state.license_private_key.is_empty() {
+        return Json(json!({ "error": "LICENSE_PRIVATE_KEY not configured on this server" })).into_response();
+    }
     match crate::license::generate_license(
         &body.tenant_id,
         &body.tenant_name,
-        body.features,
+        body.features.clone(),
         body.max_sensors,
         body.expires_days,
-        &state.license_secret,
+        &state.license_private_key,
     ) {
-        Ok(token) => Json(json!({ "token": token, "status": "ok" })).into_response(),
-        Err(e)    => Json(json!({ "error": e.to_string() })).into_response(),
+        Ok(token) => {
+            // Persist to DB so super admin can retrieve it later
+            let _ = state.ch_storage.insert_license(
+                &body.tenant_id,
+                &body.tenant_name,
+                &body.features,
+                body.max_sensors,
+                body.expires_days,
+                &token,
+            ).await;
+            Json(json!({ "token": token, "status": "ok" })).into_response()
+        }
+        Err(e) => Json(json!({ "error": e.to_string() })).into_response(),
+    }
+}
+
+pub async fn get_license_public_key(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
+    if state.license_public_key.is_empty() {
+        return Json(json!({ "error": "LICENSE_PUBLIC_KEY not configured" })).into_response();
+    }
+    Json(json!({ "public_key": state.license_public_key })).into_response()
+}
+
+pub async fn list_licenses(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
+    let tenant_id = params.get("tenant_id").map(|s| s.as_str());
+    match state.ch_storage.list_licenses(tenant_id).await {
+        Ok(rows) => Json(json!({ "licenses": rows })).into_response(),
+        Err(e)   => Json(json!({ "error": e.to_string() })).into_response(),
     }
 }
 
@@ -2707,13 +2747,6 @@ pub async fn get_effective_features(state: &AppState, tenant_id: &str) -> Vec<St
     state.ch_storage.get_tenant_features(tenant_id).await
 }
 
-pub async fn get_license_secret(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> axum::response::Response {
-    if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
-    Json(json!({ "secret": state.license_secret })).into_response()
-}
 
 pub async fn get_soar_status(
     State(state): State<AppState>,
@@ -5686,15 +5719,17 @@ pub async fn get_tenants(
     }
 
     match state.ch_storage.get_tenants().await {
-        Ok(tenants) => Json(json!({
-            "status": "ok",
-            "tenants": tenants
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "tenants": [],
-            "message": e.to_string()
-        }))
+        Ok(mut tenants) => {
+            // When a verified license is present for a real tenant (not "default"),
+            // hide the "default" placeholder from the list — the real tenant is the only org.
+            if let Some(lic) = &state.verified_license {
+                if lic.tenant_id != "default" {
+                    tenants.retain(|t| t.get("id").and_then(|v| v.as_str()) != Some("default"));
+                }
+            }
+            Json(json!({ "status": "ok", "tenants": tenants }))
+        }
+        Err(e) => Json(json!({ "status": "error", "tenants": [], "message": e.to_string() }))
     }
 }
 

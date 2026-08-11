@@ -173,6 +173,8 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
+      - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -236,6 +238,8 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
+      - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -299,6 +303,8 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
+      - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

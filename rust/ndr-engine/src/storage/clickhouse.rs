@@ -6669,6 +6669,203 @@ pub async fn get_ioc_hits(
         )).execute().await?;
         Ok(())
     }
+
+    /// Called at startup when a verified license is present.
+    /// Creates the tenant row in ndr.tenants if it does not already exist,
+    /// then sets its features from the license claims.
+    /// Called at startup when a verified license is present for a non-default tenant.
+    /// 1. Creates the tenant row if missing and syncs features from license.
+    /// 2. If CUSTOMER_ADMIN_USER + CUSTOMER_ADMIN_PASS are set in env (written by install-customer.sh),
+    ///    creates a super_admin user for this tenant, deactivates the default seed accounts
+    ///    (admin / tenant-admin), and clears the plaintext password from the .env file.
+    pub async fn ensure_license_tenant(
+        &self,
+        tenant_id:   &str,
+        tenant_name: &str,
+        features:    &[String],
+    ) {
+        // 1. Create tenant row if missing
+        let exists: bool = self.client
+            .query(&format!(
+                "SELECT count() FROM ndr.tenants FINAL WHERE id = '{}'",
+                sql_escape(tenant_id)
+            ))
+            .fetch_one::<u64>().await
+            .map(|n| n > 0)
+            .unwrap_or(false);
+
+        if !exists {
+            tracing::info!("License tenant '{}' not found — creating", tenant_id);
+            if let Err(e) = self.create_tenant(tenant_id, tenant_name).await {
+                tracing::warn!("ensure_license_tenant create failed: {}", e);
+            }
+        }
+
+        // 2. Sync features from license (source of truth)
+        let features_str = features.join(",");
+        let _ = self.client.query(&format!(
+            "INSERT INTO ndr.tenants (id, name, active, ai_enabled, features, updated_at, created_at) \
+             SELECT id, name, active, ai_enabled, '{}', now(), created_at \
+             FROM ndr.tenants FINAL WHERE id = '{}'",
+            sql_escape(&features_str),
+            sql_escape(tenant_id),
+        )).execute().await;
+
+        // 3. Tenant admin provisioning (one-time, driven by install-customer.sh)
+        //    TENANT_ADMIN_USER / TENANT_ADMIN_PASS set by the install script.
+        let admin_user = std::env::var("TENANT_ADMIN_USER").unwrap_or_default();
+        let admin_pass = std::env::var("TENANT_ADMIN_PASS").unwrap_or_default();
+
+        if !admin_user.trim().is_empty() && !admin_pass.trim().is_empty() {
+            let user_exists: bool = self.client
+                .query(&format!(
+                    "SELECT count() FROM ndr.users FINAL WHERE username = '{}' AND active = 1",
+                    sql_escape(admin_user.trim())
+                ))
+                .fetch_one::<u64>().await
+                .map(|n| n > 0)
+                .unwrap_or(false);
+
+            if !user_exists {
+                // Build permissions from the licensed features
+                let mut perms = vec![
+                    "dashboard", "alerts", "logs", "live",
+                    "network-map", "intel", "health", "users", "evidence", "assets",
+                ];
+                if features.iter().any(|f| f == "ndr") {
+                    perms.extend_from_slice(&["rules", "sensors"]);
+                }
+                if features.iter().any(|f| f == "ai") {
+                    perms.extend_from_slice(&["ai-activity", "ai-report"]);
+                }
+                if features.iter().any(|f| f == "soar") {
+                    perms.push("soar");
+                }
+                let permissions = perms.join(",");
+
+                match bcrypt::hash(admin_pass.trim(), 12) {
+                    Ok(hash) => {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let _ = self.client.query(&format!(
+                            "INSERT INTO ndr.users \
+                             (id, username, password_hash, role, tenant_id, permissions, active) \
+                             VALUES ('{}', '{}', '{}', 'tenant_admin', '{}', '{}', 1)",
+                            sql_escape(&id),
+                            sql_escape(admin_user.trim()),
+                            sql_escape(&hash),
+                            sql_escape(tenant_id),
+                            sql_escape(&permissions),
+                        )).execute().await;
+                        tracing::info!(
+                            "tenant_admin '{}' created for '{}' — permissions: {}",
+                            admin_user.trim(), tenant_id, permissions
+                        );
+
+                        // Permanently delete seed accounts — known credentials from init.sql
+                        let _ = self.client.query(
+                            "ALTER TABLE ndr.users DELETE \
+                             WHERE username IN ('admin', 'tenant-admin') AND tenant_id = 'default'"
+                        ).execute().await;
+
+                        // Delete the 'default' tenant row — not needed on licensed installs
+                        let _ = self.client.query(
+                            "ALTER TABLE ndr.tenants DELETE WHERE id = 'default'"
+                        ).execute().await;
+
+                        // Clear plaintext password from .env after use
+                        let env_path = format!(
+                            "{}/.env",
+                            std::env::var("INSTALL_DIR").unwrap_or_else(|_| ".".to_string())
+                        );
+                        if let Ok(content) = std::fs::read_to_string(&env_path) {
+                            let cleaned = content.lines()
+                                .map(|l| if l.starts_with("TENANT_ADMIN_PASS=") { "TENANT_ADMIN_PASS=" } else { l })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            let _ = std::fs::write(&env_path, cleaned + "\n");
+                        }
+                    }
+                    Err(e) => tracing::warn!("bcrypt hash failed: {}", e),
+                }
+            } else {
+                tracing::info!("tenant_admin '{}' already exists — skipping", admin_user.trim());
+            }
+        }
+
+        tracing::info!("License tenant '{}' ready — features: {:?}", tenant_id, features);
+    }
+
+    pub async fn ensure_licenses_table(&self) {
+        let _ = self.client.query(
+            "CREATE TABLE IF NOT EXISTS ndr.licenses (
+                id          String,
+                tenant_id   String,
+                tenant_name String,
+                features    String,
+                max_sensors UInt32,
+                issued_at   DateTime DEFAULT now(),
+                expires_at  DateTime,
+                token       String
+            ) ENGINE = ReplacingMergeTree(issued_at)
+            ORDER BY (tenant_id, id)"
+        ).execute().await;
+    }
+
+    pub async fn insert_license(
+        &self,
+        tenant_id:    &str,
+        tenant_name:  &str,
+        features:     &[String],
+        max_sensors:  u32,
+        expires_days: u32,
+        token:        &str,
+    ) -> anyhow::Result<()> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let features_str = features.join(",");
+        self.client.query(&format!(
+            "INSERT INTO ndr.licenses (id, tenant_id, tenant_name, features, max_sensors, issued_at, expires_at, token) \
+             VALUES ('{}', '{}', '{}', '{}', {}, now(), now() + INTERVAL {} DAY, '{}')",
+            sql_escape(&id),
+            sql_escape(tenant_id),
+            sql_escape(tenant_name),
+            sql_escape(&features_str),
+            max_sensors,
+            expires_days,
+            sql_escape(token),
+        )).execute().await?;
+        Ok(())
+    }
+
+    pub async fn list_licenses(&self, tenant_id: Option<&str>) -> anyhow::Result<Vec<serde_json::Value>> {
+        let where_clause = tenant_id
+            .map(|id| format!("WHERE tenant_id = '{}'", sql_escape(id)))
+            .unwrap_or_default();
+        let rows = self.client
+            .query(&format!(
+                "SELECT id, tenant_id, tenant_name, features, max_sensors, \
+                 formatDateTime(issued_at, '%Y-%m-%dT%H:%i:%SZ') as issued_at, \
+                 formatDateTime(expires_at, '%Y-%m-%dT%H:%i:%SZ') as expires_at, \
+                 token \
+                 FROM ndr.licenses FINAL \
+                 {} ORDER BY issued_at DESC LIMIT 200",
+                where_clause
+            ))
+            .fetch_all::<(String, String, String, String, u32, String, String, String)>()
+            .await?;
+        Ok(rows.into_iter().map(|r| {
+            let features: Vec<&str> = r.3.split(',').filter(|s| !s.is_empty()).collect();
+            serde_json::json!({
+                "id":          r.0,
+                "tenant_id":   r.1,
+                "tenant_name": r.2,
+                "features":    features,
+                "max_sensors": r.4,
+                "issued_at":   r.5,
+                "expires_at":  r.6,
+                "token":       r.7,
+            })
+        }).collect())
+    }
 }
 
 fn is_ip_in_cidr(ip: &str, cidr: &str) -> bool {

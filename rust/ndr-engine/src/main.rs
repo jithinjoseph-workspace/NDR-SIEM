@@ -259,6 +259,7 @@ async fn main() {
         ch.migrate_ipam_subnets().await;
         ch.seed_local_sensor().await;
         ch.seed_doh_providers().await;
+        ch.ensure_licenses_table().await;
         ch
     };
 
@@ -356,31 +357,41 @@ async fn main() {
         });
     }
 
-    // ── License JWT startup verification ──────────────────────────────────
-    let license_secret_val = std::env::var("LICENSE_SECRET")
-        .unwrap_or_else(|_| "promasecure-default-license-secret".to_string());
+    // ── License JWT startup verification (RS256) ──────────────────────────
+    let license_private_key = license::load_private_key().unwrap_or_else(|e| {
+        tracing::warn!("LICENSE_PRIVATE_KEY: {} — license generation disabled", e);
+        String::new()
+    });
+    let license_public_key = license::load_public_key().unwrap_or_else(|e| {
+        tracing::warn!("LICENSE_PUBLIC_KEY: {} — on-premise license verification disabled", e);
+        String::new()
+    });
 
     let verified_license: Option<Arc<license::LicenseClaims>> =
-        std::env::var("LICENSE_TOKEN").ok()
-        .filter(|t| !t.trim().is_empty())
-        .and_then(|token| {
-            match license::verify_license(&token, &license_secret_val) {
-                Ok(claims) => {
-                    info!(
-                        "License verified — tenant: '{}', features: {:?}, issued_by: {}",
-                        claims.tenant_id, claims.features, claims.issued_by
-                    );
-                    Some(Arc::new(claims))
+        if !license_public_key.is_empty() {
+            std::env::var("LICENSE_TOKEN").ok()
+            .filter(|t| !t.trim().is_empty())
+            .and_then(|token| {
+                match license::verify_license(&token, &license_public_key) {
+                    Ok(claims) => {
+                        info!(
+                            "License verified (RS256) — tenant: '{}', features: {:?}, issued_by: {}",
+                            claims.tenant_id, claims.features, claims.issued_by
+                        );
+                        Some(Arc::new(claims))
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "LICENSE_TOKEN present but invalid: {} — falling back to database features",
+                            e
+                        );
+                        None
+                    }
                 }
-                Err(e) => {
-                    tracing::error!(
-                        "LICENSE_TOKEN present but invalid: {} — falling back to database features",
-                        e
-                    );
-                    None
-                }
-            }
-        });
+            })
+        } else {
+            None
+        };
 
     let state = AppState {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
@@ -431,9 +442,25 @@ async fn main() {
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
         })),
-        license_secret: license_secret_val,
+        license_private_key,
+        license_public_key,
         verified_license,
     };
+
+    // ── License tenant provisioning ───────────────────────────────────────
+    // If an RS256-verified license is present, ensure the tenant row exists
+    // in ClickHouse so the super admin sees it in the UI immediately.
+    if let Some(lic) = &state.verified_license {
+        if lic.tenant_id != "default" {
+            let ch  = ch_storage_arc.clone();
+            let tid = lic.tenant_id.clone();
+            let tname = lic.tenant_name.clone();
+            let feats = lic.features.clone();
+            tokio::spawn(async move {
+                ch.ensure_license_tenant(&tid, &tname, &feats).await;
+            });
+        }
+    }
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
     state.enrichment.asset_id.clone().spawn_auto_updater();
@@ -724,7 +751,8 @@ async fn main() {
         .route("/api/export", get(api::export_report))
         .route("/api/export-logs", get(api::export_logs))
         .route("/api/license/generate",      post(api::generate_license))
-        .route("/api/license/secret",        get(api::get_license_secret))
+        .route("/api/license/public-key",    get(api::get_license_public_key))
+        .route("/api/licenses",              get(api::list_licenses))
         .route("/api/tenant/features",       get(api::get_tenant_features))
         .route("/api/tenant/features/:id",   post(api::set_tenant_features))
         .route("/api/soar/status",  get(api::get_soar_status))

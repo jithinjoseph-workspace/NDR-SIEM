@@ -258,7 +258,8 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
-LICENSE_SECRET=
+LICENSE_PRIVATE_KEY=
+LICENSE_PUBLIC_KEY=
 LICENSE_TOKEN=
 _EARLY_ENV
 log ".env written early (will be updated with final values in network step)"
@@ -902,21 +903,24 @@ if [ -z "$OPENAI_API_KEY" ]; then
     read -p "  OpenAI API key for ARIA (press Enter to skip): " -r OPENAI_API_KEY
 fi
 
-# ── License token + secret (from PromaSecure super admin portal) ─────────
-if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_SECRET" "$INSTALL_DIR/.env"; then
-    LICENSE_SECRET=$(grep "^LICENSE_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+# ── RSA license key pair (generated once; private key stays on this server) ──
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_PRIVATE_KEY" "$INSTALL_DIR/.env"; then
+    LICENSE_PRIVATE_KEY=$(grep "^LICENSE_PRIVATE_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+    LICENSE_PUBLIC_KEY=$(grep "^LICENSE_PUBLIC_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
 fi
-if [ -z "$LICENSE_SECRET" ]; then
+if [ -z "$LICENSE_PRIVATE_KEY" ]; then
     printf "\n"
-    read -p "  License secret (provided by your NDR vendor): " -r LICENSE_SECRET
+    log "Generating RSA-2048 key pair for license signing..."
+    _TMP_KEY=$(mktemp)
+    openssl genrsa -out "$_TMP_KEY" 2048 2>/dev/null
+    LICENSE_PRIVATE_KEY=$(cat "$_TMP_KEY" | base64 -w0)
+    LICENSE_PUBLIC_KEY=$(openssl rsa -in "$_TMP_KEY" -pubout 2>/dev/null | base64 -w0)
+    rm -f "$_TMP_KEY"
+    log "RSA key pair generated and stored in .env (base64-encoded)"
 fi
 
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_TOKEN" "$INSTALL_DIR/.env"; then
     LICENSE_TOKEN=$(grep "^LICENSE_TOKEN=" "$INSTALL_DIR/.env" | cut -d= -f2-)
-fi
-if [ -z "$LICENSE_TOKEN" ]; then
-    printf "\n"
-    read -p "  License token (paste the value from your NDR admin portal, press Enter to skip): " -r LICENSE_TOKEN
 fi
 
 # Auto-extract TENANT_ID from the license token so events are stored under
@@ -965,7 +969,8 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
-LICENSE_SECRET=$LICENSE_SECRET
+LICENSE_PRIVATE_KEY=$LICENSE_PRIVATE_KEY
+LICENSE_PUBLIC_KEY=$LICENSE_PUBLIC_KEY
 LICENSE_TOKEN=$LICENSE_TOKEN
 ENVEOF
 log ".env generated"

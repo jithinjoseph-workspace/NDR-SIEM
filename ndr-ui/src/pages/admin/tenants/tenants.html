@@ -170,17 +170,20 @@
       <span>Max sensors</span>
       <input [(ngModel)]="licenseForm.max_sensors" type="number" min="1" max="1000" />
     </label>
-    <div *ngIf="!generatedToken" class="modal-actions">
-      <button class="primary-action" type="button" [disabled]="generatingLicense" (click)="generateLicense()">
-        {{ generatingLicense ? 'Generating...' : 'Generate Token' }}
-      </button>
-      <button class="secondary-action" type="button" (click)="closeLicense()">Cancel</button>
-    </div>
+    <label class="form-field">
+      <span>Tenant admin username</span>
+      <input [(ngModel)]="licenseForm.admin_user" type="text" placeholder="e.g. acme-admin" autocomplete="off" />
+      <small>Provisioned automatically on customer server at first boot</small>
+    </label>
+    <label class="form-field">
+      <span>Tenant admin password</span>
+      <input [(ngModel)]="licenseForm.admin_pass" type="password" placeholder="Strong password" autocomplete="new-password" />
+    </label>
     <div *ngIf="generatedToken" style="margin-top:1rem;">
 
       <!-- Token -->
       <label class="form-field">
-        <span>LICENSE_TOKEN</span>
+        <span>LICENSE_TOKEN (just generated)</span>
         <textarea readonly rows="4" style="font-family:monospace;font-size:0.72rem;word-break:break-all;">{{ generatedToken }}</textarea>
       </label>
 
@@ -197,13 +200,21 @@
           <span style="opacity:0.5;">Step 2 —</span> When prompted, paste these values:
         </div>
         <div style="display:grid;gap:0.4rem;margin-bottom:0.75rem;">
-          <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;">
-            <span style="opacity:0.5;min-width:110px;">License secret</span>
-            <code style="font-family:monospace;background:var(--surface-3,#1e293b);padding:0.2rem 0.5rem;border-radius:4px;word-break:break-all;">{{ licenseSecret || '…loading' }}</code>
+          <div style="display:flex;align-items:flex-start;gap:0.5rem;font-size:0.78rem;">
+            <span style="opacity:0.5;min-width:130px;padding-top:0.2rem;">License public key</span>
+            <code style="font-family:monospace;background:var(--surface-3,#1e293b);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.65rem;word-break:break-all;white-space:pre-wrap;flex:1;">{{ licensePublicKey || '…loading' }}</code>
           </div>
           <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;">
-            <span style="opacity:0.5;min-width:110px;">License token</span>
+            <span style="opacity:0.5;min-width:130px;">License token</span>
             <code style="font-family:monospace;background:var(--surface-3,#1e293b);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.68rem;word-break:break-all;max-height:2.8rem;overflow:hidden;">{{ generatedToken.slice(0,60) }}…</code>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;">
+            <span style="opacity:0.5;min-width:130px;">Admin username</span>
+            <code style="font-family:monospace;background:var(--surface-3,#1e293b);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.68rem;">{{ licenseForm.admin_user || '—' }}</code>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;">
+            <span style="opacity:0.5;min-width:130px;">Admin password</span>
+            <code style="font-family:monospace;background:var(--surface-3,#1e293b);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.68rem;">{{ licenseForm.admin_pass ? '••••••••' : '—' }}</code>
           </div>
         </div>
 
@@ -223,6 +234,47 @@
           {{ tokenCopied ? 'Copied!' : 'Copy Token Only' }}
         </button>
         <button class="secondary-action" type="button" (click)="generateLicense()">Regenerate</button>
+        <button class="secondary-action" type="button" (click)="closeLicense()">Close</button>
+      </div>
+    </div>
+
+    <!-- Issued license history -->
+    <div *ngIf="!generatedToken" style="margin-top:1.25rem;">
+      <p style="font-size:0.75rem;font-weight:600;opacity:0.6;margin:0 0 0.6rem;letter-spacing:0.05em;text-transform:uppercase;">Previously Issued Licenses</p>
+
+      <div *ngIf="loadingLicenses" style="font-size:0.78rem;opacity:0.5;">Loading…</div>
+
+      <div *ngIf="!loadingLicenses && issuedLicenses.length === 0" style="font-size:0.78rem;opacity:0.4;">
+        No licenses issued yet for this tenant.
+      </div>
+
+      <div *ngFor="let lic of issuedLicenses"
+           style="padding:0.6rem 0.75rem;background:var(--surface-2,#0f172a);border:1px solid var(--border,#1e293b);border-radius:6px;margin-bottom:0.5rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;gap:0.3rem;flex-wrap:wrap;margin-bottom:0.2rem;">
+            <span *ngFor="let f of lic.features"
+                  style="font-size:0.65rem;padding:0.1rem 0.4rem;border-radius:3px;background:var(--accent,#3b82f6);color:#fff;font-weight:600;text-transform:uppercase;">
+              {{ f }}
+            </span>
+          </div>
+          <div style="font-size:0.72rem;opacity:0.5;">
+            Issued {{ lic.issued_at?.slice(0,10) }}
+            &nbsp;·&nbsp; Expires {{ lic.expires_at?.slice(0,10) }}
+            &nbsp;·&nbsp; Max {{ lic.max_sensors }} sensors
+          </div>
+        </div>
+        <button class="secondary-action compact-action" type="button"
+                style="font-size:0.7rem;"
+                (click)="copyInstallPackage(lic.token, lic)">
+          <lucide-icon [name]="CopyIcon" class="w-3 h-3"></lucide-icon>
+          Copy
+        </button>
+      </div>
+
+      <div class="modal-actions" style="margin-top:0.75rem;">
+        <button class="primary-action" type="button" [disabled]="generatingLicense" (click)="generateLicense()">
+          {{ generatingLicense ? 'Generating...' : 'Generate New License' }}
+        </button>
         <button class="secondary-action" type="button" (click)="closeLicense()">Close</button>
       </div>
     </div>

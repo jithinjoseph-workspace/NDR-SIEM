@@ -715,10 +715,39 @@ export class UsersSection implements OnInit, OnDestroy {
     });
   }
 
+  // ── License-aware permission helpers ──────────────────────────────────────
+
+  get licensedFeatures(): string[] {
+    const user = this.auth.getUser();
+    if (!user) return ['ndr'];
+    if (user.role === 'super_admin') return ['ndr', 'ai', 'soar'];
+    return (user.features as string[]) ?? ['ndr', 'ai'];
+  }
+
+  get licensedPermissionOptions(): PermissionOption[] {
+    const features = this.licensedFeatures;
+    return this.permissionOptions.filter(p => {
+      if (p.key === 'ai-activity' || p.key === 'ai-report') return features.includes('ai');
+      if (p.key === 'soar') return features.includes('soar');
+      return true;
+    });
+  }
+
+  get licensedPermissionCategories() {
+    const licensed = new Set(this.licensedPermissionOptions.map(p => p.key));
+    return this.permissionCategories
+      .map(cat => ({ ...cat, options: cat.options.filter(o => o && licensed.has(o.key)) }))
+      .filter(cat => cat.options.length > 0);
+  }
+
   private defaultPermissionsFor(role: string): string[] {
+    const features = this.licensedFeatures;
     if (role === 'viewer') return ['dashboard', 'alerts', 'health'];
-    if (role === 'senior_analyst') return this.permissionOptions.map(p => p.key);
-    return ['dashboard', 'alerts', 'logs', 'live', 'network-map', 'intel', 'health'];
+    if (role === 'senior_analyst') return this.licensedPermissionOptions.map(p => p.key);
+    const perms = ['dashboard', 'alerts', 'logs', 'live', 'network-map', 'intel', 'health'];
+    if (features.includes('ai'))   perms.push('ai-activity', 'ai-report');
+    if (features.includes('soar')) perms.push('soar');
+    return perms;
   }
 
   private normalizePermissions(value: unknown, role: string): string[] {
