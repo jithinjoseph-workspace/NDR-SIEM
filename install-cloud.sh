@@ -293,7 +293,7 @@ info "  SSL: uncomment the ssl_* lines after placing certs at /etc/ssl/ndr/"
 # ── Step 6: Start Docker stack ────────────────
 step "Starting Docker stack (cloud profile)"
 
-info "  ℹ️  Cloud mode starts: kafka, redis, ndr-engine x3, nginx"
+info "  ℹ️  Cloud mode starts: kafka, redis, ndr-engine x3, nginx, ndr-ui"
 info "  ℹ️  Skipped (onpremise profile only): opensearch, vector"
 info ""
 info "  ⚠️  Kafka external listener note:"
@@ -303,11 +303,38 @@ info "    docker-compose.yml → KAFKA_ADVERTISED_LISTENERS:"
 info "    PLAINTEXT://$PUBLIC_IP:9092"
 info ""
 
+# ── Registry login ────────────────────────────
+REGISTRY="ghcr.io/jithinjoseph-workspace"
+printf "\n"
+read -rp "  Registry token (provided by Proma Secure): " REGISTRY_TOKEN
+echo "$REGISTRY_TOKEN" | sudo docker login ghcr.io -u ndr-customer --password-stdin \
+    || err "Registry login failed — check your token and try again"
+log "Registry login successful"
+
+# ── Pull pre-built images ─────────────────────
+log "Pulling pre-built images..."
+sudo docker pull "${REGISTRY}/ndr-engine:latest"
+sudo docker pull "${REGISTRY}/ndr-ui:latest"
+
+# ── Write compose override (pre-built images, no build:) ─────────────
+cat > "$INSTALL_DIR/docker-compose.cloud.yml" << OVERRIDE
+services:
+  ndr-engine-1:
+    image: ${REGISTRY}/ndr-engine:latest
+  ndr-engine-2:
+    image: ${REGISTRY}/ndr-engine:latest
+  ndr-engine-3:
+    image: ${REGISTRY}/ndr-engine:latest
+  ndr-ui:
+    image: ${REGISTRY}/ndr-ui:latest
+    build: !reset null
+OVERRIDE
+
 cd "$INSTALL_DIR"
 sudo docker compose down 2>/dev/null || true
 
-sudo docker compose up -d --build
-log "✅ Docker stack started (no --profile onpremise)"
+sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d
+log "✅ Docker stack started with pre-built images"
 
 # ── Wait for ClickHouse container to be healthy ───────────────────
 log "Waiting for ClickHouse cluster (ch1 + ch2)..."

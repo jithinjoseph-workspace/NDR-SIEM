@@ -358,8 +358,8 @@ async fn main() {
     }
 
     // ── License JWT startup verification (RS256) ──────────────────────────
-    let license_private_key = license::load_private_key().unwrap_or_else(|e| {
-        tracing::warn!("LICENSE_PRIVATE_KEY: {} — license generation disabled", e);
+    let license_private_key = license::load_private_key().unwrap_or_else(|_| {
+        tracing::debug!("LICENSE_PRIVATE_KEY not set — license generation disabled (normal for customer installs)");
         String::new()
     });
     let license_public_key = license::load_public_key().unwrap_or_else(|e| {

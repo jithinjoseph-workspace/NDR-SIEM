@@ -175,6 +175,9 @@ services:
       - SENSOR_MODE=${SENSOR_MODE:-agent}
       - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_TOKEN=${LICENSE_TOKEN}
+      - TENANT_ADMIN_USER=${TENANT_ADMIN_USER}
+      - TENANT_ADMIN_PASS=${TENANT_ADMIN_PASS}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -240,6 +243,9 @@ services:
       - SENSOR_MODE=${SENSOR_MODE:-agent}
       - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_TOKEN=${LICENSE_TOKEN}
+      - TENANT_ADMIN_USER=${TENANT_ADMIN_USER}
+      - TENANT_ADMIN_PASS=${TENANT_ADMIN_PASS}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -305,6 +311,9 @@ services:
       - SENSOR_MODE=${SENSOR_MODE:-agent}
       - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_TOKEN=${LICENSE_TOKEN}
+      - TENANT_ADMIN_USER=${TENANT_ADMIN_USER}
+      - TENANT_ADMIN_PASS=${TENANT_ADMIN_PASS}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
