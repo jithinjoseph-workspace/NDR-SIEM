@@ -251,6 +251,12 @@ else
     JWT_SECRET=$(openssl rand -hex 32)
 fi
 
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^NDR_AGENT_SECRET=." "$INSTALL_DIR/.env"; then
+    NDR_AGENT_SECRET=$(grep "^NDR_AGENT_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+else
+    NDR_AGENT_SECRET=$(openssl rand -hex 32)
+fi
+
 # ── RSA license key pair (generated once; private key stays on this server) ──
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "^LICENSE_PRIVATE_KEY=." "$INSTALL_DIR/.env"; then
     LICENSE_PRIVATE_KEY=$(grep "^LICENSE_PRIVATE_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
@@ -283,16 +289,21 @@ HOST_IP=$PUBLIC_IP
 HOME_DIR=$HOME_DIR
 INSTALL_DIR=$INSTALL_DIR
 CLOUD_MODE=true
-CLICKHOUSE_URL=http://localhost:8123
-CLICKHOUSE_URL_SECONDARY=http://localhost:8124
+DEPLOY_MODE=cloud
+LOCAL_SENSOR_ID=local-central
+TENANT_ID=default
+CLICKHOUSE_URL=http://clickhouse1:8123
+CLICKHOUSE_URL_SECONDARY=http://clickhouse2:8123
 CLICKHOUSE_USER=ndr
 CLICKHOUSE_PASSWORD=ndr123
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=$JWT_SECRET
+NDR_AGENT_SECRET=$NDR_AGENT_SECRET
+CORS_ORIGIN=http://$PUBLIC_IP
 OPENSEARCH_URL=
 ARKIME_URL=
 ARKIME_PASS=
-# AI — add providers in Settings > AI Providers (super admin). Env vars are the fallback.
+OPENAI_API_KEY=
 GROQ_API_KEY=$GROQ_API_KEY
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
@@ -319,7 +330,18 @@ cat > "$INSTALL_DIR/config/nginx/nginx.conf" << 'NGINXEOF'
 events { worker_connections 1024; }
 
 http {
-    upstream ndr_backend {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    upstream ndr_engines {
+        least_conn;
+        server ndr-engine-1:3000 max_fails=3 fail_timeout=30s;
+        server ndr-engine-2:3000 max_fails=3 fail_timeout=30s;
+        server ndr-engine-3:3000 max_fails=3 fail_timeout=30s;
+    }
+
+    upstream ws_engines {
+        ip_hash;
         server ndr-engine-1:3000;
         server ndr-engine-2:3000;
         server ndr-engine-3:3000;
@@ -343,14 +365,37 @@ http {
 
         client_max_body_size 500m;
 
-        location / {
-            proxy_pass         http://ndr_backend;
+        location /ws {
+            proxy_pass         http://ws_engines;
+            proxy_http_version 1.1;
+            proxy_set_header   Upgrade    $http_upgrade;
+            proxy_set_header   Connection "upgrade";
+            proxy_set_header   Host       $host;
+            proxy_read_timeout 3600s;
+        }
+
+        location /api {
+            proxy_pass         http://ndr_engines;
             proxy_http_version 1.1;
             proxy_set_header   Host              $host;
             proxy_set_header   X-Real-IP         $remote_addr;
             proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
             proxy_set_header   X-Forwarded-Proto $scheme;
             proxy_read_timeout 120s;
+        }
+
+        location /health {
+            proxy_pass http://ndr_engines;
+        }
+
+        location / {
+            proxy_pass         http://ndr-ui:80;
+            proxy_http_version 1.1;
+            proxy_set_header   Host              $host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_read_timeout 60s;
         }
     }
 }
@@ -534,8 +579,8 @@ fi
 
 # API health
 sleep 5
-if curl -s --max-time 5 http://localhost:3000/health > /dev/null 2>&1; then
-    log "  ✅ NDR API       — reachable at http://localhost:3000"
+if curl -s --max-time 5 http://localhost:80/api/health > /dev/null 2>&1; then
+    log "  ✅ NDR API       — reachable at http://localhost"
 else
     warn "  ⚠️  NDR API       — not responding yet (engines may still be starting)"
 fi
@@ -554,11 +599,11 @@ echo -e "${GREEN}║         NDR Cloud Deployment Complete!               ║${N
 echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${BLUE}  Public IP   :${NC} $PUBLIC_IP"
-echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP:3000"
-echo -e "${BLUE}  ClickHouse  :${NC} http://localhost:8123 + :8124 (internal only, 2-node cluster)"
-echo -e "${BLUE}  Kafka       :${NC} internal only (sensors use HTTP, not Kafka)"
-echo -e "${BLUE}  Redis       :${NC} localhost:6379 (internal only)"
-echo -e "${BLUE}  Ollama AI   :${NC} http://localhost:11434 (deepseek-r1, local inference)"
+echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP (port 80)"
+echo -e "${BLUE}  API (HTTPS) :${NC} https://$PUBLIC_IP (port 443, after cert setup)"
+echo -e "${BLUE}  ClickHouse  :${NC} internal only (clickhouse1:8123, clickhouse2:8123)"
+echo -e "${BLUE}  Kafka       :${NC} internal only (sensors use HTTP POST to /api/ingest)"
+echo -e "${BLUE}  Redis       :${NC} internal only (ndr-redis:6379)"
 echo -e "${BLUE}  SSL certs   :${NC} /etc/ssl/ndr/cert.pem + key.pem"
 echo ""
 echo -e "${YELLOW}  Next steps:${NC}"
