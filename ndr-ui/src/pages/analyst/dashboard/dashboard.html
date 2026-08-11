@@ -68,6 +68,23 @@
     <div>{{ eventsLastHour() }} events in the last hour</div>
   </div>
 
+  <!-- Threat Prediction Banner -->
+  <div *ngIf="activePredictions().length > 0" class="threat-prediction-banner" (click)="openPredictionModal(activePredictions()[0])">
+    <div class="banner-glow"></div>
+    <div class="banner-content">
+      <div class="banner-icon-ring">
+        <lucide-icon [name]="ZapIcon" class="w-5 h-5 banner-icon"></lucide-icon>
+      </div>
+      <div class="banner-text">
+        <span class="banner-title">AI Threat Prediction</span>
+        <span class="banner-desc">ARIA has identified an emerging <strong class="attack-type-hl">{{ activePredictions()[0].attack_type }}</strong> pattern with {{ activePredictions()[0].probability * 100 | number:'1.0-0' }}% probability.</span>
+      </div>
+      <button class="banner-btn">
+        View Forecast <lucide-icon [name]="ChevronRightIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+  </div>
+
   <div class="metrics-grid">
     <article class="metric-card metric-primary">
       <div class="metric-topline">
@@ -377,5 +394,94 @@
         </div>
       </div>
     </section>
+  </div>
+
+  <!-- Threat Prediction Modal -->
+  <div class="prediction-modal-backdrop" *ngIf="showPredictionModal()" (click)="closePredictionModal()">
+    <div class="prediction-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-wrapper">
+            <lucide-icon [name]="ZapIcon" class="w-6 h-6"></lucide-icon>
+          </div>
+          <div>
+            <h3>Threat Forecast Analysis</h3>
+            <p>{{ selectedPrediction()?.attack_type }}</p>
+          </div>
+        </div>
+        <button class="modal-close" (click)="closePredictionModal()">
+          <lucide-icon [name]="XIcon" class="w-5 h-5"></lucide-icon>
+        </button>
+      </div>
+      
+      <div class="modal-body">
+        <div class="prediction-grid">
+          <!-- Current Prediction -->
+          <div class="prediction-card main-prediction">
+            <div class="card-eyebrow">Current Forecast</div>
+            <div class="prob-showcase">
+              <div class="prob-circle" [style.background]="'conic-gradient(#ef4444 ' + (selectedPrediction()?.probability * 100) + '%, rgba(255,255,255,0.05) 0)'">
+                <div class="prob-inner">
+                  <span class="prob-val">{{ selectedPrediction()?.probability * 100 | number:'1.0-0' }}%</span>
+                  <span class="prob-label">Probability</span>
+                </div>
+              </div>
+              <div class="prob-stats">
+                <div class="stat-row">
+                  <span class="stat-label">Confidence:</span>
+                  <span class="stat-val">{{ selectedPrediction()?.confidence * 100 | number:'1.0-0' }}%</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">Alert Level:</span>
+                  <span class="stat-val severity-{{ selectedPrediction()?.alert_level | lowercase }}">{{ selectedPrediction()?.alert_level }}</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">Internal Hits:</span>
+                  <span class="stat-val">{{ selectedPrediction()?.internal_hit_count }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="aria-briefing">
+              <h4>ARIA Briefing</h4>
+              <p>{{ selectedPrediction()?.aria_briefing }}</p>
+            </div>
+            
+            <div class="recommendations-list" *ngIf="selectedPrediction()?.recommendations?.length > 0">
+              <h4>Recommended Actions</h4>
+              <ul>
+                <li *ngFor="let rec of selectedPrediction()?.recommendations">
+                  <lucide-icon [name]="ShieldIcon" class="w-4 h-4"></lucide-icon>
+                  {{ rec }}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- History / Trend -->
+          <div class="prediction-history">
+            <div class="card-eyebrow">Historical Trend</div>
+            <div class="history-timeline" *ngIf="historicalPredictions().length > 0; else noHistory">
+              <div class="timeline-item" *ngFor="let hist of historicalPredictions().slice(0, 5)">
+                <div class="timeline-marker" [class.active]="hist.id === selectedPrediction()?.id"></div>
+                <div class="timeline-content">
+                  <div class="timeline-time">{{ hist.predicted_at | date:'short' }}</div>
+                  <div class="timeline-prob">Probability: {{ hist.probability * 100 | number:'1.0-0' }}%</div>
+                  <div class="timeline-trend">
+                    <span [class.trend-up]="hist.trend_delta > 0" [class.trend-down]="hist.trend_delta < 0">
+                      {{ hist.trend_delta > 0 ? '+' : '' }}{{ hist.trend_delta * 100 | number:'1.0-1' }}%
+                    </span>
+                    delta
+                  </div>
+                </div>
+              </div>
+            </div>
+            <ng-template #noHistory>
+              <div class="empty-history">No historical data available for this threat.</div>
+            </ng-template>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </section>

@@ -39,6 +39,7 @@ export class AiActivity {
   activeTab: 'analyses' | 'suppressions' | 'predictions' = 'analyses';
   expandedAnalyses  = new Set<string>();
   expandedPrediction = signal<string | null>(null);
+  historicalPredictions = signal<any[]>([]);
 
   private refresh$ = new Subject<void>();
 
@@ -82,7 +83,18 @@ export class AiActivity {
   isExpanded(id: string) { return this.expandedAnalyses.has(id); }
 
   togglePrediction(type: string) {
-    this.expandedPrediction.set(this.expandedPrediction() === type ? null : type);
+    if (this.expandedPrediction() === type) {
+      this.expandedPrediction.set(null);
+      this.historicalPredictions.set([]);
+    } else {
+      this.expandedPrediction.set(type);
+      this.api.getThreatPredictionsHistory().subscribe(data => {
+        if (data && data.predictions) {
+          const history = data.predictions.filter((p: any) => p.attack_type === type);
+          this.historicalPredictions.set(history);
+        }
+      });
+    }
   }
 
   isPredExpanded(type: string) { return this.expandedPrediction() === type; }

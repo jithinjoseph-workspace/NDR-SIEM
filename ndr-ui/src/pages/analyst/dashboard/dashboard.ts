@@ -4,11 +4,12 @@ import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
 import { Websocket } from '../../../services/websocket/websocket';
 import { ChartDataService } from '../../../services/chart-data/chart-data';
-import { Subscription } from 'rxjs';
+import { Subscription, interval } from 'rxjs';
+import { startWith, switchMap } from 'rxjs/operators';
 import { toSignal } from '@angular/core/rxjs-interop';
 import {
   LucideAngularModule,
-  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw, Bot
+  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw, Bot, X, ChevronRight, Zap
 } from 'lucide-angular';
 import { Router } from '@angular/router';
 import * as d3 from 'd3';
@@ -42,6 +43,12 @@ export class Dashboard implements OnInit, OnDestroy {
   chartLoading = signal(true);   // shows skeleton shimmer
   chartError = signal(false);  // shows error + retry UI
 
+  // ── Threat Prediction State ───────────────────────────────────────────────
+  activePredictions = signal<any[]>([]);
+  historicalPredictions = signal<any[]>([]);
+  showPredictionModal = signal(false);
+  selectedPrediction = signal<any>(null);
+
   /** Cosmetic bar heights for the skeleton shimmer. */
   readonly skeletonBars = ['30%', '55%', '40%', '70%', '50%', '85%', '60%', '45%', '75%', '35%'];
 
@@ -53,6 +60,9 @@ export class Dashboard implements OnInit, OnDestroy {
   ArrowIcon = ArrowUpRight;
   RefreshIcon = RefreshCw;
   BotIcon = Bot;
+  XIcon = X;
+  ChevronRightIcon = ChevronRight;
+  ZapIcon = Zap;
 
   liveEventStreamRef = viewChild<ElementRef>('liveEventStream');
   @ViewChild('severityDonutChart') severityDonutChartRef!: ElementRef;
@@ -252,6 +262,43 @@ export class Dashboard implements OnInit, OnDestroy {
     this.api.getProtocols().subscribe(data => {
       this.protocols.set(data.protocols || []);
     });
+
+    // Fetch active threat predictions for the alert banner every 60s
+    this.subs.push(
+      interval(60_000).pipe(
+        startWith(0),
+        switchMap(() => this.api.getThreatPredictions())
+      ).subscribe(data => {
+        if (data && data.predictions) {
+          // Filter to only high-confidence or active ones if needed, or just take top 3
+          this.activePredictions.set(data.predictions);
+        }
+      })
+    );
+  }
+
+  // ── Threat Prediction Logic ─────────────────────────────────────────────────
+
+  openPredictionModal(prediction: any) {
+    this.selectedPrediction.set(prediction);
+    this.showPredictionModal.set(true);
+    
+    // Fetch historical data for context
+    this.api.getThreatPredictionsHistory().subscribe(data => {
+      if (data && data.predictions) {
+        // Filter history to just this attack type for the trend view
+        const history = data.predictions.filter((p: any) => p.attack_type === prediction.attack_type);
+        this.historicalPredictions.set(history);
+      }
+    });
+  }
+
+  closePredictionModal() {
+    this.showPredictionModal.set(false);
+    setTimeout(() => {
+      this.selectedPrediction.set(null);
+      this.historicalPredictions.set([]);
+    }, 300); // Wait for transition
   }
 
   private throttle(func: Function, limit: number) {
