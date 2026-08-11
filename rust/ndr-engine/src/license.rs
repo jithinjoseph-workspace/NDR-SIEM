@@ -20,14 +20,13 @@ impl LicenseClaims {
     }
 }
 
-/// Decode a PEM string that is either raw ("-----BEGIN...") or base64-encoded.
-pub fn decode_pem(value: &str) -> anyhow::Result<String> {
-    let trimmed = value.trim();
-    if trimmed.starts_with("-----") {
-        return Ok(trimmed.to_string());
-    }
-    let bytes = base64::engine::general_purpose::STANDARD.decode(trimmed)?;
-    Ok(String::from_utf8(bytes)?)
+fn wrap_pem(b64_der: &str, header: &str) -> String {
+    let clean: String = b64_der.chars().filter(|c| !c.is_whitespace()).collect();
+    let body: String = clean.as_bytes().chunks(64)
+        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("-----BEGIN {header}-----\n{body}\n-----END {header}-----\n")
 }
 
 pub fn load_private_key() -> anyhow::Result<String> {
@@ -36,7 +35,18 @@ pub fn load_private_key() -> anyhow::Result<String> {
     if raw.trim().is_empty() {
         return Err(anyhow::anyhow!("LICENSE_PRIVATE_KEY is empty"));
     }
-    decode_pem(&raw)
+    let trimmed = raw.trim();
+    if trimmed.starts_with("-----") {
+        return Ok(trimmed.to_string());
+    }
+    // base64-encoded: might be base64(PEM) or base64(DER)
+    let clean: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&clean)?;
+    if let Ok(s) = String::from_utf8(bytes) {
+        return Ok(s); // was base64(PEM) — already has headers
+    }
+    // raw DER base64 — wrap
+    Ok(wrap_pem(&clean, "RSA PRIVATE KEY"))
 }
 
 pub fn load_public_key() -> anyhow::Result<String> {
@@ -45,7 +55,18 @@ pub fn load_public_key() -> anyhow::Result<String> {
     if raw.trim().is_empty() {
         return Err(anyhow::anyhow!("LICENSE_PUBLIC_KEY is empty"));
     }
-    decode_pem(&raw)
+    let trimmed = raw.trim();
+    if trimmed.starts_with("-----") {
+        return Ok(trimmed.to_string());
+    }
+    // base64-encoded: might be base64(PEM) or raw DER base64
+    let clean: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&clean)?;
+    if let Ok(s) = String::from_utf8(bytes) {
+        return Ok(s); // was base64(PEM) — already has headers
+    }
+    // raw DER base64 — wrap in PEM headers so DecodingKey::from_rsa_pem works
+    Ok(wrap_pem(&clean, "PUBLIC KEY"))
 }
 
 pub fn generate_license(
