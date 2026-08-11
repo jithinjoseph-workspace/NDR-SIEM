@@ -4,6 +4,7 @@
 
 mod api;
 mod auth;
+mod license;
 mod ratelimit;
 mod siem;
 mod consumer;
@@ -355,6 +356,32 @@ async fn main() {
         });
     }
 
+    // ── License JWT startup verification ──────────────────────────────────
+    let license_secret_val = std::env::var("LICENSE_SECRET")
+        .unwrap_or_else(|_| "promasecure-default-license-secret".to_string());
+
+    let verified_license: Option<Arc<license::LicenseClaims>> =
+        std::env::var("LICENSE_TOKEN").ok()
+        .filter(|t| !t.trim().is_empty())
+        .and_then(|token| {
+            match license::verify_license(&token, &license_secret_val) {
+                Ok(claims) => {
+                    info!(
+                        "License verified — tenant: '{}', features: {:?}, issued_by: {}",
+                        claims.tenant_id, claims.features, claims.issued_by
+                    );
+                    Some(Arc::new(claims))
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "LICENSE_TOKEN present but invalid: {} — falling back to database features",
+                        e
+                    );
+                    None
+                }
+            }
+        });
+
     let state = AppState {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
         enrichment: Arc::new(EnrichmentPipeline {
@@ -404,6 +431,8 @@ async fn main() {
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
         })),
+        license_secret: license_secret_val,
+        verified_license,
     };
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
@@ -694,6 +723,10 @@ async fn main() {
         .route("/api/rules/:id/toggle", post(api::toggle_rule))
         .route("/api/export", get(api::export_report))
         .route("/api/export-logs", get(api::export_logs))
+        .route("/api/license/generate",      post(api::generate_license))
+        .route("/api/license/secret",        get(api::get_license_secret))
+        .route("/api/tenant/features",       get(api::get_tenant_features))
+        .route("/api/tenant/features/:id",   post(api::set_tenant_features))
         .route("/api/soar/status",  get(api::get_soar_status))
         .route("/api/settings", get(api::get_settings).post(api::update_settings))
         .route("/api/settings/smtp", get(api::get_global_smtp).post(api::update_global_smtp))

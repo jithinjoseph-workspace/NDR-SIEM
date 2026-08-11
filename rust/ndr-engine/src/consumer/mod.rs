@@ -290,9 +290,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     return;
                                 }
                                 tracing::info!(sha256 = %sha_log, tenant = %tid_cl, "malware hash matched — hit created");
-                                crate::soar::execute_native_playbooks(
-                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
-                                ).await;
+                                let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+                                if feats.iter().any(|f| f == "soar") {
+                                    crate::soar::execute_native_playbooks(
+                                        &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                    ).await;
+                                }
                                 let ws_msg = serde_json::json!({
                                     "type": "hit", "community_id": cid_s,
                                     "src_ip": src_s, "dst_ip": dst_s,
@@ -408,9 +411,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     return;
                                 }
                                 tracing::info!(ja3 = %ja3_log, tenant = %tid_cl, "malicious JA3 matched — hit created");
-                                crate::soar::execute_native_playbooks(
-                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
-                                ).await;
+                                let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+                                if feats.iter().any(|f| f == "soar") {
+                                    crate::soar::execute_native_playbooks(
+                                        &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                    ).await;
+                                }
                                 let ws_msg = serde_json::json!({
                                     "type": "hit", "community_id": cid_s,
                                     "src_ip": src_s, "dst_ip": dst_s,
@@ -940,9 +946,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     return;
                                 }
                                 tracing::info!(domain = %dom_log, tenant = %tid_cl, "malicious domain in DNS query — hit created");
-                                crate::soar::execute_native_playbooks(
-                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
-                                ).await;
+                                let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+                                if feats.iter().any(|f| f == "soar") {
+                                    crate::soar::execute_native_playbooks(
+                                        &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                    ).await;
+                                }
                                 let ws_msg = serde_json::json!({
                                     "type": "hit", "community_id": cid_s,
                                     "src_ip": src_s, "dst_ip": dst_s,
@@ -1188,9 +1197,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     src = %src_ws, dst = %dst_ws, sig = %hit_soar.agent_s.alert.as_ref().map(|a| a.signature.as_str()).unwrap_or(""),
                                     "Suricata alert promoted to hit"
                                 );
-                                crate::soar::execute_native_playbooks(
-                                    &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
-                                ).await;
+                                let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+                                if feats.iter().any(|f| f == "soar") {
+                                    crate::soar::execute_native_playbooks(
+                                        &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
+                                    ).await;
+                                }
                                 let ws_msg = serde_json::json!({
                                     "type": "hit",
                                     "community_id": cid,

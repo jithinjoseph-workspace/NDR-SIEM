@@ -61,12 +61,12 @@ clear
 printf "\n"
 printf "  ${CYAN}╔══════════════════════════════════════════════╗${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}    ${BOLD}P R O M A   S E N S O R   v 1 . 0${NC}        ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${BOLD}ProVigilAI  —  Sensor Installer${NC}           ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}    Network Detection & Response Platform      ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}    Agent-Z  ·  Agent-S  ·  Packet Recorder   ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}    ${DIM}◆  Powered by Proma Secure  ◆${NC}              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${DIM}◆  Powered by PromaSecure  ◆${NC}               ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
 printf "  ${CYAN}╚══════════════════════════════════════════════╝${NC}\n"
 printf "\n"
@@ -314,7 +314,7 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
 else
   log "Agent-Z already installed"
 fi
-log "✅ Agent-Z: $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
+log "✅ Agent-Z ready"
 
 # ── Install Agent-S ───────────────────────────────
 step "Agent-S  (Threat Detection)"
@@ -335,7 +335,7 @@ else
   systemctl stop suricata 2>/dev/null || true
 fi
 suricata-update > /dev/null 2>&1 || true
-log "✅ Agent-S: $(suricata --version 2>&1 | head -1)"
+log "✅ Agent-S ready"
 
 # ── Packet Recorder ───────────────────────────────
 step "Packet Recorder"
@@ -854,9 +854,9 @@ if [ "$SENSOR_MODE" = "tap" ] && [ -n "$SENSOR_IP" ]; then
   SENSOR_LINE="suppress gen_id 1, sig_id 0, track by_src, ip ${SENSOR_IP}"
   if ! grep -qF "$SENSOR_LINE" "$THRESHOLD_FILE" 2>/dev/null; then
     echo "$SENSOR_LINE" >> "$THRESHOLD_FILE"
-    log "  ✅ Suppressed all Suricata alerts from sensor IP: $SENSOR_IP (TAP mode)"
+    log "  ✅ Suppressed all Agent-S alerts from sensor IP: $SENSOR_IP (TAP mode)"
   else
-    log "  Sensor IP $SENSOR_IP already suppressed in Suricata"
+    log "  Sensor IP $SENSOR_IP already suppressed in Agent-S"
   fi
 else
   log "  Agent mode: sensor IP NOT suppressed — server traffic is monitored"
@@ -2752,7 +2752,7 @@ printf "  ${CYAN}╠════════════════════
 printf "  ${CYAN}║${NC}  ${DIM}Logs :${NC}  journalctl -u ndr-agent -f           ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  ${DIM}Conf :${NC}  /etc/ndr/sensor.conf                 ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
-printf "  ${CYAN}║${NC}    ${DIM}◆  Powered by Proma Secure  ◆${NC}              ${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}    ${DIM}◆  Powered by PromaSecure  ◆${NC}               ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
 printf "  ${CYAN}╚══════════════════════════════════════════════╝${NC}\n"
 printf "\n"

@@ -282,6 +282,8 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
+LICENSE_SECRET=
+LICENSE_TOKEN=
 _EARLY_ENV
 log ".env written early (will be updated with final values in network step)"
 
@@ -324,8 +326,6 @@ sudo apt-get install -y \
     arp-scan iputils-arping snmp \
     libpcre3 2>/dev/null || true
 
-# scapy needed for ARP isolation in ndr-agent
-pip3 install scapy --break-system-packages -q 2>/dev/null || pip3 install scapy -q 2>/dev/null || true
 
 if ! dpkg -l libpcre3 2>/dev/null | grep -q '^ii'; then
     for PCRE3_URL in \
@@ -355,26 +355,9 @@ step "Node.js 20"
 log "Skipped — UI runs from Docker image, Node.js not required"
 
 # ══════════════════════════════════════════════
-step "Agent-S  (Suricata)"
+step "Agent-S"
 
-if ! command -v suricata &>/dev/null; then
-    log "Installing Agent-S..."
-    sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-    sudo apt-get update -qq 2>/dev/null || true
-    if sudo apt-get install -y suricata 2>/dev/null; then
-        log "Agent-S installed from repository"
-    else
-        warn "Agent-S install failed — skipping"
-    fi
-    sudo suricata-update 2>/dev/null || true
-    sudo systemctl disable suricata 2>/dev/null || true
-    sudo systemctl stop suricata 2>/dev/null || true
-    log "Agent-S ready"
-else
-    log "Agent-S already installed"
-    sudo systemctl disable suricata 2>/dev/null || true
-    sudo systemctl stop suricata 2>/dev/null || true
-fi
+log "Skipped — Agent-S runs on dedicated remote sensor machines"
 
 # ── Packet Recorder (Arkime) ──────────────────
 log "Installing Packet Recorder..."
@@ -467,33 +450,9 @@ else
 fi
 
 # ══════════════════════════════════════════════
-step "Agent-Z  (Zeek)"
+step "Agent-Z"
 
-if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
-    log "Installing Agent-Z..."
-    ZEEK_UBUNTU_VER="$OS_VERSION"
-    for TRY_VER in "$OS_VERSION" "24.04" "22.04"; do
-        ZEEK_KEY_URL="https://download.opensuse.org/repositories/security:zeek/xUbuntu_${TRY_VER}/Release.key"
-        if curl -fsSL --max-time 10 "$ZEEK_KEY_URL" -o /dev/null 2>/dev/null; then
-            ZEEK_UBUNTU_VER="$TRY_VER"
-            break
-        fi
-    done
-    log "Using Agent-Z repo for Ubuntu ${ZEEK_UBUNTU_VER}"
-    echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${ZEEK_UBUNTU_VER}/ /" \
-        | sudo tee /etc/apt/sources.list.d/security:zeek.list
-    curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
-        | gpg --dearmor \
-        | sudo tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
-    sudo apt-get update -qq 2>/dev/null || true
-    if sudo apt-get install -y zeek 2>/dev/null; then
-        log "Agent-Z installed"
-    else
-        warn "Agent-Z install failed — check repo availability for Ubuntu ${ZEEK_UBUNTU_VER}"
-    fi
-else
-    log "Agent-Z already installed"
-fi
+log "Skipped — Agent-Z runs on dedicated remote sensor machines"
 
 # ══════════════════════════════════════════════
 step "Analytics Database  (ClickHouse)"
@@ -667,169 +626,6 @@ EOF
     log "Packet Recorder configured on interface: ${IFACE}"
 fi
 
-# ── Configure Zeek ────────────────────────────
-log "Configuring Agent-Z..."
-# Write local.zeek — only load scripts that actually exist on this Zeek version
-ZEEK_SITE=/opt/zeek/share/zeek/site
-ZEEK_BASE=/opt/zeek/share/zeek
-
-zeek_load() {
-    local s="$1"
-    # try base/, policy/, and root
-    for d in "$ZEEK_BASE" "$ZEEK_BASE/policy" "$ZEEK_BASE/base"; do
-        [ -f "$d/$s.zeek" ] || [ -f "$d/$s" ] && { echo "@load $s"; return; }
-    done
-    # try detect-sqli variant if detect-sql-injection not found
-    if [[ "$s" == *"detect-sql-injection"* ]]; then
-        local alt="${s/detect-sql-injection/detect-sqli}"
-        for d in "$ZEEK_BASE" "$ZEEK_BASE/policy" "$ZEEK_BASE/base"; do
-            [ -f "$d/$alt.zeek" ] || [ -f "$d/$alt" ] && { echo "@load $alt"; return; }
-        done
-    fi
-    echo "  [zeek] skipping missing script: $s" >&2
-}
-
-sudo tee "$ZEEK_SITE/local.zeek" > /dev/null << ZEEKCONF
-# NDR Stack — Zeek Configuration
-@load policy/tuning/json-logs.zeek
-@load policy/protocols/conn/community-id-logging
-$(zeek_load protocols/ssh/detect-bruteforcing)
-$(zeek_load protocols/ssl/validate-certs)
-$(zeek_load protocols/http/detect-sql-injection)
-$(zeek_load protocols/http/detect-webapps)
-$(zeek_load misc/detect-traceroute)
-$(zeek_load frameworks/files/hash-all-files)
-$(zeek_load frameworks/files/detect-MHR)
-$(zeek_load policy/frameworks/software/vulnerable)
-$(zeek_load policy/frameworks/software/version-changes)
-$(zeek_load policy/frameworks/software/windows-version-detection)
-@load policy/protocols/conn/known-hosts
-@load policy/protocols/conn/known-services
-@load policy/tuning/track-all-assets.zeek
-@load policy/protocols/http/software.zeek
-@load policy/protocols/dhcp/software.zeek
-@load policy/protocols/ssh/software.zeek
-@load ndr-arp
-
-redef tcp_inactivity_timeout  = 15 secs;
-redef udp_inactivity_timeout  = 15 secs;
-redef icmp_inactivity_timeout = 10 secs;
-ZEEKCONF
-
-sudo tee /opt/zeek/share/zeek/site/ndr-arp.zeek > /dev/null << 'ARPSCRIPT'
-module ARP;
-
-export {
-    redef enum Log::ID += { LOG };
-
-    type Info: record {
-        ts:        time    &log;
-        operation: string  &log;
-        mac:       string  &log;
-        dst_mac:   string  &log;
-        ip:        addr    &log;
-        dst_ip:    addr    &log;
-    };
-}
-
-# NDR sensor self-exclusion — ndr-agent rewrites this file at every Start
-# with the real sensor MAC and IP so ARP isolation doesn't self-alert.
-# Empty sets here are safe: Zeek loads them only if agent hasn't started yet.
-const NDR_SENSOR_MACS: set[string] = {};
-const NDR_SENSOR_IPS:  set[addr]   = {};
-
-event zeek_init() &priority=5
-{
-    Log::create_stream(ARP::LOG, [$columns=Info, $path="arp"]);
-}
-
-event arp_request(mac_src: string, mac_dst: string,
-                  SPA: addr, SHA: string,
-                  TPA: addr, THA: string)
-{
-    if (SHA in NDR_SENSOR_MACS) return;
-    if (SPA in NDR_SENSOR_IPS)  return;
-    Log::write(ARP::LOG, Info(
-        $ts        = network_time(),
-        $operation = "request",
-        $mac       = SHA,
-        $dst_mac   = mac_dst,
-        $ip        = SPA,
-        $dst_ip    = TPA
-    ));
-}
-
-event arp_reply(mac_src: string, mac_dst: string,
-                SPA: addr, SHA: string,
-                TPA: addr, THA: string)
-{
-    if (SHA in NDR_SENSOR_MACS) return;
-    if (SPA in NDR_SENSOR_IPS)  return;
-    Log::write(ARP::LOG, Info(
-        $ts        = network_time(),
-        $operation = "reply",
-        $mac       = SHA,
-        $dst_mac   = THA,
-        $ip        = SPA,
-        $dst_ip    = TPA
-    ));
-}
-ARPSCRIPT
-
-/opt/zeek/bin/zkg install zeek/corelight/zeek-community-id \
-    --force >/dev/null 2>&1 || true
-log "Agent-Z configured"
-
-sudo tee /etc/logrotate.d/zeek-ndr > /dev/null << 'EOF'
-/home/user/logs/zeek/*.log {
-    su root root
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-    dateext
-    dateformat -%Y%m%d
-}
-EOF
-log "Agent-Z log rotation configured"
-
-# ── Configure Suricata ────────────────────────
-log "Configuring Agent-S..."
-sudo cp /etc/suricata/suricata.yaml \
-    /etc/suricata/suricata.yaml.bak 2>/dev/null || true
-sudo sed -i 's/community-id: false/community-id: true/g' \
-    /etc/suricata/suricata.yaml 2>/dev/null || true
-sudo sed -i "s|default-log-dir: /var/log/suricata|default-log-dir: $HOME_DIR/logs/suricata|g" \
-    /etc/suricata/suricata.yaml 2>/dev/null || true
-sudo sed -i "s|interface: eth0|interface: $IFACE|g" \
-    /etc/suricata/suricata.yaml 2>/dev/null || true
-log "Updating Agent-S rules..."
-sudo suricata-update >/dev/null 2>&1 || true
-log "Agent-S configured on interface: $IFACE"
-
-log "Configuring Agent-S suppression..."
-THRESHOLD_FILE="/etc/suricata/threshold.conf"
-sudo touch "$THRESHOLD_FILE"
-if sudo grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
-    sudo sed -i "s|threshold-file:.*|threshold-file: $THRESHOLD_FILE|g" /etc/suricata/suricata.yaml
-else
-    echo "threshold-file: $THRESHOLD_FILE" | sudo tee -a /etc/suricata/suricata.yaml > /dev/null
-fi
-log "Agent-S suppression ready"
-
-log "Configuring Agent-Z suppression..."
-sudo tee /opt/zeek/share/zeek/site/ndr-suppress.zeek > /dev/null << 'ZEEKSUPPRESS'
-# NDR suppression filters — managed dynamically by NDR engine
-# Hooks are appended here via suppress_sid commands; do not edit manually
-ZEEKSUPPRESS
-if ! sudo grep -q "ndr-suppress" /opt/zeek/share/zeek/site/local.zeek 2>/dev/null; then
-    echo "@load ndr-suppress" | sudo tee -a /opt/zeek/share/zeek/site/local.zeek > /dev/null
-fi
-log "Agent-Z suppression ready"
-
 # ── Firewall ──────────────────────────────────
 log "Configuring firewall rules for internal ports..."
 INTERNAL_PORTS="8123 9000 2181 3001"
@@ -855,26 +651,8 @@ else
     warn "iptables not found — manually block ports $INTERNAL_PORTS from external access"
 fi
 
-sudo tee /etc/logrotate.d/suricata-ndr > /dev/null << 'EOF'
-/home/user/logs/suricata/eve.json {
-    su root root
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-    dateext
-    dateformat -%Y%m%d
-}
-EOF
-log "Agent-S log rotation configured"
-
 # ── Directories ───────────────────────────────
 log "Creating runtime directories..."
-mkdir -p "$HOME_DIR/logs/suricata" "$HOME_DIR/logs/zeek"
-mkdir -p "$HOME_DIR/.vector/data/suricata" "$HOME_DIR/.vector/data/zeek"
 mkdir -p "$HOME_DIR/ndr-config"
 sudo mkdir -p /opt/ndr/pcap /opt/ndr/evidence
 sudo chmod -R 755 /opt/ndr
@@ -906,6 +684,43 @@ if [ -z "$OPENAI_API_KEY" ]; then
     read -p "  OpenAI API key for ARIA (press Enter to skip): " -r OPENAI_API_KEY
 fi
 
+# ── License token + secret (from PromaSecure super admin portal) ─────────
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_SECRET" "$INSTALL_DIR/.env"; then
+    LICENSE_SECRET=$(grep "^LICENSE_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$LICENSE_SECRET" ]; then
+    printf "\n"
+    read -p "  License secret (provided by your NDR vendor): " -r LICENSE_SECRET
+fi
+
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_TOKEN" "$INSTALL_DIR/.env"; then
+    LICENSE_TOKEN=$(grep "^LICENSE_TOKEN=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$LICENSE_TOKEN" ]; then
+    printf "\n"
+    read -p "  License token (paste the value from your NDR admin portal, press Enter to skip): " -r LICENSE_TOKEN
+fi
+
+# Auto-extract TENANT_ID from the license token so events are stored under
+# the correct tenant, not hardcoded "default".
+TENANT_ID="default"
+if [ -n "$LICENSE_TOKEN" ]; then
+    PAYLOAD=$(echo "$LICENSE_TOKEN" | cut -d. -f2)
+    # JWT uses base64url (- and _ instead of + and /); add padding if needed
+    PADDED=$(echo "$PAYLOAD" | tr '_-' '/+')
+    case $(( ${#PAYLOAD} % 4 )) in
+        2) PADDED="${PADDED}==" ;;
+        3) PADDED="${PADDED}=" ;;
+    esac
+    EXTRACTED=$(echo "$PADDED" | base64 -d 2>/dev/null \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('tenant_id','default'))" 2>/dev/null \
+        || echo "default")
+    if [ -n "$EXTRACTED" ]; then
+        TENANT_ID="$EXTRACTED"
+        log "Tenant ID from license: $TENANT_ID"
+    fi
+fi
+
 cat > "$INSTALL_DIR/.env" << ENVEOF
 HOST_IP=$HOST_IP
 HOME_DIR=$HOME_DIR
@@ -913,7 +728,7 @@ INSTALL_DIR=$INSTALL_DIR
 IFACE=$IFACE
 DEPLOY_MODE=$DEPLOY_MODE
 LOCAL_SENSOR_ID=local-central
-TENANT_ID=default
+TENANT_ID=$TENANT_ID
 CLICKHOUSE_URL=$CLICKHOUSE_URL
 CLICKHOUSE_URL_SECONDARY=$CLICKHOUSE_URL_SECONDARY
 CLICKHOUSE_USER=$CLOUD_CH_USER
@@ -932,76 +747,25 @@ BEACON_WINDOW_HOURS=1
 INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
+LICENSE_SECRET=$LICENSE_SECRET
+LICENSE_TOKEN=$LICENSE_TOKEN
 ENVEOF
 log ".env generated"
 
 # ── Sudoers ───────────────────────────────────
 log "Configuring sudo permissions..."
 cat << SUDOERS | sudo tee /etc/sudoers.d/ndr-stack > /dev/null
-# NDR stack — restricted sudo (each command locked to its specific purpose)
-Cmnd_Alias NDR_SURICATA  = /usr/bin/suricata, /usr/bin/suricatasc
-Cmnd_Alias NDR_ZEEK      = /opt/zeek/bin/zeek
-Cmnd_Alias NDR_PKILL     = /usr/bin/pkill suricata, /usr/bin/pkill -9 suricata, /usr/bin/pkill zeek, /usr/bin/pkill -9 zeek, /usr/bin/pkill -f suricata, /usr/bin/pkill -f zeek
-Cmnd_Alias NDR_PGREP     = /usr/bin/pgrep suricata, /usr/bin/pgrep zeek, /usr/bin/pgrep -f suricata, /usr/bin/pgrep -f zeek, /usr/bin/pgrep -x zeek
-Cmnd_Alias NDR_SYSTEMCTL = /usr/bin/systemctl daemon-reload, /usr/bin/systemctl start ndr-agent, /usr/bin/systemctl stop ndr-agent, /usr/bin/systemctl restart ndr-agent, /usr/bin/systemctl enable ndr-agent, /usr/bin/systemctl disable ndr-agent, /usr/bin/systemctl status ndr-agent, /usr/bin/systemctl start ndr-autoscaler, /usr/bin/systemctl stop ndr-autoscaler, /usr/bin/systemctl restart ndr-autoscaler, /usr/bin/systemctl enable ndr-autoscaler, /usr/bin/systemctl disable ndr-autoscaler, /usr/bin/systemctl start ndr-worker-autoscaler, /usr/bin/systemctl stop ndr-worker-autoscaler, /usr/bin/systemctl restart ndr-worker-autoscaler, /usr/bin/systemctl enable ndr-worker-autoscaler, /usr/bin/systemctl disable ndr-worker-autoscaler, /usr/bin/systemctl start ndr-updater, /usr/bin/systemctl stop ndr-updater, /usr/bin/systemctl restart ndr-updater, /usr/bin/systemctl enable ndr-updater, /usr/bin/systemctl start ndr-vector, /usr/bin/systemctl stop ndr-vector, /usr/bin/systemctl restart ndr-vector, /usr/bin/systemctl enable ndr-vector, /usr/bin/systemctl start suricata, /usr/bin/systemctl stop suricata, /usr/bin/systemctl restart suricata, /usr/bin/systemctl start zeek, /usr/bin/systemctl stop zeek, /usr/bin/systemctl start arkime-capture, /usr/bin/systemctl stop arkime-capture, /usr/bin/systemctl restart arkime-capture, /usr/bin/systemctl start arkime-viewer, /usr/bin/systemctl stop arkime-viewer, /usr/bin/systemctl restart arkime-viewer
-Cmnd_Alias NDR_TEE       = /usr/bin/tee /etc/suricata/threshold.conf, /usr/bin/tee -a /etc/suricata/threshold.conf, /usr/bin/tee /etc/suricata/ndr-sensor-suppress.conf, /usr/bin/tee -a /etc/suricata/ndr-sensor-suppress.conf, /usr/bin/tee /opt/zeek/share/zeek/site/ndr-arp.zeek, /usr/bin/tee -a /opt/zeek/share/zeek/site/local.zeek, /usr/bin/tee /etc/systemd/system/ndr-autoscaler.service, /usr/bin/tee /etc/systemd/system/ndr-worker-autoscaler.service
-Cmnd_Alias NDR_CAT       = /usr/bin/cat /opt/zeek/share/zeek/site/local.zeek, /usr/bin/cat /etc/suricata/threshold.conf
-Cmnd_Alias NDR_LOGROTATE = /usr/sbin/logrotate -f /etc/logrotate.d/suricata-ndr, /usr/sbin/logrotate -f /etc/logrotate.d/zeek-ndr
+# NDR platform — restricted sudo for platform services only
+Cmnd_Alias NDR_SYSTEMCTL = /usr/bin/systemctl daemon-reload, /usr/bin/systemctl start ndr-autoscaler, /usr/bin/systemctl stop ndr-autoscaler, /usr/bin/systemctl restart ndr-autoscaler, /usr/bin/systemctl enable ndr-autoscaler, /usr/bin/systemctl disable ndr-autoscaler, /usr/bin/systemctl start ndr-worker-autoscaler, /usr/bin/systemctl stop ndr-worker-autoscaler, /usr/bin/systemctl restart ndr-worker-autoscaler, /usr/bin/systemctl enable ndr-worker-autoscaler, /usr/bin/systemctl disable ndr-worker-autoscaler, /usr/bin/systemctl start ndr-updater, /usr/bin/systemctl stop ndr-updater, /usr/bin/systemctl restart ndr-updater, /usr/bin/systemctl enable ndr-updater, /usr/bin/systemctl start arkime-capture, /usr/bin/systemctl stop arkime-capture, /usr/bin/systemctl restart arkime-capture, /usr/bin/systemctl start arkime-viewer, /usr/bin/systemctl stop arkime-viewer, /usr/bin/systemctl restart arkime-viewer
+Cmnd_Alias NDR_TEE       = /usr/bin/tee /etc/systemd/system/ndr-autoscaler.service, /usr/bin/tee /etc/systemd/system/ndr-worker-autoscaler.service
 Cmnd_Alias NDR_IPTABLES  = /usr/sbin/iptables
-$USERNAME ALL=(ALL)  NOPASSWD: NDR_SURICATA, NDR_ZEEK, NDR_PKILL, NDR_PGREP, NDR_SYSTEMCTL, NDR_TEE, NDR_CAT, NDR_LOGROTATE
+$USERNAME ALL=(ALL)  NOPASSWD: NDR_SYSTEMCTL, NDR_TEE
 $USERNAME ALL=(root) NOPASSWD: NDR_IPTABLES
 SUDOERS
 sudo chmod 440 /etc/sudoers.d/ndr-stack
 log "Sudo configured"
 
-# ── ARP isolation capability ───────────────────
-# Device isolation uses scapy to send raw ARP frames (CAP_NET_RAW required).
-# setcap grants only that capability — no full root escalation.
-log "Granting python3 raw socket capability for ARP device isolation..."
-PYTHON3_BIN=$(readlink -f "$(which python3)")
-sudo setcap cap_net_raw+ep "$PYTHON3_BIN"
-log "ARP isolation ready (cap_net_raw set on $PYTHON3_BIN)"
-
-# ── NDR Agent service ─────────────────────────
-log "Setting up scripts..."
-chmod +x "$INSTALL_DIR/scripts/"*.py \
-         "$INSTALL_DIR/scripts/"*.sh 2>/dev/null || true
-
-log "Installing NDR Agent as system service..."
-sudo tee /etc/systemd/system/ndr-agent.service > /dev/null << SERVICE
-[Unit]
-Description=NDR Host Agent
-After=network.target
-
-[Service]
-Type=simple
-User=$USERNAME
-ExecStartPre=-/bin/rm -f /var/run/suricata.pid /run/suricata.pid /tmp/suricata.pid
-ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/ndr-agent.py
-Restart=always
-RestartSec=3
-Environment=HOME=$HOME_DIR
-Environment=SENSOR_ID=local-central
-Environment=TENANT_ID=default
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-sudo systemctl daemon-reload
-sudo systemctl enable ndr-agent
-sudo systemctl restart ndr-agent
-sleep 2
-log "NDR Agent service started"
-
-# ── Vector ────────────────────────────────────
-log "Configuring Vector..."
-cp "$INSTALL_DIR/config/vector.toml" "$HOME_DIR/.vector/vector.toml"
-sed -i "s|/home/[^/]*/logs|$HOME_DIR/logs|g" "$HOME_DIR/.vector/vector.toml"
-if [ "$DEPLOY_MODE" = "hybrid" ]; then
-    sed -i "s|bootstrap_servers = \"kafka:9092\"|bootstrap_servers = \"$CLOUD_KAFKA\"|g" \
-        "$HOME_DIR/.vector/vector.toml"
-fi
-log "Vector configured"
+log "NDR Agent skipped — Agent-S/Agent-Z run on remote sensor machines"
 
 # ══════════════════════════════════════════════
 step "Dashboard UI  (Angular)"
@@ -1408,8 +1172,7 @@ step "Verification"
 log "Verifying installation..."
 info "Mode:       $DEPLOY_MODE"
 info "Interface:  $IFACE  ($HOST_IP)"
-info "Agent-Z:    $(/opt/zeek/bin/zeek --version 2>&1 | head -1)"
-info "Agent-S:    $(suricata --version 2>&1 | head -1)"
+info "Sensors:    remote (install-sensor.sh on probe machines)"
 info "Docker:     $(sudo docker --version)"
 info "ndr-ui:     $(sudo docker inspect --format='{{.State.Status}}' ndr-ui 2>/dev/null || echo 'not started')"
 if [ "$DEPLOY_MODE" = "local" ]; then

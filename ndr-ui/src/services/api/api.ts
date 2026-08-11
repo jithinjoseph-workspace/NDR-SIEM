@@ -493,6 +493,25 @@ export class Api {
     return this.http.post(`${this.baseUrl}/auth/tenants/${id}/ai-enabled`, { enabled });
   }
 
+  getTenantFeatures(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/tenant/features`);
+  }
+
+  setTenantFeatures(tenantId: string, features: string[]): Observable<any> {
+    return this.http.post(`${this.baseUrl}/tenant/features/${tenantId}`, { features });
+  }
+
+  generateLicense(payload: {
+    tenant_id: string; tenant_name: string;
+    features: string[]; max_sensors: number; expires_days: number;
+  }): Observable<any> {
+    return this.http.post(`${this.baseUrl}/license/generate`, payload);
+  }
+
+  getLicenseSecret(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/license/secret`);
+  }
+
   getAnnouncements(): Observable<Announcement[]> {
     return this.http
       .get<AnnouncementListResponse>(`${this.baseUrl}/announcements`)

@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
-  Edit, Plus, RefreshCw, Search, X,
+  Edit, Plus, RefreshCw, Search, X, KeyRound, Copy,
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
@@ -23,6 +23,8 @@ export class Tenants implements OnInit {
   RefreshIcon = RefreshCw;
   SearchIcon  = Search;
   XIcon       = X;
+  KeyIcon     = KeyRound;
+  CopyIcon    = Copy;
 
   currentUser: any = {};
 
@@ -36,6 +38,20 @@ export class Tenants implements OnInit {
   tenantMsg          = '';
   editingTenant: any = null;
   tenantForm         = { name: '', active: true };
+
+  // Feature management
+  featureTenant: any  = null;
+  featureForm         = { ndr: true, ai: true, soar: false };
+  savingFeatures      = false;
+
+  // License generation
+  licenseTenant: any  = null;
+  licenseForm         = { expires_days: 365, max_sensors: 10 };
+  generatedToken      = '';
+  generatingLicense   = false;
+  tokenCopied         = false;
+  licenseSecret       = '';
+  installCopied       = false;
 
   msg     = '';
   msgType = '';
@@ -229,6 +245,115 @@ export class Tenants implements OnInit {
         error: () => {},
       });
     }, delays[attempt] ?? delays[delays.length - 1]);
+  }
+
+  openFeatures(tenant: any) {
+    this.featureTenant = tenant;
+    const feats: string[] = tenant.features ?? ['ndr', 'ai'];
+    this.featureForm = {
+      ndr:  feats.includes('ndr'),
+      ai:   feats.includes('ai'),
+      soar: feats.includes('soar'),
+    };
+    this.cdr.detectChanges();
+  }
+
+  closeFeatures() { this.featureTenant = null; this.cdr.detectChanges(); }
+
+  saveFeatures() {
+    if (!this.featureTenant) return;
+    const features: string[] = [];
+    if (this.featureForm.ndr)  features.push('ndr');
+    if (this.featureForm.ai)   features.push('ai');
+    if (this.featureForm.soar) features.push('soar');
+    this.savingFeatures = true;
+    this.api.setTenantFeatures(this.featureTenant.id, features).subscribe({
+      next: () => {
+        this.featureTenant.features = features;
+        this.savingFeatures = false;
+        this.closeFeatures();
+        this.showMsg('Features updated', 'success');
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.savingFeatures = false;
+        this.showMsg('Failed to save features', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  openLicense(tenant: any) {
+    this.licenseTenant   = tenant;
+    this.generatedToken  = '';
+    this.tokenCopied     = false;
+    this.licenseForm     = { expires_days: 365, max_sensors: 10 };
+    this.cdr.detectChanges();
+  }
+
+  closeLicense() { this.licenseTenant = null; this.generatedToken = ''; this.cdr.detectChanges(); }
+
+  generateLicense() {
+    if (!this.licenseTenant) return;
+    const features: string[] = this.licenseTenant.features ?? ['ndr', 'ai'];
+    this.generatingLicense = true;
+    this.api.generateLicense({
+      tenant_id:    this.licenseTenant.id,
+      tenant_name:  this.licenseTenant.name,
+      features,
+      max_sensors:  this.licenseForm.max_sensors,
+      expires_days: this.licenseForm.expires_days,
+    }).subscribe({
+      next: (data: any) => {
+        this.generatedToken    = data.token ?? '';
+        this.generatingLicense = false;
+        this.installCopied     = false;
+        // Fetch secret so we can show the full install package
+        this.api.getLicenseSecret().subscribe({
+          next: (s: any) => { this.licenseSecret = s.secret ?? ''; this.cdr.detectChanges(); },
+          error: () => {},
+        });
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.generatingLicense = false;
+        this.showMsg('Failed to generate license', 'error');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  copyInstallPackage() {
+    const installCmd = `bash <(curl -fsSL https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime/install-customer.sh)`;
+    const instructions = [
+      `=== ProVigilAI Install Package for ${this.licenseTenant?.name} ===`,
+      ``,
+      `1. Run on the client's Ubuntu server:`,
+      `   ${installCmd}`,
+      ``,
+      `2. When prompted, enter:`,
+      `   License secret : ${this.licenseSecret}`,
+      `   License token  : ${this.generatedToken}`,
+      ``,
+      `Features : ${(this.licenseTenant?.features ?? ['ndr','ai']).join(', ')}`,
+      `Expires  : ${this.licenseForm.expires_days} days`,
+      `Sensors  : up to ${this.licenseForm.max_sensors}`,
+    ].join('\n');
+
+    navigator.clipboard.writeText(instructions).then(() => {
+      this.installCopied = true;
+      setTimeout(() => { this.installCopied = false; this.cdr.detectChanges(); }, 2500);
+      this.cdr.detectChanges();
+    });
+  }
+
+  copyToken() {
+    if (!this.generatedToken) return;
+    navigator.clipboard.writeText(this.generatedToken).then(() => {
+      this.tokenCopied = true;
+      setTimeout(() => { this.tokenCopied = false; this.cdr.detectChanges(); }, 2000);
+      this.cdr.detectChanges();
+    });
   }
 
   showMsg(msg: string, type: string) {

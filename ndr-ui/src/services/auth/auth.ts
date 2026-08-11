@@ -173,6 +173,23 @@ export class AuthService implements OnDestroy {
     return user.ai_enabled !== false;
   }
 
+  // Returns features licensed for this tenant (stored in user session after login).
+  // super_admin always gets all features; others read from the session features array.
+  hasFeature(feature: string): boolean {
+    const user = this.getUser();
+    if (!user) return false;
+    if (user.role === 'super_admin') return true;
+    const features: string[] = user.features ?? ['ndr', 'ai'];
+    return features.includes(feature);
+  }
+
+  getTenantFeatures(): string[] {
+    const user = this.getUser();
+    if (!user) return ['ndr'];
+    if (user.role === 'super_admin') return ['ndr', 'ai', 'soar'];
+    return user.features ?? ['ndr', 'ai'];
+  }
+
   hasPermission(permission: string): boolean {
     const user = this.getUser();
     if (!user) return false;

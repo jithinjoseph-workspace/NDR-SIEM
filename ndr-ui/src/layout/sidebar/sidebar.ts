@@ -61,10 +61,10 @@ export class Sidebar implements OnInit, OnDestroy {
     // Preserve collapsed state across navigation rebuilds
     const collapsed = new Map<string, boolean>();
     this.navGroups.forEach(g => collapsed.set(g.section, g.collapsed));
-
+ 
     const user = this.auth.getUser();
     const isDefaultTenant = user?.tenant_id === 'default';
-
+ 
     if (this.auth.isAdmin()) {
       this.navGroups = [
         { section: 'MANAGEMENT', collapsed: false, items: [
@@ -120,7 +120,8 @@ export class Sidebar implements OnInit, OnDestroy {
       if (isDefaultTenant && has('setup')) systemItems.push({ label: 'Sensor Setup', route: '/analyst/setup', icon: Settings, permission: 'setup' });
 
       const responseItems: NavItem[] = [];
-      if (has('soar'))     responseItems.push({ label: 'SOAR',     route: '/analyst/soar',     icon: Zap,         permission: 'soar'     });
+      if (has('soar') && this.auth.hasFeature('soar'))
+        responseItems.push({ label: 'SOAR', route: '/analyst/soar', icon: Zap, permission: 'soar' });
       if (has('evidence')) responseItems.push({ label: 'Evidence', route: '/analyst/evidence', icon: FolderSearch, permission: 'evidence' });
 
       const intelItems: NavItem[] = [];

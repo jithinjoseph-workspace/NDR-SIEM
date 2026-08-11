@@ -258,6 +258,8 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
+LICENSE_SECRET=
+LICENSE_TOKEN=
 _EARLY_ENV
 log ".env written early (will be updated with final values in network step)"
 
@@ -900,6 +902,42 @@ if [ -z "$OPENAI_API_KEY" ]; then
     read -p "  OpenAI API key for ARIA (press Enter to skip): " -r OPENAI_API_KEY
 fi
 
+# ── License token + secret (from PromaSecure super admin portal) ─────────
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_SECRET" "$INSTALL_DIR/.env"; then
+    LICENSE_SECRET=$(grep "^LICENSE_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$LICENSE_SECRET" ]; then
+    printf "\n"
+    read -p "  License secret (provided by your NDR vendor): " -r LICENSE_SECRET
+fi
+
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_TOKEN" "$INSTALL_DIR/.env"; then
+    LICENSE_TOKEN=$(grep "^LICENSE_TOKEN=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$LICENSE_TOKEN" ]; then
+    printf "\n"
+    read -p "  License token (paste the value from your NDR admin portal, press Enter to skip): " -r LICENSE_TOKEN
+fi
+
+# Auto-extract TENANT_ID from the license token so events are stored under
+# the correct tenant, not hardcoded "default".
+TENANT_ID="default"
+if [ -n "$LICENSE_TOKEN" ]; then
+    PAYLOAD=$(echo "$LICENSE_TOKEN" | cut -d. -f2)
+    PADDED=$(echo "$PAYLOAD" | tr '_-' '/+')
+    case $(( ${#PAYLOAD} % 4 )) in
+        2) PADDED="${PADDED}==" ;;
+        3) PADDED="${PADDED}=" ;;
+    esac
+    EXTRACTED=$(echo "$PADDED" | base64 -d 2>/dev/null \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('tenant_id','default'))" 2>/dev/null \
+        || echo "default")
+    if [ -n "$EXTRACTED" ]; then
+        TENANT_ID="$EXTRACTED"
+        log "Tenant ID from license: $TENANT_ID"
+    fi
+fi
+
 cat > "$INSTALL_DIR/.env" << ENVEOF
 HOST_IP=$HOST_IP
 HOME_DIR=$HOME_DIR
@@ -907,7 +945,7 @@ INSTALL_DIR=$INSTALL_DIR
 IFACE=$IFACE
 DEPLOY_MODE=$DEPLOY_MODE
 LOCAL_SENSOR_ID=local-central
-TENANT_ID=default
+TENANT_ID=$TENANT_ID
 CLICKHOUSE_URL=$CLICKHOUSE_URL
 CLICKHOUSE_URL_SECONDARY=$CLICKHOUSE_URL_SECONDARY
 CLICKHOUSE_USER=$CLOUD_CH_USER
@@ -927,6 +965,8 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
+LICENSE_SECRET=$LICENSE_SECRET
+LICENSE_TOKEN=$LICENSE_TOKEN
 ENVEOF
 log ".env generated"
 

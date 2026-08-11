@@ -56,6 +56,19 @@
           (click)="toggleTenantAI(tenant, !tenant.ai_enabled)">
           {{ tenant.ai_enabled ? 'AI On' : 'AI Off' }}
         </button>
+        <button *ngIf="currentUser?.role === 'super_admin'"
+          class="secondary-action compact-action"
+          type="button" title="Manage licensed features"
+          (click)="openFeatures(tenant)">
+          <lucide-icon [name]="KeyIcon" class="w-3.5 h-3.5"></lucide-icon>
+          Features
+        </button>
+        <button *ngIf="currentUser?.role === 'super_admin'"
+          class="secondary-action compact-action"
+          type="button" title="Generate license token for on-premise install"
+          (click)="openLicense(tenant)">
+          License
+        </button>
         <button class="secondary-action compact-action" type="button" [disabled]="tenant.id === 'default'"
           (click)="setTenantActive(tenant, !tenant.active)">
           {{ tenant.active ? 'Deactivate' : 'Reactivate' }}
@@ -92,6 +105,126 @@
         {{ savingTenant ? 'Creating...' : 'Create Tenant' }}
       </button>
       <button class="secondary-action" type="button" (click)="showAddTenant=false">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Features Modal -->
+<div *ngIf="featureTenant" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <div>
+        <h3>Licensed Features</h3>
+        <p>{{ featureTenant.name }} — {{ featureTenant.id }}</p>
+      </div>
+      <button type="button" class="icon-button" (click)="closeFeatures()">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <p style="font-size:0.8rem;opacity:0.6;margin-bottom:1rem;">
+      Select which modules this tenant is licensed to use. SOAR requires the NDR module.
+    </p>
+    <label class="toggle-field">
+      <input [(ngModel)]="featureForm.ndr" type="checkbox" [disabled]="true" />
+      <span>NDR — Network Detection &amp; Response <em>(always included)</em></span>
+    </label>
+    <label class="toggle-field">
+      <input [(ngModel)]="featureForm.ai" type="checkbox" />
+      <span>AI Analysis — ARIA threat explanations &amp; AI activity</span>
+    </label>
+    <label class="toggle-field">
+      <input [(ngModel)]="featureForm.soar" type="checkbox" />
+      <span>SOAR — Automated response playbooks &amp; integrations</span>
+    </label>
+    <div class="modal-actions">
+      <button class="primary-action" type="button" [disabled]="savingFeatures" (click)="saveFeatures()">
+        {{ savingFeatures ? 'Saving...' : 'Save Features' }}
+      </button>
+      <button class="secondary-action" type="button" (click)="closeFeatures()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- License Modal -->
+<div *ngIf="licenseTenant" class="modal-backdrop">
+  <div class="modal-panel" style="max-width:560px;">
+    <div class="modal-head">
+      <div>
+        <h3>Generate License</h3>
+        <p>{{ licenseTenant.name }} — on-premise install token</p>
+      </div>
+      <button type="button" class="icon-button" (click)="closeLicense()">
+        <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+      </button>
+    </div>
+    <p style="font-size:0.8rem;opacity:0.6;margin-bottom:1rem;">
+      This signed JWT encodes the tenant's licensed features and expiry.
+      The client puts it in their <code>.env</code> as <code>LICENSE_TOKEN=…</code>.
+      Features included: <strong>{{ (licenseTenant.features ?? ['ndr','ai']).join(', ') }}</strong>
+    </p>
+    <label class="form-field">
+      <span>Valid for (days)</span>
+      <input [(ngModel)]="licenseForm.expires_days" type="number" min="1" max="3650" />
+    </label>
+    <label class="form-field">
+      <span>Max sensors</span>
+      <input [(ngModel)]="licenseForm.max_sensors" type="number" min="1" max="1000" />
+    </label>
+    <div *ngIf="!generatedToken" class="modal-actions">
+      <button class="primary-action" type="button" [disabled]="generatingLicense" (click)="generateLicense()">
+        {{ generatingLicense ? 'Generating...' : 'Generate Token' }}
+      </button>
+      <button class="secondary-action" type="button" (click)="closeLicense()">Cancel</button>
+    </div>
+    <div *ngIf="generatedToken" style="margin-top:1rem;">
+
+      <!-- Token -->
+      <label class="form-field">
+        <span>LICENSE_TOKEN</span>
+        <textarea readonly rows="4" style="font-family:monospace;font-size:0.72rem;word-break:break-all;">{{ generatedToken }}</textarea>
+      </label>
+
+      <!-- Install package block -->
+      <div style="margin-top:1rem;padding:1rem;background:var(--surface-2,#0f172a);border:1px solid var(--border,#1e293b);border-radius:8px;">
+        <p style="font-size:0.75rem;font-weight:600;opacity:0.7;margin:0 0 0.75rem;letter-spacing:0.05em;text-transform:uppercase;">Send to Client</p>
+
+        <div style="font-size:0.78rem;margin-bottom:0.5rem;">
+          <span style="opacity:0.5;">Step 1 —</span> Run on client's Ubuntu server:
+        </div>
+        <pre style="font-family:monospace;font-size:0.72rem;background:var(--surface-3,#1e293b);padding:0.6rem 0.8rem;border-radius:6px;margin:0 0 0.75rem;white-space:pre-wrap;word-break:break-all;">bash &lt;(curl -fsSL https://raw.githubusercontent.com/jithinjoseph-workspace/NDR-Demo/arkime/install-customer.sh)</pre>
+
+        <div style="font-size:0.78rem;margin-bottom:0.5rem;">
+          <span style="opacity:0.5;">Step 2 —</span> When prompted, paste these values:
+        </div>
+        <div style="display:grid;gap:0.4rem;margin-bottom:0.75rem;">
+          <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;">
+            <span style="opacity:0.5;min-width:110px;">License secret</span>
+            <code style="font-family:monospace;background:var(--surface-3,#1e293b);padding:0.2rem 0.5rem;border-radius:4px;word-break:break-all;">{{ licenseSecret || '…loading' }}</code>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;">
+            <span style="opacity:0.5;min-width:110px;">License token</span>
+            <code style="font-family:monospace;background:var(--surface-3,#1e293b);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.68rem;word-break:break-all;max-height:2.8rem;overflow:hidden;">{{ generatedToken.slice(0,60) }}…</code>
+          </div>
+        </div>
+
+        <div style="font-size:0.75rem;opacity:0.5;margin-bottom:0.75rem;">
+          Features: <strong style="opacity:1;">{{ (licenseTenant?.features ?? ['ndr','ai']).join(', ') }}</strong>
+          &nbsp;·&nbsp; Expires: <strong style="opacity:1;">{{ licenseForm.expires_days }} days</strong>
+          &nbsp;·&nbsp; Max sensors: <strong style="opacity:1;">{{ licenseForm.max_sensors }}</strong>
+        </div>
+      </div>
+
+      <div class="modal-actions" style="margin-top:0.75rem;">
+        <button class="primary-action" type="button" (click)="copyInstallPackage()">
+          <lucide-icon [name]="CopyIcon" class="w-3.5 h-3.5"></lucide-icon>
+          {{ installCopied ? 'Copied!' : 'Copy Install Package' }}
+        </button>
+        <button class="secondary-action" type="button" (click)="copyToken()">
+          {{ tokenCopied ? 'Copied!' : 'Copy Token Only' }}
+        </button>
+        <button class="secondary-action" type="button" (click)="generateLicense()">Regenerate</button>
+        <button class="secondary-action" type="button" (click)="closeLicense()">Close</button>
+      </div>
     </div>
   </div>
 </div>

@@ -763,15 +763,46 @@ pub async fn get_tenants(
     &self
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let result = self.client
-        .query("SELECT id, name, active, ai_enabled FROM ndr.tenants FINAL ORDER BY created_at")
-        .fetch_all::<(String,String,u8,u8)>()
+        .query("SELECT id, name, active, ai_enabled, features FROM ndr.tenants FINAL ORDER BY created_at")
+        .fetch_all::<(String,String,u8,u8,String)>()
         .await?;
-    Ok(result.iter().map(|r| json!({
-        "id":         r.0,
-        "name":       r.1,
-        "active":     r.2 == 1,
-        "ai_enabled": r.3 == 1
-    })).collect())
+    Ok(result.iter().map(|r| {
+        let features: Vec<&str> = r.4.split(',').filter(|s| !s.is_empty()).collect();
+        json!({
+            "id":         r.0,
+            "name":       r.1,
+            "active":     r.2 == 1,
+            "ai_enabled": r.3 == 1,
+            "features":   features,
+        })
+    }).collect())
+}
+
+pub async fn get_tenant_features(&self, tenant_id: &str) -> Vec<String> {
+    self.client
+        .query("SELECT features FROM ndr.tenants FINAL WHERE id = ? LIMIT 1")
+        .bind(tenant_id)
+        .fetch_all::<String>()
+        .await
+        .unwrap_or_default()
+        .first()
+        .map(|v| v.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect())
+        .unwrap_or_else(|| vec!["ndr".to_string(), "ai".to_string()])
+}
+
+pub async fn set_tenant_features(&self, tenant_id: &str, features: &[String]) -> anyhow::Result<()> {
+    let features_str = features.join(",");
+    self.client
+        .query(&format!(
+            "INSERT INTO ndr.tenants (id, name, active, ai_enabled, features, updated_at, created_at) \
+             SELECT id, name, active, ai_enabled, '{}', now(), created_at \
+             FROM ndr.tenants FINAL WHERE id = '{}'",
+            features_str.replace('\'', "''"),
+            tenant_id.replace('\'', "''")
+        ))
+        .execute()
+        .await?;
+    Ok(())
 }
 
 
@@ -1305,6 +1336,7 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS permissions String DEFAULT 'dashboard,alerts'",
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS active UInt8 DEFAULT 1",
                 "ALTER TABLE ndr.tenants ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
+                "ALTER TABLE ndr.tenants ADD COLUMN IF NOT EXISTS features String DEFAULT 'ndr,ai'",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS hostname String DEFAULT ''",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS interface_name String DEFAULT ''",
                 "ALTER TABLE ndr.sensor_keys ADD COLUMN IF NOT EXISTS os_name String DEFAULT ''",

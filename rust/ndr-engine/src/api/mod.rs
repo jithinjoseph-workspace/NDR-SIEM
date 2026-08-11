@@ -1,6 +1,7 @@
 // NDR Engine — API Routes and Handlers
 // License: Apache-2.0
 
+use axum::response::IntoResponse;
 pub mod websocket;
 pub mod response;
 #[allow(unused_imports)]
@@ -217,6 +218,11 @@ pub struct AppState {
     // Update availability, refreshed every 6h from the GitHub VERSION file.
     // None when running in cloud mode (DEPLOY_MODE=cloud) or before first check.
     pub update_status: Arc<tokio::sync::RwLock<UpdateStatus>>,
+    // Secret used to sign and verify per-tenant license JWTs.
+    pub license_secret: String,
+    // JWT verified at startup from LICENSE_TOKEN env var (on-premise installs).
+    // When present, its features take precedence over the database for this tenant.
+    pub verified_license: Option<std::sync::Arc<crate::license::LicenseClaims>>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -2627,6 +2633,86 @@ pub async fn sync_community_rules_api(
         "status":  "started",
         "message": "Sigma sync started in background",
     })).into_response()
+}
+
+// ── License endpoints ────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct GenerateLicenseRequest {
+    pub tenant_id:    String,
+    pub tenant_name:  String,
+    pub features:     Vec<String>,
+    pub max_sensors:  u32,
+    pub expires_days: u32,
+}
+
+pub async fn generate_license(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<GenerateLicenseRequest>,
+) -> axum::response::Response {
+    if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
+    match crate::license::generate_license(
+        &body.tenant_id,
+        &body.tenant_name,
+        body.features,
+        body.max_sensors,
+        body.expires_days,
+        &state.license_secret,
+    ) {
+        Ok(token) => Json(json!({ "token": token, "status": "ok" })).into_response(),
+        Err(e)    => Json(json!({ "error": e.to_string() })).into_response(),
+    }
+}
+
+pub async fn get_tenant_features(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let features = get_effective_features(&state, &tenant_id).await;
+    let from_license = state.verified_license.as_ref().map_or(false, |l| l.tenant_id == tenant_id);
+    Json(json!({ "features": features, "tenant_id": tenant_id, "from_license": from_license })).into_response()
+}
+
+pub async fn set_tenant_features(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(tenant_id): axum::extract::Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> axum::response::Response {
+    if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
+    let features: Vec<String> = body["features"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    match state.ch_storage.set_tenant_features(&tenant_id, &features).await {
+        Ok(_)  => Json(json!({ "status": "ok", "features": features })).into_response(),
+        Err(e) => Json(json!({ "error": e.to_string() })).into_response(),
+    }
+}
+
+/// Returns the effective feature list for a tenant.
+/// Checks the startup-verified license JWT first (on-premise installs);
+/// falls back to the database for cloud deployments.
+pub async fn get_effective_features(state: &AppState, tenant_id: &str) -> Vec<String> {
+    if let Some(lic) = &state.verified_license {
+        if lic.tenant_id == tenant_id {
+            return lic.features.clone();
+        }
+    }
+    state.ch_storage.get_tenant_features(tenant_id).await
+}
+
+pub async fn get_license_secret(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    if let Err(e) = require_super_admin(&headers) { return e.into_response(); }
+    Json(json!({ "secret": state.license_secret })).into_response()
 }
 
 pub async fn get_soar_status(
