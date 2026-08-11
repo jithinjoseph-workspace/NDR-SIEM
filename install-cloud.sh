@@ -313,6 +313,9 @@ SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
 LICENSE_PRIVATE_KEY=$LICENSE_PRIVATE_KEY
 LICENSE_PUBLIC_KEY=$LICENSE_PUBLIC_KEY
+LICENSE_TOKEN=
+TENANT_ADMIN_USER=
+TENANT_ADMIN_PASS=
 ENVEOF
 log "✅ Cloud .env generated"
 info "  CLOUD_MODE=true — Agent-Z/Agent-S/Arkime/OpenSearch are disabled"
@@ -444,19 +447,8 @@ sudo docker compose down 2>/dev/null || true
 
 sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d
 log "✅ Docker stack started with pre-built images"
-
-# ── Wait for ClickHouse container to be healthy ───────────────────
-log "Waiting for ClickHouse cluster (ch1 + ch2)..."
-for i in {1..40}; do
-    if curl -s http://localhost:8123/ping > /dev/null 2>&1 && \
-       curl -s http://localhost:8124/ping > /dev/null 2>&1; then
-        log "✅ ClickHouse cluster ready (both nodes up)"
-        break
-    fi
-    echo -n "."
-    sleep 3
-done
-echo ""
+# docker compose up -d already waited for every depends_on:healthy condition
+# before returning, so ch1 and ch2 are guaranteed healthy at this point.
 
 # ── Step 7: Create Kafka topic ───────────────
 step "Creating Kafka topics (3 partitions, replication-factor 3)"
@@ -541,7 +533,7 @@ if curl -s http://localhost:8123/ping > /dev/null 2>&1; then
 else
     warn "  ⚠️  ClickHouse ch1 — NOT READY"
 fi
-if curl -s http://localhost:8124/ping > /dev/null 2>&1; then
+if sudo docker inspect --format='{{.State.Health.Status}}' clickhouse2 2>/dev/null | grep -q "^healthy$"; then
     log "  ✅ ClickHouse ch2 — OK"
 else
     warn "  ⚠️  ClickHouse ch2 — NOT READY"
@@ -591,6 +583,43 @@ log "  ⏭️  Vector        — skipped (cloud mode)"
 log "  ⏭️  Agent-Z       — not installed (cloud mode)"
 log "  ⏭️  Agent-S       — not installed (cloud mode)"
 log "  ⏭️  Arkime        — not installed (cloud mode)"
+
+# ── WSL2 auto port-forwarding ────────────────────────────────────────────────
+# WSL2 runs in a VM — Windows doesn't auto-route external traffic into it.
+# Call netsh.exe via WSL2 interop to set up the forwarding automatically.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    WSL_IP=$(ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+    if [ -n "$WSL_IP" ]; then
+        log "WSL2 detected — configuring Windows port forwarding..."
+        # Clear any stale rules first
+        netsh.exe interface portproxy delete v4tov4 listenport=80  listenaddress=0.0.0.0 > /dev/null 2>&1 || true
+        netsh.exe interface portproxy delete v4tov4 listenport=443 listenaddress=0.0.0.0 > /dev/null 2>&1 || true
+        # Add forwarding rules: Windows 0.0.0.0:80/443 → WSL2 IP:80/443
+        PORTPROXY_OK=true
+        netsh.exe interface portproxy add v4tov4 \
+            listenport=80 listenaddress=0.0.0.0 \
+            connectport=80 connectaddress="$WSL_IP" > /dev/null 2>&1 || PORTPROXY_OK=false
+        netsh.exe interface portproxy add v4tov4 \
+            listenport=443 listenaddress=0.0.0.0 \
+            connectport=443 connectaddress="$WSL_IP" > /dev/null 2>&1 || PORTPROXY_OK=false
+        if $PORTPROXY_OK; then
+            # Open Windows Firewall
+            netsh.exe advfirewall firewall delete rule name="NDR HTTP"  > /dev/null 2>&1 || true
+            netsh.exe advfirewall firewall delete rule name="NDR HTTPS" > /dev/null 2>&1 || true
+            netsh.exe advfirewall firewall add rule name="NDR HTTP"  dir=in action=allow protocol=TCP localport=80  > /dev/null 2>&1 || true
+            netsh.exe advfirewall firewall add rule name="NDR HTTPS" dir=in action=allow protocol=TCP localport=443 > /dev/null 2>&1 || true
+            log "✅ Windows port forwarding configured (WSL2 $WSL_IP → 0.0.0.0:80/443)"
+            info "  Open in browser: http://localhost"
+            warn "  WSL2 IP changes on reboot — re-run install-cloud.sh to refresh forwarding"
+        else
+            warn "  netsh failed (needs admin) — open PowerShell as Administrator and run:"
+            echo "    netsh interface portproxy add v4tov4 listenport=80  listenaddress=0.0.0.0 connectport=80  connectaddress=$WSL_IP"
+            echo "    netsh interface portproxy add v4tov4 listenport=443 listenaddress=0.0.0.0 connectport=443 connectaddress=$WSL_IP"
+            echo "    netsh advfirewall firewall add rule name=\"NDR HTTP\"  dir=in action=allow protocol=TCP localport=80"
+            echo "    netsh advfirewall firewall add rule name=\"NDR HTTPS\" dir=in action=allow protocol=TCP localport=443"
+        fi
+    fi
+fi
 
 # ── Final Summary ─────────────────────────────
 echo ""
