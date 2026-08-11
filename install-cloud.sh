@@ -320,9 +320,9 @@ events { worker_connections 1024; }
 
 http {
     upstream ndr_backend {
-        server ndr-engine-1:3001;
-        server ndr-engine-2:3001;
-        server ndr-engine-3:3001;
+        server ndr-engine-1:3000;
+        server ndr-engine-2:3000;
+        server ndr-engine-3:3000;
     }
 
     # Redirect HTTP → HTTPS (enable after placing certs)
@@ -361,14 +361,10 @@ info "  SSL: uncomment the ssl_* lines after placing certs at /etc/ssl/ndr/"
 # ── Step 6: Start Docker stack ────────────────
 step "Starting Docker stack (cloud profile)"
 
-info "  ℹ️  Cloud mode starts: kafka, redis, ndr-engine x3, nginx, ndr-ui"
+info "  ℹ️  Cloud mode starts: kafka (internal), redis, ndr-engine x3, nginx, ndr-ui"
 info "  ℹ️  Skipped (onpremise profile only): opensearch, vector"
-info ""
-info "  ⚠️  Kafka external listener note:"
-info "  Sensors outside this VPS connect to kafka on port 9092."
-info "  Ensure Kafka advertises the public IP to sensors:"
-info "    docker-compose.yml → KAFKA_ADVERTISED_LISTENERS:"
-info "    PLAINTEXT://$PUBLIC_IP:9092"
+info "  ℹ️  Sensors send data via HTTP POST to https://$PUBLIC_IP/api/ingest"
+info "  ℹ️  Kafka runs internally only — not exposed to sensors"
 info ""
 
 # ── Registry login ────────────────────────────
@@ -464,14 +460,14 @@ if command -v ufw &>/dev/null; then
     sudo ufw default deny incoming > /dev/null
     sudo ufw default allow outgoing > /dev/null
 
-    # Public-facing ports
-    sudo ufw allow 22/tcp comment "SSH"
-    sudo ufw allow 80/tcp comment "NDR API HTTP"
-    sudo ufw allow 443/tcp comment "NDR API HTTPS"
-    sudo ufw allow 3000/tcp comment "NDR API (Docker nginx)"
-    sudo ufw allow 9092/tcp comment "Kafka (sensor ingest)"
+    # Public-facing ports — sensors use HTTP, Kafka is internal only
+    sudo ufw allow 22/tcp  comment "SSH"
+    sudo ufw allow 80/tcp  comment "NDR API HTTP  (sensors + UI)"
+    sudo ufw allow 443/tcp comment "NDR API HTTPS (sensors + UI)"
+    sudo ufw allow 3000/tcp comment "NDR API legacy port"
 
-    # Internal-only: block from internet (Docker bypasses ufw so containers still work)
+    # Internal-only: Kafka, ClickHouse, Redis, Keeper all stay private
+    sudo ufw deny 9092/tcp comment "Kafka (internal only — sensors use HTTP)"
     sudo ufw deny 8123/tcp comment "ClickHouse HTTP ch1 (internal only)"
     sudo ufw deny 8124/tcp comment "ClickHouse HTTP ch2 (internal only)"
     sudo ufw deny 9000/tcp comment "ClickHouse TCP ch1  (internal only)"
@@ -482,8 +478,8 @@ if command -v ufw &>/dev/null; then
 
     sudo ufw --force enable > /dev/null
     log "✅ UFW rules applied:"
-    log "   OPEN  : 22 (SSH), 80 (HTTP), 443 (HTTPS), 3000 (API), 9092 (Kafka)"
-    log "   CLOSED: 8123/8124/9000/9001/9181 (ClickHouse/Keeper), 6379 (Redis)"
+    log "   OPEN  : 22 (SSH), 80 (HTTP), 443 (HTTPS), 3000 (API)"
+    log "   CLOSED: 9092 (Kafka), 8123/8124/9000/9001/9181 (ClickHouse/Keeper), 6379 (Redis)"
 else
     warn "ufw not found — skipping firewall setup"
 fi
@@ -560,7 +556,7 @@ echo ""
 echo -e "${BLUE}  Public IP   :${NC} $PUBLIC_IP"
 echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP:3000"
 echo -e "${BLUE}  ClickHouse  :${NC} http://localhost:8123 + :8124 (internal only, 2-node cluster)"
-echo -e "${BLUE}  Kafka       :${NC} $PUBLIC_IP:9092 (sensors connect here)"
+echo -e "${BLUE}  Kafka       :${NC} internal only (sensors use HTTP, not Kafka)"
 echo -e "${BLUE}  Redis       :${NC} localhost:6379 (internal only)"
 echo -e "${BLUE}  Ollama AI   :${NC} http://localhost:11434 (deepseek-r1, local inference)"
 echo -e "${BLUE}  SSL certs   :${NC} /etc/ssl/ndr/cert.pem + key.pem"
@@ -571,8 +567,7 @@ echo "   2. Run: certbot certonly --standalone -d your.domain.com"
 echo "   3. Copy certs to /etc/ssl/ndr/"
 echo "   4. Edit $INSTALL_DIR/config/nginx/nginx.conf — uncomment SSL lines"
 echo "   5. Restart nginx: docker restart ndr-nginx"
-echo "   6. On sensors: set CLOUD_URL=http://$PUBLIC_IP:3000 in /opt/ndr-sensor/.env"
-echo "   7. Kafka external: update KAFKA_ADVERTISED_LISTENERS to $PUBLIC_IP:9092"
+echo "   6. On sensors: set CLOUD_URL=https://$PUBLIC_IP in /opt/ndr-sensor/.env"
 echo ""
 echo -e "${GREEN}  Install log: $INSTALL_DIR/install-cloud.log${NC}"
 echo ""
