@@ -4825,6 +4825,7 @@ pub async fn login(
             }
             tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
             let expires_at = chrono::Utc::now().timestamp() as u64 + 86400;
+            let features = get_effective_features(&state, tenant_id).await;
             let cookie_header = format!(
                 "ndr_token={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400",
                 token
@@ -4839,6 +4840,7 @@ pub async fn login(
                         "role": role,
                         "tenant_id": tenant_id,
                         "permissions": permissions_vec,
+                        "features": features,
                         "ai_enabled": ai_enabled,
                         "gmail": user["gmail"].as_str().unwrap_or(""),
                         "secret_code": user["secret_code"].as_str().unwrap_or(""),
@@ -4951,14 +4953,17 @@ pub async fn get_me(
                 .filter(|s| !s.is_empty())
                 .collect();
 
+            let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
+            let features = get_effective_features(&state, tenant_id).await;
             Json(json!({
                 "status": "ok",
                 "user": {
                     "id": user["id"].as_str().unwrap_or(""),
                     "username": username,
                     "role": role,
-                    "tenant_id": user["tenant_id"].as_str().unwrap_or("default"),
+                    "tenant_id": tenant_id,
                     "permissions": permissions,
+                    "features": features,
                     "secret_code": user["secret_code"].as_str().unwrap_or(""),
                     "gmail": user["gmail"].as_str().unwrap_or("")
                 }

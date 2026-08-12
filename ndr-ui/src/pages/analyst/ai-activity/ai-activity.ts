@@ -88,11 +88,14 @@ export class AiActivity {
       this.historicalPredictions.set([]);
     } else {
       this.expandedPrediction.set(type);
-      this.api.getThreatPredictionsHistory().subscribe(data => {
-        if (data && data.predictions) {
-          const history = data.predictions.filter((p: any) => p.attack_type === type);
-          this.historicalPredictions.set(history);
-        }
+      this.api.getThreatPredictionsHistory().subscribe({
+        next: data => {
+          if (data && data.predictions) {
+            const history = data.predictions.filter((p: any) => p.attack_type === type);
+            this.historicalPredictions.set(history);
+          }
+        },
+        error: () => {}
       });
     }
   }

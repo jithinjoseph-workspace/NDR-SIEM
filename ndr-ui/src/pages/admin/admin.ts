@@ -512,7 +512,8 @@ export class Admin implements OnInit, OnDestroy {
           this.overviewTelemetryHistory.shift();
         }
         this.renderResourceUtilizationArea();
-      }
+      },
+      error: () => {}
     });
   }
 
@@ -718,7 +719,8 @@ export class Admin implements OnInit, OnDestroy {
       next: (data: any) => {
         this.telemetryData = data;
         this.cdr.detectChanges();
-      }
+      },
+      error: () => {}
     });
   }
 

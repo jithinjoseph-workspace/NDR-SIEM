@@ -16,10 +16,9 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
       // Session expired or token invalid → standard logout.
       // Skip logout for the login endpoint itself — a 401 there means wrong
       // password, not an expired session; the login component shows the error.
-      const isLoginRequest = req.url.includes('/auth/login');
-      if (err.status === 401 && !isLoginRequest) {
+      const isAuthEndpoint = req.url.includes('/auth/login') || req.url.includes('/auth/logout');
+      if (err.status === 401 && !isAuthEndpoint && auth.isLoggedIn()) {
         auth.logout();
-        router.navigate(['/login']);
       }
 
       // Account disabled by Tenant Admin while session was live.

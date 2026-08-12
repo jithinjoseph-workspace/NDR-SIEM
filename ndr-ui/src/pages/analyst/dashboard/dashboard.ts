@@ -246,21 +246,28 @@ export class Dashboard implements OnInit, OnDestroy {
    * ChartDataService to avoid duplicate requests.
    */
   private loadSupportingStats() {
-    this.api.getSeverity().subscribe(data => {
-      this.seenIncidents.clear(); // Reset live deduplication baseline
-      this.critical.set(data.critical || 0);
-      this.high.set(data.high || 0);
-      this.medium.set(data.medium || 0);
-      this.low.set(data.low || 0);
+    this.api.getSeverity().subscribe({
+      next: data => {
+        this.seenIncidents.clear(); // Reset live deduplication baseline
+        this.critical.set(data.critical || 0);
+        this.high.set(data.high || 0);
+        this.medium.set(data.medium || 0);
+        this.low.set(data.low || 0);
+      },
+      error: () => {}
     });
 
-    this.api.getTopIps().subscribe(data => {
-      this.topSrcIps.set(data.top_src_ips || []);
-      this.topDstIps.set(data.top_dst_ips || []);
+    this.api.getTopIps().subscribe({
+      next: data => {
+        this.topSrcIps.set(data.top_src_ips || []);
+        this.topDstIps.set(data.top_dst_ips || []);
+      },
+      error: () => {}
     });
 
-    this.api.getProtocols().subscribe(data => {
-      this.protocols.set(data.protocols || []);
+    this.api.getProtocols().subscribe({
+      next: data => { this.protocols.set(data.protocols || []); },
+      error: () => {}
     });
 
     // Fetch active threat predictions for the alert banner every 60s
@@ -268,11 +275,13 @@ export class Dashboard implements OnInit, OnDestroy {
       interval(60_000).pipe(
         startWith(0),
         switchMap(() => this.api.getThreatPredictions())
-      ).subscribe(data => {
-        if (data && data.predictions) {
-          // Filter to only high-confidence or active ones if needed, or just take top 3
-          this.activePredictions.set(data.predictions);
-        }
+      ).subscribe({
+        next: data => {
+          if (data && data.predictions) {
+            this.activePredictions.set(data.predictions);
+          }
+        },
+        error: () => {}
       })
     );
   }
@@ -284,12 +293,14 @@ export class Dashboard implements OnInit, OnDestroy {
     this.showPredictionModal.set(true);
     
     // Fetch historical data for context
-    this.api.getThreatPredictionsHistory().subscribe(data => {
-      if (data && data.predictions) {
-        // Filter history to just this attack type for the trend view
-        const history = data.predictions.filter((p: any) => p.attack_type === prediction.attack_type);
-        this.historicalPredictions.set(history);
-      }
+    this.api.getThreatPredictionsHistory().subscribe({
+      next: data => {
+        if (data && data.predictions) {
+          const history = data.predictions.filter((p: any) => p.attack_type === prediction.attack_type);
+          this.historicalPredictions.set(history);
+        }
+      },
+      error: () => {}
     });
   }
 

@@ -291,11 +291,14 @@ export class Soar implements OnInit {
         const flow = `${session.src_ip}:${session.src_port} → ${session.dst_ip}:${session.dst_port}`;
         const proto = (session.proto || 'TCP').toUpperCase();
         const comment = `[SESSION NOTE — ${flow} ${proto}] ${this.sessionNote.trim()}`;
-        this.api.addSoarCaseComment(c.id, comment).subscribe((res: any) => {
-            if (res.status === 'success') {
-                this.sessionNote = '';
-                this.openCase(c);
-            }
+        this.api.addSoarCaseComment(c.id, comment).subscribe({
+            next: (res: any) => {
+                if (res.status === 'success') {
+                    this.sessionNote = '';
+                    this.openCase(c);
+                }
+            },
+            error: () => {}
         });
     }
 
@@ -373,11 +376,14 @@ export class Soar implements OnInit {
         const s = this.pcapViewSession();
         const flow = s ? `${s.src_ip}:${s.src_port} → ${s.dst_ip}:${s.dst_port}` : '';
         const comment = `[PCAP ANALYSIS${flow ? ' — ' + flow : ''}] ${this.pcapNote.trim()}`;
-        this.api.addSoarCaseComment(c.id, comment).subscribe((res: any) => {
-            if (res.status === 'success') {
-                this.pcapNote = '';
-                this.openCase(c);
-            }
+        this.api.addSoarCaseComment(c.id, comment).subscribe({
+            next: (res: any) => {
+                if (res.status === 'success') {
+                    this.pcapNote = '';
+                    this.openCase(c);
+                }
+            },
+            error: () => {}
         });
     }
 
@@ -813,26 +819,30 @@ export class Soar implements OnInit {
 
     // ── Data loaders ──────────────────────────────────────────────────────────
     loadCases() {
-        this.api.getSoarCases().subscribe((res: any) => {
-            if (res.status === 'success') this.cases.set(res.data);
+        this.api.getSoarCases().subscribe({
+            next: (res: any) => { if (res.status === 'success') this.cases.set(res.data); },
+            error: () => {}
         });
     }
 
     loadPlaybooks() {
-        this.api.getNativePlaybooks().subscribe((res: any) => {
-            if (res.status === 'success') this.playbooks.set(res.data);
+        this.api.getNativePlaybooks().subscribe({
+            next: (res: any) => { if (res.status === 'success') this.playbooks.set(res.data); },
+            error: () => {}
         });
     }
 
     loadIntegrations() {
-        this.api.getIntegrations().subscribe((res: any) => {
-            this.integrations.set(res.integrations || []);
+        this.api.getIntegrations().subscribe({
+            next: (res: any) => { this.integrations.set(res.integrations || []); },
+            error: () => {}
         });
     }
 
     loadRuns() {
-        this.api.getSoarRuns().subscribe((res: any) => {
-            if (res.status === 'success') this.runs.set(res.data);
+        this.api.getSoarRuns().subscribe({
+            next: (res: any) => { if (res.status === 'success') this.runs.set(res.data); },
+            error: () => {}
         });
     }
 
@@ -1128,9 +1138,12 @@ export class Soar implements OnInit {
         this.incidentReport.set(null);
         this.showCloseForm.set(false);
 
-        this.api.getSoarCaseComments(c.id).subscribe((res: any) => {
-            if (res.status === 'success') this.caseComments.set(res.data);
-            this.loadingCase.set(false);
+        this.api.getSoarCaseComments(c.id).subscribe({
+            next: (res: any) => {
+                if (res.status === 'success') this.caseComments.set(res.data);
+                this.loadingCase.set(false);
+            },
+            error: () => { this.loadingCase.set(false); }
         });
 
         this.dismissedSessionIds.set(new Set());
@@ -1141,13 +1154,19 @@ export class Soar implements OnInit {
             const pcapParams = hasPair
                 ? { src_ip: c.src_ip, dst_ip: c.dst_ip, limit: 50 }
                 : { cid: c.community_id, limit: 50 };
-            this.arkime.getSessions(pcapParams).subscribe((pcap: any) => {
-                this.liveEvidence.update(ev => ({ ...(ev || {}), pcap_sessions: pcap.sessions || [], pcap_total: pcap.total || pcap.sessions?.length || 0 }));
-                this.evidenceLoading.set(false);
+            this.arkime.getSessions(pcapParams).subscribe({
+                next: (pcap: any) => {
+                    this.liveEvidence.update(ev => ({ ...(ev || {}), pcap_sessions: pcap.sessions || [], pcap_total: pcap.total || pcap.sessions?.length || 0 }));
+                    this.evidenceLoading.set(false);
+                },
+                error: () => { this.evidenceLoading.set(false); }
             });
             if (hasCid) {
-                this.api.getEventsByCid(c.community_id).subscribe((res: any) => {
-                    this.liveEvidence.update(ev => ({ ...(ev || {}), ndr_events: res.events || [] }));
+                this.api.getEventsByCid(c.community_id).subscribe({
+                    next: (res: any) => {
+                        this.liveEvidence.update(ev => ({ ...(ev || {}), ndr_events: res.events || [] }));
+                    },
+                    error: () => {}
                 });
             }
         }

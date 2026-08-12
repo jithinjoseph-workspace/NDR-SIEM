@@ -94,7 +94,7 @@ export class AuthService implements OnDestroy {
     // navigation happens regardless of whether the request succeeds).
     this.http.post(`${this.baseUrl}/auth/logout`, {}, { withCredentials: true })
       .subscribe({ error: () => {} });
-    window.location.href = '/login';
+    this.router.navigate(['/login'], { replaceUrl: true });
   }
 
   refreshUser(): Observable<any> {

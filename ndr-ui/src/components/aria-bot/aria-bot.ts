@@ -109,6 +109,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   // ── Timers/subs ──
   private pollSub?: Subscription;
+  private routerSub?: Subscription;
   private talkTimer: any;
   private speechTimer: any;
   private proactiveSub?: any;
@@ -146,7 +147,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
       this.botTheme = savedTheme;
     }
 
-    this.router.events.subscribe((e: any) => {
+    this.routerSub = this.router.events.subscribe((e: any) => {
       const url = e.urlAfterRedirects || e.url;
       if (url) {
         this.isVisible = !url.includes('/admin');
@@ -186,6 +187,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   ngOnDestroy() {
     this.pollSub?.unsubscribe();
+    this.routerSub?.unsubscribe();
     clearInterval(this.proactiveSub);
     this.dotLottie?.destroy();
     clearTimeout(this.talkTimer);
@@ -525,7 +527,10 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   startTalking(textLen: number) {
     this.isTalking = true;
     clearTimeout(this.talkTimer);
-    this.talkTimer = setTimeout(() => { this.isTalking = false; }, Math.max(1200, textLen * 35));
+    this.talkTimer = setTimeout(() => {
+      this.isTalking = false;
+      this.cdr.detectChanges();
+    }, Math.max(1200, textLen * 35));
   }
 
   showSpeechBubble(text: string) {
