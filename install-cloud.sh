@@ -608,9 +608,17 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
             netsh.exe advfirewall firewall delete rule name="NDR HTTPS" > /dev/null 2>&1 || true
             netsh.exe advfirewall firewall add rule name="NDR HTTP"  dir=in action=allow protocol=TCP localport=80  > /dev/null 2>&1 || true
             netsh.exe advfirewall firewall add rule name="NDR HTTPS" dir=in action=allow protocol=TCP localport=443 > /dev/null 2>&1 || true
-            log "✅ Windows port forwarding configured (WSL2 $WSL_IP → 0.0.0.0:80/443)"
-            info "  Open in browser: http://localhost"
-            warn "  WSL2 IP changes on reboot — re-run install-cloud.sh to refresh forwarding"
+            # Verify rules are actually in place
+            PROXY_CHECK=$(netsh.exe interface portproxy show all 2>/dev/null | grep -c "$WSL_IP" || true)
+            if [ "$PROXY_CHECK" -ge 2 ] 2>/dev/null; then
+                log "✅ Windows port forwarding verified (WSL2 $WSL_IP → 0.0.0.0:80/443)"
+                info "  Accessible at: http://$PUBLIC_IP  and  http://localhost"
+                warn "  WSL2 IP changes on reboot — re-run install-cloud.sh to refresh forwarding"
+            else
+                warn "  portproxy rules may not have applied — verify with:"
+                echo "    netsh.exe interface portproxy show all"
+                info "  Expected: entries pointing to $WSL_IP on ports 80 and 443"
+            fi
         else
             warn "  netsh failed (needs admin) — open PowerShell as Administrator and run:"
             echo "    netsh interface portproxy add v4tov4 listenport=80  listenaddress=0.0.0.0 connectport=80  connectaddress=$WSL_IP"

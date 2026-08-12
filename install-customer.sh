@@ -85,9 +85,14 @@ fi
 # ── Fix DNS early — before any curl/apt/wget ──
 if ! curl -s --max-time 3 https://archive.ubuntu.com > /dev/null 2>&1; then
     echo "[NDR] Fixing DNS (switching to 8.8.8.8)..."
-    sudo systemctl stop systemd-resolved 2>/dev/null || true
-    sudo rm -f /etc/resolv.conf
-    printf "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" | sudo tee /etc/resolv.conf > /dev/null
+    if systemctl is-active systemd-resolved > /dev/null 2>&1; then
+        sudo mkdir -p /etc/systemd/resolved.conf.d/
+        printf "[Resolve]\nDNS=8.8.8.8 8.8.4.4\nFallbackDNS=1.1.1.1\n" \
+            | sudo tee /etc/systemd/resolved.conf.d/ndr-dns.conf > /dev/null
+        sudo systemctl restart systemd-resolved 2>/dev/null || true
+    else
+        printf "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" | sudo tee /etc/resolv.conf > /dev/null
+    fi
 fi
 
 # ── Colors ────────────────────────────────────

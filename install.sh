@@ -903,6 +903,13 @@ if [ -z "$OPENAI_API_KEY" ]; then
     read -p "  OpenAI API key for ARIA (press Enter to skip): " -r OPENAI_API_KEY
 fi
 
+# ── Arkime password — generated once, preserved across reinstalls ──
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^ARKIME_PASS=." "$INSTALL_DIR/.env"; then
+    ARKIME_PASS=$(grep "^ARKIME_PASS=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+else
+    ARKIME_PASS=$(openssl rand -hex 12 2>/dev/null || echo "$(date +%s%N | sha256sum | head -c 24)")
+fi
+
 # ── RSA license key pair (generated once; private key stays on this server) ──
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "LICENSE_PRIVATE_KEY" "$INSTALL_DIR/.env"; then
     LICENSE_PRIVATE_KEY=$(grep "^LICENSE_PRIVATE_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
