@@ -832,7 +832,14 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         if sig_id > 0 && state.ch_storage
             .is_ai_suppressed(&tenant_id, sig_id, src, dst).await
         {
-            return; // AI-suppressed — silently drop
+            tracing::info!(
+                tenant = %tenant_id,
+                sig_id = %sig_id,
+                src    = %src,
+                dst    = %dst,
+                "AI suppression: alert dropped before storage (sig matched active suppression rule)"
+            );
+            return;
         }
     }
 
@@ -1441,13 +1448,17 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     };
 
 
-    // Execute Native SOAR Playbooks
+// ── Execute all SOAR automation under one score gate ─────────────────────
+// Native playbooks were previously ungated and fired for every alert regardless
+// of score, which caused duplicate notifications alongside the legacy path below.
+// All three paths now share the same soar_threshold check.
+if risk.score >= soar_threshold {
+    // 1. Native playbooks — tenant-scoped, each evaluates its own condition
     crate::soar::execute_native_playbooks(state, hit.clone(), risk.clone(), enrichment.clone(), &tenant_id).await;
 
-// ── Execute playbooks directly (gated on soar_threshold) ────────────────
-if risk.score >= soar_threshold {
+// 2. Legacy playbooks — now tenant-scoped (was hardcoded to "default" tenant)
 let playbooks = state.ch_storage
-    .get_soar_playbooks().await
+    .get_soar_playbooks_by_tenant(&tenant_id).await
     .unwrap_or_default();
 
 for pb in &playbooks {
@@ -1556,10 +1567,10 @@ for pb in &playbooks {
 } // end playbooks threshold check
 
 
-// Execute integrations — gated on soar_threshold (separate from alert display threshold)
+// 3. Integrations — tenant-scoped (was hardcoded to "default" tenant)
 if risk.score >= soar_threshold {
 let integrations = state.ch_storage
-    .get_integrations().await
+    .get_integrations_by_tenant(&tenant_id).await
     .unwrap_or_default();
 
 for integration in &integrations {

@@ -1,4 +1,4 @@
-import { HttpInterceptorFn } from '@angular/common/http';
+import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { AuthService } from './auth';
 import { Router } from '@angular/router';
@@ -8,15 +8,19 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthService);
   const router = inject(Router);
 
+  const isAuthEndpoint = req.url.includes('/auth/login') || req.url.includes('/auth/logout');
+
+  // Block outgoing API requests immediately after logout — prevents in-flight
+  // requests from hitting the wire and appearing as 401s in the Network tab.
+  if (!isAuthEndpoint && !auth.isLoggedIn()) {
+    return throwError(() => new HttpErrorResponse({ status: 401, statusText: 'Unauthorized' }));
+  }
+
   // withCredentials: true sends the httpOnly cookie on every request.
   const authReq = req.clone({ withCredentials: true });
 
   return next(authReq).pipe(
     catchError(err => {
-      // Session expired or token invalid → standard logout.
-      // Skip logout for the login endpoint itself — a 401 there means wrong
-      // password, not an expired session; the login component shows the error.
-      const isAuthEndpoint = req.url.includes('/auth/login') || req.url.includes('/auth/logout');
       if (err.status === 401 && !isAuthEndpoint && auth.isLoggedIn()) {
         auth.logout();
       }
