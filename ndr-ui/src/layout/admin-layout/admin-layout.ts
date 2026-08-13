@@ -5,7 +5,7 @@ import {
   LucideAngularModule,
   LayoutDashboard, Building2, Users, Server, KeyRound,
   Megaphone, Activity, Zap, Cloud, Globe, Mail, ShieldCheck,
-  ChevronDown, Gavel,
+  ChevronDown, Gavel, HelpCircle,
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
 
@@ -33,6 +33,7 @@ export class AdminLayout implements OnInit {
   ShieldIcon        = ShieldCheck;
   ChevronIcon       = ChevronDown;
   RulesIcon         = Gavel;
+  SupportIcon       = HelpCircle;
 
   groups: Record<string, boolean> = {
     access:         true,

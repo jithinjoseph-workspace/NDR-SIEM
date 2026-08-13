@@ -1,8 +1,12 @@
-/* ── Analyst Layout Shell ─────────────────────────────────────────── */
-
-.analyst-shell {
+.analyst-layout {
   display: flex;
-  flex-direction: column;
-  min-height: 100%;
   width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.analyst-content {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
 }

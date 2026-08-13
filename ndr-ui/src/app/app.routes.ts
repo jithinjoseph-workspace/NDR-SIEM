@@ -56,6 +56,7 @@ export const routes: Routes = [
       { path: 'trusted-cloud',   loadComponent: () => import('../pages/admin/trusted-cloud/trusted-cloud').then(m => m.TrustedCloud) },
       { path: 'trusted-domains', loadComponent: () => import('../pages/admin/trusted-domains/trusted-domains').then(m => m.TrustedDomains) },
       { path: 'smtp-config',     loadComponent: () => import('../pages/admin/smtp-config/smtp-config').then(m => m.SmtpConfig) },
+      { path: 'support',         loadComponent: () => import('../pages/admin/support/support').then(m => m.Support) },
     ]
   },
 

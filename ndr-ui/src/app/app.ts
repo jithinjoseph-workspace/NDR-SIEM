@@ -1,7 +1,6 @@
 import { Component, OnInit, ViewEncapsulation, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, RouterOutlet, NavigationEnd, NavigationStart } from '@angular/router';
-import { Sidebar } from '../layout/sidebar/sidebar';
 import { Navbar } from '../layout/navbar/navbar';
 import { Websocket } from '../services/websocket/websocket';
 import { AuthService } from '../services/auth/auth';
@@ -11,14 +10,13 @@ import { AriaBot } from '../components/aria-bot/aria-bot';
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterOutlet, Sidebar, Navbar, ToastContainer, AriaBot],
+  imports: [CommonModule, RouterOutlet, Navbar, ToastContainer, AriaBot],
   templateUrl: './app.html',
   styleUrl: './app.css',
   encapsulation: ViewEncapsulation.None
 })
 export class App implements OnInit {
   showShell = false;
-  showGlobalSidebar = false;
 
   constructor(
     private wsService: Websocket,
@@ -39,11 +37,9 @@ export class App implements OnInit {
         const goingToLogin = url === '/login' || url.startsWith('/login?') || url === '/';
         if (!goingToLogin && this.auth.isLoggedIn()) {
           this.showShell = true;
-          this.showGlobalSidebar = !url.startsWith('/tenant-admin') && !url.startsWith('/admin');
           this.cdr.detectChanges();
         } else if (goingToLogin) {
           this.showShell = false;
-          this.showGlobalSidebar = false;
           this.cdr.detectChanges();
         }
         return;
@@ -53,7 +49,6 @@ export class App implements OnInit {
         const url: string = e.urlAfterRedirects || e.url;
         const isLoginPage = url === '/login' || url.startsWith('/login?');
         this.showShell = !isLoginPage && this.auth.isLoggedIn();
-        this.showGlobalSidebar = this.showShell && !url.startsWith('/tenant-admin') && !url.startsWith('/admin');
         if (isLoginPage) {
           this.auth.stopSessionPoll();
         }
@@ -64,7 +59,6 @@ export class App implements OnInit {
     const url = this.router.url;
     const isLoginPage = url === '/login' || url.startsWith('/login?');
     this.showShell = !isLoginPage && this.auth.isLoggedIn();
-    this.showGlobalSidebar = this.showShell && !url.startsWith('/tenant-admin') && !url.startsWith('/admin');
 
     // Connect WebSocket only when authenticated
     if (this.auth.isLoggedIn()) {

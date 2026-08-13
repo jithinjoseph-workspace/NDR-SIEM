@@ -22,6 +22,12 @@
         <span>Overview</span>
       </a>
 
+      <!-- Standalone: Support -->
+      <a routerLink="/admin/support" routerLinkActive="active" class="sa-nav-link">
+        <lucide-icon [name]="SupportIcon" class="w-4 h-4"></lucide-icon>
+        <span>Support</span>
+      </a>
+
       <!-- Group: Access Control (blue) -->
       <div class="sa-group">
         <button class="sa-group-header sa-group--blue" (click)="toggleGroup('access')">

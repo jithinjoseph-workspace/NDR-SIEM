@@ -302,7 +302,9 @@ export class Navbar implements OnInit, OnDestroy {
 
   goToSupport() {
     this.showUserMenu = false;
-    if (this.auth.isTenantAdmin()) {
+    if (this.auth.isAdmin()) {
+      this.router.navigate(['/admin/support']);
+    } else if (this.auth.isTenantAdmin()) {
       this.router.navigate(['/tenant-admin/support']);
     } else {
       this.router.navigate(['/analyst/support']);
