@@ -179,7 +179,7 @@ export class AuthService implements OnDestroy {
     const user = this.getUser();
     if (!user) return false;
     if (user.role === 'super_admin') return true;
-    const features: string[] = user.features ?? ['ndr', 'ai'];
+    const features: string[] = user.features ?? ['ndr'];
     return features.includes(feature);
   }
 
@@ -187,7 +187,7 @@ export class AuthService implements OnDestroy {
     const user = this.getUser();
     if (!user) return ['ndr'];
     if (user.role === 'super_admin') return ['ndr', 'ai', 'soar'];
-    return user.features ?? ['ndr', 'ai'];
+    return user.features ?? ['ndr'];
   }
 
   hasPermission(permission: string): boolean {

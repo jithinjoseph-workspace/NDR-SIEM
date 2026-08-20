@@ -721,7 +721,7 @@ export class UsersSection implements OnInit, OnDestroy {
     const user = this.auth.getUser();
     if (!user) return ['ndr'];
     if (user.role === 'super_admin') return ['ndr', 'ai', 'soar'];
-    return (user.features as string[]) ?? ['ndr', 'ai'];
+    return (user.features as string[]) ?? ['ndr'];
   }
 
   get licensedPermissionOptions(): PermissionOption[] {

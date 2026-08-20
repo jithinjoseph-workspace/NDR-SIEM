@@ -7,6 +7,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
+use redis::AsyncCommands;
+
 use crate::AppState;
 use provigil_common::validate_jwt;
 
@@ -32,6 +34,30 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Auth helper — validate JWT + Valkey session check (force-logout enforcement)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn auth(headers: &HeaderMap, state: &AppState)
+    -> Result<provigil_common::Claims, (StatusCode, Json<serde_json::Value>)>
+{
+    let token = extract_token(headers).ok_or_else(|| (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "status": "error", "message": "Unauthorized" })),
+    ))?;
+    let claims = validate_jwt(&token, &state.jwt_secret).map_err(|_| (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "status": "error", "message": "Token invalid or expired" })),
+    ))?;
+    let key = format!("provigil:session:{}", claims.jti);
+    let alive: bool = state.valkey.clone().exists(&key).await.unwrap_or(false);
+    if !alive {
+        return Err((StatusCode::UNAUTHORIZED,
+            Json(json!({ "status": "error", "message": "Session revoked — please log in again" }))));
+    }
+    Ok(claims)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PUT /api/auth/me/gmail
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -45,15 +71,9 @@ pub async fn update_gmail(
     headers: HeaderMap,
     Json(payload): Json<UpdateGmailPayload>,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     let gmail = payload.gmail.trim();
@@ -95,15 +115,9 @@ pub async fn regenerate_secret(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     // Generate 6-char alphanumeric code (in own scope before async)

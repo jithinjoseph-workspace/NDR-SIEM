@@ -252,7 +252,7 @@ export class Tenants implements OnInit {
 
   openFeatures(tenant: any) {
     this.featureTenant = tenant;
-    const feats: string[] = tenant.features ?? ['ndr', 'ai'];
+    const feats: string[] = tenant.features ?? ['ndr'];
     this.featureForm = {
       ndr:  feats.includes('ndr'),
       ai:   feats.includes('ai'),
@@ -313,7 +313,7 @@ export class Tenants implements OnInit {
 
   generateLicense() {
     if (!this.licenseTenant) return;
-    const features: string[] = this.licenseTenant.features ?? ['ndr', 'ai'];
+    const features: string[] = this.licenseTenant.features ?? ['ndr'];
     this.generatingLicense = true;
     this.api.generateLicense({
       tenant_id:    this.licenseTenant.id,
@@ -355,7 +355,7 @@ export class Tenants implements OnInit {
       ? `until ${license.expires_at.slice(0, 10)}`
       : `${this.licenseForm.expires_days} days`;
     const useMaxSensors = license?.max_sensors ?? this.licenseForm.max_sensors;
-    const useFeatures = license?.features ?? this.licenseTenant?.features ?? ['ndr', 'ai'];
+    const useFeatures = license?.features ?? this.licenseTenant?.features ?? ['ndr'];
     // Admin user: prefer history record, fall back to current form value
     const useAdminUser = (license?.admin_user || this.licenseForm.admin_user).trim();
     const useAdminPass = this.licenseForm.admin_pass;

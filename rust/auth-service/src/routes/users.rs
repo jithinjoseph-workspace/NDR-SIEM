@@ -7,6 +7,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use redis::AsyncCommands;
+
 use crate::AppState;
 use provigil_common::validate_jwt;
 use super::login::{default_permissions, validate_password_strength};
@@ -33,6 +35,31 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Auth helper — validate JWT then confirm session still alive in Valkey
+// (catches force-logged-out users whose token hasn't expired yet)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn auth(headers: &HeaderMap, state: &AppState)
+    -> Result<provigil_common::Claims, (StatusCode, Json<serde_json::Value>)>
+{
+    let token = extract_token(headers).ok_or_else(|| (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "status": "error", "message": "Unauthorized" })),
+    ))?;
+    let claims = validate_jwt(&token, &state.jwt_secret).map_err(|_| (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "status": "error", "message": "Token invalid or expired" })),
+    ))?;
+    let key = format!("provigil:session:{}", claims.jti);
+    let alive: bool = state.valkey.clone().exists(&key).await.unwrap_or(false);
+    if !alive {
+        return Err((StatusCode::UNAUTHORIZED,
+            Json(json!({ "status": "error", "message": "Session revoked — please log in again" }))));
+    }
+    Ok(claims)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Inline permissions helper
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -56,15 +83,9 @@ pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     let users = match claims.role.as_str() {
@@ -103,15 +124,9 @@ pub async fn create(
     headers: HeaderMap,
     Json(payload): Json<CreateUserPayload>,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     // Only super_admin and tenant_admin may create users
@@ -196,15 +211,9 @@ pub async fn update(
     Path(id): Path<String>,
     Json(payload): Json<UpdateUserPayload>,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     if claims.role != "super_admin" && claims.role != "tenant_admin" {
@@ -278,15 +287,9 @@ pub async fn set_status(
     Path(id): Path<String>,
     Json(payload): Json<SetStatusPayload>,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     if claims.role != "super_admin" && claims.role != "tenant_admin" {
@@ -319,15 +322,9 @@ pub async fn set_permissions(
     Path(id): Path<String>,
     Json(payload): Json<SetPermissionsPayload>,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     if claims.role != "super_admin" && claims.role != "tenant_admin" {
@@ -362,15 +359,9 @@ pub async fn reset_password(
     Path(id): Path<String>,
     Json(payload): Json<ResetPasswordPayload>,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     if claims.role != "super_admin" && claims.role != "tenant_admin" {
@@ -412,15 +403,9 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let token = match extract_token(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Unauthorized" }))).into_response(),
-    };
-    let claims = match validate_jwt(&token, &state.jwt_secret) {
+    let claims = match auth(&headers, &state).await {
         Ok(c)  => c,
-        Err(_) => return (StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Token invalid or expired" }))).into_response(),
+        Err((s, j)) => return (s, j).into_response(),
     };
 
     if claims.role != "super_admin" && claims.role != "tenant_admin" {
