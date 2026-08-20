@@ -1,8 +1,11 @@
 [package]
 name = "provigil-common"
-version = "0.1.0"
+version = "1.0.11"
 edition = "2021"
 description = "Shared types, JWT, SOAR, threat-intel, ClickHouse, Kafka, and tenant utilities for Provigil AI XDR services"
+
+[features]
+kafka = ["dep:rdkafka"]
 
 [dependencies]
 jsonwebtoken = "9"
@@ -13,4 +16,4 @@ uuid         = { version = "1",   features = ["v4"] }
 thiserror    = "1"
 tracing      = "0.1"
 clickhouse   = "0.11"
-rdkafka      = { version = "0.36", features = ["cmake-build"] }
+rdkafka      = { version = "0.36", features = ["cmake-build"], optional = true }
