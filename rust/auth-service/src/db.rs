@@ -87,14 +87,18 @@ impl AuthDb {
         #[derive(Deserialize, clickhouse::Row)]
         struct Row { features: String }
         let q = format!(
-            "SELECT coalesce(features, '[\"ndr\"]') AS features
-             FROM tenants WHERE id = '{}' LIMIT 1",
+            "SELECT coalesce(features, 'ndr') AS features
+             FROM tenants FINAL WHERE id = '{}' LIMIT 1",
             escape(tenant_id)
         );
         let mut cur = self.client.query(&q).fetch::<Row>()?;
         if let Some(r) = cur.next().await? {
-            let feats: Vec<String> = serde_json::from_str(&r.features)
-                .unwrap_or_else(|_| vec!["ndr".into()]);
+            // features stored as comma-separated (e.g. "ndr,ai,soar")
+            let feats: Vec<String> = r.features
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
             return Ok(feats);
         }
         Ok(vec!["ndr".into()])
@@ -105,7 +109,7 @@ impl AuthDb {
         #[derive(Deserialize, clickhouse::Row)]
         struct Row { ai_enabled: u8 }
         let q = format!(
-            "SELECT ai_enabled FROM tenants WHERE id = '{}' LIMIT 1",
+            "SELECT ai_enabled FROM tenants FINAL WHERE id = '{}' LIMIT 1",
             escape(tenant_id)
         );
         let Ok(mut cur) = self.client.query(&q).fetch::<Row>() else { return false };
