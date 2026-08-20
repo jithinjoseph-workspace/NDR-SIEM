@@ -1,7 +1,6 @@
 // NDR Engine — Kafka Consumer (pure-Rust via rdkafka)
 // License: Apache-2.0
 
-use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use std::collections::HashMap;
@@ -47,23 +46,14 @@ async fn batch_writer(
 }
 
 pub async fn start_consumer(state: Arc<AppState>) {
-    let brokers = std::env::var("KAFKA_BROKERS")
-        .unwrap_or_else(|_| crate::KAFKA_DEFAULT.to_string());
-
+    let kafka_cfg = provigil_common::kafka::KafkaConfig::from_env();
     let instance_id = std::env::var("INSTANCE_ID")
         .unwrap_or_else(|_| "1".to_string());
-
-    let consumer: StreamConsumer = ClientConfig::new()
-        .set("group.id", "ndr-engine-group")
-        .set("bootstrap.servers", &brokers)
-        .set("enable.auto.commit", "true")
-        .set("auto.offset.reset", "latest")
-        .set("client.id", format!("ndr-engine-{}", instance_id))
-        .create()
-        .expect("Consumer creation failed");
+    let consumer: StreamConsumer = kafka_cfg
+        .build_consumer("ndr-engine-group", &format!("ndr-engine-{}", instance_id));
 
     consumer
-        .subscribe(&["ndr-events"])
+        .subscribe(&[provigil_common::kafka::TOPIC_NDR_EVENTS])
         .expect("Topic subscription failed");
 
     // Channel: consumer sends events here; batch_writer flushes to ClickHouse every 100 ms.

@@ -35,7 +35,6 @@ use enrichment::{AsnLookup, AssetIdentifier, EnrichmentPipeline, GeoIpLookup, Th
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
-const KAFKA_DEFAULT: &str = "kafka:9092";
 
 #[tokio::main]
 async fn main() {
@@ -127,19 +126,8 @@ async fn main() {
     let storage = storage::SqliteStorage::new("ndr.db")
         .expect("Failed to open SQLite database");
 
-    use rdkafka::producer::FutureProducer;
-    use rdkafka::ClientConfig;
-
-    let kafka_producer: FutureProducer = ClientConfig::new()
-        .set("bootstrap.servers", 
-             std::env::var("KAFKA_BROKERS")
-             .unwrap_or_else(|_| KAFKA_DEFAULT.to_string()))
-        .set("message.timeout.ms", "5000")
-        .set("queue.buffering.max.messages", "100000")
-        .set("batch.num.messages", "1000")
-        .set("linger.ms", "5")
-        .create()
-        .expect("Kafka producer creation failed");
+    let kafka_cfg = provigil_common::kafka::KafkaConfig::from_env();
+    let kafka_producer = kafka_cfg.build_producer();
 
     let kafka_producer = Arc::new(kafka_producer);
 
@@ -170,7 +158,7 @@ async fn main() {
                                 batch.push(ev);
                                 if batch.len() >= 200 {
                                     for (_, payload) in batch.drain(..) {
-                                        let rec = FutureRecord::<str, str>::to("ndr-events")
+                                        let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
                                             .payload(&payload);
                                         if let Err((e, _)) = producer
                                             .send(rec, std::time::Duration::from_secs(5))
@@ -187,7 +175,7 @@ async fn main() {
                     _ = ticker.tick() => {
                         if !batch.is_empty() {
                             for (_, payload) in batch.drain(..) {
-                                let rec = FutureRecord::<str, str>::to("ndr-events")
+                                let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
                                     .payload(&payload);
                                 if let Err((e, _)) = producer
                                     .send(rec, std::time::Duration::from_secs(5))
@@ -908,6 +896,7 @@ async fn main() {
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
 .route("/api/honeypots",      get(api::list_honeypots).post(api::create_honeypot))
 .route("/api/honeypots/:id",  delete(api::remove_honeypot))
+.route("/api/retrospective/fired-rules", get(api::list_fired_rules))
 .route("/api/retrospective/scan",       post(api::start_retrospective_scan))
 .route("/api/retrospective/scans",      get(api::list_retrospective_scans))
 .route("/api/retrospective/scans/:id",  get(api::get_retrospective_scan))
@@ -922,7 +911,8 @@ async fn main() {
     info!("🌐 API active");
     info!("❤  Health:    GET  http://0.0.0.0:3000/health");
     info!("📡 Kafka:     ndr-events (broker: {})",
-        std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| KAFKA_DEFAULT.to_string()));
+        std::env::var(provigil_common::kafka::ENV_KAFKA_BROKERS)
+            .unwrap_or_else(|_| provigil_common::kafka::DEFAULT_KAFKA_BROKERS.to_string()));
 
 // ── Background: agent status monitor ─────────────────────────────────
     {

@@ -1205,21 +1205,8 @@ pub async fn delete_announcement(
     Ok(())
 }
     pub fn new() -> Self {
-        let url = std::env::var("CLICKHOUSE_URL")
-            .unwrap_or_else(|_| "http://localhost:8123".to_string());
-        let user = std::env::var("CLICKHOUSE_USER")
-            .unwrap_or_else(|_| "ndr".to_string());
-        let password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| {
-            tracing::error!("CLICKHOUSE_PASSWORD not set — connection will likely fail");
-            String::new()
-        });
-        Self {
-            client: Client::default()
-                .with_url(url)
-                .with_user(user)
-                .with_password(password)
-                .with_database("ndr"),
-        }
+        let cfg = provigil_common::clickhouse::ClickHouseConfig::from_env();
+        Self { client: cfg.build_client() }
     }
 
     pub async fn health_check(&self) -> bool {
@@ -7024,6 +7011,30 @@ pub async fn get_ioc_hits(
             "ts":               r.6,
             "tenant_id":        tenant_id,
         })).collect())
+    }
+
+    /// Returns distinct rule names that have actually fired, with hit counts and top severity.
+    /// Covers both Agent-S (Suricata) alert strings and Sigma rule UUIDs stored in sigma_hits.
+    pub async fn get_fired_rules(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Vec<(String, u64, String)>> {
+        let db = tenant_db(tenant_id);
+        let rows = self.client
+            .query(&format!(
+                "SELECT arrayJoin(sigma_hits) as rule_name, \
+                 toUInt64(count()) as cnt, \
+                 any(severity) as sev \
+                 FROM {}.ndr_hits \
+                 WHERE notEmpty(sigma_hits) \
+                 GROUP BY rule_name \
+                 ORDER BY cnt DESC \
+                 LIMIT 500",
+                db
+            ))
+            .fetch_all::<(String, u64, String)>()
+            .await?;
+        Ok(rows)
     }
 }
 

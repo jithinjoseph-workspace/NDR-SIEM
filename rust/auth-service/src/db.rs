@@ -21,16 +21,9 @@ pub struct AuthDb {
 }
 
 impl AuthDb {
-    pub async fn new(url: &str) -> Result<Self> {
-        let db   = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "ndr".into());
-        let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "ndr".into());
-        let pass = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
-        let client = Client::default()
-            .with_url(url)
-            .with_database(db)
-            .with_user(user)
-            .with_password(pass);
-        Ok(Self { client })
+    pub async fn new(_url: &str) -> Result<Self> {
+        let cfg = provigil_common::clickhouse::ClickHouseConfig::from_env();
+        Ok(Self { client: cfg.build_client() })
     }
 
     /// Fetch a user by username within a tenant.
