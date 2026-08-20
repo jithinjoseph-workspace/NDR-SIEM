@@ -1,5 +1,6 @@
 mod db;
 mod jwt;
+mod license;
 mod mfa;
 mod routes;
 
@@ -20,6 +21,8 @@ pub struct AppState {
     pub token_ttl:   usize,
     /// Refresh token TTL in seconds.  Default: 604800 (7 days).
     pub refresh_ttl: usize,
+    /// Verified license claims from LICENSE_TOKEN — None means DB-based feature lookup.
+    pub verified_license: Option<Arc<license::LicenseClaims>>,
 }
 
 #[tokio::main]
@@ -40,6 +43,32 @@ async fn main() -> anyhow::Result<()> {
     let redis_client  = redis::Client::open(valkey_url.as_str())?;
     let valkey        = redis::aio::ConnectionManager::new(redis_client).await?;
 
+    // Verify the customer's license token at startup.
+    // LICENSE_PRIVATE_KEY is PromaSecure-internal only — never set in customer deployments.
+    // Customers receive only LICENSE_PUBLIC_KEY + LICENSE_TOKEN.
+    let verified_license: Option<Arc<license::LicenseClaims>> = {
+        let pub_key = std::env::var("LICENSE_PUBLIC_KEY").unwrap_or_default();
+        let token   = std::env::var("LICENSE_TOKEN").unwrap_or_default();
+        if !pub_key.trim().is_empty() && !token.trim().is_empty() {
+            match license::verify_license(&token, &pub_key) {
+                Ok(claims) => {
+                    tracing::info!(
+                        "License verified — tenant: '{}', features: {:?}",
+                        claims.tenant_id, claims.features
+                    );
+                    Some(Arc::new(claims))
+                }
+                Err(e) => {
+                    tracing::warn!("LICENSE_TOKEN present but invalid: {} — features from DB", e);
+                    None
+                }
+            }
+        } else {
+            tracing::info!("No LICENSE_TOKEN set — features resolved from database per tenant");
+            None
+        }
+    };
+
     let state = AppState {
         db,
         valkey,
@@ -48,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
                         .ok().and_then(|v| v.parse().ok()).unwrap_or(3600),
         refresh_ttl: std::env::var("REFRESH_TTL_SECS")
                         .ok().and_then(|v| v.parse().ok()).unwrap_or(604_800),
+        verified_license,
     };
 
     let cors = CorsLayer::new()

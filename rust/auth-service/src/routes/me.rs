@@ -71,7 +71,17 @@ pub async fn handle(
         user.permissions.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
     };
 
-    let features = state.db.get_tenant_features(&user.tenant_id).await.unwrap_or_else(|_| vec!["ndr".into()]);
+    // License token takes precedence over DB — if a verified license exists for this tenant,
+    // its feature list is authoritative (customer cannot self-upgrade via DB).
+    let features = if let Some(lic) = &state.verified_license {
+        if lic.tenant_id == user.tenant_id || lic.tenant_id.is_empty() {
+            lic.features.clone()
+        } else {
+            state.db.get_tenant_features(&user.tenant_id).await.unwrap_or_else(|_| vec!["ndr".into()])
+        }
+    } else {
+        state.db.get_tenant_features(&user.tenant_id).await.unwrap_or_else(|_| vec!["ndr".into()])
+    };
     let ai_enabled = user.role == "super_admin" || state.db.get_tenant_ai_enabled(&user.tenant_id).await;
     let sensor_ids = if user.role == "super_admin" || user.role == "tenant_admin" {
         vec![]

@@ -163,6 +163,8 @@ services:
       - TOKEN_TTL_SECS=3600
       - REFRESH_TTL_SECS=604800
       - LISTEN_ADDR=0.0.0.0:3001
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_TOKEN=${LICENSE_TOKEN}
     depends_on:
       clickhouse1:
         condition: service_healthy
@@ -208,7 +210,6 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
-      - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_TOKEN=${LICENSE_TOKEN}
       - TENANT_ADMIN_USER=${TENANT_ADMIN_USER}
@@ -278,7 +279,6 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
-      - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_TOKEN=${LICENSE_TOKEN}
       - TENANT_ADMIN_USER=${TENANT_ADMIN_USER}
@@ -348,7 +348,6 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - HOST_IP=${HOST_IP}
       - SENSOR_MODE=${SENSOR_MODE:-agent}
-      - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_TOKEN=${LICENSE_TOKEN}
       - TENANT_ADMIN_USER=${TENANT_ADMIN_USER}
