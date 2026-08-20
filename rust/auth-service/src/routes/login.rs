@@ -340,6 +340,18 @@ pub async fn issue_full_token(
         let _: redis::RedisResult<i64>  = conn.sadd(&user_set_key, &jti).await;
         let _: redis::RedisResult<bool> = conn.expire(&user_set_key, state.refresh_ttl).await;
         let _: redis::RedisResult<i64>  = conn.sadd(&tenant_set_key, &jti).await;
+        // ndr-engine's auth_middleware checks ndr:session:{jti} — write there too
+        // so sessions created by auth-service are accepted by all ndr-engine API endpoints.
+        let ndr_session_key = format!("ndr:session:{}", jti);
+        let _: redis::RedisResult<()> = conn.hset_multiple(&ndr_session_key, &[
+            ("username",   username),
+            ("role",       role),
+            ("tenant_id",  tenant_id),
+            ("ip",         ip.as_str()),
+            ("device",     device.as_str()),
+            ("login_time", login_ts.as_str()),
+        ]).await;
+        let _: redis::RedisResult<bool> = conn.expire(&ndr_session_key, state.token_ttl).await;
     }
 
     // ── New-device detection (background, never blocks login) ──────────────

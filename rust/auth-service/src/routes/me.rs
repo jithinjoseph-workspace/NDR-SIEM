@@ -98,7 +98,21 @@ pub async fn handle(
     ).into_response()
 }
 
+/// Read token from cookie first (Angular withCredentials), then Authorization header.
 fn extract_bearer(headers: &HeaderMap) -> Option<String> {
+    // Cookie path — Angular sends ndr_token via HttpOnly cookie with withCredentials: true
+    let from_cookie = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| {
+            c.split(';').find_map(|p| {
+                p.trim().strip_prefix("ndr_token=").map(str::to_owned)
+            })
+        });
+    if from_cookie.is_some() {
+        return from_cookie;
+    }
+    // Bearer header fallback (direct API clients, curl, siem-engine)
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
