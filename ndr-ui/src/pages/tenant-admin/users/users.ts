@@ -740,6 +740,11 @@ export class UsersSection implements OnInit, OnDestroy {
       .filter(cat => cat.options.length > 0);
   }
 
+  get visibleEnabledCount(): number {
+    const licensed = new Set(this.licensedPermissionOptions.map(p => p.key));
+    return this.userForm.permissions.filter(p => licensed.has(p)).length;
+  }
+
   private defaultPermissionsFor(role: string): string[] {
     const features = this.licensedFeatures;
     if (role === 'viewer') return ['dashboard', 'alerts', 'health'];
