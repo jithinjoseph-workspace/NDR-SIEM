@@ -2,7 +2,7 @@
 name = "provigil-common"
 version = "0.1.0"
 edition = "2021"
-description = "Shared types and JWT utilities for Provigil AI XDR services"
+description = "Shared types, JWT, SOAR, and threat-intel utilities for Provigil AI XDR services"
 
 [dependencies]
 jsonwebtoken = "9"

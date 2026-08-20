@@ -1,59 +1,57 @@
 use crate::correlator::CorrelationHit;
 use crate::scoring::RiskResult;
 use crate::enrichment::EnrichmentData;
+use provigil_common::soar::{SoarContext, SoarNativePlaybook};
 
+/// Build a generic SoarContext from ndr-engine-specific types, then delegate
+/// to the shared pure evaluator in provigil_common.
 pub fn evaluate_condition(
     cond_field: &str,
     cond_op: &str,
     cond_value: &str,
-    _hit: &CorrelationHit,
+    hit: &CorrelationHit,
     risk: &RiskResult,
     enrichment: &EnrichmentData,
 ) -> bool {
-    match cond_field {
-        "score" => {
-            let score_val = cond_value.parse::<f32>().unwrap_or(0.0);
-            match cond_op {
-                ">" => risk.score > score_val,
-                ">=" => risk.score >= score_val,
-                "<" => risk.score < score_val,
-                "<=" => risk.score <= score_val,
-                "==" => (risk.score - score_val).abs() < f32::EPSILON,
-                _ => false,
-            }
-        }
-        "severity" => {
-            match cond_op {
-                "==" => risk.severity.as_str().eq_ignore_ascii_case(cond_value),
-                "contains" => risk.severity.as_str().to_lowercase().contains(&cond_value.to_lowercase()),
-                _ => false,
-            }
-        }
-        "threat_intel" => {
-            let val = cond_value.to_lowercase() == "true" || cond_value == "1";
-            match cond_op {
-                "==" => enrichment.is_malicious == val,
-                _ => false,
-            }
-        }
-        "src_country" => {
-            let country = enrichment.src_geo.as_ref()
-                .map(|g| g.country_code.clone())
-                .unwrap_or_default();
-            match cond_op {
-                "==" => country.eq_ignore_ascii_case(cond_value),
-                "contains" => country.to_lowercase().contains(&cond_value.to_lowercase()),
-                _ => false,
-            }
-        }
-        "sigma_tag" => {
-            // Check if any tag matches
-            match cond_op {
-                "==" => risk.tags.iter().any(|t| t.eq_ignore_ascii_case(cond_value)),
-                "contains" => risk.tags.iter().any(|t| t.to_lowercase().contains(&cond_value.to_lowercase())),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
+    let src_ip = match hit.source.as_str() {
+        "agent-s" => hit.agent_s.source_ip.clone().unwrap_or_default(),
+        _ => hit.agent_z.source_ip.clone()
+            .or_else(|| hit.agent_s.source_ip.clone())
+            .unwrap_or_default(),
+    };
+    let dst_ip = match hit.source.as_str() {
+        "agent-s" => hit.agent_s.dest_ip.clone().unwrap_or_default(),
+        _ => hit.agent_z.dest_ip.clone()
+            .or_else(|| hit.agent_s.dest_ip.clone())
+            .unwrap_or_default(),
+    };
+    let src_country = enrichment.src_geo.as_ref()
+        .map(|g| g.country_code.clone())
+        .unwrap_or_default();
+
+    let ctx = SoarContext {
+        score:        risk.score,
+        severity:     risk.severity.as_str().to_string(),
+        is_malicious: enrichment.is_malicious,
+        src_country,
+        tags:         risk.tags.clone(),
+        src_ip,
+        dst_ip,
+        community_id: hit.community_id.clone(),
+        tenant_id:    String::new(), // filled by caller when needed
+    };
+
+    // Delegate to the shared pure evaluator
+    let pb = SoarNativePlaybook {
+        id: String::new(), name: String::new(), description: String::new(),
+        enabled: 1,
+        cond_field: cond_field.to_string(),
+        cond_op:    cond_op.to_string(),
+        cond_value: cond_value.to_string(),
+        action_type: String::new(), action_config: String::new(),
+        run_count: 0, last_run: None,
+        created_at: String::new(), updated_at: String::new(),
+        tenant_id:  String::new(),
+    };
+    provigil_common::soar::conditions::evaluate_condition(&pb, &ctx)
 }

@@ -6,6 +6,7 @@ license = "Apache-2.0"
 description = "Production-grade NDR correlation engine (Apache-2.0)"
 
 [dependencies]
+provigil-common = { path = "../provigil-common" }
 axum            = { version = "0.7", features = ["ws", "multipart"] }
 tokio           = { version = "1",   features = ["full"] }
 serde           = { version = "1",   features = ["derive"] }
