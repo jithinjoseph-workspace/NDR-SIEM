@@ -32,6 +32,8 @@ interface PermissionOption {
   label: string;
   description: string;
   icon: any;
+  // features that unlock this page — empty means always visible
+  requiredFeatures?: string[];
 }
 
 @Component({
@@ -46,6 +48,7 @@ interface PermissionOption {
 export class UsersSection implements OnInit, OnDestroy {
   @Input() tenantId = '';
   @Input() tenantName = 'Organization';
+  @Input() tenantFeatures: string[] = [];
 
   UsersIcon        = UsersLucide;
   UserPlusIcon     = UserPlus;
@@ -145,10 +148,7 @@ export class UsersSection implements OnInit, OnDestroy {
     password: '',
     role: 'analyst',
     active: true,
-    permissions: [
-      'dashboard', 'alerts', 'assets', 'logs', 'live',
-      'network-map', 'intel', 'health', 'evidence',
-    ] as string[],
+    permissions: ['dashboard', 'health'] as string[],
   };
 
   // ── Constants ─────────────────────────────────────────────────────────────
@@ -169,30 +169,45 @@ export class UsersSection implements OnInit, OnDestroy {
   };
 
   readonly permissionOptions: PermissionOption[] = [
-    { key: 'dashboard',   label: 'Dashboard',    description: 'Operational overview',  icon: LayoutDashboard },
-    { key: 'alerts',      label: 'Alerts',        description: 'Alert triage',          icon: Bell },
-    { key: 'assets',      label: 'Assets',        description: 'Asset inventory',       icon: Server },
-    { key: 'logs',        label: 'Network Logs',  description: 'Event records',         icon: FileText },
-    { key: 'live',        label: 'Live Stream',   description: 'Real-time activity',    icon: Radio },
-    { key: 'network-map', label: 'Network Map',   description: 'Topology view',         icon: Network },
-    { key: 'intel',       label: 'Threat Intel',  description: 'IOC lookup',            icon: Globe },
-    { key: 'health',      label: 'System Health', description: 'Service status',        icon: Activity },
-    { key: 'rules',         label: 'Rules View',       description: 'Detection rules',          icon: Gem },
-    { key: 'evidence',      label: 'Evidence',         description: 'Artifact locker',          icon: FolderSearch },
-    { key: 'honeypots',     label: 'Honeypots',        description: 'Deception trap management', icon: Shield },
-    { key: 'retrospective', label: 'Retrospective',    description: 'Historical rule re-scan',   icon: RotateCcw },
-    { key: 'soar',          label: 'SOAR View',        description: 'Automation visibility',     icon: Settings },
-    { key: 'ai-activity',   label: 'AI Activity',      description: 'Aria interactions',         icon: Bot },
-    { key: 'ai-report',     label: 'AI Report',        description: 'AI-generated reports',      icon: Bot },
+    { key: 'dashboard',    label: 'Dashboard',     description: 'Operational overview',         icon: LayoutDashboard },
+    { key: 'alerts',       label: 'Alerts',         description: 'Alert triage',                icon: Bell,        requiredFeatures: ['ndr', 'soar'] },
+    { key: 'assets',       label: 'Assets',         description: 'Asset inventory',             icon: Server,      requiredFeatures: ['ndr', 'soar'] },
+    { key: 'logs',         label: 'Network Logs',   description: 'Event records',               icon: FileText,    requiredFeatures: ['ndr'] },
+    { key: 'live',         label: 'Live Stream',    description: 'Real-time activity',          icon: Radio,       requiredFeatures: ['ndr'] },
+    { key: 'network-map',  label: 'Network Map',    description: 'Topology view',               icon: Network,     requiredFeatures: ['ndr'] },
+    { key: 'intel',        label: 'Threat Intel',   description: 'IOC lookup',                  icon: Globe,       requiredFeatures: ['threat_intel'] },
+    { key: 'health',       label: 'System Health',  description: 'Service status',              icon: Activity },
+    { key: 'rules',        label: 'Rules View',     description: 'Detection rules',             icon: Gem,         requiredFeatures: ['ndr'] },
+    { key: 'evidence',     label: 'Evidence',       description: 'Artifact locker',             icon: FolderSearch,requiredFeatures: ['ndr'] },
+    { key: 'honeypots',    label: 'Honeypots',      description: 'Deception trap management',   icon: Shield,      requiredFeatures: ['ndr'] },
+    { key: 'retrospective',label: 'Retrospective',  description: 'Historical rule re-scan',     icon: RotateCcw,   requiredFeatures: ['ndr'] },
+    { key: 'soar',         label: 'SOAR View',      description: 'Automation visibility',       icon: Settings,    requiredFeatures: ['soar'] },
+    { key: 'ai-activity',  label: 'AI Activity',    description: 'Aria interactions',           icon: Bot,         requiredFeatures: ['ai'] },
+    { key: 'ai-report',    label: 'AI Report',      description: 'AI-generated reports',        icon: Bot,         requiredFeatures: ['ai'] },
   ];
 
-  readonly permissionCategories = [
-    { title: 'CORE',       options: ['dashboard', 'alerts', 'assets'].map(k => this.permissionOptions.find(p => p.key === k)!) },
-    { title: 'NETWORK',    options: ['logs', 'network-map', 'live'].map(k => this.permissionOptions.find(p => p.key === k)!) },
-    { title: 'SECURITY',   options: ['intel', 'rules', 'evidence'].map(k => this.permissionOptions.find(p => p.key === k)!) },
-    { title: 'ENFORCE',    options: ['honeypots', 'retrospective'].map(k => this.permissionOptions.find(p => p.key === k)!) },
-    { title: 'OPERATIONS', options: ['health', 'soar', 'ai-activity', 'ai-report'].map(k => this.permissionOptions.find(p => p.key === k)!) },
+  private readonly allPermissionCategories = [
+    { title: 'CORE',       keys: ['dashboard', 'alerts', 'assets'] },
+    { title: 'NETWORK',    keys: ['logs', 'network-map', 'live'] },
+    { title: 'SECURITY',   keys: ['intel', 'rules', 'evidence'] },
+    { title: 'ENFORCE',    keys: ['honeypots', 'retrospective'] },
+    { title: 'OPERATIONS', keys: ['health', 'soar', 'ai-activity', 'ai-report'] },
   ];
+
+  get permissionCategories() {
+    const feats = this.tenantFeatures;
+    const licensed = this.permissionOptions.filter(p => {
+      if (!p.requiredFeatures || p.requiredFeatures.length === 0) return true;
+      // OR logic: page is accessible if tenant has ANY of the required features
+      return p.requiredFeatures.some(f => feats.includes(f));
+    });
+    return this.allPermissionCategories
+      .map(cat => ({
+        title: cat.title,
+        options: cat.keys.map(k => licensed.find(p => p.key === k)!).filter(Boolean),
+      }))
+      .filter(cat => cat.options.length > 0);
+  }
 
   readonly roleOptions = [
     { value: 'analyst',        label: 'Analyst',        tier: 'blue' },
@@ -720,27 +735,14 @@ export class UsersSection implements OnInit, OnDestroy {
 
   // ── License-aware permission helpers ──────────────────────────────────────
 
-  get licensedFeatures(): string[] {
-    const user = this.auth.getUser();
-    if (!user) return ['ndr'];
-    if (user.role === 'super_admin') return ['ndr', 'ai', 'soar'];
-    return (user.features as string[]) ?? ['ndr'];
-  }
-
   get licensedPermissionOptions(): PermissionOption[] {
-    const features = this.licensedFeatures;
-    return this.permissionOptions.filter(p => {
-      if (p.key === 'ai-activity' || p.key === 'ai-report') return features.includes('ai');
-      if (p.key === 'soar') return features.includes('soar');
-      return true;
-    });
+    // permissionCategories getter already filters by tenantFeatures — flatten it
+    return this.permissionCategories.flatMap(c => c.options);
   }
 
   get licensedPermissionCategories() {
-    const licensed = new Set(this.licensedPermissionOptions.map(p => p.key));
-    return this.permissionCategories
-      .map(cat => ({ ...cat, options: cat.options.filter(o => o && licensed.has(o.key)) }))
-      .filter(cat => cat.options.length > 0);
+    // permissionCategories already applies feature gating; return it directly
+    return this.permissionCategories;
   }
 
   get visibleEnabledCount(): number {
@@ -749,13 +751,12 @@ export class UsersSection implements OnInit, OnDestroy {
   }
 
   private defaultPermissionsFor(role: string): string[] {
-    const features = this.licensedFeatures;
-    if (role === 'viewer') return ['dashboard', 'alerts', 'health'];
-    if (role === 'senior_analyst') return this.licensedPermissionOptions.map(p => p.key);
-    const perms = ['dashboard', 'alerts', 'logs', 'live', 'network-map', 'intel', 'health'];
-    if (features.includes('ai'))   perms.push('ai-activity', 'ai-report');
-    if (features.includes('soar')) perms.push('soar');
-    return perms;
+    const licensed = this.licensedPermissionOptions.map(p => p.key);
+    if (role === 'viewer')         return ['dashboard', 'health'].filter(k => licensed.includes(k));
+    if (role === 'senior_analyst') return licensed;
+    // analyst: dashboard + everything except enforce pages (honeypots/retrospective)
+    const enforce = new Set(['honeypots', 'retrospective']);
+    return licensed.filter(k => !enforce.has(k));
   }
 
   private normalizePermissions(value: unknown, role: string): string[] {

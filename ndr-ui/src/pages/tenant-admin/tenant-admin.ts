@@ -47,10 +47,11 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   // ── Shell signals ──────────────────────────────────────────────────────────
 
-  readonly activeTab     = signal<'users' | 'trusted-domains' | 'sessions' | 'profile'>('users');
-  readonly tenantId      = signal('');
-  readonly tenantName    = signal('Organization');
-  readonly currentUser   = signal<any>({});
+  readonly activeTab      = signal<'users' | 'trusted-domains' | 'sessions' | 'profile'>('users');
+  readonly tenantId       = signal('');
+  readonly tenantName     = signal('Organization');
+  readonly tenantFeatures = signal<string[]>([]);
+  readonly currentUser    = signal<any>({});
 
   // System status
   readonly tenantSystemStatus = signal<'OPERATIONAL' | 'DEGRADED' | 'CHECKING...'>('CHECKING...');
@@ -90,6 +91,10 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.refreshTenantSystemStatus();
     this.statusInterval = setInterval(() => this.refreshTenantSystemStatus(), 10000);
     this.checkForUpdates();
+    this.api.getTenantFeatures().subscribe({
+      next: (data: any) => this.tenantFeatures.set(data.features ?? []),
+      error: () => {},
+    });
   }
 
   ngOnDestroy() {

@@ -124,7 +124,8 @@
   <app-users
     *ngIf="activeTab() === 'users'"
     [tenantId]="tenantId()"
-    [tenantName]="tenantName()">
+    [tenantName]="tenantName()"
+    [tenantFeatures]="tenantFeatures()">
   </app-users>
 
   <app-trusted-domains
