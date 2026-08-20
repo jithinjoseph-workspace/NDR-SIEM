@@ -1018,6 +1018,7 @@ sudo docker rm -f vector 2>/dev/null || true
 
 log "Pulling pre-built images..."
 sudo docker pull "${REGISTRY}/ndr-engine:latest"
+sudo docker pull "${REGISTRY}/provigil-auth:latest"
 sudo docker pull "${REGISTRY}/ndr-ui:latest"
 
 # Write a compose override that replaces build: with the pre-built image
@@ -1029,6 +1030,9 @@ services:
     image: ${REGISTRY}/ndr-engine:latest
   ndr-engine-3:
     image: ${REGISTRY}/ndr-engine:latest
+  provigil-auth:
+    image: ${REGISTRY}/provigil-auth:latest
+    build: !reset null
   ndr-ui:
     image: ${REGISTRY}/ndr-ui:latest
     build: !reset null
@@ -1155,8 +1159,9 @@ while true; do
         rm -f "$FLAG"
         logger -t ndr-updater "Update triggered → pulling ${TARGET_VERSION:-latest}"
         cd "$INSTALL_DIR" || exit 1
-        docker pull "${REGISTRY}/ndr-engine:latest" 2>&1 | logger -t ndr-updater
-        docker pull "${REGISTRY}/ndr-ui:latest"     2>&1 | logger -t ndr-updater
+        docker pull "${REGISTRY}/ndr-engine:latest"   2>&1 | logger -t ndr-updater
+        docker pull "${REGISTRY}/provigil-auth:latest" 2>&1 | logger -t ndr-updater
+        docker pull "${REGISTRY}/ndr-ui:latest"        2>&1 | logger -t ndr-updater
         docker compose -f docker-compose.yml -f docker-compose.customer.yml \
             --profile onpremise up -d --no-build    2>&1 | logger -t ndr-updater
         logger -t ndr-updater "Update complete"

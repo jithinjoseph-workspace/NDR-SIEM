@@ -847,8 +847,12 @@ export class Api {
 
   // ── Retrospective Detection ─────────────────────────────────────────────
 
-  startRetroScan(rule_sid: number, rule_content: string, hours_back: number): Observable<any> {
-    return this.http.post(`${this.baseUrl}/retrospective/scan`, { rule_sid, rule_content, hours_back });
+  getFiredRules(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/retrospective/fired-rules`);
+  }
+
+  startRetroScan(rule_id: string, rule_name: string, rule_content: string, hours_back: number): Observable<any> {
+    return this.http.post(`${this.baseUrl}/retrospective/scan`, { rule_id, rule_name, rule_content, hours_back });
   }
 
   listRetroScans(): Observable<any> {

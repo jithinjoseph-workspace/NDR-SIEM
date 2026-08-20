@@ -185,6 +185,8 @@ export class Rules implements OnInit {
   syncing = false;
   categoryFilter: string = '';
   severityFilter: string = '';
+  activeTab: 'all' | 'agent-z' | 'agent-s' = 'all';
+  agentSRules: any[] = [];
 
   get topCategories(): { tag: string; label: string; count: number }[] {
     const counts: { [key: string]: number } = {};
@@ -210,8 +212,14 @@ export class Rules implements OnInit {
     return counts;
   }
 
+  get allRules(): any[] {
+    if (this.activeTab === 'agent-z') return this.rules;
+    if (this.activeTab === 'agent-s') return this.agentSRules;
+    return [...this.rules, ...this.agentSRules];
+  }
+
   get displayRules(): any[] {
-    return this.rules.filter(rule => {
+    return this.allRules.filter(rule => {
       const catOk = !this.categoryFilter || (rule.tags || []).includes(this.categoryFilter);
       const sevOk = !this.severityFilter || rule.severity.toUpperCase() === this.severityFilter;
       return catOk && sevOk;
@@ -283,7 +291,7 @@ export class Rules implements OnInit {
       next: (data: any[]) => {
         this.rules = data.map(r => ({
           name: r.title || 'Unknown',
-          type: 'SIGMA',
+          type: 'Agent-Z',
           severity: (r.severity || 'medium').toUpperCase(),
           status: r.enabled ? 'ACTIVE' : 'INACTIVE',
           id: r.id,
@@ -295,7 +303,7 @@ export class Rules implements OnInit {
         this.loading = false;
         this.cdr.detectChanges();
 
-        // Load hit counts after rules are set to avoid race condition
+        // Load hit counts
         this.api.getRuleHitCounts().subscribe({
           next: (hitCounts: { [ruleName: string]: number }) => {
             this.totalHits = Object.values(hitCounts).reduce((a, b) => a + b, 0);
@@ -312,6 +320,29 @@ export class Rules implements OnInit {
         this.loading = false;
         this.cdr.detectChanges();
       }
+    });
+
+    // Load Agent-S fired rules from ndr_hits.sigma_hits
+    this.api.getFiredRules().subscribe({
+      next: (r: any) => {
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        this.agentSRules = (r.rules ?? [])
+          .filter((x: any) => x.name && !UUID_RE.test(x.name))  // exclude Sigma UUIDs — those appear in sigma rules
+          .map((x: any) => ({
+            name: x.name,
+            type: 'Agent-S',
+            severity: (x.severity || 'HIGH').toUpperCase(),
+            status: 'ACTIVE',
+            id: x.name,
+            description: 'Agent-S detection rule (managed by the sensor)',
+            tags: [],
+            conditions: 0,
+            hits: x.hit_count || 0,
+          }));
+        this.totalHits = this.totalHits + this.agentSRules.reduce((s: number, r: any) => s + r.hits, 0);
+        this.cdr.detectChanges();
+      },
+      error: () => {}
     });
   }
 

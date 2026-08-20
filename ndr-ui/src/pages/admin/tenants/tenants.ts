@@ -42,7 +42,7 @@ export class Tenants implements OnInit {
 
   // Feature management
   featureTenant: any  = null;
-  featureForm         = { ndr: true, ai: true, soar: false };
+  featureForm         = { ndr: false, siem: false, soar: false, threat_intel: false, ai: false };
   savingFeatures      = false;
 
   // License generation
@@ -254,9 +254,11 @@ export class Tenants implements OnInit {
     this.featureTenant = tenant;
     const feats: string[] = tenant.features ?? ['ndr'];
     this.featureForm = {
-      ndr:  feats.includes('ndr'),
-      ai:   feats.includes('ai'),
-      soar: feats.includes('soar'),
+      ndr:          feats.includes('ndr'),
+      siem:         feats.includes('siem'),
+      soar:         feats.includes('soar'),
+      threat_intel: feats.includes('threat_intel'),
+      ai:           feats.includes('ai'),
     };
     this.cdr.detectChanges();
   }
@@ -266,9 +268,11 @@ export class Tenants implements OnInit {
   saveFeatures() {
     if (!this.featureTenant) return;
     const features: string[] = [];
-    if (this.featureForm.ndr)  features.push('ndr');
-    if (this.featureForm.ai)   features.push('ai');
-    if (this.featureForm.soar) features.push('soar');
+    if (this.featureForm.ndr)          features.push('ndr');
+    if (this.featureForm.siem)         features.push('siem');
+    if (this.featureForm.soar)         features.push('soar');
+    if (this.featureForm.threat_intel) features.push('threat_intel');
+    if (this.featureForm.ai)           features.push('ai');
     this.savingFeatures = true;
     this.api.setTenantFeatures(this.featureTenant.id, features).subscribe({
       next: () => {

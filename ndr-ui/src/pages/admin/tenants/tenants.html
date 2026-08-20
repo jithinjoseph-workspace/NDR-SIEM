@@ -122,19 +122,27 @@
       </button>
     </div>
     <p style="font-size:0.8rem;opacity:0.6;margin-bottom:1rem;">
-      Select which modules this tenant is licensed to use. SOAR requires the NDR module.
+      Select which modules this tenant has purchased. These become embedded in the license token — the customer can only access what is checked here.
     </p>
     <label class="toggle-field">
-      <input [(ngModel)]="featureForm.ndr" type="checkbox" [disabled]="true" />
-      <span>NDR — Network Detection &amp; Response <em>(always included)</em></span>
+      <input [(ngModel)]="featureForm.ndr" type="checkbox" />
+      <span>NDR — Network Detection &amp; Response</span>
     </label>
     <label class="toggle-field">
-      <input [(ngModel)]="featureForm.ai" type="checkbox" />
-      <span>AI Analysis — ARIA threat explanations &amp; AI activity</span>
+      <input [(ngModel)]="featureForm.siem" type="checkbox" />
+      <span>SIEM — Log ingestion, correlation &amp; alerting</span>
     </label>
     <label class="toggle-field">
       <input [(ngModel)]="featureForm.soar" type="checkbox" />
       <span>SOAR — Automated response playbooks &amp; integrations</span>
+    </label>
+    <label class="toggle-field">
+      <input [(ngModel)]="featureForm.threat_intel" type="checkbox" />
+      <span>Threat Intel — External feed collection (CISA, OTX, AbuseIPDB)</span>
+    </label>
+    <label class="toggle-field">
+      <input [(ngModel)]="featureForm.ai" type="checkbox" />
+      <span>AI Analysis — ARIA threat explanations &amp; AI activity</span>
     </label>
     <div class="modal-actions">
       <button class="primary-action" type="button" [disabled]="savingFeatures" (click)="saveFeatures()">

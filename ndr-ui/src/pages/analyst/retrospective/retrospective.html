@@ -8,7 +8,7 @@
         THREAT HUNTING
       </div>
       <h1 class="retro-title">Retrospective Detection</h1>
-      <p class="retro-subtitle">Re-run detection rules against historical alerts to uncover threats that existed before the rule was written.</p>
+      <p class="retro-subtitle">Search historical alerts for any Agent-S or Agent-Z rule that has fired — pick from the list or type a keyword.</p>
     </div>
     <button class="btn-refresh" (click)="loadScans()" [disabled]="loading" [class.spinning]="loading">
       <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
@@ -23,14 +23,82 @@
       Launch Retrospective Scan
     </div>
     <div class="retro-form">
-      <div class="retro-field">
-        <label>Rule SID</label>
-        <input type="number" [(ngModel)]="ruleSid" placeholder="e.g. 2027865" class="retro-input" />
+
+      <!-- Rule picker -->
+      <div class="retro-field retro-field-wide retro-picker-wrap">
+        <label>Rule</label>
+
+        @if (selectedRuleId) {
+          <!-- Selected rule chip -->
+          <div class="retro-selected-rule">
+            <span class="retro-engine-badge" [class]="'retro-engine-' + ruleEngine(selectedRuleId).toLowerCase().replace('-','')">
+              {{ ruleEngine(selectedRuleId) }}
+            </span>
+            <span class="retro-selected-name">{{ selectedRuleName }}</span>
+            <button class="retro-clear-btn" (click)="clearRule()" title="Clear selection">
+              <lucide-icon [name]="XIcon" class="w-3 h-3"></lucide-icon>
+            </button>
+          </div>
+        } @else {
+          <!-- Search input -->
+          <div class="retro-search-wrap">
+            <lucide-icon [name]="SearchIcon" class="retro-search-icon w-3.5 h-3.5"></lucide-icon>
+            <input
+              class="retro-input retro-search-input"
+              [(ngModel)]="ruleQuery"
+              placeholder="{{ rulesLoading ? 'Loading rules...' : 'Search rules by name…' }}"
+              (focus)="openDropdown()"
+              (input)="openDropdown()"
+              autocomplete="off"
+            />
+          </div>
+          @if (showDropdown) {
+            <div class="retro-dropdown">
+              @if (filteredFired.length === 0 && filteredSigma.length === 0) {
+                <div class="retro-dropdown-empty">No rules found</div>
+              }
+
+              <!-- Section: Rules with actual history -->
+              @if (filteredFired.length > 0) {
+                <div class="retro-dropdown-section">HAS HISTORY</div>
+                @for (rule of filteredFired; track rule.name) {
+                  <div class="retro-dropdown-item" (click)="selectRule(rule)">
+                    <div class="retro-dropdown-row">
+                      <span class="retro-dropdown-name">{{ rule.name }}</span>
+                      <span class="retro-engine-badge" [class]="'retro-engine-' + ruleEngine(rule.name).toLowerCase().replace('-','')">
+                        {{ ruleEngine(rule.name) }}
+                      </span>
+                    </div>
+                    <span class="retro-dropdown-id">{{ rule.hit_count }} hit{{ rule.hit_count === 1 ? '' : 's' }} in history</span>
+                  </div>
+                }
+              }
+
+              <!-- Section: All Sigma library (Agent-Z) -->
+              @if (filteredSigma.length > 0) {
+                <div class="retro-dropdown-section">SIGMA LIBRARY — AGENT-Z</div>
+                @for (rule of filteredSigma; track rule.id) {
+                  <div class="retro-dropdown-item" (click)="selectRule(rule)">
+                    <div class="retro-dropdown-row">
+                      <span class="retro-dropdown-name">{{ rule.name }}</span>
+                      <span class="retro-engine-badge retro-engine-agentz">Agent-Z</span>
+                    </div>
+                    <span class="retro-dropdown-id">{{ rule.id }}</span>
+                  </div>
+                }
+              }
+            </div>
+          }
+        }
       </div>
+
+      <!-- Keyword fallback -->
       <div class="retro-field retro-field-wide">
-        <label>Keyword / Rule Content <span class="retro-optional">(optional)</span></label>
-        <input [(ngModel)]="ruleContent" placeholder="Match against alert signature or IP" class="retro-input" />
+        <label>Keyword / IP <span class="retro-optional">(optional — OR filter)</span></label>
+        <input [(ngModel)]="ruleContent" placeholder="e.g. 185.220.101.45 or lateral-movement" class="retro-input" />
       </div>
+
+      <!-- Time window -->
       <div class="retro-field">
         <label>History Window</label>
         <div class="retro-hours">
@@ -41,6 +109,8 @@
           }
         </div>
       </div>
+
+      <!-- Run -->
       <div class="retro-field retro-field-btn">
         <button class="btn-run" (click)="startScan()" [disabled]="scanning">
           <lucide-icon [name]="PlayIcon" class="w-3.5 h-3.5"></lucide-icon>
@@ -68,7 +138,7 @@
           <div class="retro-card-header" (click)="viewScan(scan)">
             <div class="retro-card-left">
               <span class="retro-badge" [class]="'retro-badge-' + scan.status">{{ scan.status.toUpperCase() }}</span>
-              <span class="retro-meta-item">SID <strong>{{ scan.rule_sid || '—' }}</strong></span>
+              <span class="retro-meta-item"><strong>{{ scanLabel(scan) }}</strong></span>
               <span class="retro-meta-sep">·</span>
               <span class="retro-meta-item">Last {{ scan.hours_back === 168 ? '7d' : scan.hours_back + 'h' }}</span>
             </div>
@@ -108,7 +178,7 @@
                         <th>Src IP</th>
                         <th>Dst IP</th>
                         <th>Severity</th>
-                        <th>Signature / SIDs</th>
+                        <th>Matched Rules</th>
                         <th>Community ID</th>
                       </tr>
                     </thead>

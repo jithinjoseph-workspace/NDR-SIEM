@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod clickhouse;
+#[cfg(feature = "kafka")]
 pub mod kafka;
 pub mod soar;
 pub mod tenant;

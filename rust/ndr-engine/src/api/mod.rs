@@ -11557,8 +11557,9 @@ pub async fn apply_update(
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RetroScan {
     pub id:           String,
-    pub rule_sid:     u32,
-    pub rule_content: String,
+    pub rule_id:      String,  // Sigma rule UUID
+    pub rule_name:    String,  // human-readable rule name
+    pub rule_content: String,  // optional keyword search
     pub hours_back:   u32,
     pub status:       String, // pending | running | done | failed
     pub started_at:   String,
@@ -11672,6 +11673,28 @@ async fn reload_honeypot_cidrs(state: &AppState) {
 
 // ── Retrospective scan handlers ──────────────────────────────────────────
 
+pub async fn list_fired_rules(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    match state.ch_storage.get_fired_rules(&claims.tenant_id).await {
+        Ok(rows) => {
+            let rules: Vec<serde_json::Value> = rows.into_iter()
+                .filter(|(name, _, _)| !name.is_empty())
+                .map(|(name, count, sev)| json!({ "name": name, "hit_count": count, "severity": sev }))
+                .collect();
+            (axum::http::StatusCode::OK, Json(json!({"status":"ok","rules":rules})))
+        }
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                   Json(json!({"status":"error","message":e.to_string()}))),
+    }
+}
+
 pub async fn start_retrospective_scan(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -11682,19 +11705,21 @@ pub async fn start_retrospective_scan(
         None => return (axum::http::StatusCode::UNAUTHORIZED,
                         Json(json!({"status":"error","message":"Unauthorized"}))),
     };
-    let rule_sid     = body["rule_sid"].as_u64().unwrap_or(0) as u32;
-    let rule_content = body["rule_content"].as_str().unwrap_or("").to_string();
+    let rule_id      = body["rule_id"].as_str().unwrap_or("").trim().to_string();
+    let rule_name    = body["rule_name"].as_str().unwrap_or("").trim().to_string();
+    let rule_content = body["rule_content"].as_str().unwrap_or("").trim().to_string();
     let hours_back   = body["hours_back"].as_u64().unwrap_or(24).min(168) as u32;
-    if rule_sid == 0 && rule_content.is_empty() {
+    if rule_id.is_empty() && rule_content.is_empty() {
         return (axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({"status":"error","message":"rule_sid or rule_content required"})));
+                Json(json!({"status":"error","message":"rule_id or rule_content required"})));
     }
     let scan_id   = uuid::Uuid::new_v4().to_string();
     let tenant_id = claims.tenant_id.clone();
     let now_str   = chrono::Utc::now().to_rfc3339();
     let scan = RetroScan {
         id:           scan_id.clone(),
-        rule_sid,
+        rule_id:      rule_id.clone(),
+        rule_name:    rule_name.clone(),
         rule_content: rule_content.clone(),
         hours_back,
         status:       "running".to_string(),
@@ -11713,16 +11738,16 @@ pub async fn start_retrospective_scan(
     tokio::spawn(async move {
         match ch.get_events_for_retrospective(&tenant_id, hours_back, 100_000).await {
             Ok(events) => {
-                let sid_str = rule_sid.to_string();
                 let matched: Vec<serde_json::Value> = events.into_iter().filter(|ev| {
                     let sig = ev["alert_signature"].as_str().unwrap_or("");
-                    let matches_sid  = rule_sid > 0 && sig.contains(&sid_str);
+                    // Match Sigma rule UUID against stored sigma_hits UUIDs
+                    let matches_rule = !rule_id.is_empty() && sig.contains(&rule_id);
                     let matches_kw   = !rule_content.is_empty() && (
                         sig.to_lowercase().contains(&rule_content.to_lowercase())
                         || ev["src_ip"].as_str().unwrap_or("").contains(rule_content.as_str())
                         || ev["dst_ip"].as_str().unwrap_or("").contains(rule_content.as_str())
                     );
-                    matches_sid || matches_kw
+                    matches_rule || matches_kw
                 }).collect();
                 let count = matched.len();
                 let done_ts = chrono::Utc::now().to_rfc3339();
@@ -11762,7 +11787,9 @@ pub async fn list_retrospective_scans(
             let s = e.value();
             json!({
                 "id":           s.id,
-                "rule_sid":     s.rule_sid,
+                "rule_id":      s.rule_id,
+                "rule_name":    s.rule_name,
+                "rule_content": s.rule_content,
                 "hours_back":   s.hours_back,
                 "status":       s.status,
                 "started_at":   s.started_at,
@@ -11795,7 +11822,9 @@ pub async fn get_retrospective_scan(
                 "status":       "ok",
                 "scan": {
                     "id":           s.id,
-                    "rule_sid":     s.rule_sid,
+                    "rule_id":      s.rule_id,
+                    "rule_name":    s.rule_name,
+                    "rule_content": s.rule_content,
                     "hours_back":   s.hours_back,
                     "status":       s.status,
                     "started_at":   s.started_at,

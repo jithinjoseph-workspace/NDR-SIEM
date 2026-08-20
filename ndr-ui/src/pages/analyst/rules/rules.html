@@ -307,6 +307,22 @@
     <p>Loading rules…</p>
   </div>
 
+  <!-- ── Engine tab switcher ─────────────────────── -->
+  <div *ngIf="!loading" class="engine-tabs">
+    <button [class]="'engine-tab' + (activeTab === 'all' ? ' active' : '')" (click)="activeTab = 'all'">
+      All
+      <span class="engine-tab-count">{{ rules.length + agentSRules.length }}</span>
+    </button>
+    <button [class]="'engine-tab engine-tab-az' + (activeTab === 'agent-z' ? ' active' : '')" (click)="activeTab = 'agent-z'">
+      Agent-Z
+      <span class="engine-tab-count">{{ rules.length }}</span>
+    </button>
+    <button [class]="'engine-tab engine-tab-as' + (activeTab === 'agent-s' ? ' active' : '')" (click)="activeTab = 'agent-s'">
+      Agent-S
+      <span class="engine-tab-count">{{ agentSRules.length }}</span>
+    </button>
+  </div>
+
   <!-- ── Rules list ───────────────────────────────── -->
   <section *ngIf="!loading" class="rules-list-panel">
     <!-- HUD corners on the list panel -->
@@ -349,7 +365,7 @@
         <div class="rule-card-body">
           <div class="rule-name">{{ rule.name }}</div>
           <div class="rule-meta">
-            <span class="rule-type-badge">{{ rule.type }}</span>
+            <span [class]="'rule-type-badge rule-type-' + rule.type.toLowerCase().replace('-','')">{{ rule.type }}</span>
             <span [class]="'sev-badge sev-' + rule.severity.toLowerCase()">{{ rule.severity }}</span>
             <span class="meta-dim">{{ rule.conditions }} condition(s)</span>
             <span class="hits-badge">{{ rule.hits || 0 }} hits</span>
@@ -367,7 +383,8 @@
               {{ rule.status }}
             </span>
           </div>
-          <div class="rule-btns">
+          <!-- Agent-S rules are managed by the sensor — no edit/delete actions -->
+          <div class="rule-btns" *ngIf="rule.type !== 'Agent-S'">
             <button (click)="openEditForm(rule)" title="Edit rule" class="icon-btn" type="button">
               <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
             </button>

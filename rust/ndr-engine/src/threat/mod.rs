@@ -126,7 +126,22 @@ fn spawn_threat_tasks(
         Arc::clone(&ch),
     );
 
-    collector::spawn_collector(Arc::clone(&ch));
+    // Only collect external feeds if any active tenant purchased threat_intel.
+    {
+        let ch_feat = Arc::clone(&ch);
+        tokio::spawn(async move {
+            let any_ti = ch_feat.client
+                .query("SELECT count() FROM ndr.tenants WHERE active = 1 AND positionCaseInsensitive(features, 'threat_intel') > 0")
+                .fetch_one::<u64>()
+                .await
+                .unwrap_or(0);
+            if any_ti > 0 {
+                collector::spawn_collector(ch_feat);
+            } else {
+                tracing::info!("No tenant has threat_intel — external feed collector skipped");
+            }
+        });
+    }
     predictor::spawn_predictor(Arc::clone(&ch), Arc::clone(&trusted));
     patterns::spawn_pattern_sync(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&redis));
     chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&trusted), Arc::clone(&asn));

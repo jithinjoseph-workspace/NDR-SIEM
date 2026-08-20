@@ -6,7 +6,8 @@ WORKDIR /app
 
 ARG CACHEBUST=1
 
-COPY ndr-engine ./ndr-engine
+COPY provigil-common ./provigil-common
+COPY ndr-engine      ./ndr-engine
 
 WORKDIR /app/ndr-engine
 
