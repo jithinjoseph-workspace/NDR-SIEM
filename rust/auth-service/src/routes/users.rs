@@ -90,7 +90,10 @@ pub async fn list(
 
     let users = match claims.role.as_str() {
         "super_admin" => state.db.get_all_users().await,
-        "tenant_admin" => state.db.get_users_by_tenant(&claims.tenant_id).await,
+        "tenant_admin" => state.db.get_users_by_tenant(&claims.tenant_id).await
+            .map(|list| list.into_iter().filter(|u| {
+                u.get("role").and_then(|r| r.as_str()) != Some("super_admin")
+            }).collect()),
         _ => return (StatusCode::FORBIDDEN,
             Json(json!({ "status": "error", "message": "Forbidden" }))).into_response(),
     };
