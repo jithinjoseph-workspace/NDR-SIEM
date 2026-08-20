@@ -33,8 +33,8 @@ export const routes: Routes = [
       { path: 'setup',       canActivate: [authGuard], data: { permission: 'setup'                        }, loadComponent: () => import('../pages/analyst/setup/setup').then(m => m.Setup) },
       { path: 'settings',    canActivate: [authGuard], loadComponent: () => import('../pages/analyst/settings/settings').then(m => m.Settings) },
       { path: 'support',        canActivate: [authGuard], loadComponent: () => import('../pages/analyst/support/support').then(m => m.Support) },
-      { path: 'honeypots',      canActivate: [authGuard], data: { permission: 'alerts' }, loadComponent: () => import('../pages/analyst/honeypots/honeypots').then(m => m.Honeypots) },
-      { path: 'retrospective',  canActivate: [authGuard], data: { permission: 'rules'  }, loadComponent: () => import('../pages/analyst/retrospective/retrospective').then(m => m.Retrospective) },
+      { path: 'honeypots',      canActivate: [authGuard], data: { permission: 'honeypots'     }, loadComponent: () => import('../pages/analyst/honeypots/honeypots').then(m => m.Honeypots) },
+      { path: 'retrospective',  canActivate: [authGuard], data: { permission: 'retrospective' }, loadComponent: () => import('../pages/analyst/retrospective/retrospective').then(m => m.Retrospective) },
     ]
   },
 

@@ -7000,27 +7000,28 @@ pub async fn get_ioc_hits(
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let safe_limit = limit.min(100_000);
         let db = tenant_db(tenant_id);
+        // Query ndr_hits (detection alerts) — not ndr_events (raw flows).
+        // ReplicatedMergeTree does not support FINAL, so omit it.
         let rows = self.client
             .query(&format!(
-                "SELECT src_ip, dst_ip, src_port, dst_port, proto, event_type, community_id, \
-                 toString(timestamp) \
-                 FROM {}.ndr_events FINAL \
+                "SELECT src_ip, dst_ip, toString(score), severity, \
+                 arrayStringConcat(sigma_hits, ','), community_id, toString(timestamp) \
+                 FROM {}.ndr_hits \
                  WHERE timestamp > now() - INTERVAL {} HOUR \
                  ORDER BY timestamp DESC \
                  LIMIT {}",
                 db, hours_back, safe_limit
             ))
-            .fetch_all::<(String, String, u16, u16, String, String, String, String)>()
+            .fetch_all::<(String, String, String, String, String, String, String)>()
             .await?;
         Ok(rows.into_iter().map(|r| serde_json::json!({
             "src_ip":           r.0,
             "dst_ip":           r.1,
-            "src_port":         r.2,
-            "dst_port":         r.3,
-            "protocol":         r.4,
-            "alert_signature":  r.5,
-            "community_id":     r.6,
-            "ts":               r.7,
+            "score":            r.2,
+            "severity":         r.3,
+            "alert_signature":  r.4,   // sigma_hits joined — contains rule SIDs
+            "community_id":     r.5,
+            "ts":               r.6,
             "tenant_id":        tenant_id,
         })).collect())
     }

@@ -82,8 +82,8 @@ export class Sidebar implements OnInit, OnDestroy {
 
     const enforceItems: NavItem[] = [];
     if (has('rules'))   enforceItems.push({ label: 'Rules',                 route: '/analyst/rules',          icon: ShieldAlert,  permission: 'rules'  });
-    if (has('rules'))   enforceItems.push({ label: 'Retrospective',          route: '/analyst/retrospective',  icon: RotateCcw,    permission: 'rules'  });
-    if (has('alerts'))  enforceItems.push({ label: 'Honeypots',              route: '/analyst/honeypots',      icon: Shield,       permission: 'alerts' });
+    if (has('retrospective')) enforceItems.push({ label: 'Retrospective', route: '/analyst/retrospective', icon: RotateCcw, permission: 'retrospective' });
+    if (has('honeypots'))     enforceItems.push({ label: 'Honeypots',     route: '/analyst/honeypots',     icon: Shield,    permission: 'honeypots'     });
 
     const systemItems: NavItem[] = [];
     if (has('health')) systemItems.push({ label: 'System Health', route: '/analyst/health', icon: Database, permission: 'health' });

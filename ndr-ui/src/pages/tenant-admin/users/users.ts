@@ -10,7 +10,7 @@ import {
   Activity, ChartColumn, Shield, Search, ArrowUpDown, MoreVertical,
   LayoutDashboard, Bell, FileText, Radio, Network, Globe, Gem, Settings,
   UserCircle, ChevronRight, Server, FolderSearch, Bot, Cpu, Plus,
-  AlertCircle, XCircle, ChevronDown, Check,
+  AlertCircle, XCircle, ChevronDown, Check, RotateCcw,
 } from 'lucide-angular';
 import { Api, SensorKey, SensorAssignment } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
@@ -177,17 +177,20 @@ export class UsersSection implements OnInit, OnDestroy {
     { key: 'network-map', label: 'Network Map',   description: 'Topology view',         icon: Network },
     { key: 'intel',       label: 'Threat Intel',  description: 'IOC lookup',            icon: Globe },
     { key: 'health',      label: 'System Health', description: 'Service status',        icon: Activity },
-    { key: 'rules',       label: 'Rules View',    description: 'Detection rules',       icon: Gem },
-    { key: 'evidence',    label: 'Evidence',      description: 'Artifact locker',       icon: FolderSearch },
-    { key: 'soar',        label: 'SOAR View',     description: 'Automation visibility', icon: Settings },
-    { key: 'ai-activity', label: 'AI Activity',   description: 'Aria interactions',     icon: Bot },
-    { key: 'ai-report',   label: 'AI Report',     description: 'AI-generated reports',  icon: Bot },
+    { key: 'rules',         label: 'Rules View',       description: 'Detection rules',          icon: Gem },
+    { key: 'evidence',      label: 'Evidence',         description: 'Artifact locker',          icon: FolderSearch },
+    { key: 'honeypots',     label: 'Honeypots',        description: 'Deception trap management', icon: Shield },
+    { key: 'retrospective', label: 'Retrospective',    description: 'Historical rule re-scan',   icon: RotateCcw },
+    { key: 'soar',          label: 'SOAR View',        description: 'Automation visibility',     icon: Settings },
+    { key: 'ai-activity',   label: 'AI Activity',      description: 'Aria interactions',         icon: Bot },
+    { key: 'ai-report',     label: 'AI Report',        description: 'AI-generated reports',      icon: Bot },
   ];
 
   readonly permissionCategories = [
     { title: 'CORE',       options: ['dashboard', 'alerts', 'assets'].map(k => this.permissionOptions.find(p => p.key === k)!) },
     { title: 'NETWORK',    options: ['logs', 'network-map', 'live'].map(k => this.permissionOptions.find(p => p.key === k)!) },
     { title: 'SECURITY',   options: ['intel', 'rules', 'evidence'].map(k => this.permissionOptions.find(p => p.key === k)!) },
+    { title: 'ENFORCE',    options: ['honeypots', 'retrospective'].map(k => this.permissionOptions.find(p => p.key === k)!) },
     { title: 'OPERATIONS', options: ['health', 'soar', 'ai-activity', 'ai-report'].map(k => this.permissionOptions.find(p => p.key === k)!) },
   ];
 
