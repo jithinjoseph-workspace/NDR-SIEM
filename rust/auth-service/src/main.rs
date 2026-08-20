@@ -3,7 +3,7 @@ mod jwt;
 mod mfa;
 mod routes;
 
-use axum::{Router, routing::{get, post}};
+use axum::{Router, routing::{delete, get, post, put}};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -65,6 +65,27 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/check-username",   get(routes::login::check_username))
         // Authenticated — JWT required (validated inside the handler)
         .route("/api/auth/me",               get(routes::me::handle))
+        // User management
+        .route("/api/auth/users",                        get(routes::users::list))
+        .route("/api/auth/users",                        post(routes::users::create))
+        .route("/api/auth/users/:id",                    put(routes::users::update))
+        .route("/api/auth/users/:id/status",             post(routes::users::set_status))
+        .route("/api/auth/users/:id/permissions",        put(routes::users::set_permissions))
+        .route("/api/auth/users/:id/password",           post(routes::users::reset_password))
+        .route("/api/auth/users/:id",                    delete(routes::users::delete))
+        // Tenant management
+        .route("/api/auth/tenants",                      get(routes::tenants::list))
+        .route("/api/auth/tenants",                      post(routes::tenants::create))
+        .route("/api/auth/tenants/:id",                  put(routes::tenants::update))
+        .route("/api/auth/tenants/:id/status",           post(routes::tenants::set_status))
+        .route("/api/auth/tenants/:id/ai-enabled",       post(routes::tenants::set_ai_enabled))
+        // Profile
+        .route("/api/auth/me/gmail",                     put(routes::profile::update_gmail))
+        .route("/api/auth/me/regenerate-secret",         post(routes::profile::regenerate_secret))
+        // Forgot password (no auth inside handlers)
+        .route("/api/auth/forgot/verify-secret",         post(routes::forgot::verify_secret))
+        .route("/api/auth/forgot/send-otp",              post(routes::forgot::send_otp))
+        .route("/api/auth/forgot/reset-password",        post(routes::forgot::reset_password))
         .with_state(state)
         .layer(cors);
 
