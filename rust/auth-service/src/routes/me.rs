@@ -1,0 +1,107 @@
+use axum::{extract::State, http::HeaderMap, Json};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use redis::AsyncCommands;
+use serde_json::json;
+
+use crate::AppState;
+use provigil_common::validate_jwt;
+use super::login::default_permissions;
+
+/// GET /api/auth/me
+///
+/// Called by the Angular app every 30 seconds to re-validate the session
+/// and pull fresh role/feature/sensor data without a full re-login.
+pub async fn handle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "status": "error", "message": "Unauthorized" })),
+        ).into_response(),
+    };
+
+    let claims = match validate_jwt(&token, &state.jwt_secret) {
+        Ok(c)  => c,
+        Err(_) => return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "status": "error", "message": "Token invalid or expired" })),
+        ).into_response(),
+    };
+
+    // Check session is still alive in Valkey (catches force-logout)
+    let session_key = format!("provigil:session:{}", claims.jti);
+    let mut conn = state.valkey.clone();
+    let alive: bool = conn.exists(&session_key).await.unwrap_or(false);
+    if !alive {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "status": "error", "message": "Session revoked — please log in again" })),
+        ).into_response();
+    }
+
+    // Re-fetch live user data — catches role changes, disables, etc.
+    let user = match state.db.get_user(&claims.sub, &claims.tenant_id).await {
+        Ok(Some(u)) => u,
+        _ => return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "status": "error", "message": "User not found" })),
+        ).into_response(),
+    };
+
+    if user.active == 0 {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "status": "error",
+                "message": "Your account has been disabled by your administrator.",
+                "code": "USER_DISABLED"
+            })),
+        ).into_response();
+    }
+
+    let permissions: Vec<String> = if user.role == "super_admin" || user.role == "tenant_admin" {
+        default_permissions(&user.role)
+    } else if user.permissions.is_empty() {
+        default_permissions(&user.role)
+    } else {
+        user.permissions.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    };
+
+    let features = state.db.get_tenant_features(&user.tenant_id).await.unwrap_or_else(|_| vec!["ndr".into()]);
+    let ai_enabled = user.role == "super_admin" || state.db.get_tenant_ai_enabled(&user.tenant_id).await;
+    let sensor_ids = if user.role == "super_admin" || user.role == "tenant_admin" {
+        vec![]
+    } else {
+        state.db.get_sensor_ids(&user.id).await.unwrap_or_default()
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "user": {
+                "id":          user.id,
+                "username":    user.username,
+                "role":        user.role,
+                "tenant_id":   user.tenant_id,
+                "permissions": permissions,
+                "features":    features,
+                "ai_enabled":  ai_enabled,
+                "gmail":       user.gmail,
+                "sensor_ids":  sensor_ids,
+            }
+        })),
+    ).into_response()
+}
+
+fn extract_bearer(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|v| v.trim().to_string())
+}

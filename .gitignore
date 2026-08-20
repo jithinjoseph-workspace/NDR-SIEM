@@ -33,3 +33,9 @@ config/nginx/ssl/*.key
 __pycache__/
 *.pyc
 *.pyo
+
+# Reference documents — do not commit
+*.pdf
+*.doc
+*.docx
+NDR-Developer-Reference*

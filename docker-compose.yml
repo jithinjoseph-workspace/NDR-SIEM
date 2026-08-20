@@ -142,6 +142,39 @@ services:
     restart: unless-stopped
 
 
+  # ── Auth service — identity microservice (login, JWT, MFA, refresh, logout) ─
+  provigil-auth:
+    build:
+      context: ./rust
+      dockerfile: auth-service/Dockerfile
+    container_name: provigil-auth
+    restart: unless-stopped
+    mem_limit: 256m
+    networks:
+      - ndr-internal
+      - default
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - CLICKHOUSE_URL=http://clickhouse1:8123
+      - CLICKHOUSE_USER=ndr
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=ndr
+      - VALKEY_URL=redis://ndr-redis:6379
+      - TOKEN_TTL_SECS=3600
+      - REFRESH_TTL_SECS=604800
+      - LISTEN_ADDR=0.0.0.0:3001
+    depends_on:
+      clickhouse1:
+        condition: service_healthy
+      ndr-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/api/auth/check-username?username=ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   ndr-engine-1:
     build: ./rust
     container_name: ndr-engine-1
@@ -401,6 +434,8 @@ services:
       wait $$NGX"
     depends_on:
       ndr-ui:
+        condition: service_healthy
+      provigil-auth:
         condition: service_healthy
       ndr-engine-1:
         condition: service_healthy

@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "ndr-engine",
+    "auth-service",
+    "provigil-common",
+]
+resolver = "2"

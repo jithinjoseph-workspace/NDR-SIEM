@@ -1,0 +1,83 @@
+mod db;
+mod jwt;
+mod mfa;
+mod routes;
+
+use axum::{Router, routing::{get, post}};
+use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+pub use db::AuthDb;
+
+/// Shared application state — cheap to clone (all Arc-backed).
+#[derive(Clone)]
+pub struct AppState {
+    pub db:          Arc<AuthDb>,
+    pub valkey:      redis::aio::ConnectionManager,
+    pub jwt_secret:  String,
+    /// Access token TTL in seconds.  Default: 3600 (1 hour).
+    pub token_ttl:   usize,
+    /// Refresh token TTL in seconds.  Default: 604800 (7 days).
+    pub refresh_ttl: usize,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "auth_service=info,tower_http=warn".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    let ch_url     = require_env("CLICKHOUSE_URL");
+    let valkey_url = require_env("VALKEY_URL");
+    let jwt_secret = require_env("JWT_SECRET");
+
+    let db            = Arc::new(AuthDb::new(&ch_url).await?);
+    let redis_client  = redis::Client::open(valkey_url.as_str())?;
+    let valkey        = redis::aio::ConnectionManager::new(redis_client).await?;
+
+    let state = AppState {
+        db,
+        valkey,
+        jwt_secret,
+        token_ttl:   std::env::var("TOKEN_TTL_SECS")
+                        .ok().and_then(|v| v.parse().ok()).unwrap_or(3600),
+        refresh_ttl: std::env::var("REFRESH_TTL_SECS")
+                        .ok().and_then(|v| v.parse().ok()).unwrap_or(604_800),
+    };
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    let app = Router::new()
+        // Public — no JWT required
+        .route("/api/auth/login",            post(routes::login::handle))
+        .route("/api/auth/mfa/verify",       post(routes::mfa::handle))
+        .route("/api/auth/refresh",          post(routes::refresh::handle))
+        .route("/api/auth/logout",           post(routes::logout::handle))
+        .route("/api/auth/reset-password",   post(routes::password::handle))
+        .route("/api/auth/check-username",   get(routes::login::check_username))
+        // Authenticated — JWT required (validated inside the handler)
+        .route("/api/auth/me",               get(routes::me::handle))
+        .with_state(state)
+        .layer(cors);
+
+    let addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".into());
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!("auth-service listening on {}", addr);
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+fn require_env(key: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| {
+        tracing::error!("Required env var {} not set — aborting", key);
+        std::process::exit(1);
+    })
+}
