@@ -1,0 +1,100 @@
+<div class="honeypots-page">
+  <div class="page-header">
+    <div class="header-left">
+      <lucide-angular [img]="ShieldAlertIcon" class="header-icon"></lucide-angular>
+      <div>
+        <h1>Honeypots</h1>
+        <p class="subtitle">Any traffic touching these IPs/CIDRs generates an immediate CRITICAL alert.</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-secondary" (click)="load()" [disabled]="loading">
+        <lucide-angular [img]="RefreshIcon" class="btn-icon"></lucide-angular>
+        Refresh
+      </button>
+      @if (canManage()) {
+        <button class="btn btn-primary" (click)="toggleForm()">
+          <lucide-angular [img]="PlusIcon" class="btn-icon"></lucide-angular>
+          Add Honeypot
+        </button>
+      }
+    </div>
+  </div>
+
+  @if (success) {
+    <div class="alert alert-success">{{ success }}</div>
+  }
+  @if (error) {
+    <div class="alert alert-error">{{ error }}</div>
+  }
+
+  @if (showForm) {
+    <div class="add-form">
+      <h3>Add Honeypot</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name</label>
+          <input [(ngModel)]="formName" placeholder="e.g. Fake DB Server" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label>CIDR</label>
+          <input [(ngModel)]="formCidr" placeholder="e.g. 192.168.100.50/32 or 10.0.99.0/24" class="form-input" />
+        </div>
+        <div class="form-group wide">
+          <label>Description (optional)</label>
+          <input [(ngModel)]="formDesc" placeholder="Purpose or notes" class="form-input" />
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" (click)="submit()" [disabled]="submitting">
+          {{ submitting ? 'Saving...' : 'Save Honeypot' }}
+        </button>
+        <button class="btn btn-secondary" (click)="toggleForm()">Cancel</button>
+      </div>
+    </div>
+  }
+
+  @if (loading) {
+    <div class="loading">Loading...</div>
+  } @else {
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>CIDR</th>
+            <th>Description</th>
+            <th>Tenant</th>
+            <th>Created</th>
+            @if (canManage()) { <th>Actions</th> }
+          </tr>
+        </thead>
+        <tbody>
+          @for (hp of honeypots; track hp.id) {
+            <tr>
+              <td>{{ hp.name }}</td>
+              <td><code class="cidr-code">{{ hp.cidr }}</code></td>
+              <td>{{ hp.description || '—' }}</td>
+              <td>{{ hp.tenant_id }}</td>
+              <td>{{ hp.created_at | date:'short' }}</td>
+              @if (canManage()) {
+                <td>
+                  <button class="btn-icon-only btn-danger" (click)="remove(hp)" title="Remove">
+                    <lucide-angular [img]="TrashIcon"></lucide-angular>
+                  </button>
+                </td>
+              }
+            </tr>
+          }
+          @if (honeypots.length === 0) {
+            <tr>
+              <td [attr.colspan]="canManage() ? 6 : 5" class="empty-row">
+                No honeypots configured. Add one to start detecting unauthorized access.
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</div>

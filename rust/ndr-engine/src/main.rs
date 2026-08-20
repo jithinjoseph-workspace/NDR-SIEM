@@ -260,6 +260,7 @@ async fn main() {
         ch.seed_local_sensor().await;
         ch.seed_doh_providers().await;
         ch.ensure_licenses_table().await;
+        ch.ensure_honeypots_table().await;
         ch
     };
 
@@ -393,6 +394,17 @@ async fn main() {
             None
         };
 
+    // ── Honeypot CIDR cache (DB-backed, pre-parsed for O(n) membership checks) ──
+    let honeypot_cidrs = {
+        let pairs = ch_storage_arc.get_all_honeypot_cidrs().await.unwrap_or_default();
+        let parsed: Vec<(ipnetwork::IpNetwork, String)> = pairs.into_iter()
+            .filter_map(|(cidr, tid)| {
+                cidr.parse::<ipnetwork::IpNetwork>().ok().map(|net| (net, tid))
+            })
+            .collect();
+        Arc::new(tokio::sync::RwLock::new(parsed))
+    };
+
     let state = AppState {
         correlator: Arc::new(correlator::CorrelationEngine::new()),
         enrichment: Arc::new(EnrichmentPipeline {
@@ -445,6 +457,8 @@ async fn main() {
         license_private_key,
         license_public_key,
         verified_license,
+        honeypot_cidrs,
+        retro_scans: Arc::new(dashmap::DashMap::new()),
     };
 
     // ── License tenant provisioning ───────────────────────────────────────
@@ -892,6 +906,11 @@ async fn main() {
 .route("/api/admin/sessions/:username",        delete(api::force_logout_user))
 .route("/api/admin/sessions/:username/device", delete(api::force_logout_device))
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
+.route("/api/honeypots",      get(api::list_honeypots).post(api::create_honeypot))
+.route("/api/honeypots/:id",  delete(api::remove_honeypot))
+.route("/api/retrospective/scan",       post(api::start_retrospective_scan))
+.route("/api/retrospective/scans",      get(api::list_retrospective_scans))
+.route("/api/retrospective/scans/:id",  get(api::get_retrospective_scan))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth_middleware))
         .layer(axum::middleware::from_fn(ratelimit::rate_limit_middleware))

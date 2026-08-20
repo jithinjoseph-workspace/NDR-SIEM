@@ -830,4 +830,32 @@ export class Api {
   forceLogoutDevice(username: string, ip: string, device: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/admin/sessions/${encodeURIComponent(username)}/device`, { body: { ip, device } });
   }
+
+  // ── Honeypots ──────────────────────────────────────────────────────────────
+
+  getHoneypots(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/honeypots`);
+  }
+
+  addHoneypot(name: string, cidr: string, description: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/honeypots`, { name, cidr, description });
+  }
+
+  deleteHoneypot(id: string): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/honeypots/${encodeURIComponent(id)}`);
+  }
+
+  // ── Retrospective Detection ─────────────────────────────────────────────
+
+  startRetroScan(rule_sid: number, rule_content: string, hours_back: number): Observable<any> {
+    return this.http.post(`${this.baseUrl}/retrospective/scan`, { rule_sid, rule_content, hours_back });
+  }
+
+  listRetroScans(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/retrospective/scans`);
+  }
+
+  getRetroScan(id: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/retrospective/scans/${encodeURIComponent(id)}`);
+  }
 }

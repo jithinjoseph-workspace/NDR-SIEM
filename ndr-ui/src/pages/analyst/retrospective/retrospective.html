@@ -1,0 +1,122 @@
+<div class="retro-page">
+  <div class="page-header">
+    <div class="header-left">
+      <lucide-angular [img]="RetroIcon" class="header-icon"></lucide-angular>
+      <div>
+        <h1>Retrospective Detection</h1>
+        <p class="subtitle">Re-run detection rules against historical network events to find threats that existed before the rule was written.</p>
+      </div>
+    </div>
+    <button class="btn btn-secondary" (click)="loadScans()" [disabled]="loading">
+      <lucide-angular [img]="RefreshIcon" class="btn-icon"></lucide-angular>
+      Refresh
+    </button>
+  </div>
+
+  <!-- Scan launcher -->
+  <div class="scan-panel">
+    <h3>Launch Retrospective Scan</h3>
+    <div class="scan-form">
+      <div class="form-group">
+        <label>Rule SID</label>
+        <input type="number" [(ngModel)]="ruleSid" placeholder="e.g. 2027865" class="form-input" />
+      </div>
+      <div class="form-group wide">
+        <label>Keyword / Rule Content</label>
+        <input [(ngModel)]="ruleContent" placeholder="Match against alert signature or IP (optional)" class="form-input" />
+      </div>
+      <div class="form-group">
+        <label>History Window</label>
+        <div class="hours-selector">
+          @for (h of hoursOptions; track h) {
+            <button
+              class="hours-btn"
+              [class.active]="hoursBack === h"
+              (click)="hoursBack = h">
+              {{ h === 168 ? '7d' : h + 'h' }}
+            </button>
+          }
+        </div>
+      </div>
+      <div class="form-group align-end">
+        <button class="btn btn-primary" (click)="startScan()" [disabled]="scanning">
+          <lucide-angular [img]="PlayIcon" class="btn-icon"></lucide-angular>
+          {{ scanning ? 'Starting...' : 'Run Scan' }}
+        </button>
+      </div>
+    </div>
+
+    @if (success) { <div class="alert alert-success">{{ success }}</div> }
+    @if (error)   { <div class="alert alert-error">{{ error }}</div> }
+  </div>
+
+  <!-- Scan list -->
+  <div class="scans-section">
+    <h3>Past Scans</h3>
+    @if (loading) {
+      <div class="loading">Loading...</div>
+    } @else if (scans.length === 0) {
+      <div class="empty">No scans yet. Launch one above.</div>
+    } @else {
+      @for (scan of scans; track scan.id) {
+        <div class="scan-card" [class.expanded]="selectedScan?.id === scan.id">
+          <div class="scan-header" (click)="viewScan(scan)">
+            <div class="scan-meta">
+              <span class="badge" [class]="statusClass(scan.status)">{{ scan.status }}</span>
+              <span class="scan-sid">SID: {{ scan.rule_sid || '—' }}</span>
+              <span class="scan-window">Last {{ scan.hours_back }}h</span>
+            </div>
+            <div class="scan-info">
+              <span class="match-count">{{ scan.match_count }} match{{ scan.match_count === 1 ? '' : 'es' }}</span>
+              <span class="scan-time">{{ scan.started_at | date:'short' }}</span>
+              <lucide-angular [img]="selectedScan?.id === scan.id ? ChevronDown : ChevronRight" class="chevron"></lucide-angular>
+            </div>
+          </div>
+
+          @if (selectedScan?.id === scan.id && scan.status === 'done') {
+            <div class="scan-results">
+              @if (selectedMatches.length === 0) {
+                <div class="empty small">No matching events found for this rule.</div>
+              } @else {
+                <div class="results-table-wrap">
+                  <table class="results-table">
+                    <thead>
+                      <tr>
+                        <th>Timestamp</th>
+                        <th>Src IP</th>
+                        <th>Dst IP</th>
+                        <th>Ports</th>
+                        <th>Protocol</th>
+                        <th>Signature</th>
+                        <th>Community ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (m of selectedMatches; track m.community_id) {
+                        <tr>
+                          <td>{{ m.ts }}</td>
+                          <td>{{ m.src_ip }}</td>
+                          <td>{{ m.dst_ip }}</td>
+                          <td>{{ m.src_port }}:{{ m.dst_port }}</td>
+                          <td>{{ m.protocol }}</td>
+                          <td class="sig-cell">{{ m.alert_signature || '—' }}</td>
+                          <td><code>{{ m.community_id }}</code></td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              }
+            </div>
+          }
+          @if (selectedScan?.id === scan.id && scan.status === 'running') {
+            <div class="scan-results"><div class="loading small">Scan in progress...</div></div>
+          }
+          @if (selectedScan?.id === scan.id && scan.status === 'failed') {
+            <div class="scan-results"><div class="alert alert-error small">Scan failed. Check engine logs for details.</div></div>
+          }
+        </div>
+      }
+    }
+  </div>
+</div>

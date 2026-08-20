@@ -5,7 +5,7 @@ import { filter, Subscription } from 'rxjs';
 import {
   LayoutDashboard, Bell, FileText, ShieldAlert, Search,
   Database, Settings, Network, Zap, FolderSearch, Bot, Server,
-  ChevronDown, Map as MapIcon,
+  ChevronDown, Map as MapIcon, Shield, RotateCcw,
   LucideAngularModule
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
@@ -81,7 +81,9 @@ export class Sidebar implements OnInit, OnDestroy {
     if (has('assets'))      networkItems.push({ label: 'Assets',      route: '/analyst/assets',      icon: Server,   permission: 'assets'      });
 
     const enforceItems: NavItem[] = [];
-    if (has('rules')) enforceItems.push({ label: 'Rules', route: '/analyst/rules', icon: ShieldAlert, permission: 'rules' });
+    if (has('rules'))   enforceItems.push({ label: 'Rules',                 route: '/analyst/rules',          icon: ShieldAlert,  permission: 'rules'  });
+    if (has('rules'))   enforceItems.push({ label: 'Retrospective',          route: '/analyst/retrospective',  icon: RotateCcw,    permission: 'rules'  });
+    if (has('alerts'))  enforceItems.push({ label: 'Honeypots',              route: '/analyst/honeypots',      icon: Shield,       permission: 'alerts' });
 
     const systemItems: NavItem[] = [];
     if (has('health')) systemItems.push({ label: 'System Health', route: '/analyst/health', icon: Database, permission: 'health' });

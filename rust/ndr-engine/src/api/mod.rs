@@ -225,6 +225,11 @@ pub struct AppState {
     // JWT verified at startup from LICENSE_TOKEN env var (on-premise installs).
     // When present, its features take precedence over the database for this tenant.
     pub verified_license: Option<std::sync::Arc<crate::license::LicenseClaims>>,
+    // Pre-parsed honeypot CIDRs for O(n) IP membership checks on every event.
+    // Refreshed whenever honeypots are added or removed via the API.
+    pub honeypot_cidrs: Arc<tokio::sync::RwLock<Vec<(ipnetwork::IpNetwork, String)>>>,
+    // In-memory retrospective scan state (ephemeral — not persisted).
+    pub retro_scans: Arc<dashmap::DashMap<String, RetroScan>>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -764,6 +769,63 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             if is_trusted_cloud {
                 return;
             }
+        }
+    }
+
+    // ── Honeypot check — CRITICAL alert if src or dst touches a honeypot CIDR ──
+    {
+        let src_addr: Option<std::net::IpAddr> = src.parse().ok();
+        let dst_addr: Option<std::net::IpAddr> = dst.parse().ok();
+        let honeypot_tenant = {
+            let cidrs = state.honeypot_cidrs.read().await;
+            cidrs.iter().find(|(net, tid)| {
+                (tid == &tenant_id || tid.is_empty()) &&
+                (src_addr.map(|ip| net.contains(ip)).unwrap_or(false) ||
+                 dst_addr.map(|ip| net.contains(ip)).unwrap_or(false))
+            }).map(|(_, t)| t.clone())
+        };
+        if honeypot_tenant.is_some() {
+            let now_ts = chrono::Utc::now().timestamp() as u32;
+            let hp_hit = crate::storage::clickhouse::NdrHit {
+                timestamp:          now_ts,
+                community_id:       hit.community_id.clone(),
+                src_ip:             src.to_string(),
+                dst_ip:             dst.to_string(),
+                score:              100.0,
+                severity:           "CRITICAL".to_string(),
+                tags:               vec!["honeypot-access".to_string()],
+                sigma_hits:         vec!["Honeypot Access Detected".to_string()],
+                threat_intel:       0,
+                src_country:        enrichment.src_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default(),
+                dst_country:        enrichment.dst_geo.as_ref().map(|g| g.country_code.clone()).unwrap_or_default(),
+                tenant_id:          tenant_id.clone(),
+                correlation_status: hit.source.clone(),
+                agent_z_details:    serde_json::to_string(&hit.agent_z.raw).unwrap_or_else(|_| "{}".into()),
+                agent_s_details:    "{}".into(),
+                corroborated_at:    0,
+                agent_s_rule_id:    String::new(),
+                agent_s_category:   "Honeypot Access".to_string(),
+                updated_at:         now_ts,
+                sensor_id:          hit.agent_z.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            };
+            let ch_hp = state.ch_storage.clone();
+            let tid_hp = tenant_id.clone();
+            let ws_msg = serde_json::json!({
+                "type":      "alert",
+                "severity":  "CRITICAL",
+                "src_ip":    src,
+                "dst_ip":    dst,
+                "tags":      ["honeypot-access"],
+                "message":   "Honeypot access detected",
+                "tenant_id": tenant_id,
+            }).to_string();
+            publish_event(state, &tenant_id, &ws_msg);
+            tokio::spawn(async move {
+                if let Err(e) = ch_hp.insert_hit_for_tenant(hp_hit, &tid_hp).await {
+                    tracing::warn!("Honeypot hit insert error: {}", e);
+                }
+            });
+            return; // Skip normal scoring — honeypot hits are always CRITICAL
         }
     }
 
@@ -11488,4 +11550,262 @@ pub async fn apply_update(
         "message": "Update triggered. Services will restart in ~30 seconds.",
         "target_version": status.latest_version
     })))
+}
+
+// ── Retrospective scan state ───────────────────────────────────────────────
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RetroScan {
+    pub id:           String,
+    pub rule_sid:     u32,
+    pub rule_content: String,
+    pub hours_back:   u32,
+    pub status:       String, // pending | running | done | failed
+    pub started_at:   String,
+    pub completed_at: Option<String>,
+    pub match_count:  usize,
+    pub matches:      Vec<serde_json::Value>,
+    pub tenant_id:    String,
+}
+
+// ── Honeypot handlers ─────────────────────────────────────────────────────
+
+pub async fn list_honeypots(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    let result = if claims.role == "super_admin" {
+        state.ch_storage.get_all_honeypots().await
+    } else {
+        state.ch_storage.get_honeypots(&claims.tenant_id).await
+    };
+    match result {
+        Ok(rows) => (axum::http::StatusCode::OK, Json(json!({"status":"ok","honeypots":rows}))),
+        Err(e)   => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                     Json(json!({"status":"error","message":e.to_string()}))),
+    }
+}
+
+pub async fn create_honeypot(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    if !matches!(claims.role.as_str(), "super_admin" | "tenant_admin" | "admin") {
+        return (axum::http::StatusCode::FORBIDDEN,
+                Json(json!({"status":"error","message":"Forbidden"})));
+    }
+    let name = body["name"].as_str().unwrap_or("").to_string();
+    let cidr = body["cidr"].as_str().unwrap_or("").to_string();
+    let description = body["description"].as_str().unwrap_or("").to_string();
+    if name.is_empty() || cidr.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"status":"error","message":"name and cidr are required"})));
+    }
+    // Validate CIDR
+    if cidr.parse::<ipnetwork::IpNetwork>().is_err() {
+        return (axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"status":"error","message":"Invalid CIDR format"})));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let tenant_id = if claims.role == "super_admin" {
+        body["tenant_id"].as_str().unwrap_or(&claims.tenant_id).to_string()
+    } else {
+        claims.tenant_id.clone()
+    };
+    match state.ch_storage.add_honeypot(&id, &tenant_id, &name, &cidr, &description).await {
+        Ok(_) => {
+            // Refresh the in-memory CIDR cache
+            reload_honeypot_cidrs(&state).await;
+            (axum::http::StatusCode::OK, Json(json!({"status":"ok","id":id})))
+        }
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                   Json(json!({"status":"error","message":e.to_string()}))),
+    }
+}
+
+pub async fn remove_honeypot(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    if !matches!(claims.role.as_str(), "super_admin" | "tenant_admin" | "admin") {
+        return (axum::http::StatusCode::FORBIDDEN,
+                Json(json!({"status":"error","message":"Forbidden"})));
+    }
+    let tenant_id = claims.tenant_id.clone();
+    match state.ch_storage.delete_honeypot(&id, &tenant_id).await {
+        Ok(_) => {
+            reload_honeypot_cidrs(&state).await;
+            (axum::http::StatusCode::OK, Json(json!({"status":"ok"})))
+        }
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                   Json(json!({"status":"error","message":e.to_string()}))),
+    }
+}
+
+async fn reload_honeypot_cidrs(state: &AppState) {
+    if let Ok(pairs) = state.ch_storage.get_all_honeypot_cidrs().await {
+        let parsed: Vec<(ipnetwork::IpNetwork, String)> = pairs.into_iter()
+            .filter_map(|(cidr, tid)| {
+                cidr.parse::<ipnetwork::IpNetwork>().ok().map(|net| (net, tid))
+            })
+            .collect();
+        *state.honeypot_cidrs.write().await = parsed;
+    }
+}
+
+// ── Retrospective scan handlers ──────────────────────────────────────────
+
+pub async fn start_retrospective_scan(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    let rule_sid     = body["rule_sid"].as_u64().unwrap_or(0) as u32;
+    let rule_content = body["rule_content"].as_str().unwrap_or("").to_string();
+    let hours_back   = body["hours_back"].as_u64().unwrap_or(24).min(168) as u32;
+    if rule_sid == 0 && rule_content.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"status":"error","message":"rule_sid or rule_content required"})));
+    }
+    let scan_id   = uuid::Uuid::new_v4().to_string();
+    let tenant_id = claims.tenant_id.clone();
+    let now_str   = chrono::Utc::now().to_rfc3339();
+    let scan = RetroScan {
+        id:           scan_id.clone(),
+        rule_sid,
+        rule_content: rule_content.clone(),
+        hours_back,
+        status:       "running".to_string(),
+        started_at:   now_str,
+        completed_at: None,
+        match_count:  0,
+        matches:      vec![],
+        tenant_id:    tenant_id.clone(),
+    };
+    state.retro_scans.insert(scan_id.clone(), scan);
+
+    // Spawn background task
+    let scans_ref = state.retro_scans.clone();
+    let ch        = state.ch_storage.clone();
+    let sid_clone = scan_id.clone();
+    tokio::spawn(async move {
+        match ch.get_events_for_retrospective(&tenant_id, hours_back, 100_000).await {
+            Ok(events) => {
+                let sid_str = rule_sid.to_string();
+                let matched: Vec<serde_json::Value> = events.into_iter().filter(|ev| {
+                    let sig = ev["alert_signature"].as_str().unwrap_or("");
+                    let matches_sid  = rule_sid > 0 && sig.contains(&sid_str);
+                    let matches_kw   = !rule_content.is_empty() && (
+                        sig.to_lowercase().contains(&rule_content.to_lowercase())
+                        || ev["src_ip"].as_str().unwrap_or("").contains(rule_content.as_str())
+                        || ev["dst_ip"].as_str().unwrap_or("").contains(rule_content.as_str())
+                    );
+                    matches_sid || matches_kw
+                }).collect();
+                let count = matched.len();
+                let done_ts = chrono::Utc::now().to_rfc3339();
+                if let Some(mut entry) = scans_ref.get_mut(&sid_clone) {
+                    entry.status       = "done".to_string();
+                    entry.completed_at = Some(done_ts);
+                    entry.match_count  = count;
+                    entry.matches      = matched;
+                }
+            }
+            Err(e) => {
+                let done_ts = chrono::Utc::now().to_rfc3339();
+                if let Some(mut entry) = scans_ref.get_mut(&sid_clone) {
+                    entry.status       = "failed".to_string();
+                    entry.completed_at = Some(done_ts);
+                }
+                tracing::warn!("Retrospective scan {} failed: {}", sid_clone, e);
+            }
+        }
+    });
+
+    (axum::http::StatusCode::OK, Json(json!({"status":"ok","scan_id":scan_id})))
+}
+
+pub async fn list_retrospective_scans(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    let scans: Vec<serde_json::Value> = state.retro_scans.iter()
+        .filter(|e| e.value().tenant_id == claims.tenant_id || claims.role == "super_admin")
+        .map(|e| {
+            let s = e.value();
+            json!({
+                "id":           s.id,
+                "rule_sid":     s.rule_sid,
+                "hours_back":   s.hours_back,
+                "status":       s.status,
+                "started_at":   s.started_at,
+                "completed_at": s.completed_at,
+                "match_count":  s.match_count,
+            })
+        })
+        .collect();
+    (axum::http::StatusCode::OK, Json(json!({"status":"ok","scans":scans})))
+}
+
+pub async fn get_retrospective_scan(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::UNAUTHORIZED,
+                        Json(json!({"status":"error","message":"Unauthorized"}))),
+    };
+    match state.retro_scans.get(&id) {
+        Some(e) => {
+            let s = e.value();
+            if s.tenant_id != claims.tenant_id && claims.role != "super_admin" {
+                return (axum::http::StatusCode::FORBIDDEN,
+                        Json(json!({"status":"error","message":"Forbidden"})));
+            }
+            (axum::http::StatusCode::OK, Json(json!({
+                "status":       "ok",
+                "scan": {
+                    "id":           s.id,
+                    "rule_sid":     s.rule_sid,
+                    "hours_back":   s.hours_back,
+                    "status":       s.status,
+                    "started_at":   s.started_at,
+                    "completed_at": s.completed_at,
+                    "match_count":  s.match_count,
+                    "matches":      s.matches,
+                }
+            })))
+        }
+        None => (axum::http::StatusCode::NOT_FOUND,
+                 Json(json!({"status":"error","message":"Scan not found"}))),
+    }
 }

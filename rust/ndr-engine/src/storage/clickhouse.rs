@@ -6885,6 +6885,145 @@ pub async fn get_ioc_hits(
             .await?;
         Ok(())
     }
+
+    // ── Honeypots ─────────────────────────────────────────────────────────────
+
+    pub async fn ensure_honeypots_table(&self) {
+        let _ = self.client.query(
+            "CREATE TABLE IF NOT EXISTS ndr.honeypots (
+                id          String,
+                tenant_id   String,
+                name        String,
+                cidr        String,
+                description String DEFAULT '',
+                active      UInt8 DEFAULT 1,
+                created_at  DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (tenant_id, id)"
+        ).execute().await;
+    }
+
+    pub async fn get_honeypots(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = self.client
+            .query(&format!(
+                "SELECT id, tenant_id, name, cidr, description, active, \
+                 formatDateTime(created_at, '%Y-%m-%dT%H:%i:%SZ') \
+                 FROM ndr.honeypots FINAL \
+                 WHERE active = 1 AND tenant_id = '{}' \
+                 ORDER BY created_at DESC",
+                sql_escape(tenant_id)
+            ))
+            .fetch_all::<(String, String, String, String, String, u8, String)>()
+            .await?;
+        Ok(rows.into_iter().map(|r| serde_json::json!({
+            "id":          r.0,
+            "tenant_id":   r.1,
+            "name":        r.2,
+            "cidr":        r.3,
+            "description": r.4,
+            "active":      r.5 == 1,
+            "created_at":  r.6,
+        })).collect())
+    }
+
+    pub async fn get_all_honeypots(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = self.client
+            .query(
+                "SELECT id, tenant_id, name, cidr, description, active, \
+                 formatDateTime(created_at, '%Y-%m-%dT%H:%i:%SZ') \
+                 FROM ndr.honeypots FINAL \
+                 WHERE active = 1 \
+                 ORDER BY tenant_id, created_at DESC"
+            )
+            .fetch_all::<(String, String, String, String, String, u8, String)>()
+            .await?;
+        Ok(rows.into_iter().map(|r| serde_json::json!({
+            "id":          r.0,
+            "tenant_id":   r.1,
+            "name":        r.2,
+            "cidr":        r.3,
+            "description": r.4,
+            "active":      r.5 == 1,
+            "created_at":  r.6,
+        })).collect())
+    }
+
+    pub async fn add_honeypot(
+        &self,
+        id:          &str,
+        tenant_id:   &str,
+        name:        &str,
+        cidr:        &str,
+        description: &str,
+    ) -> anyhow::Result<()> {
+        self.client.query(&format!(
+            "INSERT INTO ndr.honeypots (id, tenant_id, name, cidr, description, active) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', 1)",
+            sql_escape(id),
+            sql_escape(tenant_id),
+            sql_escape(name),
+            sql_escape(cidr),
+            sql_escape(description),
+        )).execute().await?;
+        Ok(())
+    }
+
+    pub async fn delete_honeypot(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        self.client.query(&format!(
+            "ALTER TABLE ndr.honeypots UPDATE active = 0 \
+             WHERE id = '{}' AND tenant_id = '{}' \
+             SETTINGS mutations_sync = 1",
+            sql_escape(id),
+            sql_escape(tenant_id),
+        )).execute().await?;
+        Ok(())
+    }
+
+    /// Returns Vec<(cidr, tenant_id)> for all active honeypots across all tenants.
+    pub async fn get_all_honeypot_cidrs(&self) -> anyhow::Result<Vec<(String, String)>> {
+        let rows = self.client
+            .query(
+                "SELECT cidr, tenant_id FROM ndr.honeypots FINAL WHERE active = 1"
+            )
+            .fetch_all::<(String, String)>()
+            .await?;
+        Ok(rows)
+    }
+
+    // ── Retrospective Detection ───────────────────────────────────────────────
+
+    pub async fn get_events_for_retrospective(
+        &self,
+        tenant_id: &str,
+        hours_back: u32,
+        limit: u32,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let safe_limit = limit.min(100_000);
+        let db = tenant_db(tenant_id);
+        let rows = self.client
+            .query(&format!(
+                "SELECT src_ip, dst_ip, src_port, dst_port, proto, event_type, community_id, \
+                 toString(timestamp) \
+                 FROM {}.ndr_events FINAL \
+                 WHERE timestamp > now() - INTERVAL {} HOUR \
+                 ORDER BY timestamp DESC \
+                 LIMIT {}",
+                db, hours_back, safe_limit
+            ))
+            .fetch_all::<(String, String, u16, u16, String, String, String, String)>()
+            .await?;
+        Ok(rows.into_iter().map(|r| serde_json::json!({
+            "src_ip":           r.0,
+            "dst_ip":           r.1,
+            "src_port":         r.2,
+            "dst_port":         r.3,
+            "protocol":         r.4,
+            "alert_signature":  r.5,
+            "community_id":     r.6,
+            "ts":               r.7,
+            "tenant_id":        tenant_id,
+        })).collect())
+    }
 }
 
 fn is_ip_in_cidr(ip: &str, cidr: &str) -> bool {
