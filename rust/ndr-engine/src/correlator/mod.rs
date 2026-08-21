@@ -98,8 +98,14 @@ impl CorrelationEngine {
                 }
             }
 
-            // Linux endpoint events are handled at ingest time — they never reach the correlator.
-            EventSource::Linux | EventSource::Unknown => {}
+            // Non-network sources are handled at ingest time and never reach the correlator.
+            EventSource::Linux
+            | EventSource::WindowsEvent
+            | EventSource::Syslog
+            | EventSource::CloudTrailAws
+            | EventSource::AzureAd
+            | EventSource::Okta
+            | EventSource::Unknown => {}
         }
 
         None

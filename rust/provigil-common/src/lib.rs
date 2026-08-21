@@ -1,8 +1,10 @@
 pub mod auth;
 pub mod clickhouse;
+pub mod detection;
 pub mod enrichment;
 #[cfg(feature = "kafka")]
 pub mod kafka;
+pub mod normalizer;
 pub mod siem;
 pub mod soar;
 pub mod tenant;

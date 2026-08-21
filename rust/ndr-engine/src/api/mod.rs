@@ -7135,10 +7135,9 @@ pub async fn sensor_heartbeat(
 /// Run SIGMA detection on a Linux auditd event and store any hits directly to ClickHouse.
 /// Called inline during ingest — Linux events don't participate in the Zeek+Suricata correlator.
 async fn handle_linux_endpoint_event(state: &AppState, raw: Value, tenant_id: &str) {
-    use crate::normalizer::NormalizedEvent;
     use crate::storage::clickhouse::NdrHit;
 
-    let event = match NormalizedEvent::from_raw(&raw) {
+    let event = match crate::normalizer::normalize(&raw) {
         Some(e) => e,
         None    => return,
     };

@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::api::AppState;
-use crate::normalizer::{NormalizedEvent, EventSource};
+use crate::normalizer::EventSource;
 use crate::storage::clickhouse::NdrEvent;
 
 // Drains the channel every 100 ms and batch-inserts into ClickHouse.
@@ -174,7 +174,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     Err(_) => continue,
                 };
 
-                let Some(mut event) = NormalizedEvent::from_raw(&raw) else { continue; };
+                let Some(mut event) = crate::normalizer::normalize(&raw) else { continue; };
 
                 if event.should_drop() { continue; }
 
