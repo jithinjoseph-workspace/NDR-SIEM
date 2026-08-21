@@ -217,7 +217,7 @@ export class Retrospective implements OnInit {
 
     // Use cached matches — no second API call on re-open
     if (scan.matches !== undefined) {
-      this.selectedMatches = scan.matches;
+      this.selectedMatches = scan.matches ?? [];
       return;
     }
 
