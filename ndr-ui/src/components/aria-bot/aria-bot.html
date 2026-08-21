@@ -96,7 +96,7 @@
                   [class.ac-high]="msg.alertCard.severity === 'High'">
                   {{ msg.alertCard.severity }}
                 </div>
-                <div class="ac-tag">{{ msg.alertCard.rule_name || 'Security Alert' }}</div>
+                <div class="ac-tag">{{ sanitizeRuleName(msg.alertCard.rule_name || 'Security Alert') }}</div>
               </div>
               <div class="ac-ips">
                 <span class="ac-ip src">{{ msg.alertCard.src_ip }}</span>

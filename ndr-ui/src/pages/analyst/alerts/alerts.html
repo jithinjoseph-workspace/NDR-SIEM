@@ -128,7 +128,7 @@
             <div *ngFor="let step of inc.attack_chain; let i = index" class="timeline-step">
               <div class="timeline-dot" [ngClass]="incidentSeverityClass(step.severity)"></div>
               <div class="timeline-body">
-                <div class="timeline-rule">{{ step.rule_name || 'Alert' }}</div>
+                <div class="timeline-rule">{{ ruleLabel(step.rule_name || 'Alert') }}</div>
                 <div class="timeline-ips">{{ step.src_ip }} → {{ step.dst_ip }}</div>
                 <div class="timeline-ts">{{ formatIncidentTs(step.timestamp) }}</div>
               </div>

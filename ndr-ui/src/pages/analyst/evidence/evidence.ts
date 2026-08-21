@@ -315,4 +315,10 @@ export class EvidenceComponent implements OnInit {
   hasAgentSLogs(): boolean {
     return (this.timeline()?.uid_logs ?? []).some((e: any) => e.source === 'agent-s');
   }
+
+  sanitizeRuleName(name: any): string {
+    return String(name || '')
+      .replace(/\bSURICATA\b/gi, 'Agent-S')
+      .replace(/\bZEEK\b/gi, 'Agent-Z');
+  }
 }

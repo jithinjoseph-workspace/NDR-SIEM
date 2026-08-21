@@ -176,8 +176,24 @@ export class Retrospective implements OnInit {
     this.loading = true;
     this.api.listRetroScans().subscribe({
       next: (r: any) => {
-        this.scans   = (r.scans ?? []).sort((a: RetroScan, b: RetroScan) =>
+        const fresh: RetroScan[] = (r.scans ?? []).sort((a: RetroScan, b: RetroScan) =>
           new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+
+        // Carry cached matches forward so re-open after Refresh doesn't flash empty
+        for (const s of fresh) {
+          const prev = this.scans.find(p => p.id === s.id);
+          if (prev?.matches !== undefined) s.matches = prev.matches;
+        }
+
+        this.scans = fresh;
+
+        // Keep selectedScan pointing at the new object for the same ID
+        if (this.selectedScan) {
+          const updated = fresh.find(s => s.id === this.selectedScan!.id);
+          this.selectedScan = updated ?? null;
+          if (!this.selectedScan) this.selectedMatches = [];
+        }
+
         this.loading = false;
         this.cdr.markForCheck();
       },
@@ -190,21 +206,34 @@ export class Retrospective implements OnInit {
   }
 
   viewScan(scan: RetroScan): void {
+    // Toggle: clicking the open card collapses it
     if (this.selectedScan?.id === scan.id) {
-      this.selectedScan    = null;
-      this.selectedMatches = [];
+      this.selectedScan = null;
       return;
     }
     this.selectedScan = scan;
-    if (scan.status === 'done') {
-      this.api.getRetroScan(scan.id).subscribe({
-        next: (r: any) => {
-          this.selectedMatches = r.scan?.matches ?? [];
-          this.cdr.markForCheck();
-        },
-        error: () => { this.selectedMatches = []; },
-      });
+
+    if (scan.status !== 'done') return;
+
+    // Use cached matches — no second API call on re-open
+    if (scan.matches !== undefined) {
+      this.selectedMatches = scan.matches;
+      return;
     }
+
+    // First open: fetch and cache on the scan object
+    this.selectedMatches = [];
+    this.api.getRetroScan(scan.id).subscribe({
+      next: (r: any) => {
+        scan.matches         = r.scan?.matches ?? [];
+        this.selectedMatches = scan.matches;
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        scan.matches         = [];
+        this.selectedMatches = [];
+      },
+    });
   }
 
   scanLabel(scan: RetroScan): string {

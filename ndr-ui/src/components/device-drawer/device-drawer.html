@@ -275,7 +275,7 @@
         </div>
         <div class="session-list" *ngIf="!loadingAlerts && selectedNodeAlerts.length > 0">
           <div class="session-row session-row--alert" *ngFor="let alert of selectedNodeAlerts">
-            <div class="alert-name">{{ alert.rule_name || alert.event_type }}</div>
+            <div class="alert-name">{{ sanitizeRuleName(alert.rule_name || alert.event_type) }}</div>
             <div class="session-meta">
               <span class="alert-time">{{ alert.timestamp | date:'short' }}</span>
             </div>

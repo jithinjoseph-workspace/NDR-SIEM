@@ -363,7 +363,7 @@
           <lucide-icon [name]="GavelIcon" class="w-5 h-5"></lucide-icon>
         </div>
         <div class="rule-card-body">
-          <div class="rule-name">{{ rule.name }}</div>
+          <div class="rule-name">{{ sanitizeRuleName(rule.name) }}</div>
           <div class="rule-meta">
             <span [class]="'rule-type-badge rule-type-' + rule.type.toLowerCase().replace('-','')">{{ rule.type }}</span>
             <span [class]="'sev-badge sev-' + rule.severity.toLowerCase()">{{ rule.severity }}</span>

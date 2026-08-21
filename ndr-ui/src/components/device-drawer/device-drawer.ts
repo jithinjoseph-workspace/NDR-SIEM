@@ -277,4 +277,10 @@ export class DeviceDrawer implements OnChanges {
     if (node?.threat) return 'threat';
     return this.isInternalNode(node) ? 'internal' : 'external';
   }
+
+  sanitizeRuleName(name: any): string {
+    return String(name || '')
+      .replace(/\bSURICATA\b/gi, 'Agent-S')
+      .replace(/\bZEEK\b/gi, 'Agent-Z');
+  }
 }

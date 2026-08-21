@@ -723,7 +723,7 @@
                  class="alert-row" [class]="'sev-' + a.severity?.toLowerCase()">
               <div class="alert-header">
                 <span class="sev-badge">{{ a.severity }}</span>
-                <span class="alert-name">{{ a.rule_name || a.tags }}</span>
+                <span class="alert-name">{{ sanitizeRuleName(a.rule_name || a.tags) }}</span>
                 <span class="alert-time">{{ a.timestamp }}</span>
               </div>
               <div class="alert-meta">
@@ -741,7 +741,7 @@
                  class="alert-row sigma">
               <div class="alert-header">
                 <span class="sev-badge">{{ s.severity }}</span>
-                <span class="alert-name">{{ s.sigma_hits }}</span>
+                <span class="alert-name">{{ sanitizeRuleName(s.sigma_hits) }}</span>
                 <span class="alert-time">{{ s.timestamp }}</span>
               </div>
               <div *ngIf="s.tags" class="alert-tags">Tags: {{ s.tags }}</div>

@@ -586,4 +586,10 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   private httpPost(url: string, body: any) {
     return this.http.post<any>(url, body);
   }
+
+  sanitizeRuleName(name: any): string {
+    return String(name || '')
+      .replace(/\bSURICATA\b/gi, 'Agent-S')
+      .replace(/\bZEEK\b/gi, 'Agent-Z');
+  }
 }

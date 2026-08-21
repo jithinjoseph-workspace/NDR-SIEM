@@ -509,4 +509,10 @@ export class Rules implements OnInit {
   getSeverityBadgeClass(severity: string): string {
     return 'sev-badge sev-' + (severity || 'low').toLowerCase();
   }
+
+  sanitizeRuleName(name: string): string {
+    return (name || '')
+      .replace(/\bSURICATA\b/gi, 'Agent-S')
+      .replace(/\bZEEK\b/gi, 'Agent-Z');
+  }
 }
