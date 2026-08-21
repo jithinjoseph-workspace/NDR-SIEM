@@ -226,7 +226,7 @@ export class Retrospective implements OnInit {
     this.api.getRetroScan(scan.id).subscribe({
       next: (r: any) => {
         scan.matches         = r.scan?.matches ?? [];
-        this.selectedMatches = scan.matches;
+        this.selectedMatches = scan.matches ?? [];
         this.cdr.markForCheck();
       },
       error: () => {
