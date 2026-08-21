@@ -24,6 +24,7 @@ tracing         = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite        = { version = "0.31", features = ["bundled"] }
 anyhow          = "1"
+async-trait     = "0.1"
 rdkafka         = { version = "0.36", features = ["cmake-build"] }
 tower-http      = { version = "0.5", features = ["cors", "decompression-gzip"] }
 clickhouse      = { version = "0.11", features = ["watch"] }

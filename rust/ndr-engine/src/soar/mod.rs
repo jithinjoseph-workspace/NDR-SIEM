@@ -10,6 +10,7 @@ pub use provigil_common::soar::{
     ActiveBlock,
     DeviceIsolation,
     SoarContext,
+    SoarStore,
 };
 
 use crate::api::AppState;
@@ -29,20 +30,19 @@ pub async fn execute_native_playbooks(
         Err(_) => return,
     };
 
+    // Build context once — shared by both condition evaluation and action execution.
+    let ctx = conditions::build_soar_context(&hit, &risk, &enrichment, tenant_id);
+
     for pb in playbooks {
         if pb.enabled != 1 { continue; }
 
-        let triggered = conditions::evaluate_condition(
-            &pb.cond_field,
-            &pb.cond_op,
-            &pb.cond_value,
-            &hit,
-            &risk,
-            &enrichment,
-        );
-
+        let triggered = provigil_common::soar::conditions::evaluate_condition(&pb, &ctx);
         if triggered {
-            actions::execute_action(state, &pb, &hit, &risk, &enrichment).await;
+            provigil_common::soar::actions::execute_action(
+                state.ch_storage.as_ref(),
+                &pb,
+                &ctx,
+            ).await;
         }
     }
 }

@@ -1,4 +1,7 @@
+pub mod actions;
 pub mod conditions;
+pub mod firewall;
+pub mod switch;
 
 use serde::{Deserialize, Serialize};
 
@@ -97,7 +100,32 @@ pub struct SoarContext {
     pub tags: Vec<String>,
     pub src_ip: String,
     pub dst_ip: String,
+    pub src_port: u16,
+    pub dst_port: u16,
     /// Unique flow identifier (community_id or similar)
     pub community_id: String,
     pub tenant_id: String,
+}
+
+// ── Storage abstraction for SOAR actions ─────────────────────────────────────
+//
+// Both ndr-engine and siem-engine implement this trait on their ChStorage type.
+// execute_action() in provigil-common::soar::actions takes &dyn SoarStore.
+
+#[async_trait::async_trait]
+pub trait SoarStore: Send + Sync {
+    async fn soar_get_integrations(&self, tenant_id: &str) -> Vec<serde_json::Value>;
+    async fn soar_find_open_case(&self, src: &str, dst: &str, tenant_id: &str) -> Option<(String, String, String, String)>;
+    async fn soar_add_comment(&self, case_id: &str, author: &str, comment: &str, tenant_id: &str);
+    async fn soar_escalate_case(&self, case_id: &str, severity: &str, priority: &str, tenant_id: &str);
+    async fn soar_next_case_number(&self, tenant_id: &str) -> String;
+    async fn soar_create_case(
+        &self, id: &str, case_number: &str, title: &str, description: &str,
+        severity: &str, priority: &str, status: &str, assigned_to: &str,
+        src_ip: &str, dst_ip: &str, community_id: &str, tags: &[String], tenant_id: &str,
+    ) -> anyhow::Result<()>;
+    async fn soar_get_pcap_sessions(&self, tenant_id: &str, cid: &str, limit: usize) -> Vec<serde_json::Value>;
+    async fn soar_get_events(&self, community_id: &str, tenant_id: &str) -> serde_json::Value;
+    async fn soar_insert_block(&self, block: &ActiveBlock) -> anyhow::Result<()>;
+    async fn soar_insert_run(&self, run: &SoarPlaybookRun) -> anyhow::Result<()>;
 }

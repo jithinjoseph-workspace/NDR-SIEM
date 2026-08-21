@@ -7156,3 +7156,54 @@ fn cidr_host_count(cidr: &str) -> usize {
     if prefix_len >= 32 { return 1; }
     ((1u32 << (32 - prefix_len)) as usize).saturating_sub(2) // exclude network + broadcast
 }
+
+// ── SoarStore — bridge between provigil-common SOAR execution and ndr-engine storage ──
+
+use provigil_common::soar::{SoarStore, ActiveBlock, SoarPlaybookRun};
+
+#[async_trait::async_trait]
+impl SoarStore for ClickhouseStorage {
+    async fn soar_get_integrations(&self, tenant_id: &str) -> Vec<serde_json::Value> {
+        self.get_integrations_by_tenant(tenant_id).await.unwrap_or_default()
+    }
+
+    async fn soar_find_open_case(&self, src: &str, dst: &str, tenant_id: &str) -> Option<(String, String, String, String)> {
+        self.find_open_case_by_src_dst(src, dst, tenant_id).await
+    }
+
+    async fn soar_add_comment(&self, case_id: &str, author: &str, comment: &str, tenant_id: &str) {
+        let _ = self.insert_soar_case_comment(case_id, author, comment, tenant_id).await;
+    }
+
+    async fn soar_escalate_case(&self, case_id: &str, severity: &str, priority: &str, tenant_id: &str) {
+        let _ = self.escalate_case_severity(case_id, severity, priority, tenant_id).await;
+    }
+
+    async fn soar_next_case_number(&self, tenant_id: &str) -> String {
+        self.get_next_case_number(tenant_id).await
+    }
+
+    async fn soar_create_case(
+        &self, id: &str, case_number: &str, title: &str, description: &str,
+        severity: &str, priority: &str, status: &str, assigned_to: &str,
+        src_ip: &str, dst_ip: &str, community_id: &str, tags: &[String], tenant_id: &str,
+    ) -> anyhow::Result<()> {
+        self.insert_soar_case(id, case_number, title, description, severity, priority, status, assigned_to, src_ip, dst_ip, community_id, tags, tenant_id).await
+    }
+
+    async fn soar_get_pcap_sessions(&self, tenant_id: &str, cid: &str, limit: usize) -> Vec<serde_json::Value> {
+        self.get_pcap_sessions(tenant_id, Some(cid), None, limit as u32, &[]).await.unwrap_or_default()
+    }
+
+    async fn soar_get_events(&self, community_id: &str, tenant_id: &str) -> serde_json::Value {
+        self.get_events_by_community_id(community_id, tenant_id, &[]).await.unwrap_or_default()
+    }
+
+    async fn soar_insert_block(&self, block: &ActiveBlock) -> anyhow::Result<()> {
+        self.insert_active_block(block).await
+    }
+
+    async fn soar_insert_run(&self, run: &SoarPlaybookRun) -> anyhow::Result<()> {
+        self.insert_soar_playbook_run(run).await
+    }
+}

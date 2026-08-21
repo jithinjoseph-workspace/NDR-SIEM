@@ -17,7 +17,11 @@ thiserror    = "1"
 tracing      = "0.1"
 clickhouse   = "0.11"
 rdkafka      = { version = "0.36", features = ["cmake-build"], optional = true }
-tokio        = { version = "1",   features = ["rt", "macros", "time"] }
-reqwest      = { version = "0.12", features = ["json"] }
+tokio        = { version = "1",   features = ["rt", "macros", "time", "process"] }
+reqwest      = { version = "0.12", features = ["json", "native-tls"] }
 dashmap      = "5"
 ipnetwork    = "0.20"
+anyhow       = "1"
+async-trait  = "0.1"
+urlencoding  = "2"
+lettre       = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
