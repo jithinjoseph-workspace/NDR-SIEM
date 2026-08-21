@@ -11731,15 +11731,15 @@ pub async fn start_retrospective_scan(
     state.retro_scans.insert(scan_id.clone(), scan);
 
     // Spawn background task
-    let scans_ref = state.retro_scans.clone();
-    let ch        = state.ch_storage.clone();
-    let sid_clone = scan_id.clone();
+    let scans_ref     = state.retro_scans.clone();
+    let ch            = state.ch_storage.clone();
+    let sid_clone     = scan_id.clone();
+    let started_at_ts = chrono::Utc::now().timestamp() as u32;
     tokio::spawn(async move {
         match ch.get_events_for_retrospective(&tenant_id, hours_back, 100_000).await {
             Ok(events) => {
                 let matched: Vec<serde_json::Value> = events.into_iter().filter(|ev| {
                     let sig = ev["alert_signature"].as_str().unwrap_or("");
-                    // Match Sigma rule UUID against stored sigma_hits UUIDs
                     let matches_rule = !rule_id.is_empty() && sig.contains(&rule_id);
                     let matches_kw   = !rule_content.is_empty() && (
                         sig.to_lowercase().contains(&rule_content.to_lowercase())
@@ -11748,21 +11748,34 @@ pub async fn start_retrospective_scan(
                     );
                     matches_rule || matches_kw
                 }).collect();
-                let count = matched.len();
-                let done_ts = chrono::Utc::now().to_rfc3339();
+                let count      = matched.len();
+                let done_ts    = chrono::Utc::now().to_rfc3339();
+                let done_ts_u32 = chrono::Utc::now().timestamp() as u32;
+                let matches_json = serde_json::to_string(&matched).unwrap_or_else(|_| "[]".to_string());
                 if let Some(mut entry) = scans_ref.get_mut(&sid_clone) {
                     entry.status       = "done".to_string();
                     entry.completed_at = Some(done_ts);
                     entry.match_count  = count;
                     entry.matches      = matched;
                 }
+                let _ = ch.save_retro_scan(
+                    &sid_clone, &rule_id, &rule_name, &rule_content,
+                    hours_back, "done", started_at_ts, done_ts_u32,
+                    count, matches_json, &tenant_id,
+                ).await;
             }
             Err(e) => {
-                let done_ts = chrono::Utc::now().to_rfc3339();
+                let done_ts    = chrono::Utc::now().to_rfc3339();
+                let done_ts_u32 = chrono::Utc::now().timestamp() as u32;
                 if let Some(mut entry) = scans_ref.get_mut(&sid_clone) {
                     entry.status       = "failed".to_string();
                     entry.completed_at = Some(done_ts);
                 }
+                let _ = ch.save_retro_scan(
+                    &sid_clone, &rule_id, &rule_name, &rule_content,
+                    hours_back, "failed", started_at_ts, done_ts_u32,
+                    0, "[]".to_string(), &tenant_id,
+                ).await;
                 tracing::warn!("Retrospective scan {} failed: {}", sid_clone, e);
             }
         }
@@ -11780,10 +11793,12 @@ pub async fn list_retrospective_scans(
         None => return (axum::http::StatusCode::UNAUTHORIZED,
                         Json(json!({"status":"error","message":"Unauthorized"}))),
     };
-    let scans: Vec<serde_json::Value> = state.retro_scans.iter()
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut scans: Vec<serde_json::Value> = state.retro_scans.iter()
         .filter(|e| e.value().tenant_id == claims.tenant_id || claims.role == "super_admin")
         .map(|e| {
             let s = e.value();
+            seen_ids.insert(s.id.clone());
             json!({
                 "id":           s.id,
                 "rule_id":      s.rule_id,
@@ -11797,6 +11812,30 @@ pub async fn list_retrospective_scans(
             })
         })
         .collect();
+
+    // Merge persisted scans from ClickHouse (survive engine restarts)
+    if let Ok(rows) = state.ch_storage.list_retro_scans_for_tenant(&claims.tenant_id).await {
+        for row in rows {
+            if seen_ids.contains(&row.id) { continue; }
+            let started = chrono::NaiveDateTime::from_timestamp_opt(row.started_at as i64, 0)
+                .map(|dt| dt.and_utc().to_rfc3339()).unwrap_or_default();
+            let completed: Option<String> = if row.completed_at > 0 {
+                chrono::NaiveDateTime::from_timestamp_opt(row.completed_at as i64, 0)
+                    .map(|dt| dt.and_utc().to_rfc3339())
+            } else { None };
+            scans.push(json!({
+                "id":           row.id,
+                "rule_id":      row.rule_id,
+                "rule_name":    row.rule_name,
+                "rule_content": row.rule_content,
+                "hours_back":   row.hours_back,
+                "status":       row.status,
+                "started_at":   started,
+                "completed_at": completed,
+                "match_count":  row.match_count,
+            }));
+        }
+    }
     (axum::http::StatusCode::OK, Json(json!({"status":"ok","scans":scans})))
 }
 
@@ -11833,7 +11872,37 @@ pub async fn get_retrospective_scan(
                 }
             })))
         }
-        None => (axum::http::StatusCode::NOT_FOUND,
-                 Json(json!({"status":"error","message":"Scan not found"}))),
+        None => {
+            // Fallback: look up persisted scan in ClickHouse
+            match state.ch_storage.get_retro_scan_by_id(&claims.tenant_id, &id).await {
+                Ok(Some(row)) => {
+                    let started = chrono::NaiveDateTime::from_timestamp_opt(row.started_at as i64, 0)
+                        .map(|dt| dt.and_utc().to_rfc3339()).unwrap_or_default();
+                    let completed: Option<String> = if row.completed_at > 0 {
+                        chrono::NaiveDateTime::from_timestamp_opt(row.completed_at as i64, 0)
+                            .map(|dt| dt.and_utc().to_rfc3339())
+                    } else { None };
+                    let matches: Vec<serde_json::Value> =
+                        serde_json::from_str(&row.matches).unwrap_or_default();
+                    (axum::http::StatusCode::OK, Json(json!({
+                        "status": "ok",
+                        "scan": {
+                            "id":           row.id,
+                            "rule_id":      row.rule_id,
+                            "rule_name":    row.rule_name,
+                            "rule_content": row.rule_content,
+                            "hours_back":   row.hours_back,
+                            "status":       row.status,
+                            "started_at":   started,
+                            "completed_at": completed,
+                            "match_count":  row.match_count,
+                            "matches":      matches,
+                        }
+                    })))
+                }
+                _ => (axum::http::StatusCode::NOT_FOUND,
+                      Json(json!({"status":"error","message":"Scan not found"}))),
+            }
+        }
     }
 }

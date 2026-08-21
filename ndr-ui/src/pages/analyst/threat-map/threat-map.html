@@ -88,7 +88,7 @@
           <div class="tm-detail-header">
             <span class="tm-detail-flag">{{ countryFlag(selectedCountry.code) }}</span>
             <span class="tm-detail-country-name">{{ selectedCountry.country }}</span>
-            <span class="tm-detail-total">{{ selectedCountry.count.toLocaleString() }} hits</span>
+            <span class="tm-detail-total">{{ selectedCountry.count.toLocaleString() }} connections</span>
             <button class="tm-detail-close" (click)="selectedCountry = null" type="button">×</button>
           </div>
           <div class="tm-detail-eyebrow">Attack type breakdown · last 24h</div>
@@ -106,7 +106,7 @@
             </div>
           </div>
           <ng-template #noBreakdown>
-            <div class="tm-no-data tm-no-data-sm">No attack type data for this country</div>
+            <div class="tm-no-data tm-no-data-sm">Raw traffic only — no detection alerts fired from this country</div>
           </ng-template>
         </div>
       </div>

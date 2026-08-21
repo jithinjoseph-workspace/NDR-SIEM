@@ -52,6 +52,36 @@ pub struct TopIp {
     pub count: u64,
 }
 
+#[derive(Debug, Serialize, clickhouse::Row)]
+pub struct RetroScanRow {
+    pub id:           String,
+    pub rule_id:      String,
+    pub rule_name:    String,
+    pub rule_content: String,
+    pub hours_back:   u32,
+    pub status:       String,
+    pub started_at:   u32,
+    pub completed_at: u32,
+    pub match_count:  u64,
+    pub matches:      String,
+    pub tenant_id:    String,
+    pub updated_at:   u32,
+}
+
+#[derive(Debug, Deserialize, clickhouse::Row)]
+pub struct RetroScanReadRow {
+    pub id:           String,
+    pub rule_id:      String,
+    pub rule_name:    String,
+    pub rule_content: String,
+    pub hours_back:   u32,
+    pub status:       String,
+    pub started_at:   u32,
+    pub completed_at: u32,
+    pub match_count:  u64,
+    pub matches:      String,
+}
+
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct NetworkPair {
@@ -1350,6 +1380,7 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.users ADD COLUMN IF NOT EXISTS secret_code String DEFAULT ''",
                 "ALTER TABLE ndr.soar_cases ADD COLUMN IF NOT EXISTS case_number String DEFAULT ''",
                 "ALTER TABLE ndr.soar_cases ADD COLUMN IF NOT EXISTS priority String DEFAULT 'P2'",
+                "CREATE TABLE IF NOT EXISTS ndr.retro_scans (id String, rule_id String DEFAULT '', rule_name String DEFAULT '', rule_content String DEFAULT '', hours_back UInt32 DEFAULT 24, status String DEFAULT 'pending', started_at UInt32 DEFAULT 0, completed_at UInt32 DEFAULT 0, match_count UInt64 DEFAULT 0, matches String DEFAULT '[]', tenant_id String DEFAULT 'default', updated_at UInt32 DEFAULT 0) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (tenant_id, id)",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -7011,6 +7042,68 @@ pub async fn get_ioc_hits(
             "ts":               r.6,
             "tenant_id":        tenant_id,
         })).collect())
+    }
+
+    pub async fn save_retro_scan(
+        &self,
+        id: &str, rule_id: &str, rule_name: &str, rule_content: &str,
+        hours_back: u32, status: &str,
+        started_at: u32, completed_at: u32,
+        match_count: usize, matches_json: String, tenant_id: &str,
+    ) -> anyhow::Result<()> {
+        let row = RetroScanRow {
+            id:           id.to_string(),
+            rule_id:      rule_id.to_string(),
+            rule_name:    rule_name.to_string(),
+            rule_content: rule_content.to_string(),
+            hours_back,
+            status:       status.to_string(),
+            started_at,
+            completed_at,
+            match_count:  match_count as u64,
+            matches:      matches_json,
+            tenant_id:    tenant_id.to_string(),
+            updated_at:   chrono::Utc::now().timestamp() as u32,
+        };
+        let mut ins = self.client.insert("ndr.retro_scans")?;
+        ins.write(&row).await?;
+        ins.end().await?;
+        Ok(())
+    }
+
+    pub async fn list_retro_scans_for_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Vec<RetroScanReadRow>> {
+        Ok(self.client
+            .query(&format!(
+                "SELECT id, rule_id, rule_name, rule_content, hours_back, status, \
+                 started_at, completed_at, match_count, matches \
+                 FROM ndr.retro_scans FINAL \
+                 WHERE tenant_id = '{}' ORDER BY started_at DESC LIMIT 200",
+                tenant_id.replace('\'', "")
+            ))
+            .fetch_all::<RetroScanReadRow>()
+            .await?)
+    }
+
+    pub async fn get_retro_scan_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> anyhow::Result<Option<RetroScanReadRow>> {
+        let rows = self.client
+            .query(&format!(
+                "SELECT id, rule_id, rule_name, rule_content, hours_back, status, \
+                 started_at, completed_at, match_count, matches \
+                 FROM ndr.retro_scans FINAL \
+                 WHERE tenant_id = '{}' AND id = '{}' LIMIT 1",
+                tenant_id.replace('\'', ""),
+                id.replace('\'', "")
+            ))
+            .fetch_all::<RetroScanReadRow>()
+            .await?;
+        Ok(rows.into_iter().next())
     }
 
     /// Returns distinct rule names that have actually fired, with hit counts and top severity.
