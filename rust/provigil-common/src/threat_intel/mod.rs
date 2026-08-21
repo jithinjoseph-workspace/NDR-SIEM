@@ -1,7 +1,9 @@
+pub mod collector;
 pub mod feeds;
 pub mod intel;
 
 pub use intel::ThreatIntel;
+pub use collector::ThreatCollectorStore;
 
 use serde::{Deserialize, Serialize};
 

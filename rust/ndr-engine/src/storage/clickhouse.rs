@@ -7207,3 +7207,51 @@ impl SoarStore for ClickhouseStorage {
         self.insert_soar_playbook_run(run).await
     }
 }
+
+// ── ThreatCollectorStore — bridges provigil-common collector to ndr-engine storage ──
+
+use provigil_common::threat_intel::{ThreatCollectorStore, ThreatIntelEntry};
+
+#[async_trait::async_trait]
+impl ThreatCollectorStore for ClickhouseStorage {
+    async fn fetch_existing_iocs(&self) -> std::collections::HashSet<(String, String)> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row { source: String, ioc_value: String }
+
+        self.client
+            .query("SELECT source, ioc_value FROM ndr.threat_intel FINAL WHERE expires_at > now()")
+            .fetch_all::<Row>()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.source, r.ioc_value))
+            .collect()
+    }
+
+    async fn get_api_keys(&self) -> (String, String) {
+        let settings = self.get_settings_by_tenant("default").await.unwrap_or_default();
+        let abuseipdb = settings["abuseipdb_api_key"].as_str().unwrap_or("").to_string();
+        let otx       = settings["otx_api_key"].as_str().unwrap_or("").to_string();
+        (abuseipdb, otx)
+    }
+
+    async fn insert_ioc_entries(
+        &self,
+        existing: &std::collections::HashSet<(String, String)>,
+        entries: Vec<ThreatIntelEntry>,
+    ) -> usize {
+        let mut saved = 0;
+        for e in entries {
+            if existing.contains(&(e.source.clone(), e.ioc_value.clone())) { continue; }
+            let q = format!(
+                "INSERT INTO ndr.threat_intel \
+                 (source, attack_type, severity, ioc_type, ioc_value, description, threat_pattern) \
+                 VALUES ('{}','{}','{}','{}','{}','{}','{}')",
+                sql_escape(&e.source), sql_escape(&e.attack_type), sql_escape(&e.severity),
+                sql_escape(&e.ioc_type), sql_escape(&e.ioc_value), sql_escape(&e.description), sql_escape(&e.threat_pattern)
+            );
+            if self.client.query(&q).execute().await.is_ok() { saved += 1; }
+        }
+        saved
+    }
+}
