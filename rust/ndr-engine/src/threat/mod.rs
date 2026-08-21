@@ -9,6 +9,7 @@ pub mod cloud_suggestions;
 pub mod beacon_detector;
 pub mod entity_scorer;
 pub mod lateral_movement;
+pub mod jarm;
 
 use std::sync::Arc;
 
@@ -151,8 +152,9 @@ fn spawn_threat_tasks(
     entity_scorer::spawn_entity_scorer(Arc::clone(&ch), entity_cache);
     crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch));
     lateral_movement::spawn_lateral_movement_detector(Arc::clone(&ch));
+    jarm::spawn_jarm_scanner(Arc::clone(&ch));
 
-    tracing::info!("All 11 threat background tasks started on elected leader");
+    tracing::info!("All 12 threat background tasks started on elected leader");
 }
 
 // ── Row structs for ClickHouse queries ───────────────────────────────────────

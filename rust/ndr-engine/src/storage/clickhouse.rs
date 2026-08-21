@@ -7036,6 +7036,100 @@ pub async fn get_ioc_hits(
             .await?;
         Ok(rows)
     }
+
+    // ── JARM fingerprint observations ─────────────────────────────────────────
+
+    pub async fn jarm_already_seen(&self, tenant_id: &str, server_ip: &str, server_port: u16) -> bool {
+        self.client
+            .query("SELECT count() FROM ndr.jarm_observations WHERE tenant_id = ? AND server_ip = ? AND server_port = ?")
+            .bind(tenant_id)
+            .bind(server_ip)
+            .bind(server_port)
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0) > 0
+    }
+
+    pub async fn store_jarm_observation(
+        &self,
+        tenant_id:   &str,
+        server_ip:   &str,
+        server_port: u16,
+        fingerprint: &str,
+        c2_match:    &str,
+    ) -> anyhow::Result<()> {
+        self.client
+            .query(
+                "INSERT INTO ndr.jarm_observations \
+                 (tenant_id, server_ip, server_port, fingerprint, c2_match) \
+                 VALUES (?, ?, ?, ?, ?)"
+            )
+            .bind(tenant_id)
+            .bind(server_ip)
+            .bind(server_port)
+            .bind(fingerprint)
+            .bind(c2_match)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_jarm_c2_hits(&self, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = self.client
+            .query(
+                "SELECT server_ip, server_port, fingerprint, c2_match, toString(first_seen) \
+                 FROM ndr.jarm_observations \
+                 WHERE tenant_id = ? AND c2_match != '' \
+                 ORDER BY first_seen DESC \
+                 LIMIT 500"
+            )
+            .bind(tenant_id)
+            .fetch_all::<(String, u16, String, String, String)>()
+            .await?;
+
+        Ok(rows.into_iter().map(|(ip, port, fp, c2, seen)| serde_json::json!({
+            "server_ip":   ip,
+            "server_port": port,
+            "fingerprint": fp,
+            "c2_match":    c2,
+            "first_seen":  seen,
+        })).collect())
+    }
+
+    /// Return all active server IPs and ports seen in recent traffic (last 24 h),
+    /// one row per unique (tenant_id, server_ip, server_port).
+    pub async fn get_active_tls_servers(&self, tenant_id: &str) -> anyhow::Result<Vec<(String, u16)>> {
+        let rows = self.client
+            .query(
+                "SELECT DISTINCT dst_ip, dst_port \
+                 FROM ndr.network_logs \
+                 WHERE tenant_id = ? \
+                   AND timestamp > now() - INTERVAL 24 HOUR \
+                   AND dst_port IN (443, 8443, 8080, 4443, 9443, 2083, 2087, 2096, 7443) \
+                 LIMIT 5000"
+            )
+            .bind(tenant_id)
+            .fetch_all::<(String, u16)>()
+            .await
+            .unwrap_or_default();
+        Ok(rows)
+    }
+
+    pub async fn get_all_tenant_ids_with_ndr(&self) -> Vec<String> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct TenantRow { tenant_id: String }
+        self.client
+            .query(
+                "SELECT tenant_id FROM ndr.tenants \
+                 WHERE active = 1 AND positionCaseInsensitive(features, 'ndr') > 0"
+            )
+            .fetch_all::<TenantRow>()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| r.tenant_id)
+            .collect()
+    }
 }
 
 fn is_ip_in_cidr(ip: &str, cidr: &str) -> bool {

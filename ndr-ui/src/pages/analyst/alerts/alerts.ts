@@ -24,6 +24,7 @@ const DETECTION_TAGS = new Set([
   'abnormal-hours','nxdomain-flood','dns-tunneling','tls-cert-anomaly',
   'protocol-misuse','large-volume-exfil','sensitive-country',
   'ip-conflict','sigma','dga','doh-evasion','malicious-domain',
+  'c2',
 ]);
 
 function primaryTag(tags: string[]): string {
@@ -653,6 +654,7 @@ export class Alerts implements OnInit, OnDestroy {
       'dga':                  'DGA Domain',
       'doh-evasion':          'DoH Evasion',
       'malicious-domain':     'Malicious Domain',
+      'c2':                   'C2 Framework',
       // Connection-state derived tags
       'mid-stream':           'Mid-Stream TCP',
       'midstream':            'Mid-Stream TCP',

@@ -938,6 +938,22 @@ ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_incide
 ORDER BY (tenant_id, id)
 TTL created_at + INTERVAL 90 DAY;
 
+-- JARM TLS fingerprint observations — known C2 framework detection by TLS stack
+CREATE TABLE IF NOT EXISTS ndr.jarm_observations ON CLUSTER ndr_cluster
+(
+    id          String   DEFAULT toString(generateUUIDv4()),
+    tenant_id   String   DEFAULT 'default',
+    server_ip   String,
+    server_port UInt16,
+    fingerprint String,
+    c2_match    String   DEFAULT '',
+    first_seen  DateTime DEFAULT now(),
+    created_at  DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/jarm_observations', '{replica}', first_seen)
+ORDER BY (tenant_id, server_ip, server_port)
+TTL created_at + INTERVAL 90 DAY;
+
 -- ── Retention TTL migrations (idempotent — safe to re-run on existing tables) ──
 -- Applied here so already-deployed clusters pick up TTLs without a manual ALTER.
 ALTER TABLE ndr.ioc_hits ON CLUSTER ndr_cluster MODIFY TTL timestamp + INTERVAL 90 DAY;

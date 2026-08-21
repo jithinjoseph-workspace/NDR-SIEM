@@ -1,4 +1,7 @@
 pub mod feeds;
+pub mod intel;
+
+pub use intel::ThreatIntel;
 
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +55,10 @@ pub enum FeedSource {
     AbuseIpDb,
     Otx,
     EmergingThreats,
+    Feodo,
+    UrlHaus,
+    ThreatFox,
+    SpamhausDrop,
     Custom(String),
 }
 
@@ -62,6 +69,10 @@ impl FeedSource {
             FeedSource::AbuseIpDb       => "abuseipdb",
             FeedSource::Otx             => "otx",
             FeedSource::EmergingThreats => "emerging_threats",
+            FeedSource::Feodo           => "feodo",
+            FeedSource::UrlHaus         => "urlhaus",
+            FeedSource::ThreatFox       => "threatfox",
+            FeedSource::SpamhausDrop    => "spamhaus_drop",
             FeedSource::Custom(s)       => s.as_str(),
         }
     }
@@ -108,3 +119,28 @@ pub const FEED_OTX: &str =
 
 pub const FEED_EMERGING_THREATS: &str =
     "https://rules.emergingthreats.net/open/suricata-5.0/rules/emerging-current_events.rules";
+
+// Feodo Tracker — confirmed botnet C2 IPs (Emotet, TrickBot, QakBot, Dridex, AgentTesla)
+// No API key required. Updated every ~5 minutes by abuse.ch.
+pub const FEED_FEODO: &str =
+    "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.json";
+
+// URLhaus — active malware distribution URLs and domains
+// No API key required. Updated continuously by abuse.ch community.
+pub const FEED_URLHAUS: &str =
+    "https://urlhaus-api.abuse.ch/v1/urls/recent/limit/500/";
+
+// ThreatFox — IOC database for malware families (IPs, domains, URLs, hashes)
+// No API key required for the recent-100 query. Updated continuously.
+pub const FEED_THREATFOX: &str =
+    "https://threatfox-api.abuse.ch/api/v1/";
+
+// Spamhaus DROP — hijacked/leased IP blocks used by organized crime (CIDRs)
+// No API key required. Plain text, one CIDR per line.
+pub const FEED_SPAMHAUS_DROP: &str =
+    "https://www.spamhaus.org/drop/drop.txt";
+
+// Spamhaus EDROP — extended DROP: delegated blocks controlled by criminals
+// No API key required. Complements DROP with additional hijacked ranges.
+pub const FEED_SPAMHAUS_EDROP: &str =
+    "https://www.spamhaus.org/drop/edrop.txt";

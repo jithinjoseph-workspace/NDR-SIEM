@@ -3,7 +3,10 @@ use tracing::{info, warn};
 use provigil_common::threat_intel::{
     ThreatIntelEntry,
     FEED_CISA_KEV, FEED_ABUSEIPDB, FEED_OTX, FEED_EMERGING_THREATS,
-    feeds::{parse_cisa_kev, parse_abuseipdb, parse_otx, parse_emerging_threats},
+    FEED_FEODO, FEED_URLHAUS, FEED_THREATFOX,
+    FEED_SPAMHAUS_DROP, FEED_SPAMHAUS_EDROP,
+    feeds::{parse_cisa_kev, parse_abuseipdb, parse_otx, parse_emerging_threats,
+            parse_feodo, parse_urlhaus, parse_threatfox, parse_spamhaus_drop},
 };
 
 pub fn spawn_collector(ch: std::sync::Arc<crate::storage::ClickhouseStorage>) {
@@ -35,6 +38,10 @@ pub async fn collect_all(ch: &crate::storage::ClickhouseStorage) {
         run_feed_abuseipdb(&http, ch, &abuseipdb_key, &existing),
         run_feed_otx(&http, ch, &otx_key, &existing),
         run_feed_emerging_threats(&http, ch, &existing),
+        run_feed_feodo(&http, ch, &existing),
+        run_feed_urlhaus(&http, ch, &existing),
+        run_feed_threatfox(&http, ch, &existing),
+        run_feed_spamhaus(&http, ch, &existing),
     );
 }
 
@@ -144,6 +151,74 @@ async fn run_feed_emerging_threats(
     let n = entries.len();
     insert_entries(ch, existing, entries).await;
     info!("Emerging Threats: {} attack categories", n);
+}
+
+async fn run_feed_feodo(
+    http: &reqwest::Client,
+    ch: &crate::storage::ClickhouseStorage,
+    existing: &std::collections::HashSet<(String, String)>,
+) {
+    let Ok(resp) = http.get(FEED_FEODO).send().await else { return };
+    let Ok(data) = resp.json::<serde_json::Value>().await else { return };
+    let entries = parse_feodo(&data);
+    let n = insert_entries(ch, existing, entries).await;
+    info!("Feodo Tracker: {} botnet C2 IPs collected", n);
+}
+
+async fn run_feed_urlhaus(
+    http: &reqwest::Client,
+    ch: &crate::storage::ClickhouseStorage,
+    existing: &std::collections::HashSet<(String, String)>,
+) {
+    let Ok(resp) = http.get(FEED_URLHAUS).send().await else { return };
+    let Ok(data) = resp.json::<serde_json::Value>().await else { return };
+    let entries = parse_urlhaus(&data);
+    let n = insert_entries(ch, existing, entries).await;
+    info!("URLhaus: {} malware distribution IOCs collected", n);
+}
+
+async fn run_feed_threatfox(
+    http: &reqwest::Client,
+    ch: &crate::storage::ClickhouseStorage,
+    existing: &std::collections::HashSet<(String, String)>,
+) {
+    // ThreatFox uses a POST request with a JSON body to query recent IOCs
+    let body = serde_json::json!({ "query": "get_iocs", "days": 3 });
+    let Ok(resp) = http.post(FEED_THREATFOX)
+        .json(&body)
+        .send().await else { return };
+    let Ok(data) = resp.json::<serde_json::Value>().await else { return };
+    let entries = parse_threatfox(&data);
+    let n = insert_entries(ch, existing, entries).await;
+    info!("ThreatFox: {} malware family IOCs collected", n);
+}
+
+async fn run_feed_spamhaus(
+    http: &reqwest::Client,
+    ch: &crate::storage::ClickhouseStorage,
+    existing: &std::collections::HashSet<(String, String)>,
+) {
+    // Fetch DROP and EDROP in parallel — same format, same parser
+    let (drop_res, edrop_res) = tokio::join!(
+        http.get(FEED_SPAMHAUS_DROP).send(),
+        http.get(FEED_SPAMHAUS_EDROP).send(),
+    );
+
+    let mut all_entries = Vec::new();
+
+    if let Ok(r) = drop_res {
+        if let Ok(text) = r.text().await {
+            all_entries.extend(parse_spamhaus_drop(&text, "DROP"));
+        }
+    }
+    if let Ok(r) = edrop_res {
+        if let Ok(text) = r.text().await {
+            all_entries.extend(parse_spamhaus_drop(&text, "EDROP"));
+        }
+    }
+
+    let n = insert_entries(ch, existing, all_entries).await;
+    info!("Spamhaus DROP+EDROP: {} criminal CIDR blocks collected", n);
 }
 
 // Re-export for use in other ndr-engine modules that already call classify_attack
