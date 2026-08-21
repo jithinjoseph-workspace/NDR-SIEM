@@ -191,7 +191,11 @@ export class Retrospective implements OnInit {
         if (this.selectedScan) {
           const updated = fresh.find(s => s.id === this.selectedScan!.id);
           this.selectedScan = updated ?? null;
-          if (!this.selectedScan) this.selectedMatches = [];
+          if (!this.selectedScan) {
+            this.selectedMatches = [];
+          } else if (updated!.matches !== undefined) {
+            this.selectedMatches = updated!.matches;
+          }
         }
 
         this.loading = false;
