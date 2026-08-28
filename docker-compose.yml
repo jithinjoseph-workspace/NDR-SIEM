@@ -185,6 +185,8 @@ services:
     profiles: ["siem"]
     restart: unless-stopped
     mem_limit: 512m
+    ports:
+      - "127.0.0.1:3002:3002"
     networks:
       - default
       - ndr-internal
@@ -193,8 +195,12 @@ services:
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=ndr
       - VALKEY_URL=redis://ndr-valkey:6379
+      - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
+      - TENANT_ID=${TENANT_ID}
       - LISTEN_ADDR=0.0.0.0:3002
+      - RUST_LOG=siem_engine=info
     depends_on:
       clickhouse1:
         condition: service_healthy
