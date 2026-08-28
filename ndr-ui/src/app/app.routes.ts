@@ -38,6 +38,21 @@ export const routes: Routes = [
     ]
   },
 
+  /* ── XDR unified pages — all authenticated users ──────────────────── */
+  {
+    path: 'xdr',
+    canActivate: [authGuard],
+    loadComponent: () => import('../layout/analyst-layout/analyst-layout').then(m => m.AnalystLayout),
+    children: [
+      {
+        path: 'alerts',
+        canActivate: [authGuard],
+        data: { permission: 'alerts' },
+        loadComponent: () => import('../pages/xdr/alerts/xdr-alerts').then(m => m.XdrAlerts),
+      },
+    ],
+  },
+
   /* ── ADMIN pages ──────────────────────────────────────────────────── */
   {
     path: 'admin',

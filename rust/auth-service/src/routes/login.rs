@@ -304,7 +304,7 @@ pub async fn issue_full_token(
 
     let (token, jti) = match create_jwt(
         username, role, tenant_id,
-        permissions.clone(), sensor_ids.clone(),
+        permissions.clone(), features.clone(), sensor_ids.clone(),
         &state.jwt_secret, state.token_ttl,
     ) {
         Ok(v) => v,
@@ -352,6 +352,14 @@ pub async fn issue_full_token(
             ("login_time", login_ts.as_str()),
         ]).await;
         let _: redis::RedisResult<bool> = conn.expire(&ndr_session_key, state.token_ttl).await;
+        // Also register in ndr: tenant + user sets so ndr-engine's active-sessions
+        // endpoint and force-logout can find sessions created by auth-service.
+        let ndr_tenant_set = format!("ndr:tenant_sessions:{}", tenant_id);
+        let ndr_user_set   = format!("ndr:user_sessions:{}:{}", tenant_id, username);
+        let _: redis::RedisResult<i64>  = conn.sadd(&ndr_tenant_set, &jti).await;
+        let _: redis::RedisResult<bool> = conn.expire(&ndr_tenant_set, state.refresh_ttl).await;
+        let _: redis::RedisResult<i64>  = conn.sadd(&ndr_user_set, &jti).await;
+        let _: redis::RedisResult<bool> = conn.expire(&ndr_user_set, state.refresh_ttl).await;
     }
 
     // ── New-device detection (background, never blocks login) ──────────────

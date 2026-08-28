@@ -29,8 +29,18 @@
     <!-- Map -->
     <div class="tm-map-wrap">
       <div class="tm-map-label">
-        <lucide-icon [name]="RadarIcon" class="w-3 h-3"></lucide-icon>
-        Live Attack Map
+        <div class="tm-map-label-left">
+          <lucide-icon [name]="RadarIcon" class="w-3 h-3"></lucide-icon>
+          Live Attack Map
+        </div>
+        <div class="tm-mode-toggle">
+          <button class="tm-mode-btn" [class.tm-mode-active]="mapMode === 'flat'" (click)="switchMode('flat')" type="button">
+            🗺 Flat
+          </button>
+          <button class="tm-mode-btn" [class.tm-mode-active]="mapMode === 'globe'" (click)="switchMode('globe')" type="button">
+            🌍 Globe
+          </button>
+        </div>
       </div>
       <div #mapContainer class="tm-map-canvas"></div>
 
@@ -88,7 +98,7 @@
           <div class="tm-detail-header">
             <span class="tm-detail-flag">{{ countryFlag(selectedCountry.code) }}</span>
             <span class="tm-detail-country-name">{{ selectedCountry.country }}</span>
-            <span class="tm-detail-total">{{ selectedCountry.count.toLocaleString() }} hits</span>
+            <span class="tm-detail-total">{{ selectedCountry.count.toLocaleString() }} connections</span>
             <button class="tm-detail-close" (click)="selectedCountry = null" type="button">×</button>
           </div>
           <div class="tm-detail-eyebrow">Attack type breakdown · last 24h</div>
@@ -106,12 +116,12 @@
             </div>
           </div>
           <ng-template #noBreakdown>
-            <div class="tm-no-data tm-no-data-sm">No attack type data for this country</div>
+            <div class="tm-no-data tm-no-data-sm">Raw traffic only — no detection alerts fired from this country</div>
           </ng-template>
         </div>
       </div>
 
-      <!-- Attack trends (static display) -->
+      <!-- Network Exposure -->
       <div class="tm-panel">
         <div class="tm-panel-header">
           <lucide-icon [name]="TrendIcon" class="w-4 h-4"></lucide-icon>
