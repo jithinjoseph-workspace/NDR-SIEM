@@ -53,52 +53,7 @@ use std::time::Duration;
 use rdkafka::producer::Producer;
 use rdkafka::util::Timeout;
 use crate::evidence;
-use jsonwebtoken::{encode, decode, Header, 
-    Validation, EncodingKey, DecodingKey};
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Claims {
-    sub: String,
-    role: String,
-    tenant_id: String,
-    permissions: Vec<String>,
-    exp: usize,
-    sensor_ids: Vec<String>,
-    jti: String,
-}
-
-// Returns (token, jti) so the caller can track the session in Redis.
-fn generate_jwt(username: &str, role: &str,
-    tenant_id: &str, permissions: Vec<String>, sensor_ids: Vec<String>) -> (String, String) {
-    let Ok(secret) = std::env::var("JWT_SECRET") else {
-        tracing::error!("JWT_SECRET not set — cannot issue token");
-        return (String::new(), String::new());
-    };
-    let jti = uuid::Uuid::new_v4().to_string();
-    let expiry = chrono::Utc::now()
-        .timestamp() as usize + 86400; // 24 hours
-    let claims = Claims {
-        sub: username.to_string(),
-        role: role.to_string(),
-        tenant_id: tenant_id.to_string(),
-        permissions,
-        exp: expiry,
-        sensor_ids,
-        jti: jti.clone(),
-    };
-    let token = match encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes())
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("JWT encode failed: {} — returning empty session", e);
-            return (String::new(), String::new());
-        }
-    };
-    (token, jti)
-}
+use jsonwebtoken::{decode, Validation, DecodingKey};
 
 
 use base64::Engine;
@@ -2507,6 +2462,70 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
     Json(json!({ "countries": countries }))
 }
 
+// Threat Intel Map — geo-locate detected threat intel IPs by country
+pub async fn get_threat_intel_map(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+
+    let detected = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id, &sensor_ids).await
+        .unwrap_or_default();
+    if detected.is_empty() {
+        return Json(json!({ "countries": [] }));
+    }
+
+    let mut ip_hits: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for h in &detected {
+        if let Some(ip) = h["src_ip"].as_str() {
+            if !ip.is_empty() {
+                *ip_hits.entry(ip.to_string()).or_default() += h["hits"].as_u64().unwrap_or(1);
+            }
+        }
+    }
+    if ip_hits.is_empty() {
+        return Json(json!({ "countries": [] }));
+    }
+
+    let batch: Vec<Value> = ip_hits.keys().take(100)
+        .map(|ip| json!({ "query": ip })).collect();
+    let geo_results: Vec<Value> = match HTTP_CLIENT
+        .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
+        .json(&batch).send().await
+    {
+        Ok(resp) => resp.json::<Vec<Value>>().await.unwrap_or_default(),
+        Err(_)   => vec![],
+    };
+
+    let mut country_map: std::collections::HashMap<String, (String, f64, f64, u64, u64, Vec<String>)> =
+        std::collections::HashMap::new();
+    for geo in &geo_results {
+        if geo.get("status").and_then(|s| s.as_str()) != Some("success") { continue; }
+        let ip       = geo["query"].as_str().unwrap_or("").to_string();
+        let country  = geo["country"].as_str().unwrap_or("Unknown").to_string();
+        let code     = geo["countryCode"].as_str().unwrap_or("XX").to_string();
+        let lat      = geo["lat"].as_f64().unwrap_or(0.0);
+        let lon      = geo["lon"].as_f64().unwrap_or(0.0);
+        let hits     = ip_hits.get(&ip).copied().unwrap_or(1);
+        country_map.entry(code.clone())
+            .and_modify(|e| { e.3 += 1; e.4 += hits; e.5.push(ip.clone()); })
+            .or_insert((country, lat, lon, 1, hits, vec![ip]));
+    }
+
+    let mut countries: Vec<Value> = country_map.into_iter()
+        .map(|(code, (country, lat, lon, ip_count, hit_count, ips))| json!({
+            "country":   country,
+            "code":      code,
+            "lat":       lat,
+            "lon":       lon,
+            "ip_count":  ip_count,
+            "hit_count": hit_count,
+            "ips":       ips,
+        }))
+        .collect();
+    countries.sort_by(|a, b| b["hit_count"].as_u64().unwrap_or(0).cmp(&a["hit_count"].as_u64().unwrap_or(0)));
+    Json(json!({ "countries": countries }))
+}
+
 //lookup ioc
 //lookup ioc
 pub async fn lookup_ioc(
@@ -2654,9 +2673,11 @@ pub async fn sync_community_rules_api(
     };
 
     let rules_dir = std::env::var("RULES_DIR").unwrap_or_else(|_| "rules".to_string());
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let redis_url = std::env::var("VALKEY_URL")
+        .or_else(|_| std::env::var("REDIS_URL"))
+        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
 
-    // Acquire a Redis lock so only one engine runs the sync at a time.
+    // Acquire a Valkey lock so only one engine runs the sync at a time.
     // TTL = 300s covers the worst-case GitHub download time.
     let lock_acquired = match redis::Client::open(redis_url.clone()) {
         Ok(client) => match client.get_multiplexed_async_connection().await {
@@ -4654,322 +4675,21 @@ fn get_client_ip(headers: &axum::http::HeaderMap) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-// POST /api/auth/login
+// POST /api/auth/login — login is handled by auth-service (provigil-auth:3001).
+// nginx routes /api/auth/login → auth-service before this engine sees it.
 pub async fn login(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<Value>,
+    _state: State<AppState>,
+    _headers: axum::http::HeaderMap,
+    _body: axum::body::Body,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-
-    let username = payload["username"]
-        .as_str().unwrap_or("").to_string();
-    let password = payload["password"]
-        .as_str().unwrap_or("").to_string();
-
-    if username.is_empty() || password.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "status": "error",
-                "message": "Username and password required"
-            }))
-        ).into_response();
-    }
-
-    if !is_safe_username(&username) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "status": "error",
-                "message": "Invalid username or password"
-            }))
-        ).into_response();
-    }
-
-    // ── Brute-force protection ────────────────────────────────────────────
-    {
-        use redis::AsyncCommands;
-        let mut mux = state.redis_mux.clone();
-        let lock_key    = format!("ndr:login_locked:{}", username);
-        let _attempt_key = format!("ndr:login_attempts:{}", username);
-
-        // Check if account is locked
-        let locked: bool = mux.exists(&lock_key).await.unwrap_or(false);
-        if locked {
-            let ttl: i64 = mux.ttl(&lock_key).await.unwrap_or(0);
-            let mins = (ttl / 60).max(1);
-            tracing::warn!("🔒 Login blocked — account locked: '{}'", username);
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(json!({
-                    "status": "error",
-                    "message": format!("Account locked due to too many failed attempts. Try again in {} minute(s).", mins)
-                }))
-            ).into_response();
-        }
-    }
-
-    tracing::info!("🔐 Login attempt: username='{}'", username);
-
-    match state.ch_storage.verify_user(&username, &password).await {
-        Ok(Some(user)) => {
-            // Disabled account sentinel — returned by verify_user when
-            // active=0 (or a pending disable mutation exists).
-            if user.get("__disabled__").and_then(|v| v.as_bool()).unwrap_or(false) {
-                tracing::warn!("🚫 Login BLOCKED for disabled account: '{}'", username);
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({
-                        "status": "error",
-                        "message": "Your account has been disabled. Please contact your administrator."
-                    }))
-                ).into_response();
-            }
-
-            let role = user["role"].as_str().unwrap_or("analyst");
-            let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
-            if role != "super_admin" {
-                match state.ch_storage.is_tenant_active(tenant_id).await {
-                    Ok(false) => {
-                        tracing::warn!(
-                            "Login BLOCKED for inactive tenant: username='{}' tenant='{}'",
-                            username,
-                            tenant_id
-                        );
-                        return (
-                            StatusCode::FORBIDDEN,
-                            Json(json!({
-                                "status": "error",
-                                "message": "Your tenant has been deactivated. Please contact your administrator."
-                            }))
-                        ).into_response();
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Tenant active check failed during login for {}: {}",
-                            tenant_id,
-                            e
-                        );
-                        return (
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            Json(json!({
-                                "status": "error",
-                                "message": "Unable to verify tenant status"
-                            }))
-                        ).into_response();
-                    }
-                    Ok(true) => {}
-                }
-            }
-            let permissions_str = if role == "super_admin" || role == "tenant_admin" {
-                crate::storage::clickhouse::default_permissions(role)
-            } else {
-                let stored = user["permissions"].as_str().unwrap_or("").to_string();
-                if stored.is_empty() {
-                    crate::storage::clickhouse::default_permissions(role)
-                } else {
-                    stored
-                }
-            };
-            let permissions_vec: Vec<String> = permissions_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            // Admins get no sensor restriction (empty = see all sensors).
-            // Analysts get only their assigned sensors — looked up by UUID (the value
-            // stored in user_sensor_assignments, not the username string).
-            let user_uuid = user["id"].as_str().unwrap_or("").to_string();
-            let sensor_ids = if role == "super_admin" || role == "tenant_admin" {
-                vec![]
-            } else {
-                state.ch_storage.get_user_sensor_ids(&user_uuid, tenant_id).await.unwrap_or_default()
-            };
-            let (token, jti) = generate_jwt(
-                &username,
-                role,
-                tenant_id,
-                permissions_vec.clone(),
-                sensor_ids.clone(),
-            );
-
-            // Track active session in Redis for session management.
-            {
-                let ip     = get_client_ip(&headers);
-                let device = parse_device_from_ua(
-                    headers.get("User-Agent")
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("")
-                );
-                let login_ts = chrono::Utc::now().timestamp().to_string();
-                let session_key    = format!("ndr:session:{}", jti);
-                let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, username);
-                let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
-                let mut mux = state.redis_mux.clone();
-                use redis::AsyncCommands;
-                let _ = mux.hset_multiple::<_, _, _, ()>(&session_key, &[
-                    ("username",   username.as_str()),
-                    ("role",       role),
-                    ("tenant_id",  tenant_id),
-                    ("ip",         ip.as_str()),
-                    ("device",     device.as_str()),
-                    ("login_time", login_ts.as_str()),
-                ]).await;
-                let _: redis::RedisResult<bool> = mux.expire(&session_key, 86400usize).await;
-                let _: redis::RedisResult<i64>  = mux.sadd(&user_set_key, &jti).await;
-                let _: redis::RedisResult<bool> = mux.expire(&user_set_key, 86400usize).await;
-                let _: redis::RedisResult<i64>  = mux.sadd(&tenant_set_key, &jti).await;
-
-                // New-device detection runs fully in background — never blocks login response.
-                {
-                    let state_clone     = state.clone();
-                    let username_clone  = username.clone();
-                    let tenant_clone    = tenant_id.to_string();
-                    let device_clone    = device.clone();
-                    let ip_clone        = ip.clone();
-                    let login_ts_clone  = login_ts.clone();
-                    let user_set_key_c  = user_set_key.clone();
-                    let jti_clone       = jti.clone();
-                    let mut mux2        = state.redis_mux.clone();
-                    tokio::spawn(async move {
-                        use redis::AsyncCommands;
-                        let prev_jtis: Vec<String> = mux2.smembers(&user_set_key_c).await.unwrap_or_default();
-                        let mut seen_before = false;
-                        for prev_jti in &prev_jtis {
-                            if prev_jti == &jti_clone { continue; }
-                            let prev_key = format!("ndr:session:{}", prev_jti);
-                            let prev_device: Option<String> = mux2.hget(&prev_key, "device").await.unwrap_or(None);
-                            if prev_device.as_deref() == Some(device_clone.as_str()) {
-                                seen_before = true;
-                                break;
-                            }
-                        }
-                        if !seen_before {
-                            if let Ok(Some(admin_gmail)) = state_clone.ch_storage
-                                .get_tenant_admin_gmail(&tenant_clone).await
-                            {
-                                let subject = format!("New device login — {}", username_clone);
-                                let body = format!(
-                                    "Hello,\n\n\
-                                    A new device just signed in to your NDR tenant.\n\n\
-                                    User:    {}\n\
-                                    Device:  {}\n\
-                                    IP:      {}\n\
-                                    Time:    {}\n\n\
-                                    If this was you, no action is needed.\n\
-                                    If this was not you, please contact your administrator immediately.\n\n\
-                                    — Proma Secure NDR",
-                                    username_clone, device_clone, ip_clone, login_ts_clone
-                                );
-                                let _ = send_system_email(&state_clone, &admin_gmail, &subject, &body).await;
-                            }
-                        }
-                    });
-                }
-            }
-
-            let ai_enabled = if role == "super_admin" {
-                true
-            } else {
-                // Check Redis cache first to avoid ClickHouse round-trip on every login
-                let ai_cache_key = format!("ndr:ai_enabled:{}", tenant_id);
-                let cached: Option<u8> = {
-                    use redis::AsyncCommands;
-                    let mut mux = state.redis_mux.clone();
-                    mux.get(&ai_cache_key).await.unwrap_or(None)
-                };
-                match cached {
-                    Some(v) => v == 1,
-                    None => {
-                        let val = state.ch_storage.get_tenant_ai_enabled(tenant_id).await;
-                        let mut mux = state.redis_mux.clone();
-                        use redis::AsyncCommands;
-                        let _: redis::RedisResult<()> = mux.set_ex(&ai_cache_key, if val { 1u8 } else { 0u8 }, 300usize).await;
-                        val
-                    }
-                }
-            };
-            // Clear failed-attempt counter on successful login
-            {
-                use redis::AsyncCommands;
-                let mut mux = state.redis_mux.clone();
-                let _: redis::RedisResult<()> = mux.del(format!("ndr:login_attempts:{}", username)).await;
-            }
-            tracing::info!("✅ Login SUCCESS: username='{}' role='{}'", username, role);
-            let expires_at = chrono::Utc::now().timestamp() as u64 + 86400;
-            let features = get_effective_features(&state, tenant_id).await;
-            let cookie_header = format!(
-                "ndr_token={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400",
-                token
-            );
-            let mut resp = (
-                StatusCode::OK,
-                Json(json!({
-                    "status": "ok",
-                    "user": {
-                        "id": user["id"].as_str().unwrap_or(""),
-                        "username": username,
-                        "role": role,
-                        "tenant_id": tenant_id,
-                        "permissions": permissions_vec,
-                        "features": features,
-                        "ai_enabled": ai_enabled,
-                        "gmail": user["gmail"].as_str().unwrap_or(""),
-                        "secret_code": user["secret_code"].as_str().unwrap_or(""),
-                        "sensor_ids": sensor_ids,
-                        "expires_at": expires_at
-                    }
-                }))
-            ).into_response();
-            if let Ok(v) = cookie_header.parse::<axum::http::HeaderValue>() {
-                resp.headers_mut().insert(axum::http::header::SET_COOKIE, v);
-            }
-            resp
-        }
-        Ok(None) => {
-            tracing::warn!("❌ Login FAILED (wrong credentials): username='{}'", username);
-            // Increment failed attempt counter; lock after 5 failures for 15 minutes
-            {
-                use redis::AsyncCommands;
-                let mut mux = state.redis_mux.clone();
-                let attempt_key = format!("ndr:login_attempts:{}", username);
-                let lock_key    = format!("ndr:login_locked:{}", username);
-                let attempts: i64 = mux.incr(&attempt_key, 1i64).await.unwrap_or(1);
-                let _: redis::RedisResult<bool> = mux.expire(&attempt_key, 900usize).await;
-                if attempts >= 5 {
-                    let _: redis::RedisResult<String> = mux.set_ex(&lock_key, "1", 900usize).await;
-                    let _: redis::RedisResult<()> = mux.del(&attempt_key).await;
-                    tracing::warn!("🔒 Account locked after {} failures: '{}'", attempts, username);
-                    return (
-                        StatusCode::TOO_MANY_REQUESTS,
-                        Json(json!({
-                            "status": "error",
-                            "message": "Too many failed attempts. Account locked for 15 minutes."
-                        }))
-                    ).into_response();
-                }
-                let remaining = 5 - attempts;
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "status": "error",
-                        "message": format!("Invalid username or password. {} attempt(s) remaining before lockout.", remaining)
-                    }))
-                ).into_response();
-            }
-        }
-        Err(e) => {
-            tracing::error!("💥 Login DB error for '{}': {}", username, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "status": "error",
-                    "message": "Authentication service error. Please try again."
-                }))
-            ).into_response()
-        }
-    }
+    (
+        StatusCode::GONE,
+        Json(json!({
+            "status": "error",
+            "message": "Login endpoint has moved to auth-service. Use /api/auth/login via the platform gateway."
+        }))
+    ).into_response()
 }
 
 

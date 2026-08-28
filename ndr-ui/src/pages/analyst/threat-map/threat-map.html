@@ -29,8 +29,18 @@
     <!-- Map -->
     <div class="tm-map-wrap">
       <div class="tm-map-label">
-        <lucide-icon [name]="RadarIcon" class="w-3 h-3"></lucide-icon>
-        Live Attack Map
+        <div class="tm-map-label-left">
+          <lucide-icon [name]="RadarIcon" class="w-3 h-3"></lucide-icon>
+          Live Attack Map
+        </div>
+        <div class="tm-mode-toggle">
+          <button class="tm-mode-btn" [class.tm-mode-active]="mapMode === 'flat'" (click)="switchMode('flat')" type="button">
+            🗺 Flat
+          </button>
+          <button class="tm-mode-btn" [class.tm-mode-active]="mapMode === 'globe'" (click)="switchMode('globe')" type="button">
+            🌍 Globe
+          </button>
+        </div>
       </div>
       <div #mapContainer class="tm-map-canvas"></div>
 
@@ -111,7 +121,7 @@
         </div>
       </div>
 
-      <!-- Attack trends (static display) -->
+      <!-- Network Exposure -->
       <div class="tm-panel">
         <div class="tm-panel-header">
           <lucide-icon [name]="TrendIcon" class="w-4 h-4"></lucide-icon>

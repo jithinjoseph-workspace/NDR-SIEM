@@ -961,3 +961,40 @@ ALTER TABLE ndr.soar_playbook_runs ON CLUSTER ndr_cluster MODIFY TTL created_at 
 ALTER TABLE ndr.evidence_log ON CLUSTER ndr_cluster MODIFY TTL performed_at + INTERVAL 90 DAY;
 ALTER TABLE ndr.soar_case_comments ON CLUSTER ndr_cluster MODIFY TTL created_at + INTERVAL 730 DAY;
 
+
+-- ── Unified Alerts — ONE table for ALL alert sources (NDR + SIEM + corroborated) ──
+-- ndr-engine writes here with source='ndr'; siem-engine with source='siem';
+-- correlation engine writes corroborated alerts with source='corroborated'.
+CREATE TABLE IF NOT EXISTS ndr.unified_alerts ON CLUSTER ndr_cluster
+(
+    alert_id             String   DEFAULT toString(generateUUIDv4()),
+    tenant_id            String,
+    source               LowCardinality(String),   -- ndr / siem / corroborated / threat_intel
+    severity             LowCardinality(String),   -- CRITICAL / HIGH / MEDIUM / LOW / INFO
+    rule_id              String   DEFAULT '',
+    rule_name            String   DEFAULT '',
+    title                String,
+    description          String   DEFAULT '',
+    affected_hosts       Array(String),
+    mitre_techniques     Array(String),
+    mitre_sources        Array(String),
+    mitre_confidences    Array(Float32),
+    status               LowCardinality(String)   DEFAULT 'New',  -- New / Investigating / Escalated / Resolved / Closed
+    assignee_id          Nullable(String),
+    linked_alert_ids     Array(String),
+    linked_ndr_event_ids Array(String),
+    linked_siem_log_ids  Array(String),
+    ai_summary           Nullable(String),
+    ai_provider          Nullable(String),
+    qdrant_refs          Array(String),
+    threat_intel_matches Array(String),
+    is_fp                Nullable(UInt8),
+    sla_started_at       Nullable(DateTime),
+    sla_breached_at      Nullable(DateTime),
+    legal_hold           UInt8    DEFAULT 0,
+    created_at           DateTime DEFAULT now(),
+    updated_at           DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/unified_alerts', '{replica}', updated_at)
+ORDER BY (tenant_id, alert_id)
+TTL created_at + INTERVAL 365 DAY;

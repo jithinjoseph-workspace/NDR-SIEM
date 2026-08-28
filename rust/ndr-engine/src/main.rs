@@ -94,10 +94,11 @@ async fn main() {
     // ── Build AppState ────────────────────────────────────────────────────
     let (tx, _) = broadcast::channel::<String>(512);
 
-    let redis_url = std::env::var("REDIS_URL")
+    let redis_url = std::env::var("VALKEY_URL")
+        .or_else(|_| std::env::var("REDIS_URL"))
         .unwrap_or_else(|_| "redis://localhost:6379".to_string());
     let redis_client = redis::Client::open(redis_url.clone())
-        .expect("Redis connection failed");
+        .expect("Valkey connection failed");
     // Shared multiplexed connection for publishing — avoids opening a new
     // TCP connection on every event (was causing per-event latency spikes)
     let redis_mux = {
@@ -108,15 +109,15 @@ async fn main() {
                 Ok(c) => { conn = Some(c); break; }
                 Err(e) => {
                     last_err = e.to_string();
-                    tracing::warn!("Redis not ready (attempt {}/6): {} — retrying in 5s", attempt, e);
+                    tracing::warn!("Valkey not ready (attempt {}/6): {} — retrying in 5s", attempt, e);
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
         }
         conn.unwrap_or_else(|| {
             tracing::error!(
-                "Redis unreachable after 30 s ({}). \
-                 Check REDIS_URL={} or ensure the Redis container is running. Exiting.",
+                "Valkey unreachable after 30 s ({}). \
+                 Check VALKEY_URL={} or ensure the Valkey container is running. Exiting.",
                 last_err, redis_url
             );
             std::process::exit(1);
@@ -744,6 +745,7 @@ async fn main() {
         .route("/api/rules/hit-counts", get(api::get_rule_hit_counts))
         .route("/api/rules/:id",      get(api::get_rule_by_id).delete(api::delete_rule))
         .route("/api/threat-map",        get(api::get_threat_map))
+        .route("/api/threat-intel-map",  get(api::get_threat_intel_map))
         .route("/api/threat-intel",                    get(api::get_threat_intel))
         .route("/api/threat-intel/add",               post(api::add_manual_ioc))
         .route("/api/threat-intel/watchlist",         get(api::get_watchlist_iocs))

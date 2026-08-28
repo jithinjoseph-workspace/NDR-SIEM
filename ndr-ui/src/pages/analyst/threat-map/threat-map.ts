@@ -41,12 +41,24 @@ export class ThreatMap implements OnInit, OnDestroy {
   TrendIcon  = TrendingUp;
 
   private rafId?: number;
-  private particles: Particle[] = [];
-  private arcPaths: SVGPathElement[] = [];
+  private resizeTimer?: ReturnType<typeof setTimeout>;
+  private initSeq = 0;
+  private cachedWorld: any = null;
+  mapMode: 'flat' | 'globe' = 'flat';
 
   constructor(private http: HttpClient, private ngZone: NgZone, private cdr: ChangeDetectorRef) {}
 
   ngOnInit() { this.init(); }
+
+  switchMode(mode: 'flat' | 'globe') {
+    if (this.mapMode === mode) return;
+    this.mapMode = mode;
+    if (this.rafId) cancelAnimationFrame(this.rafId);
+    if (this.cachedWorld) {
+      this.ngZone.runOutsideAngular(() => this.drawMap(this.cachedWorld));
+    }
+    this.cdr.detectChanges();
+  }
 
   selectCountry(src: AttackSource) {
     this.selectedCountry = this.selectedCountry?.country === src.country ? null : src;
@@ -100,21 +112,37 @@ export class ThreatMap implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     if (this.rafId) cancelAnimationFrame(this.rafId);
+    clearTimeout(this.resizeTimer);
   }
 
   @HostListener('window:resize')
-  onResize() { this.init(); }
+  onResize() {
+    clearTimeout(this.resizeTimer);
+    // Debounce: only redraw 300ms after resize stops. Reuse cached data so no
+    // extra API call fires — DevTools open/close triggers many resize events.
+    this.resizeTimer = setTimeout(() => {
+      if (this.rafId) cancelAnimationFrame(this.rafId);
+      if (this.cachedWorld) {
+        this.ngZone.runOutsideAngular(() => this.drawMap(this.cachedWorld));
+      }
+    }, 300);
+  }
 
   private async init() {
+    const seq = ++this.initSeq;
     if (this.rafId) cancelAnimationFrame(this.rafId);
-    this.particles = [];
-    this.arcPaths  = [];
 
     const [world, data] = await Promise.all([
-      this.http.get('/assets/world-110m.json').toPromise(),
+      this.cachedWorld
+        ? Promise.resolve(this.cachedWorld)
+        : this.http.get('/assets/world-110m.json').toPromise(),
       this.http.get<any>('/api/threat-map').toPromise().catch(() => ({ countries: [] }))
     ]);
 
+    // Discard result if a newer init() was already started
+    if (seq !== this.initSeq) return;
+
+    this.cachedWorld = world;
     const raw: any[] = data?.countries ?? [];
     this.attackSources = raw.map((c, i) => ({
       ...c,
@@ -130,334 +158,359 @@ export class ThreatMap implements OnInit, OnDestroy {
   }
 
   private drawMap(world: any) {
-    const el   = this.mapRef.nativeElement;
-    const W    = el.clientWidth  || 900;
-    const H    = el.clientHeight || 480;
+    this.mapMode === 'globe' ? this.drawGlobe(world) : this.drawFlatMap(world);
+  }
+
+  private makeTooltip(el: HTMLElement): {
+    show: (x: number, y: number, src: AttackSource) => void;
+    hide: () => void;
+  } {
+    const tip = document.createElement('div');
+    tip.className = 'tm-map-tooltip';
+    tip.innerHTML = '<span class="tm-tip-flag"></span><span class="tm-tip-country"></span><span class="tm-tip-count"></span>';
+    el.appendChild(tip);
+    const flag    = tip.querySelector('.tm-tip-flag')!    as HTMLElement;
+    const country = tip.querySelector('.tm-tip-country')! as HTMLElement;
+    const count   = tip.querySelector('.tm-tip-count')!   as HTMLElement;
+    return {
+      show: (x, y, src) => {
+        flag.textContent    = this.countryFlag(src.code);
+        country.textContent = src.country;
+        count.textContent   = `${src.count.toLocaleString()} hits`;
+        tip.style.left = (x + 14) + 'px';
+        tip.style.top  = (y - 18) + 'px';
+        tip.classList.add('visible');
+      },
+      hide: () => tip.classList.remove('visible'),
+    };
+  }
+
+  private drawFlatMap(world: any) {
+    const el = this.mapRef.nativeElement;
+    const W  = el.clientWidth  || 900;
+    const H  = el.clientHeight || 480;
 
     d3.select(el).selectAll('*').remove();
+    el.style.position = '';
 
     const svg = d3.select(el).append('svg')
       .attr('width', W).attr('height', H)
       .attr('viewBox', `0 0 ${W} ${H}`)
       .style('display', 'block');
 
-    // ── SVG Filters (glow effects) ─────────────────────────
     const defs = svg.append('defs');
+    const mkGlow = (id: string, std: number) => {
+      const f = defs.append('filter').attr('id', id).attr('x', '-100%').attr('y', '-100%').attr('width', '300%').attr('height', '300%');
+      f.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', std).attr('result', 'blur');
+      f.append('feMerge').selectAll('n').data(['blur', 'SourceGraphic']).enter().append('feMergeNode').attr('in', (d: any) => d);
+    };
+    mkGlow('f-arc', 3); mkGlow('f-dot', 5); mkGlow('f-green', 7);
 
-    const arcGlow = defs.append('filter').attr('id', 'arc-glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
-    arcGlow.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '3').attr('result', 'blur');
-    arcGlow.append('feMerge').selectAll('feMergeNode').data(['blur', 'SourceGraphic']).enter().append('feMergeNode').attr('in', (d: any) => d);
-
-    const dotGlow = defs.append('filter').attr('id', 'dot-glow').attr('x', '-100%').attr('y', '-100%').attr('width', '300%').attr('height', '300%');
-    dotGlow.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '5').attr('result', 'blur');
-    dotGlow.append('feMerge').selectAll('feMergeNode').data(['blur', 'SourceGraphic']).enter().append('feMergeNode').attr('in', (d: any) => d);
-
-    const greenGlow = defs.append('filter').attr('id', 'green-glow').attr('x', '-100%').attr('y', '-100%').attr('width', '300%').attr('height', '300%');
-    greenGlow.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '6').attr('result', 'blur');
-    greenGlow.append('feMerge').selectAll('feMergeNode').data(['blur', 'SourceGraphic']).enter().append('feMergeNode').attr('in', (d: any) => d);
-
-    // Ocean radial gradient
-    const oceanGrad = defs.append('radialGradient').attr('id', 'ocean-grad').attr('cx', '50%').attr('cy', '50%').attr('r', '55%');
+    const oceanGrad = defs.append('radialGradient').attr('id', 'f-ocean').attr('cx', '50%').attr('cy', '50%').attr('r', '55%');
     oceanGrad.append('stop').attr('offset', '0%').attr('stop-color', '#091828');
     oceanGrad.append('stop').attr('offset', '100%').attr('stop-color', '#040c18');
 
-    const proj = d3.geoNaturalEarth1()
-      .scale(W / 6.2)
-      .translate([W / 2, H / 2]);
-
+    const proj  = d3.geoNaturalEarth1().scale(W / 6.2).translate([W / 2, H / 2]);
     const pathFn = d3.geoPath().projection(proj);
 
-    // Ocean fill
-    svg.append('path')
-      .datum({ type: 'Sphere' } as any)
-      .attr('d', pathFn as any)
-      .attr('fill', 'url(#ocean-grad)');
+    svg.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'url(#f-ocean)');
+    svg.append('path').datum(d3.geoGraticule().step([20, 20])()).attr('d', pathFn as any)
+      .attr('fill', 'none').attr('stroke', 'rgba(34,197,94,0.05)').attr('stroke-width', 0.4);
+    const land    = (topojson as any).feature(world, world.objects.countries);
+    const borders = (topojson as any).mesh(world, world.objects.countries, (a: any, b: any) => a !== b);
+    svg.selectAll('.land').data((land as any).features).enter().append('path')
+      .attr('class', 'land').attr('d', pathFn as any).attr('fill', '#0d2135').attr('stroke', 'rgba(34,197,94,0.18)').attr('stroke-width', 0.5);
+    svg.append('path').datum(borders).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', 'rgba(100,180,140,0.1)').attr('stroke-width', 0.3);
+    svg.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', 'rgba(34,197,94,0.12)').attr('stroke-width', 1);
 
-    // Graticule — fine 20° grid
-    const grat = d3.geoGraticule().step([20, 20]);
-    svg.append('path')
-      .datum(grat())
-      .attr('d', pathFn as any)
-      .attr('fill', 'none')
-      .attr('stroke', 'rgba(34,197,94,0.06)')
-      .attr('stroke-width', 0.4);
+    const TARGET: [number, number] = [80.0, 12.0];
+    const txy = proj(TARGET)!;
 
-    // Countries — tinted blue-green land
-    const countries = (topojson as any).feature(world, world.objects.countries);
-    svg.selectAll('.land')
-      .data((countries as any).features)
-      .enter().append('path')
-      .attr('class', 'land')
-      .attr('d', pathFn as any)
-      .attr('fill', '#0d2135')
-      .attr('stroke', 'rgba(34,197,94,0.18)')
-      .attr('stroke-width', 0.5);
+    const arcG = svg.append('g'); const dotG = svg.append('g'); const partG = svg.append('g');
+    const hoverG = svg.append('g'); const tG = svg.append('g');
 
-    // Inner country borders
-    svg.append('path')
-      .datum((topojson as any).mesh(world, world.objects.countries, (a: any, b: any) => a !== b))
-      .attr('d', pathFn as any)
-      .attr('fill', 'none')
-      .attr('stroke', 'rgba(100,180,140,0.1)')
-      .attr('stroke-width', 0.3);
+    const tooltip = this.makeTooltip(el);
 
-    // Sphere outline
-    svg.append('path')
-      .datum({ type: 'Sphere' } as any)
-      .attr('d', pathFn as any)
-      .attr('fill', 'none')
-      .attr('stroke', 'rgba(34,197,94,0.12)')
-      .attr('stroke-width', 1);
+    type FlatP = { path: SVGPathElement; el: SVGCircleElement; t: number; speed: number };
+    const flatParticles: FlatP[] = [];
 
-    const targetCoords: [number, number] = [80.0, 12.0];
-    const targetXY = proj(targetCoords)!;
+    this.attackSources.forEach((src, i) => {
+      const sxy = proj([src.lon, src.lat]);
+      if (!sxy) return;
 
-    const arcGroup      = svg.append('g').attr('class', 'arcs');
-    const arcGlowGroup  = svg.append('g').attr('class', 'arcs-glow');
-    const dotGroup      = svg.append('g').attr('class', 'dots');
-    const particleGroup = svg.append('g').attr('class', 'particles');
+      // Arc
+      const arcLine = { type: 'LineString', coordinates: [[src.lon, src.lat], TARGET] };
+      const arcEl = arcG.append('path').attr('d', pathFn(arcLine as any) || '')
+        .attr('fill', 'none').attr('stroke', src.color).attr('stroke-width', 1.5)
+        .attr('stroke-linecap', 'round').attr('opacity', 0.6).attr('filter', 'url(#f-arc)').node()!;
 
-    this.arcPaths = [];
-    this.particles = [];
+      // Source dot
+      const r = this.sizeForCount(src.count);
+      dotG.append('circle').attr('cx', sxy[0]).attr('cy', sxy[1]).attr('r', r + 5)
+        .attr('fill', src.color).attr('opacity', 0.15).attr('filter', 'url(#f-dot)');
+      dotG.append('circle').attr('cx', sxy[0]).attr('cy', sxy[1]).attr('r', r)
+        .attr('fill', src.color).attr('opacity', 0.95).attr('filter', 'url(#f-dot)');
+      dotG.append('circle').attr('cx', sxy[0]).attr('cy', sxy[1]).attr('r', Math.max(2, r * 0.4))
+        .attr('fill', '#fff').attr('opacity', 0.9);
+      const sr = dotG.append('circle').attr('cx', sxy[0]).attr('cy', sxy[1]).attr('r', r).attr('fill', 'none')
+        .attr('stroke', src.color).attr('stroke-width', 1.5).attr('opacity', 0);
+      this.pulseRing(sr, i * 200, r + 12);
 
-    this.attackSources.slice(0, 12).forEach((src, i) => {
-      const srcXY = proj([src.lon, src.lat]);
-      if (!srcXY) return;
+      // Transparent hover hit area
+      hoverG.append('circle').attr('cx', sxy[0]).attr('cy', sxy[1]).attr('r', r + 10)
+        .attr('fill', 'transparent').attr('cursor', 'pointer')
+        .on('mouseenter', (event: MouseEvent) => tooltip.show(sxy[0], sxy[1], src))
+        .on('mouseleave', () => tooltip.hide());
 
-      const lineData: any = { type: 'LineString', coordinates: [[src.lon, src.lat], targetCoords] };
-      const totalLen = (() => {
-        const tmp = arcGroup.append('path').datum(lineData).attr('d', pathFn as any).node() as SVGPathElement;
-        const l = tmp.getTotalLength();
-        tmp.remove();
-        return l;
-      })();
-
-      // Glow copy (thick, blurred)
-      arcGlowGroup.append('path')
-        .datum(lineData)
-        .attr('d', pathFn as any)
-        .attr('fill', 'none')
-        .attr('stroke', src.color)
-        .attr('stroke-width', 4)
-        .attr('stroke-opacity', 0)
-        .attr('filter', 'url(#arc-glow)')
-        .attr('stroke-dasharray', `${totalLen} ${totalLen}`)
-        .attr('stroke-dashoffset', totalLen)
-        .transition().delay(i * 180).duration(1400).ease(d3.easeLinear)
-        .attr('stroke-dashoffset', 0)
-        .attr('stroke-opacity', 0.3);
-
-      // Sharp arc on top
-      const arcEl = arcGroup.append('path')
-        .datum(lineData)
-        .attr('d', pathFn as any)
-        .attr('fill', 'none')
-        .attr('stroke', src.color)
-        .attr('stroke-width', 1.5)
-        .attr('stroke-opacity', 0)
-        .attr('stroke-dasharray', `${totalLen} ${totalLen}`)
-        .attr('stroke-dashoffset', totalLen);
-
-      arcEl.transition().delay(i * 180).duration(1400).ease(d3.easeLinear)
-        .attr('stroke-dashoffset', 0)
-        .attr('stroke-opacity', 0.75);
-
-      const pathNode = arcEl.node() as SVGPathElement;
-      this.arcPaths.push(pathNode);
-
-      // Pulsing source dot — size by count
-      const dotR = this.sizeForCount(src.count);
-      dotGroup.append('circle')
-        .attr('cx', srcXY[0]).attr('cy', srcXY[1])
-        .attr('r', 0).attr('fill', src.color).attr('opacity', 1)
-        .attr('filter', 'url(#dot-glow)')
-        .transition().delay(i * 180).duration(500)
-        .attr('r', dotR);
-
-      // Solid core dot
-      dotGroup.append('circle')
-        .attr('cx', srcXY[0]).attr('cy', srcXY[1])
-        .attr('r', 0).attr('fill', '#fff').attr('opacity', 0.9)
-        .transition().delay(i * 180).duration(500)
-        .attr('r', Math.max(2, dotR * 0.45));
-
-      // Expanding ring
-      dotGroup.append('circle')
-        .attr('cx', srcXY[0]).attr('cy', srcXY[1])
-        .attr('r', 0).attr('fill', 'none')
-        .attr('stroke', src.color).attr('stroke-width', 1.2).attr('opacity', 0)
-        .call((sel: any) => this.pulseRing(sel, i * 180 + 400, dotR + 10));
-
-      // Second slower ring
-      dotGroup.append('circle')
-        .attr('cx', srcXY[0]).attr('cy', srcXY[1])
-        .attr('r', 0).attr('fill', 'none')
-        .attr('stroke', src.color).attr('stroke-width', 0.7).attr('opacity', 0)
-        .call((sel: any) => this.pulseRing(sel, i * 180 + 900, dotR + 18));
-
-      // Country label — pill background so it's readable over map features
-      const labelText = src.country;
-      const lw = labelText.length * 5.8 + 12;
-      const lh = 15;
-      const lx2 = srcXY[0] + dotR + 6;
-      const ly2 = srcXY[1] - lh / 2;
-
-      dotGroup.append('rect')
-        .attr('x', lx2 - 2).attr('y', ly2)
-        .attr('width', lw).attr('height', lh)
-        .attr('rx', 3)
-        .attr('fill', 'rgba(4, 12, 24, 0.78)')
-        .attr('stroke', 'rgba(255,255,255,0.06)')
-        .attr('stroke-width', 0.5)
-        .attr('opacity', 0)
-        .transition().delay(i * 180 + 700).duration(500)
-        .attr('opacity', 1);
-
-      dotGroup.append('text')
-        .attr('x', lx2 + 2)
-        .attr('y', srcXY[1] + 4)
-        .attr('fill', '#e2e8f0')
-        .attr('font-size', '9px')
-        .attr('font-family', 'JetBrains Mono, monospace')
-        .attr('font-weight', '600')
-        .attr('letter-spacing', '0.03em')
-        .attr('opacity', 0)
-        .text(labelText)
-        .transition().delay(i * 180 + 700).duration(500)
-        .attr('opacity', 0.95);
-
-      // Transparent clickable overlay — covers dot + label pill
-      const hitW = lw + dotR + 14;
-      dotGroup.append('rect')
-        .attr('x', srcXY[0] - dotR - 4)
-        .attr('y', ly2 - 4)
-        .attr('width', hitW)
-        .attr('height', lh + 8)
-        .attr('rx', 4)
-        .attr('fill', 'transparent')
-        .attr('cursor', 'pointer')
-        .on('mouseenter', function() {
-          d3.select(this).attr('fill', `${src.color}18`).attr('stroke', src.color)
-            .attr('stroke-width', 0.8).attr('stroke-opacity', 0.4);
-        })
-        .on('mouseleave', function() {
-          d3.select(this).attr('fill', 'transparent').attr('stroke', 'none');
-        })
-        .on('click', () => {
-          this.ngZone.run(() => this.selectCountry(src));
-        });
-
-      // Particles — more for higher counts
-      const pCount = Math.min(4, Math.ceil(Math.log2(src.count + 1)));
-      setTimeout(() => {
-        for (let p = 0; p < pCount; p++) {
-          this.particles.push({
-            path: pathNode,
-            color: src.color,
-            t: p / pCount,
-            speed: 0.0018 + Math.random() * 0.0022,
-            el: particleGroup.append('circle')
-              .attr('r', 2.8)
-              .attr('fill', src.color)
-              .attr('filter', 'url(#dot-glow)')
-              .attr('opacity', 0.9)
-              .node() as SVGCircleElement,
-          });
-        }
-      }, i * 180 + 1400);
+      // Particles (3 per arc)
+      [0, 0.33, 0.66].forEach(offset => {
+        const pEl = partG.append('circle').attr('r', 2.8).attr('fill', src.color).attr('opacity', 0).attr('filter', 'url(#f-dot)').node()!;
+        flatParticles.push({ path: arcEl, el: pEl, t: (offset + Math.random() * 0.08) % 1, speed: 0.0022 + Math.random() * 0.0014 });
+      });
     });
 
-    // ── Target marker — pulsing green beacon ──────────────
-    const tg = svg.append('g').attr('class', 'target');
+    // Target beacon
+    tG.append('circle').attr('cx', txy[0]).attr('cy', txy[1]).attr('r', 8).attr('fill', '#22c55e').attr('filter', 'url(#f-green)');
+    tG.append('circle').attr('cx', txy[0]).attr('cy', txy[1]).attr('r', 3.5).attr('fill', '#fff').attr('opacity', 0.95);
+    const tr1 = tG.append('circle').attr('cx', txy[0]).attr('cy', txy[1]).attr('r', 8).attr('fill', 'none').attr('stroke', '#22c55e').attr('stroke-width', 1.8).attr('opacity', 0);
+    const tr2 = tG.append('circle').attr('cx', txy[0]).attr('cy', txy[1]).attr('r', 8).attr('fill', 'none').attr('stroke', '#22c55e').attr('stroke-width', 1).attr('opacity', 0);
+    this.pulseRing(tr1, 0, 30); this.pulseRing(tr2, 700, 46);
 
-    // Glow halo
-    tg.append('circle')
-      .attr('cx', targetXY[0]).attr('cy', targetXY[1])
-      .attr('r', 14).attr('fill', 'rgba(34,197,94,0.12)')
-      .attr('filter', 'url(#green-glow)');
-
-    // Core dot
-    tg.append('circle')
-      .attr('cx', targetXY[0]).attr('cy', targetXY[1])
-      .attr('r', 7).attr('fill', '#22c55e').attr('opacity', 1)
-      .attr('filter', 'url(#green-glow)');
-
-    // White inner
-    tg.append('circle')
-      .attr('cx', targetXY[0]).attr('cy', targetXY[1])
-      .attr('r', 3).attr('fill', '#ffffff').attr('opacity', 0.95);
-
-    // Expanding rings
-    tg.append('circle')
-      .attr('cx', targetXY[0]).attr('cy', targetXY[1])
-      .attr('r', 7).attr('fill', 'none')
-      .attr('stroke', '#22c55e').attr('stroke-width', 1.8).attr('opacity', 0)
-      .call((sel: any) => this.pulseRing(sel, 0, 28));
-
-    tg.append('circle')
-      .attr('cx', targetXY[0]).attr('cy', targetXY[1])
-      .attr('r', 7).attr('fill', 'none')
-      .attr('stroke', '#22c55e').attr('stroke-width', 1).attr('opacity', 0)
-      .call((sel: any) => this.pulseRing(sel, 700, 42));
-
-    // Label — shown only on hover over the target beacon
-    const lx = targetXY[0];
-    const ly = targetXY[1] - 22;
-
-    const labelG = tg.append('g')
-      .attr('class', 'target-label')
-      .attr('pointer-events', 'none')
-      .style('opacity', '0')
-      .style('transition', 'opacity 0.2s');
-
-    labelG.append('rect')
-      .attr('x', lx - 52).attr('y', ly - 12)
-      .attr('width', 104).attr('height', 22)
-      .attr('rx', 4)
-      .attr('fill', 'rgba(4, 14, 26, 0.88)')
-      .attr('stroke', 'rgba(34,197,94,0.35)')
-      .attr('stroke-width', 1);
-
-    labelG.append('text')
-      .attr('x', lx).attr('y', ly)
-      .attr('text-anchor', 'middle')
-      .attr('fill', '#86efac')
-      .attr('font-size', '9px')
-      .attr('font-family', 'JetBrains Mono, monospace')
-      .attr('font-weight', '700')
-      .attr('letter-spacing', '0.1em')
-      .text('YOUR NETWORK');
-
-    labelG.append('text')
-      .attr('x', lx).attr('y', ly + 9)
-      .attr('text-anchor', 'middle')
-      .attr('fill', 'rgba(134,239,172,0.55)')
-      .attr('font-size', '7.5px')
-      .attr('font-family', 'JetBrains Mono, monospace')
-      .attr('letter-spacing', '0.06em')
-      .text('▲ PROTECTED');
-
-    // Show label only on hover
-    tg.style('cursor', 'pointer')
-      .on('mouseover', () => labelG.style('opacity', '1'))
-      .on('mouseout',  () => labelG.style('opacity', '0'));
-
-    // Start particle animation loop
-    this.animate();
+    const frame = () => {
+      flatParticles.forEach(p => {
+        p.t = (p.t + p.speed) % 1;
+        try {
+          const len = p.path.getTotalLength();
+          const pt  = p.path.getPointAtLength(p.t * len);
+          d3.select(p.el).attr('cx', pt.x).attr('cy', pt.y).attr('opacity', 0.9);
+        } catch (_) {}
+      });
+      this.rafId = requestAnimationFrame(frame);
+    };
+    this.rafId = requestAnimationFrame(frame);
   }
 
-  private animate() {
-    this.particles.forEach(p => {
-      p.t += p.speed;
-      if (p.t > 1) p.t = 0;
-      try {
-        const len = p.path.getTotalLength();
-        const pt  = p.path.getPointAtLength(p.t * len);
-        d3.select(p.el).attr('cx', pt.x).attr('cy', pt.y);
-      } catch (_) {}
+  private drawGlobe(world: any) {
+    const el = this.mapRef.nativeElement;
+    const W  = el.clientWidth  || 900;
+    const H  = el.clientHeight || 480;
+
+    d3.select(el).selectAll('*').remove();
+    el.style.position = 'relative';
+
+    // ── Layer 1: canvas for rotating globe base ────────────────
+    const canvas = d3.select(el).append('canvas')
+      .attr('width', W).attr('height', H)
+      .style('position', 'absolute').style('top', '0').style('left', '0')
+      .node() as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+
+    // ── Layer 2: SVG overlay for arcs + particles ──────────────
+    const svgEl = d3.select(el).append('svg')
+      .attr('width', W).attr('height', H)
+      .attr('viewBox', `0 0 ${W} ${H}`)
+      .style('position', 'absolute').style('top', '0').style('left', '0')
+      .style('pointer-events', 'none');
+
+    const defs = svgEl.append('defs');
+    const makeGlow = (id: string, std: number) => {
+      const f = defs.append('filter').attr('id', id)
+        .attr('x', '-100%').attr('y', '-100%').attr('width', '300%').attr('height', '300%');
+      f.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', std).attr('result', 'blur');
+      f.append('feMerge').selectAll('n').data(['blur', 'SourceGraphic']).enter().append('feMergeNode').attr('in', (d: any) => d);
+    };
+    makeGlow('g-arc',   3);
+    makeGlow('g-dot',   5);
+    makeGlow('g-green', 8);
+
+    const R    = Math.min(W, H) * 0.46;
+    const rot: [number, number, number] = [0, -20, 0];
+    const proj = d3.geoOrthographic().scale(R).translate([W / 2, H / 2]).clipAngle(90).rotate(rot);
+
+    // Canvas path generator (draws to ctx)
+    const pCtx = d3.geoPath().projection(proj).context(ctx);
+    // SVG path generator (returns d string)
+    const pSvg = d3.geoPath().projection(proj);
+
+    const land    = (topojson as any).feature(world, world.objects.countries);
+    const borders = (topojson as any).mesh(world, world.objects.countries, (a: any, b: any) => a !== b);
+    const grat    = d3.geoGraticule().step([20, 20])();
+
+    // Reusable ocean radial gradient (canvas)
+    const oceanGrad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, R * 1.05);
+    oceanGrad.addColorStop(0,   '#091828');
+    oceanGrad.addColorStop(0.7, '#051020');
+    oceanGrad.addColorStop(1,   '#040c18');
+
+    const TARGET: [number, number] = [80.0, 12.0]; // India — receiving network
+
+    // ── SVG groups (order = painter's algorithm) ───────────────
+    const arcG      = svgEl.append('g');
+    const srcDotG   = svgEl.append('g');
+    const particleG = svgEl.append('g');
+    const targetG   = svgEl.append('g');
+
+    // ── Arc paths (one per source, redrawn each frame) ─────────
+    const arcs = this.attackSources.map(src => ({
+      src:    [src.lon, src.lat] as [number, number],
+      color:  src.color,
+      pathEl: arcG.append('path')
+        .attr('fill', 'none').attr('stroke', src.color)
+        .attr('stroke-width', 1.4).attr('stroke-linecap', 'round')
+        .attr('opacity', 0.6).attr('filter', 'url(#g-arc)')
+        .node()!,
+    }));
+
+    // ── Source country dots ────────────────────────────────────
+    const srcDots = this.attackSources.map(src => ({
+      coords: [src.lon, src.lat] as [number, number],
+      color:  src.color,
+      r:      this.sizeForCount(src.count),
+      el:     srcDotG.append('circle')
+        .attr('r', this.sizeForCount(src.count))
+        .attr('fill', src.color).attr('filter', 'url(#g-dot)')
+        .node()!,
+    }));
+
+    // ── Particles (3 per arc, staggered) ──────────────────────
+    const globeParticles = this.attackSources.flatMap(src =>
+      [0, 0.33, 0.66].map(offset => ({
+        src:   [src.lon, src.lat] as [number, number],
+        t:     (offset + Math.random() * 0.08) % 1,
+        speed: 0.0022 + Math.random() * 0.0014,
+        el:    particleG.append('circle')
+          .attr('r', 2.8).attr('fill', src.color).attr('opacity', 0)
+          .attr('filter', 'url(#g-dot)').node()!,
+      }))
+    );
+
+    // ── Target beacon (India) ──────────────────────────────────
+    targetG.append('circle').attr('r', 8).attr('fill', '#22c55e').attr('filter', 'url(#g-green)');
+    targetG.append('circle').attr('r', 3.5).attr('fill', '#ffffff').attr('opacity', 0.95);
+    const ring1 = targetG.append('circle').attr('r', 8).attr('fill', 'none')
+      .attr('stroke', '#22c55e').attr('stroke-width', 1.8).attr('opacity', 0);
+    const ring2 = targetG.append('circle').attr('r', 8).attr('fill', 'none')
+      .attr('stroke', '#22c55e').attr('stroke-width', 1).attr('opacity', 0);
+    this.pulseRing(ring1, 0, 30);
+    this.pulseRing(ring2, 700, 46);
+
+    // Visibility: is this lonLat on the front hemisphere?
+    const frontHemi = (lonLat: [number, number]) =>
+      d3.geoDistance(lonLat, [-rot[0], -rot[1]] as [number, number]) < Math.PI / 2;
+
+    // ── Atmosphere glow canvas gradient ───────────────────────
+    const atmoGrad = ctx.createRadialGradient(W / 2, H / 2, R * 0.88, W / 2, H / 2, R * 1.22);
+    atmoGrad.addColorStop(0, 'rgba(34,197,94,0.12)');
+    atmoGrad.addColorStop(1, 'rgba(34,197,94,0)');
+
+    // ── Tooltip ────────────────────────────────────────────────
+    const tooltip = this.makeTooltip(el);
+
+    canvas.addEventListener('mousemove', (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      let found: AttackSource | null = null;
+      let foundXY: [number, number] | null = null;
+      let minD = 28;
+      this.attackSources.forEach(src => {
+        const xy = proj([src.lon, src.lat]);
+        if (!xy || !frontHemi([src.lon, src.lat] as [number, number])) return;
+        const d = Math.hypot(mx - xy[0], my - xy[1]);
+        if (d < minD) { minD = d; found = src; foundXY = xy as [number, number]; }
+      });
+      if (found && foundXY) tooltip.show(foundXY[0], foundXY[1], found);
+      else tooltip.hide();
     });
-    this.rafId = requestAnimationFrame(() => this.animate());
+    canvas.addEventListener('mouseleave', () => tooltip.hide());
+
+    // ── Drag-to-rotate ─────────────────────────────────────────
+    let dragStart: [number, number] | null = null;
+    let rotStart: [number, number, number] = [...rot] as [number, number, number];
+    canvas.style.cursor = 'grab';
+
+    d3.select(canvas).call(
+      (d3.drag() as any)
+        .on('start', (event: any) => {
+          dragStart = [event.x, event.y];
+          rotStart  = [...rot] as [number, number, number];
+          canvas.style.cursor = 'grabbing';
+        })
+        .on('drag', (event: any) => {
+          if (!dragStart) return;
+          rot[0] = rotStart[0] + (event.x - dragStart[0]) * 0.35;
+          rot[1] = Math.max(-80, Math.min(80, rotStart[1] - (event.y - dragStart[1]) * 0.35));
+          proj.rotate(rot);
+        })
+        .on('end', () => { dragStart = null; canvas.style.cursor = 'grab'; })
+    );
+
+    // ── Animation loop (no auto-rotate — user drags) ───────────
+    const frame = () => {
+      // Canvas: atmosphere → ocean → graticule → land → borders → sphere rim
+      ctx.clearRect(0, 0, W, H);
+
+      ctx.beginPath(); ctx.arc(W / 2, H / 2, R * 1.22, 0, Math.PI * 2);
+      ctx.fillStyle = atmoGrad; ctx.fill();
+
+      ctx.beginPath(); pCtx({ type: 'Sphere' } as any);
+      ctx.fillStyle = oceanGrad; ctx.fill();
+
+      ctx.beginPath(); pCtx(grat);
+      ctx.strokeStyle = 'rgba(34,197,94,0.05)'; ctx.lineWidth = 0.4; ctx.stroke();
+
+      ctx.beginPath(); pCtx(land as any);
+      ctx.fillStyle = '#0d2135'; ctx.fill();
+      ctx.strokeStyle = 'rgba(34,197,94,0.16)'; ctx.lineWidth = 0.5; ctx.stroke();
+
+      ctx.beginPath(); pCtx(borders as any);
+      ctx.strokeStyle = 'rgba(100,200,140,0.08)'; ctx.lineWidth = 0.3; ctx.stroke();
+
+      ctx.beginPath(); pCtx({ type: 'Sphere' } as any);
+      ctx.strokeStyle = 'rgba(34,197,94,0.28)'; ctx.lineWidth = 1.5; ctx.stroke();
+
+      // SVG: redraw arc paths (projection changed)
+      arcs.forEach(a => {
+        const d = pSvg({ type: 'LineString', coordinates: [a.src, TARGET] } as any);
+        d3.select(a.pathEl).attr('d', d || '');
+      });
+
+      // SVG: source country dots
+      srcDots.forEach(s => {
+        const xy  = proj(s.coords);
+        const vis = frontHemi(s.coords);
+        d3.select(s.el)
+          .attr('cx', xy && vis ? xy[0] : -999)
+          .attr('cy', xy && vis ? xy[1] : -999)
+          .attr('opacity', xy && vis ? 0.95 : 0);
+      });
+
+      // SVG: particles — great-circle interpolation
+      globeParticles.forEach(p => {
+        p.t = (p.t + p.speed) % 1;
+        const interp = d3.geoInterpolate(p.src, TARGET);
+        const pt = interp(p.t) as [number, number];
+        const xy  = proj(pt);
+        const vis = frontHemi(pt);
+        d3.select(p.el)
+          .attr('cx', xy && vis ? xy[0] : -999)
+          .attr('cy', xy && vis ? xy[1] : -999)
+          .attr('opacity', xy && vis ? 0.9 : 0);
+      });
+
+      // SVG: target beacon follows globe rotation
+      const txy  = proj(TARGET);
+      const tvis = frontHemi(TARGET);
+      targetG
+        .attr('transform', txy ? `translate(${txy[0]},${txy[1]})` : 'translate(-999,-999)')
+        .attr('opacity', tvis ? 1 : 0);
+
+      this.rafId = requestAnimationFrame(frame);
+    };
+
+    this.rafId = requestAnimationFrame(frame);
   }
+
 
   private pulseRing(sel: any, delay: number, maxR = 18) {
     const startR = Math.max(3, maxR * 0.2);
@@ -476,10 +529,3 @@ export class ThreatMap implements OnInit, OnDestroy {
   }
 }
 
-interface Particle {
-  path: SVGPathElement;
-  color: string;
-  t: number;
-  speed: number;
-  el: SVGCircleElement;
-}

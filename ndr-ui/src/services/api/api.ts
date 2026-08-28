@@ -199,6 +199,10 @@ export class Api {
     return this.http.get(`${this.baseUrl}/threat-intel`);
   }
 
+  getThreatIntelMap(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat-intel-map`);
+  }
+
   lookupIoc(ip: string): Observable<any> {
     return this.http.get(`${this.baseUrl}/threat-intel/${ip}`);
   }
