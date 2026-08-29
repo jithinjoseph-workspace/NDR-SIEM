@@ -729,6 +729,7 @@ async fn main() {
         .route("/api/stop",        post(api::stop_services))
         .route("/api/agent-status",  get(api::get_agent_status))
         .route("/api/stats",         get(api::get_stats))
+        .route("/api/stats/unified", get(api::get_unified_stats))
         .route("/api/events",        get(api::get_recent_events))
         .route("/api/top-ips",       get(api::get_top_ips))
         .route("/api/protocols",     get(api::get_protocols))

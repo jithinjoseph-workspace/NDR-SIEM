@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable, of, tap, Subscription } from 'rxjs';
 import { Websocket } from '../websocket/websocket';
+import { ConfigService } from '../config/config.service';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService implements OnDestroy {
@@ -43,7 +44,8 @@ export class AuthService implements OnDestroy {
   constructor(
     private http: HttpClient,
     private router: Router,
-    private ws: Websocket
+    private ws: Websocket,
+    private config: ConfigService,
   ) { }
 
   ngOnDestroy(): void {
@@ -175,19 +177,30 @@ export class AuthService implements OnDestroy {
 
   // Returns features licensed for this tenant (stored in user session after login).
   // super_admin always gets all features; others read from the session features array.
+  // When the JWT has no features field, we fall back to the product mode reported
+  // by nginx (/product-config.json loaded at startup by ConfigService).
   hasFeature(feature: string): boolean {
     const user = this.getUser();
     if (!user) return false;
     if (user.role === 'super_admin') return true;
-    const features: string[] = user.features ?? ['ndr'];
-    return features.includes(feature);
+    const feats = user.features as string[] | undefined | null;
+    // Only trust JWT features if the array is non-empty; empty = not yet assigned, fall through
+    if (feats && feats.length > 0) return feats.includes(feature);
+    // No features set in JWT — derive from installed product mode
+    if (feature === 'ndr')  return this.config.hasNdr();
+    if (feature === 'siem') return this.config.hasSiem();
+    return false;
   }
 
   getTenantFeatures(): string[] {
     const user = this.getUser();
-    if (!user) return ['ndr'];
-    if (user.role === 'super_admin') return ['ndr', 'ai', 'soar'];
-    return user.features ?? ['ndr'];
+    if (!user) return this.config.hasNdr() ? ['ndr'] : ['siem'];
+    if (user.role === 'super_admin') return ['ndr', 'siem', 'ai', 'soar'];
+    if (user.features) return user.features as string[];
+    const derived: string[] = [];
+    if (this.config.hasNdr())  derived.push('ndr');
+    if (this.config.hasSiem()) derived.push('siem');
+    return derived.length ? derived : ['ndr'];
   }
 
   hasPermission(permission: string): boolean {
@@ -203,6 +216,9 @@ export class AuthService implements OnDestroy {
     if (!user) return '/login';
     if (this.isAdmin()) return '/admin';
     if (user.role === 'tenant_admin') return '/tenant-admin';
+
+    // SIEM-only installs default to SIEM dashboard
+    if (this.config.hasSiem() && !this.config.hasNdr()) return '/siem/dashboard';
 
     const permissions = this.normalizePermissions(user.permissions);
     const firstPermission = permissions.find(permission => this.defaultRouteByPermission[permission]);

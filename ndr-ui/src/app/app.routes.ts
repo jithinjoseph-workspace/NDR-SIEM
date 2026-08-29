@@ -1,8 +1,10 @@
 import { Routes } from '@angular/router';
 import { authGuard } from '../services/auth/auth-guard';
+import { homeGuard } from './home.guard';
 
 export const routes: Routes = [
-  { path: '', redirectTo: 'analyst/dashboard', pathMatch: 'full' },
+  // Smart home redirect — sends user to the right dashboard based on installed product
+  { path: '', pathMatch: 'full', canActivate: [homeGuard], loadComponent: () => import('../pages/login/login').then(m => m.Login) },
   {
     path: 'login',
     loadComponent: () => import('../pages/login/login')
@@ -16,7 +18,7 @@ export const routes: Routes = [
     loadComponent: () => import('../layout/analyst-layout/analyst-layout')
       .then(m => m.AnalystLayout),
     children: [
-      { path: 'dashboard',   canActivate: [authGuard], data: { role: 'analyst', permission: 'dashboard'   }, loadComponent: () => import('../pages/analyst/dashboard/dashboard').then(m => m.Dashboard) },
+      { path: 'dashboard',   canActivate: [authGuard], data: { role: 'analyst' }, loadComponent: () => import('../pages/analyst/dashboard/dashboard').then(m => m.Dashboard) },
       { path: 'alerts',      canActivate: [authGuard], data: { role: 'analyst', permission: 'alerts'      }, loadComponent: () => import('../pages/analyst/alerts/alerts').then(m => m.Alerts) },
       { path: 'logs',        canActivate: [authGuard], data: { role: 'analyst', permission: 'logs'        }, loadComponent: () => import('../pages/analyst/logs/logs').then(m => m.Logs) },
       { path: 'live',        canActivate: [authGuard], data: { role: 'analyst', permission: 'live'        }, loadComponent: () => import('../pages/analyst/live/live').then(m => m.Live) },
@@ -53,6 +55,11 @@ export const routes: Routes = [
     ],
   },
 
+  /* ── SIEM pages — all embedded in analyst dashboard or moved to admin/tenant-admin ── */
+  { path: 'siem/dashboard', redirectTo: '/analyst/dashboard',        pathMatch: 'full' },
+  { path: 'siem/logs',      redirectTo: '/analyst/dashboard',        pathMatch: 'full' },
+  { path: 'siem/sources',   redirectTo: '/tenant-admin/siem-sources', pathMatch: 'full' },
+
   /* ── ADMIN pages ──────────────────────────────────────────────────── */
   {
     path: 'admin',
@@ -74,6 +81,7 @@ export const routes: Routes = [
       { path: 'trusted-domains', loadComponent: () => import('../pages/admin/trusted-domains/trusted-domains').then(m => m.TrustedDomains) },
       { path: 'smtp-config',     loadComponent: () => import('../pages/admin/smtp-config/smtp-config').then(m => m.SmtpConfig) },
       { path: 'support',         loadComponent: () => import('../pages/admin/support/support').then(m => m.Support) },
+      { path: 'siem-sources',    loadComponent: () => import('../pages/siem/sources/siem-sources').then(m => m.SiemSources) },
     ]
   },
 
@@ -90,6 +98,7 @@ export const routes: Routes = [
       { path: 'sessions',       loadComponent: () => import('../pages/tenant-admin/sessions/sessions').then(m => m.Sessions) },
       { path: 'profile',        loadComponent: () => import('../pages/tenant-admin/profile/profile').then(m => m.Profile) },
       { path: 'setup',          loadComponent: () => import('../pages/tenant-admin/setup/setup').then(m => m.Setup) },
+      { path: 'siem-sources',   loadComponent: () => import('../pages/siem/sources/siem-sources').then(m => m.SiemSources) },
       { path: 'settings',       loadComponent: () => import('../pages/tenant-admin/settings/settings').then(m => m.TenantSettings) },
       { path: 'support',        loadComponent: () => import('../pages/tenant-admin/support/support').then(m => m.TenantSupport) },
     ]

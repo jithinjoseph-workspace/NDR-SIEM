@@ -1010,6 +1010,10 @@
 .sa-group--amber  .sa-group-label { color: #FBBF24; }
 .sa-group--amber  .sa-chevron     { color: #FBBF24; }
 
+.sa-group--cyan   .sa-group-dot  { background: #22D3EE; }
+.sa-group--cyan   .sa-group-label { color: #22D3EE; }
+.sa-group--cyan   .sa-chevron     { color: #22D3EE; }
+
 .sa-chevron {
   width: 12px;
   height: 12px;

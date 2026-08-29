@@ -100,7 +100,16 @@ pub async fn handle(
 ) -> impl IntoResponse {
     let username  = payload.username.trim().to_string();
     let password  = payload.password.trim().to_string();
-    let tenant_id = payload.tenant_id.clone().unwrap_or_else(|| "default".into());
+    // If no tenant_id supplied, resolve it from DB so users outside 'default' can login.
+    let tenant_id = match payload.tenant_id.clone() {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            match state.db.get_user_any_tenant(&username).await {
+                Ok(Some(u)) => u.tenant_id,
+                _ => "default".into(),
+            }
+        }
+    };
 
     if username.is_empty() || password.is_empty() {
         return (
@@ -238,9 +247,9 @@ pub async fn check_username(
     if !is_safe_username(&q.username) {
         return Json(json!({ "exists": false }));
     }
-    let tenant = q.tenant_id.as_deref().unwrap_or("default");
-    match state.db.get_user(&q.username, tenant).await {
-        Ok(Some(_)) => Json(json!({ "exists": true })),
+    // Search across all tenants so users outside 'default' are found correctly.
+    match state.db.get_user_any_tenant(&q.username).await {
+        Ok(Some(u)) => Json(json!({ "exists": true, "tenant_id": u.tenant_id })),
         _           => Json(json!({ "exists": false })),
     }
 }

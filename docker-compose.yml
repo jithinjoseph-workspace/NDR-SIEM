@@ -188,12 +188,19 @@ services:
     networks:
       - default
       - ndr-internal
+    ports:
+      - "3002:3002"     # HTTP API — direct access (bypasses nginx, useful for siem-only deploy)
+      - "601:601"       # Syslog TCP (RFC 6587) — NXLog / Winlogbeat
+      - "6514:6514"     # Syslog TCP TLS
+      - "514:514/udp"   # Syslog UDP (legacy devices)
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - VALKEY_URL=redis://ndr-valkey:6379
+      - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
+      - IP_TOKEN_KEY=${IP_TOKEN_KEY}
       - LISTEN_ADDR=0.0.0.0:3002
     depends_on:
       clickhouse1:
@@ -469,12 +476,6 @@ services:
       ndr-ui:
         condition: service_healthy
       provigil-auth:
-        condition: service_healthy
-      ndr-engine-1:
-        condition: service_healthy
-      ndr-engine-2:
-        condition: service_healthy
-      ndr-engine-3:
         condition: service_healthy
     networks:
       - ndr-internal

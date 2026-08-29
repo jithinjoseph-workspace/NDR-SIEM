@@ -16,8 +16,13 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     return throwError(() => new HttpErrorResponse({ status: 401, statusText: 'Unauthorized' }));
   }
 
-  // withCredentials: true sends the httpOnly cookie on every request.
-  const authReq = req.clone({ withCredentials: true });
+  // Send both the httpOnly cookie (for auth-service) and a Bearer token header
+  // (for siem-engine, which reads Authorization: Bearer rather than the cookie).
+  const token = auth.getUser()?.token;
+  const headers = token
+    ? req.headers.set('Authorization', `Bearer ${token}`)
+    : req.headers;
+  const authReq = req.clone({ withCredentials: true, headers });
 
   return next(authReq).pipe(
     catchError(err => {

@@ -7,7 +7,7 @@ import { RouterModule } from '@angular/router';
 import {
   LucideAngularModule,
   Users, Globe, Activity, User, Settings, HelpCircle,
-  Building2, ArrowUpCircle, RefreshCw, Loader, ShieldCheck, X,
+  Building2, ArrowUpCircle, RefreshCw, Loader, ShieldCheck, X, Radio,
 } from 'lucide-angular';
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
@@ -34,6 +34,9 @@ export class TenantAdminLayout implements OnInit, OnDestroy {
   SettingsIcon      = Settings;
   HelpCircleIcon    = HelpCircle;
   BuildingIcon      = Building2;
+  RadioIcon         = Radio;
+
+  hasSiem = false;
   ArrowUpCircleIcon = ArrowUpCircle;
   RefreshCwIcon     = RefreshCw;
   LoaderIcon        = Loader;
@@ -72,6 +75,7 @@ export class TenantAdminLayout implements OnInit, OnDestroy {
       return;
     }
 
+    this.hasSiem = this.auth.hasFeature('siem');
     this.refreshTenantSystemStatus();
     this.statusInterval = setInterval(() => this.refreshTenantSystemStatus(), 10000);
     this.checkForUpdates();

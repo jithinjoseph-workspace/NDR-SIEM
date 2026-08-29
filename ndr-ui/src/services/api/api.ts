@@ -135,6 +135,10 @@ export class Api {
     return this.http.get(`${this.baseUrl}/stats`);
   }
 
+  getUnifiedStats(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/stats/unified`);
+  }
+
   getRecentEvents(hours?: number): Observable<any[]> {
     let url = `${this.baseUrl}/events`;
     if (hours) {
@@ -502,7 +506,7 @@ export class Api {
   }
 
   setTenantFeatures(tenantId: string, features: string[]): Observable<any> {
-    return this.http.post(`${this.baseUrl}/tenant/features/${tenantId}`, { features });
+    return this.http.post(`${this.baseUrl}/auth/tenants/${tenantId}/features`, { features });
   }
 
   generateLicense(payload: {

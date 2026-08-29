@@ -2052,6 +2052,58 @@ pub async fn get_stats(State(state): State<AppState>, headers: axum::http::Heade
     }
 }
 
+pub async fn get_unified_stats(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let sensor_ids = claims.as_ref().map(|c| c.sensor_ids.clone()).unwrap_or_default();
+    let db = format!("ndr_{}", tenant_id.replace('-', "_"));
+
+    // NDR stats (reuse existing)
+    let ndr = state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await.unwrap_or(json!({}));
+
+    // SIEM: logs today + last hour + EPS
+    #[derive(serde::Deserialize, clickhouse::Row)]
+    struct SiemRow { logs_today: u64, logs_1h: u64 }
+    let siem_row = state.ch_storage.client
+        .query(&format!(
+            "SELECT countIf(timestamp >= toStartOfDay(now())) AS logs_today,
+                    countIf(timestamp >= now() - INTERVAL 1 HOUR)  AS logs_1h
+             FROM {db}.siem_logs"
+        ))
+        .fetch_one::<SiemRow>().await;
+    let (logs_today, logs_1h) = siem_row.map(|r| (r.logs_today, r.logs_1h)).unwrap_or((0, 0));
+    let eps = if logs_1h > 0 { logs_1h / 3600 } else { 0 };
+
+    // Combined alerts: critical + high from unified_alerts (covers both NDR hits and SIEM rules)
+    #[derive(serde::Deserialize, clickhouse::Row)]
+    struct AlertRow { critical: u64, high: u64, medium: u64 }
+    let alert_row = state.ch_storage.client
+        .query(&format!(
+            "SELECT countIf(severity = 'CRITICAL') AS critical,
+                    countIf(severity = 'HIGH')     AS high,
+                    countIf(severity = 'MEDIUM')   AS medium
+             FROM {db}.unified_alerts FINAL
+             WHERE timestamp >= now() - INTERVAL 24 HOUR"
+        ))
+        .fetch_one::<AlertRow>().await;
+    let (critical, high, medium) = alert_row.map(|r| (r.critical, r.high, r.medium)).unwrap_or((0, 0, 0));
+
+    // Correlation hits last hour (NDR rule engine)
+    let hits_1h = ndr.get("hits_1h").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    Json(json!({
+        "ndr_events_today": ndr.get("events_total").and_then(|v| v.as_u64()).unwrap_or(0),
+        "ndr_events_1h":    ndr.get("events_1h").and_then(|v| v.as_u64()).unwrap_or(0),
+        "siem_logs_today":  logs_today,
+        "siem_logs_1h":     logs_1h,
+        "siem_eps":         eps,
+        "correlation_hits_1h": hits_1h,
+        "critical_alerts":  critical,
+        "high_alerts":      high,
+        "medium_alerts":    medium,
+    }))
+}
+
 pub async fn get_recent_events(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());

@@ -36,9 +36,23 @@ impl AuthDb {
         let q = format!(
             "SELECT id, username, password_hash, role, tenant_id, permissions,
                     active, coalesce(gmail,'') AS gmail, coalesce(secret_code,'') AS secret_code
-             FROM users
+             FROM users FINAL
              WHERE username = '{u}'
              {tenant_clause}
+             LIMIT 1",
+            u = escape(username),
+        );
+        let mut cur = self.client.query(&q).fetch::<UserRow>()?;
+        Ok(cur.next().await?)
+    }
+
+    /// Fetch a user by username across ALL tenants (used by check_username to resolve tenant).
+    pub async fn get_user_any_tenant(&self, username: &str) -> Result<Option<UserRow>> {
+        let q = format!(
+            "SELECT id, username, password_hash, role, tenant_id, permissions,
+                    active, coalesce(gmail,'') AS gmail, coalesce(secret_code,'') AS secret_code
+             FROM users FINAL
+             WHERE username = '{u}'
              LIMIT 1",
             u = escape(username),
         );
@@ -76,6 +90,15 @@ impl AuthDb {
     }
 
     /// Feature flags for a tenant — stored as JSON array in tenants.features column.
+    pub async fn tenant_id_exists(&self, id: &str) -> bool {
+        #[derive(Deserialize, clickhouse::Row)]
+        struct Row { cnt: u64 }
+        let q = format!("SELECT count() AS cnt FROM tenants FINAL WHERE id = '{}'", escape(id));
+        self.client.query(&q).fetch_one::<Row>().await
+            .map(|r| r.cnt > 0)
+            .unwrap_or(false)
+    }
+
     pub async fn get_tenant_features(&self, tenant_id: &str) -> Result<Vec<String>> {
         #[derive(Deserialize, clickhouse::Row)]
         struct Row { features: String }
@@ -367,7 +390,7 @@ impl AuthDb {
         let q = "SELECT id, name, active, ai_enabled, \
                         coalesce(features,'[\"ndr\"]') AS features, \
                         toString(created_at) AS created_at \
-                 FROM tenants ORDER BY created_at DESC";
+                 FROM tenants FINAL ORDER BY created_at DESC";
         let mut cur = self.client.query(q).fetch::<Row>()?;
         let mut out = Vec::new();
         while let Some(r) = cur.next().await? {
@@ -391,8 +414,12 @@ impl AuthDb {
     }
 
     pub async fn update_tenant(&self, id: &str, name: &str, active: bool) -> Result<()> {
+        // INSERT-SELECT pattern: ReplacingMergeTree keeps the row with the highest updated_at.
+        // ALTER TABLE UPDATE on the version column (updated_at) is rejected by ClickHouse 24.x.
         let q = format!(
-            "ALTER TABLE tenants UPDATE name = '{}', active = {}, updated_at = now() WHERE id = '{}'",
+            "INSERT INTO tenants (id, name, active, ai_enabled, features, updated_at, created_at) \
+             SELECT id, '{}', {}, ai_enabled, features, now(), created_at \
+             FROM tenants FINAL WHERE id = '{}'",
             escape(name), active as u8, escape(id)
         );
         self.client.query(&q).execute().await?;
@@ -401,7 +428,9 @@ impl AuthDb {
 
     pub async fn set_tenant_active(&self, id: &str, active: bool) -> Result<()> {
         let q = format!(
-            "ALTER TABLE tenants UPDATE active = {}, updated_at = now() WHERE id = '{}'",
+            "INSERT INTO tenants (id, name, active, ai_enabled, features, updated_at, created_at) \
+             SELECT id, name, {}, ai_enabled, features, now(), created_at \
+             FROM tenants FINAL WHERE id = '{}'",
             active as u8, escape(id)
         );
         self.client.query(&q).execute().await?;
@@ -410,8 +439,22 @@ impl AuthDb {
 
     pub async fn set_tenant_ai_enabled(&self, id: &str, enabled: bool) -> Result<()> {
         let q = format!(
-            "ALTER TABLE tenants UPDATE ai_enabled = {}, updated_at = now() WHERE id = '{}'",
+            "INSERT INTO tenants (id, name, active, ai_enabled, features, updated_at, created_at) \
+             SELECT id, name, active, {}, features, now(), created_at \
+             FROM tenants FINAL WHERE id = '{}'",
             enabled as u8, escape(id)
+        );
+        self.client.query(&q).execute().await?;
+        Ok(())
+    }
+
+    pub async fn set_tenant_features(&self, id: &str, features: &[String]) -> Result<()> {
+        let features_str = features.join(",");
+        let q = format!(
+            "INSERT INTO tenants (id, name, active, ai_enabled, features, updated_at, created_at) \
+             SELECT id, name, active, ai_enabled, '{}', now(), created_at \
+             FROM tenants FINAL WHERE id = '{}'",
+            escape(&features_str), escape(id)
         );
         self.client.query(&q).execute().await?;
         Ok(())
@@ -443,9 +486,173 @@ impl AuthDb {
         }
         Ok((host, port, user, pass))
     }
+
+    // ── Announcements ────────────────────────────────────────────────────────
+
+    pub async fn get_announcements(&self) -> Result<Vec<serde_json::Value>> {
+        #[derive(Deserialize, clickhouse::Row)]
+        struct Row {
+            id: String, title: String, message: String,
+            announcement_type: String, audience: String, status: String,
+            target_roles: Vec<String>, target_tenants: Vec<String>,
+            starts_at: String, ends_at: String,
+            created_by: String, created_at: String, updated_at: String,
+        }
+        let q = "SELECT id, title, message, announcement_type, audience, status, \
+                        target_roles, target_tenants, \
+                        toString(start_at) AS starts_at, \
+                        ifNull(toString(end_at), '') AS ends_at, \
+                        created_by, toString(created_at) AS created_at, toString(updated_at) AS updated_at \
+                 FROM ndr.announcements FINAL ORDER BY updated_at DESC";
+        let mut cur = self.client.query(q).fetch::<Row>()?;
+        let mut out = Vec::new();
+        while let Some(r) = cur.next().await? {
+            out.push(serde_json::json!({
+                "id": r.id, "title": r.title, "message": r.message,
+                "type": r.announcement_type, "announcement_type": r.announcement_type,
+                "audience": r.audience, "status": r.status,
+                "active": r.status == "active",
+                "target_roles": r.target_roles, "target_tenants": r.target_tenants,
+                "start_at": r.starts_at, "starts_at": r.starts_at,
+                "end_at": r.ends_at, "ends_at": r.ends_at,
+                "created_by": r.created_by,
+                "created_at": r.created_at, "updated_at": r.updated_at
+            }));
+        }
+        Ok(out)
+    }
+
+    pub async fn get_active_announcements(&self, role: &str, tenant_id: &str, username: &str) -> Result<Vec<serde_json::Value>> {
+        #[derive(Deserialize, clickhouse::Row)]
+        struct Row {
+            id: String, title: String, message: String,
+            announcement_type: String, audience: String, status: String,
+            target_roles: Vec<String>, target_tenants: Vec<String>,
+            starts_at: String, ends_at: String,
+            created_by: String, created_at: String, updated_at: String,
+        }
+        let role_alias = if role == "tenant_admin" { "tenant_admins" } else { role };
+        let q = format!(
+            "SELECT id, title, message, announcement_type, audience, status, \
+                    target_roles, target_tenants, \
+                    toString(start_at) AS starts_at, \
+                    ifNull(toString(end_at), '') AS ends_at, \
+                    created_by, toString(created_at) AS created_at, toString(updated_at) AS updated_at \
+             FROM ndr.announcements FINAL \
+             WHERE status = 'active' \
+               AND start_at <= now() \
+               AND (isNull(end_at) OR end_at >= now()) \
+               AND (length(target_roles) = 0 OR has(target_roles, 'all') OR has(target_roles, '{}') OR has(target_roles, '{}')) \
+               AND (length(target_tenants) = 0 OR has(target_tenants, 'all') OR has(target_tenants, '{}')) \
+             ORDER BY start_at DESC, updated_at DESC",
+            escape(role), escape(role_alias), escape(tenant_id)
+        );
+        let mut cur = self.client.query(&q).fetch::<Row>()?;
+        let read_ids: std::collections::HashSet<String> = {
+            #[derive(Deserialize, clickhouse::Row)]
+            struct ReadRow { announcement_id: String }
+            let rq = format!("SELECT announcement_id FROM ndr.announcement_reads FINAL WHERE username = '{}'", escape(username));
+            let mut rcur = self.client.query(&rq).fetch::<ReadRow>()?;
+            let mut set = std::collections::HashSet::new();
+            while let Some(r) = rcur.next().await? { set.insert(r.announcement_id); }
+            set
+        };
+        let mut out = Vec::new();
+        while let Some(r) = cur.next().await? {
+            out.push(serde_json::json!({
+                "id": r.id, "title": r.title, "message": r.message,
+                "type": r.announcement_type, "announcement_type": r.announcement_type,
+                "audience": r.audience, "status": r.status, "active": true,
+                "read": read_ids.contains(&r.id),
+                "target_roles": r.target_roles, "target_tenants": r.target_tenants,
+                "start_at": r.starts_at, "starts_at": r.starts_at,
+                "end_at": r.ends_at, "ends_at": r.ends_at,
+                "created_by": r.created_by,
+                "created_at": r.created_at, "updated_at": r.updated_at
+            }));
+        }
+        Ok(out)
+    }
+
+    pub async fn create_announcement(
+        &self, id: &str, title: &str, message: &str, atype: &str,
+        audience: &str, status: &str, target_roles: &[String],
+        target_tenants: &[String], start_at: Option<&str>, end_at: Option<&str>,
+        created_by: &str,
+    ) -> Result<()> {
+        let start_expr = start_at.filter(|v| !v.trim().is_empty())
+            .map(|v| format!("parseDateTimeBestEffort('{}')", escape(v)))
+            .unwrap_or_else(|| "now()".to_string());
+        let end_expr = end_at.filter(|v| !v.trim().is_empty())
+            .map(|v| format!("parseDateTimeBestEffort('{}')", escape(v)))
+            .unwrap_or_else(|| "CAST(NULL, 'Nullable(DateTime)')".to_string());
+        let q = format!(
+            "INSERT INTO ndr.announcements \
+             (id, title, message, announcement_type, audience, status, \
+              target_roles, target_tenants, start_at, end_at, created_by, updated_at) \
+             VALUES ('{}','{}','{}','{}','{}','{}',{},{},{},{},'{}',now())",
+            escape(id), escape(title), escape(message), escape(atype),
+            escape(audience), escape(status),
+            sql_array_literal(target_roles), sql_array_literal(target_tenants),
+            start_expr, end_expr, escape(created_by)
+        );
+        self.client.query(&q).execute().await?;
+        Ok(())
+    }
+
+    pub async fn update_announcement(
+        &self, id: &str, title: &str, message: &str, atype: &str,
+        audience: &str, status: &str, target_roles: &[String],
+        target_tenants: &[String], start_at: Option<&str>, end_at: Option<&str>,
+    ) -> Result<()> {
+        let start_expr = start_at.filter(|v| !v.trim().is_empty())
+            .map(|v| format!("parseDateTimeBestEffort('{}')", escape(v)))
+            .unwrap_or_else(|| "now()".to_string());
+        let end_expr = end_at.filter(|v| !v.trim().is_empty())
+            .map(|v| format!("parseDateTimeBestEffort('{}')", escape(v)))
+            .unwrap_or_else(|| "CAST(NULL, 'Nullable(DateTime)')".to_string());
+        let q = format!(
+            "INSERT INTO ndr.announcements \
+             (id, title, message, announcement_type, audience, status, \
+              target_roles, target_tenants, start_at, end_at, created_by, created_at, updated_at) \
+             SELECT id, '{title}', '{message}', '{atype}', '{audience}', '{status}', \
+                    {roles}, {tenants}, {start_expr}, {end_expr}, \
+                    created_by, created_at, now() \
+             FROM ndr.announcements FINAL WHERE id = '{id}'",
+            title = escape(title), message = escape(message), atype = escape(atype),
+            audience = escape(audience), status = escape(status),
+            roles = sql_array_literal(target_roles), tenants = sql_array_literal(target_tenants),
+            start_expr = start_expr, end_expr = end_expr, id = escape(id)
+        );
+        self.client.query(&q).execute().await?;
+        Ok(())
+    }
+
+    pub async fn mark_announcement_read(&self, announcement_id: &str, username: &str) -> Result<()> {
+        let q = format!(
+            "INSERT INTO ndr.announcement_reads (announcement_id, username, read_at) VALUES ('{}','{}',now())",
+            escape(announcement_id), escape(username)
+        );
+        self.client.query(&q).execute().await?;
+        Ok(())
+    }
+
+    pub async fn delete_announcement(&self, id: &str) -> Result<()> {
+        let q = format!(
+            "ALTER TABLE ndr.announcements DELETE WHERE id = '{}' SETTINGS mutations_sync=1",
+            escape(id)
+        );
+        self.client.query(&q).execute().await?;
+        Ok(())
+    }
 }
 
 /// Minimal SQL escape — single-quote sanitisation.
 fn escape(s: &str) -> String {
     s.replace('\'', "\\'")
+}
+
+fn sql_array_literal(items: &[String]) -> String {
+    let inner = items.iter().map(|s| format!("'{}'", escape(s))).collect::<Vec<_>>().join(",");
+    format!("[{}]", inner)
 }
