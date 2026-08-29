@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates wget && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates wget libssl3 libsasl2-2 libcurl4 && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/siem-engine/target/release/siem-engine /usr/local/bin/siem-engine
 EXPOSE 3002
 CMD ["siem-engine"]

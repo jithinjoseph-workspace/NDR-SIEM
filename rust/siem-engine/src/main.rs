@@ -8,6 +8,7 @@ use tracing::info;
 mod api;
 mod ingest;
 mod db_init;
+mod correlation;
 
 use ingest::pipeline::Pipeline;
 
@@ -87,6 +88,9 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move { consumer.run().await });
     info!("ClickHouse consumer spawned (group: siem-engine-consumers)");
 
+    // ── Correlation engine ────────────────────────────────────────────────
+    correlation::start(kafka_brokers.clone(), clickhouse_url.clone(), valkey_url.clone()).await?;
+
     // ── HTTP router ───────────────────────────────────────────────────────
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -104,6 +108,8 @@ async fn main() -> anyhow::Result<()> {
                                            .post(api::sources::create))
         .route("/api/siem/sources/:id", axum::routing::delete(api::sources::delete))
         .route("/api/xdr/alerts",      axum::routing::get(api::alerts::list))
+        .route("/api/siem/rules",      axum::routing::get(api::rules::list_rules))
+        .route("/api/siem/rules/:id",  axum::routing::put(api::rules::update_rule))
         .route_layer(middleware::from_fn_with_state(state.clone(), api::middleware::require_siem));
 
     let app = Router::new()

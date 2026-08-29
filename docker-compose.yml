@@ -196,12 +196,14 @@ services:
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
+      - CLICKHOUSE_DB=ndr
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - VALKEY_URL=redis://ndr-valkey:6379
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
       - IP_TOKEN_KEY=${IP_TOKEN_KEY}
       - LISTEN_ADDR=0.0.0.0:3002
+      - RUST_LOG=siem_engine=info
     depends_on:
       clickhouse1:
         condition: service_healthy
