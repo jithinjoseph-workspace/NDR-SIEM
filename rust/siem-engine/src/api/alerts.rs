@@ -4,11 +4,12 @@
 // Returns paginated JSON with total count.
 // License: Apache-2.0
 
-use axum::{extract::{State, Query}, Json};
+use axum::{extract::{State, Query, Extension}, Json};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use crate::AppState;
+use crate::api::middleware::Claims;
 use crate::correlation::alerts::{AlertQuery, get_alerts, count_alerts, AlertListRow};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,11 +83,10 @@ impl From<AlertListRow> for AlertItem {
 /// Reads from ndr.unified_alerts in ClickHouse, filtered by tenant_id from JWT.
 pub async fn list(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Query(params): Query<AlertsParams>,
 ) -> (StatusCode, Json<Value>) {
-    // Extract tenant_id from JWT (Authorization header)
-    // For now use AppState jwt_secret — in production extract from Bearer token
-    let tenant_id = extract_tenant_id_from_state(&state);
+    let tenant_id = claims.tenant_id.clone();
 
     let page  = params.page.unwrap_or(1).max(1);
     let limit = params.limit.unwrap_or(50).min(500);
@@ -134,14 +134,3 @@ pub async fn list(
     }).unwrap_or(json!({ "error": "serialization error" }))))
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper — extract tenant from JWT (placeholder for Phase 1)
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn extract_tenant_id_from_state(_state: &AppState) -> String {
-    // TENANT_ID is injected by docker-compose from the customer's .env file.
-    // install.sh extracts the real tenant from the license JWT and writes it
-    // into .env (e.g. "acme-corp"). Falls back to "default" if not set.
-    // Full per-request JWT extraction (multi-tenant API) is a Phase 2 item.
-    std::env::var("TENANT_ID").unwrap_or_else(|_| "default".to_string())
-}

@@ -170,6 +170,40 @@ fi
 rm -f "$_APT_LOG"
 log "Network ready"
 
+# ── Product Selection ─────────────────────────
+printf "\n"
+printf "  ${CYAN}┌──────────────────────────────────────────────┐${NC}\n"
+printf "  ${CYAN}│${NC}  ${BOLD}Select Product to Deploy${NC}                      ${CYAN}│${NC}\n"
+printf "  ${CYAN}├──────────────────────────────────────────────┤${NC}\n"
+printf "  ${CYAN}│${NC}  ${GREEN}[1]${NC} NDR only   — Network Detection & Response  ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}       Agent-Z · Agent-S · Alerts · PCAP       ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}                                              ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}  ${BLUE}[2]${NC} SIEM only  — Log Ingest & Analytics        ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}       Windows · Syslog · CEF · Dashboard      ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}                                              ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}  ${YELLOW}[3]${NC} NDR + SIEM — Full XDR Platform            ${CYAN}│${NC}\n"
+printf "  ${CYAN}│${NC}       Complete detection + log analytics      ${CYAN}│${NC}\n"
+printf "  ${CYAN}└──────────────────────────────────────────────┘${NC}\n"
+printf "\n"
+read -p "  Enter choice (1/2/3) [default: 1]: " PRODUCT_CHOICE
+
+case "$PRODUCT_CHOICE" in
+    2)
+        PRODUCT_MODE="siem"
+        log "Product: SIEM only"
+        ;;
+    3)
+        PRODUCT_MODE="both"
+        log "Product: NDR + SIEM (full XDR)"
+        ;;
+    *)
+        PRODUCT_MODE="ndr"
+        log "Product: NDR only"
+        ;;
+esac
+
+printf "\n"
+
 # ── Deployment Mode ───────────────────────────
 printf "\n"
 printf "  ${CYAN}┌──────────────────────────────────────────────┐${NC}\n"
@@ -976,6 +1010,8 @@ INGEST_RATE_LIMIT=50000
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
+PRODUCT_MODE=$PRODUCT_MODE
+IP_TOKEN_KEY=$(openssl rand -hex 32 2>/dev/null || echo "change-me-in-production")
 LICENSE_PRIVATE_KEY=$LICENSE_PRIVATE_KEY
 LICENSE_PUBLIC_KEY=$LICENSE_PUBLIC_KEY
 LICENSE_TOKEN=$LICENSE_TOKEN
@@ -1303,14 +1339,50 @@ sudo systemctl enable ndr-updater 2>/dev/null || true
 sudo systemctl restart ndr-updater 2>/dev/null || true
 log "✅ Update watcher service installed and started"
 
-sudo docker compose --profile onpremise down 2>/dev/null || true
+sudo docker compose --profile onpremise --profile siem down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
-if [ "$DEPLOY_MODE" = "hybrid" ]; then
-    log "Hybrid mode — using cloud: $CLOUD_KAFKA"
-    sudo docker compose --profile onpremise up -d --build vector ndr-engine-1 nginx
+# ── Select nginx config for this product mode ─────────────────────────────────
+# Each mode has its own config so nginx never tries to resolve upstreams
+# that aren't running (e.g. ndr-engine-1 in SIEM-only mode).
+if [ "$PRODUCT_MODE" = "siem" ]; then
+    cp "$INSTALL_DIR/config/nginx/nginx-siem.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
+    log "nginx: SIEM-only config selected"
+elif [ "$PRODUCT_MODE" = "both" ]; then
+    cp "$INSTALL_DIR/config/nginx/nginx-both.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
+    log "nginx: NDR+SIEM config selected"
 else
-    sudo docker compose --profile onpremise up -d --build
+    cp "$INSTALL_DIR/config/nginx/nginx-ndr.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
+    log "nginx: NDR-only config selected"
+fi
+
+log "Starting Docker stack — product: ${PRODUCT_MODE}, mode: ${DEPLOY_MODE}"
+
+if [ "$PRODUCT_MODE" = "siem" ]; then
+    # SIEM only — no ndr-engine, no Agent-Z/S profile
+    # clickhouse2 + clickhouse-init required: init.sql creates ndr DB + users/tenants tables for auth
+    sudo docker compose --profile siem up -d --build \
+        clickhouse-keeper clickhouse1 clickhouse2 clickhouse-init \
+        ndr-valkey \
+        kafka1 kafka2 kafka3 kafka-init \
+        provigil-auth siem-engine-1 ndr-ui nginx
+elif [ "$PRODUCT_MODE" = "both" ]; then
+    # NDR + SIEM — full XDR stack
+    if [ "$DEPLOY_MODE" = "hybrid" ]; then
+        log "Hybrid + SIEM — cloud Kafka/CH, local sensors"
+        sudo docker compose --profile siem --profile onpremise up -d --build \
+            vector ndr-engine-1 siem-engine-1 ndr-ui nginx
+    else
+        sudo docker compose --profile siem --profile onpremise up -d --build
+    fi
+else
+    # NDR only (default)
+    if [ "$DEPLOY_MODE" = "hybrid" ]; then
+        log "Hybrid NDR — using cloud: $CLOUD_KAFKA"
+        sudo docker compose --profile onpremise up -d --build vector ndr-engine-1 nginx
+    else
+        sudo docker compose --profile onpremise up -d --build
+    fi
 fi
 log "Docker stack started"
 
@@ -1463,8 +1535,15 @@ printf "  ${CYAN}╠════════════════════
 printf "  ${CYAN}║${NC}  ${BOLD}$(_pad "Service         Access Point")${NC}  ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  ${DIM}$(_pad "─────────────── ────────────────────────")${NC}  ${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "Dashboard       https://${HOST_IP}:3000")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Product:        ${PRODUCT_MODE}")${CYAN}║${NC}\n"
+if [ "$PRODUCT_MODE" != "siem" ]; then
 printf "  ${CYAN}║${NC}  $(_pad "NDR Agent       http://localhost:3001")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "Packet Recorder http://localhost:8005")${CYAN}║${NC}\n"
+fi
+if [ "$PRODUCT_MODE" != "ndr" ]; then
+printf "  ${CYAN}║${NC}  $(_pad "SIEM API        http://${HOST_IP}:3002")${CYAN}║${NC}\n"
+printf "  ${CYAN}║${NC}  $(_pad "Syslog (TCP)    ${HOST_IP}:601 / :6514")${CYAN}║${NC}\n"
+fi
 printf "  ${CYAN}╠══════════════════════════════════════════════╣${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "start:    ./start.sh")${CYAN}║${NC}\n"
 printf "  ${CYAN}║${NC}  $(_pad "stop:     ./stop.sh")${CYAN}║${NC}\n"

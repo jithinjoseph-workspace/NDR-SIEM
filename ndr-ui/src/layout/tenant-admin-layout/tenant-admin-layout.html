@@ -47,6 +47,12 @@
         </span>
         <span class="nav-label">Sensor Setup</span>
       </a>
+      <a *ngIf="hasSiem" routerLink="/tenant-admin/siem-sources" routerLinkActive="active" class="nav-link">
+        <span class="nav-icon">
+          <lucide-icon [name]="RadioIcon" class="w-4 h-4"></lucide-icon>
+        </span>
+        <span class="nav-label">SIEM Sources</span>
+      </a>
     </nav>
 
   </aside>

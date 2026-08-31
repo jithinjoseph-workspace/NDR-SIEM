@@ -2,6 +2,7 @@ import { Component, OnInit, OnDestroy, ViewChild, ElementRef, HostListener, sign
 import { CommonModule } from '@angular/common';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
+import { ConfigService } from '../../../services/config/config.service';
 import { Websocket } from '../../../services/websocket/websocket';
 import { ChartDataService } from '../../../services/chart-data/chart-data';
 import { Subscription, interval } from 'rxjs';
@@ -13,12 +14,12 @@ import {
 } from 'lucide-angular';
 import { Router } from '@angular/router';
 import * as d3 from 'd3';
-
+import { SiemDashboard } from '../../siem/dashboard/siem-dashboard';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule],
+  imports: [CommonModule, LucideAngularModule, SiemDashboard],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })
@@ -82,12 +83,26 @@ export class Dashboard implements OnInit, OnDestroy {
   /** Sensor IDs this user is scoped to (from JWT). Empty = unrestricted. */
   sensorIds: string[] = [];
 
+  hasNdr  = false;
+  hasSiem = false;
+  activeTab = signal<'ndr' | 'siem'>('ndr');
+
+  // ── Unified KPI strip (only when hasNdr && hasSiem) ───────────────────────
+  uNdrEvents   = signal(0);
+  uSiemLogs    = signal(0);
+  uSiemEps     = signal(0);
+  uCorrHits    = signal(0);
+  uCritical    = signal(0);
+  uHigh        = signal(0);
+  uMedium      = signal(0);
+
   constructor(
     private api: Api,
     private ws: Websocket,
     private chartService: ChartDataService,
     private router: Router,
-    private auth: AuthService
+    private auth: AuthService,
+    private config: ConfigService,
   ) {
     // ── Effects for D3 re-rendering ───────────────────────────────────────
     effect(() => {
@@ -116,7 +131,26 @@ export class Dashboard implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
+    // Tab visible only when tenant has the feature AND analyst has the page permission
+    this.hasNdr  = this.auth.hasFeature('ndr')  && this.auth.hasPermission('dashboard');
+    this.hasSiem = this.auth.hasFeature('siem') && this.auth.hasPermission('siem-dashboard');
     this.sensorIds = this.auth.getSensorIds();
+
+    // Unified KPI strip — poll every 30s when both features active
+    if (this.hasNdr && this.hasSiem) {
+      this.subs.push(
+        interval(30_000).pipe(startWith(0), switchMap(() => this.api.getUnifiedStats()))
+          .subscribe({ next: (r: any) => {
+            this.uNdrEvents.set(r.ndr_events_today  ?? 0);
+            this.uSiemLogs.set(r.siem_logs_today    ?? 0);
+            this.uSiemEps.set(r.siem_eps            ?? 0);
+            this.uCorrHits.set(r.correlation_hits_1h ?? 0);
+            this.uCritical.set(r.critical_alerts    ?? 0);
+            this.uHigh.set(r.high_alerts            ?? 0);
+            this.uMedium.set(r.medium_alerts        ?? 0);
+          }})
+      );
+    }
 
     // Kick off the single background fetch loop in the service.
     // /api/stats is now called ONCE every 30s — result shared with stat cards.

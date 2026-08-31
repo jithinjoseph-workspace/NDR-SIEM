@@ -151,9 +151,9 @@ export class Tenants implements OnInit {
         }
         this.cdr.detectChanges();
       },
-      error: () => {
+      error: (err: any) => {
         this.savingTenant = false;
-        this.tenantMsg = 'Failed to create tenant';
+        this.tenantMsg = err?.error?.message ?? 'Failed to create tenant';
         this.cdr.detectChanges();
       },
     });

@@ -1,0 +1,111 @@
+<section class="siem-logs-shell">
+
+  <div class="logs-header">
+    <div>
+      <div class="eyebrow">SIEM — Log Search</div>
+      <h2>Log Explorer</h2>
+    </div>
+    <button class="btn-export" (click)="exportCsv()">
+      <lucide-icon [name]="DownloadIcon" class="w-4 h-4"></lucide-icon>
+      Export CSV
+    </button>
+  </div>
+
+  <!-- Search bar + filters -->
+  <div class="search-panel">
+    <div class="search-row">
+      <div class="search-input-wrap">
+        <lucide-icon [name]="SearchIcon" class="search-icon w-4 h-4"></lucide-icon>
+        <input
+          class="search-input"
+          type="text"
+          placeholder="Keyword search across raw_log and parsed fields..."
+          [(ngModel)]="query"
+          (keyup.enter)="search()"
+        />
+        <button *ngIf="query" class="search-clear" (click)="query=''; search()">
+          <lucide-icon [name]="XIcon" class="w-3 h-3"></lucide-icon>
+        </button>
+      </div>
+      <button class="btn-search" (click)="search()">Search</button>
+    </div>
+
+    <div class="filter-row">
+      <select class="filter-select" [(ngModel)]="filterSource" (change)="search()">
+        <option *ngFor="let s of sources" [value]="s">{{ s === 'all' ? 'All Sources' : s }}</option>
+      </select>
+      <select class="filter-select" [(ngModel)]="filterSev" (change)="search()">
+        <option *ngFor="let s of severities" [value]="s">{{ s === 'all' ? 'All Severities' : s }}</option>
+      </select>
+      <select class="filter-select" [(ngModel)]="filterClass" (change)="search()">
+        <option *ngFor="let c of classes" [value]="c">{{ c === 'all' ? 'All Classes' : c }}</option>
+      </select>
+      <input class="filter-date" type="datetime-local" [(ngModel)]="dateFrom" (change)="search()" title="From" />
+      <input class="filter-date" type="datetime-local" [(ngModel)]="dateTo"   (change)="search()" title="To"   />
+      <button class="btn-clear" (click)="clearFilters()">Clear</button>
+    </div>
+  </div>
+
+  <!-- Results meta -->
+  <div *ngIf="!loading() && !error()" class="results-meta">
+    <span>{{ total() | number }} logs</span>
+    <span class="muted">· {{ tookMs() }}ms</span>
+    <span *ngIf="totalPages > 1" class="muted">· page {{ page }} of {{ totalPages }}</span>
+  </div>
+
+  <!-- Error -->
+  <div *ngIf="error()" class="error-banner">{{ error() }}</div>
+
+  <!-- Loading -->
+  <div *ngIf="loading()" class="loading-row">
+    <span class="spinner"></span> Searching...
+  </div>
+
+  <!-- Log rows -->
+  <div *ngIf="!loading() && !error()" class="log-list">
+
+    <div *ngIf="logs().length === 0" class="empty-state">
+      No logs match your search.
+    </div>
+
+    <div *ngFor="let log of logs()" class="log-row" (click)="toggleExpand(log.log_id)">
+
+      <div class="log-row-summary">
+        <span class="sev-badge" [class]="severityClass(log.severity)">{{ log.severity }}</span>
+        <span class="src-chip">{{ sourceLabel(log.source_type) }}</span>
+        <span class="class-chip">{{ log.event_class }}</span>
+        <span class="log-ts mono">{{ log.timestamp | date:'yyyy-MM-dd HH:mm:ss' }}</span>
+        <span class="log-raw">{{ log.raw_log | slice:0:180 }}<span *ngIf="log.raw_log.length > 180">…</span></span>
+        <lucide-icon [name]="ChevronIcon" class="w-3 h-3 expand-icon" [class.rotated]="expanded() === log.log_id"></lucide-icon>
+      </div>
+
+      <div *ngIf="expanded() === log.log_id" class="log-row-detail" (click)="$event.stopPropagation()">
+        <div class="detail-section">
+          <div class="detail-label">Log ID</div>
+          <div class="detail-value mono">{{ log.log_id }}</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">Source</div>
+          <div class="detail-value">{{ log.source_id }} ({{ sourceLabel(log.source_type) }})</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">Raw Log</div>
+          <pre class="detail-raw">{{ log.raw_log }}</pre>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">Parsed (OCSF)</div>
+          <pre class="detail-raw">{{ log.parsed | json }}</pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  <div *ngIf="totalPages > 1 && !loading()" class="pagination">
+    <button class="page-btn" (click)="prevPage()" [disabled]="page === 1">← Prev</button>
+    <span class="page-info">{{ page }} / {{ totalPages }}</span>
+    <button class="page-btn" (click)="nextPage()" [disabled]="page === totalPages">Next →</button>
+  </div>
+
+</section>

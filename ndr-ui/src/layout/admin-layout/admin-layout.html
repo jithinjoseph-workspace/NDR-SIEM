@@ -47,8 +47,8 @@
         </div>
       </div>
 
-      <!-- Group: Infrastructure (violet) -->
-      <div class="sa-group">
+      <!-- Group: Infrastructure (violet) — NDR-only -->
+      <div class="sa-group" *ngIf="hasNdr">
         <button class="sa-group-header sa-group--violet" (click)="toggleGroup('infrastructure')">
           <span class="sa-group-dot"></span>
           <span class="sa-group-label">Infrastructure</span>
@@ -85,6 +85,21 @@
           <a routerLink="/admin/announcements" routerLinkActive="active" class="sa-nav-link sa-nav-child">
             <lucide-icon [name]="AnnouncementsIcon" class="w-4 h-4"></lucide-icon>
             <span>Announcements</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Group: SIEM (cyan) — only when SIEM engine is installed -->
+      <div class="sa-group" *ngIf="hasSiem">
+        <button class="sa-group-header sa-group--cyan" (click)="toggleGroup('siem')">
+          <span class="sa-group-dot"></span>
+          <span class="sa-group-label">SIEM</span>
+          <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['siem']"></lucide-icon>
+        </button>
+        <div class="sa-group-body" [class.open]="groups['siem']">
+          <a routerLink="/admin/siem-sources" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+            <lucide-icon [name]="RadioIcon" class="w-4 h-4"></lucide-icon>
+            <span>Log Sources</span>
           </a>
         </div>
       </div>

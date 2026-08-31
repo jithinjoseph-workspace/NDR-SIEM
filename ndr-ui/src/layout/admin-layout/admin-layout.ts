@@ -5,9 +5,10 @@ import {
   LucideAngularModule,
   LayoutDashboard, Building2, Users, Server, KeyRound,
   Megaphone, Activity, Zap, Cloud, Globe, Mail, ShieldCheck,
-  ChevronDown, Gavel, HelpCircle,
+  ChevronDown, Gavel, HelpCircle, Radio,
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
+import { ConfigService } from '../../services/config/config.service';
 
 @Component({
   selector: 'app-admin-layout',
@@ -34,19 +35,25 @@ export class AdminLayout implements OnInit {
   ChevronIcon       = ChevronDown;
   RulesIcon         = Gavel;
   SupportIcon       = HelpCircle;
+  RadioIcon         = Radio;
 
   groups: Record<string, boolean> = {
     access:         true,
     infrastructure: true,
     monitoring:     true,
     config:         true,
+    siem:           true,
   };
 
   currentUser = signal<any>(null);
+  hasNdr  = false;
+  hasSiem = false;
 
-  constructor(private auth: AuthService, private router: Router) {}
+  constructor(private auth: AuthService, private router: Router, private config: ConfigService) {}
 
   ngOnInit() {
+    this.hasNdr  = this.config.hasNdr();
+    this.hasSiem = this.config.hasSiem();
     this.currentUser.set(this.auth.getUser());
     const url = this.router.url;
     this.groups = {
@@ -55,6 +62,7 @@ export class AdminLayout implements OnInit {
       monitoring:     url.includes('/rules') || url.includes('/telemetry') || url.includes('/announcements'),
       config:         url.includes('/ai-providers') || url.includes('/trusted-cloud')
                       || url.includes('/trusted-domains') || url.includes('/smtp-config'),
+      siem:           url.includes('/siem-sources'),
     };
     if (!Object.values(this.groups).some(v => v)) {
       Object.keys(this.groups).forEach(k => this.groups[k] = true);

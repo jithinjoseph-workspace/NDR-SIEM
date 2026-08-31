@@ -91,9 +91,17 @@ export class TenantAdmin implements OnInit, OnDestroy {
     this.refreshTenantSystemStatus();
     this.statusInterval = setInterval(() => this.refreshTenantSystemStatus(), 10000);
     this.checkForUpdates();
+    // Seed from JWT first (instant), then override with a live DB fetch so stale JWTs
+    // don't show an outdated Page Access list when tenant features change post-login.
+    const jwtFeatures = this.auth.getTenantFeatures();
+    this.tenantFeatures.set(jwtFeatures.length ? jwtFeatures : ['ndr']);
     this.api.getTenantFeatures().subscribe({
-      next: (data: any) => this.tenantFeatures.set(data.features ?? []),
-      error: () => {},
+      next: (res: any) => {
+        const live: string[] = Array.isArray(res?.features) ? res.features
+          : typeof res?.features === 'string' ? res.features.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : [];
+        if (live.length) this.tenantFeatures.set(live);
+      },
     });
   }
 

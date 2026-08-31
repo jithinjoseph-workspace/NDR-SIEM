@@ -3,8 +3,7 @@ use axum::http::StatusCode;
 use serde_json::{json, Value};
 use crate::AppState;
 
-/// POST /api/siem/ingest — generic OCSF JSON ingest endpoint.
-/// Phase 1: accepts OCSF-normalised JSON from sensors / log sources.
+#[allow(dead_code)]
 pub async fn handle(
     State(_state): State<AppState>,
     Json(payload): Json<Value>,

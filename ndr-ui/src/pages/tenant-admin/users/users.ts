@@ -11,6 +11,7 @@ import {
   LayoutDashboard, Bell, FileText, Radio, Network, Globe, Gem, Settings,
   UserCircle, ChevronRight, Server, FolderSearch, Bot, Cpu, Plus,
   AlertCircle, XCircle, ChevronDown, Check, RotateCcw,
+  Database, ShieldAlert, ScrollText,
 } from 'lucide-angular';
 import { Api, SensorKey, SensorAssignment } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
@@ -48,7 +49,8 @@ interface PermissionOption {
 export class UsersSection implements OnInit, OnDestroy {
   @Input() tenantId = '';
   @Input() tenantName = 'Organization';
-  @Input() tenantFeatures: string[] = [];
+  @Input() set tenantFeatures(v: string[]) { if (v?.length) this._tenantFeatures.set(v); }
+  private readonly _tenantFeatures = signal<string[]>([]);
 
   UsersIcon        = UsersLucide;
   UserPlusIcon     = UserPlus;
@@ -169,21 +171,26 @@ export class UsersSection implements OnInit, OnDestroy {
   };
 
   readonly permissionOptions: PermissionOption[] = [
-    { key: 'dashboard',    label: 'Dashboard',     description: 'Operational overview',         icon: LayoutDashboard },
-    { key: 'alerts',       label: 'Alerts',         description: 'Alert triage',                icon: Bell,        requiredFeatures: ['ndr', 'soar'] },
-    { key: 'assets',       label: 'Assets',         description: 'Asset inventory',             icon: Server,      requiredFeatures: ['ndr', 'soar'] },
-    { key: 'logs',         label: 'Network Logs',   description: 'Event records',               icon: FileText,    requiredFeatures: ['ndr'] },
-    { key: 'live',         label: 'Live Stream',    description: 'Real-time activity',          icon: Radio,       requiredFeatures: ['ndr'] },
-    { key: 'network-map',  label: 'Network Map',    description: 'Topology view',               icon: Network,     requiredFeatures: ['ndr'] },
-    { key: 'intel',        label: 'Threat Intel',   description: 'IOC lookup',                  icon: Globe,       requiredFeatures: ['threat_intel'] },
-    { key: 'health',       label: 'System Health',  description: 'Service status',              icon: Activity },
-    { key: 'rules',        label: 'Rules View',     description: 'Detection rules',             icon: Gem,         requiredFeatures: ['ndr'] },
-    { key: 'evidence',     label: 'Evidence',       description: 'Artifact locker',             icon: FolderSearch,requiredFeatures: ['ndr'] },
-    { key: 'honeypots',    label: 'Honeypots',      description: 'Deception trap management',   icon: Shield,      requiredFeatures: ['ndr'] },
-    { key: 'retrospective',label: 'Retrospective',  description: 'Historical rule re-scan',     icon: RotateCcw,   requiredFeatures: ['ndr'] },
-    { key: 'soar',         label: 'SOAR View',      description: 'Automation visibility',       icon: Settings,    requiredFeatures: ['soar'] },
-    { key: 'ai-activity',  label: 'AI Activity',    description: 'Aria interactions',           icon: Bot,         requiredFeatures: ['ai'] },
-    { key: 'ai-report',    label: 'AI Report',      description: 'AI-generated reports',        icon: Bot,         requiredFeatures: ['ai'] },
+    // NDR pages
+    { key: 'dashboard',    label: 'Dashboard',       description: 'Operational overview',         icon: LayoutDashboard },
+    { key: 'alerts',       label: 'Alerts',           description: 'Alert triage',                icon: Bell,            requiredFeatures: ['ndr', 'soar'] },
+    { key: 'assets',       label: 'Assets',           description: 'Asset inventory',             icon: Server,          requiredFeatures: ['ndr', 'soar'] },
+    { key: 'logs',         label: 'Network Logs',     description: 'Event records',               icon: FileText,        requiredFeatures: ['ndr'] },
+    { key: 'live',         label: 'Live Stream',      description: 'Real-time activity',          icon: Radio,           requiredFeatures: ['ndr'] },
+    { key: 'network-map',  label: 'Network Map',      description: 'Topology view',               icon: Network,         requiredFeatures: ['ndr'] },
+    { key: 'intel',        label: 'Threat Intel',     description: 'IOC lookup',                  icon: Globe,           requiredFeatures: ['threat_intel'] },
+    { key: 'health',       label: 'System Health',    description: 'Service status',              icon: Activity,        requiredFeatures: ['ndr'] },
+    { key: 'rules',        label: 'Rules View',       description: 'Detection rules',             icon: Gem,             requiredFeatures: ['ndr'] },
+    { key: 'evidence',     label: 'Evidence',         description: 'Artifact locker',             icon: FolderSearch,    requiredFeatures: ['ndr'] },
+    { key: 'honeypots',    label: 'Honeypots',        description: 'Deception trap management',   icon: Shield,          requiredFeatures: ['ndr'] },
+    { key: 'retrospective',label: 'Retrospective',    description: 'Historical rule re-scan',     icon: RotateCcw,       requiredFeatures: ['ndr'] },
+    { key: 'soar',         label: 'SOAR View',        description: 'Automation visibility',       icon: Settings,        requiredFeatures: ['soar'] },
+    { key: 'ai-activity',  label: 'AI Activity',      description: 'Aria interactions',           icon: Bot,             requiredFeatures: ['ai'] },
+    { key: 'ai-report',    label: 'AI Report',        description: 'AI-generated reports',        icon: Bot,             requiredFeatures: ['ai'] },
+    // SIEM pages
+    { key: 'siem-dashboard', label: 'SIEM Dashboard', description: 'Security events overview',   icon: ShieldAlert,     requiredFeatures: ['siem'] },
+    { key: 'siem-logs',      label: 'SIEM Logs',      description: 'Ingested log stream',         icon: ScrollText,      requiredFeatures: ['siem'] },
+    { key: 'siem-sources',   label: 'SIEM Sources',   description: 'Log source management',       icon: Database,        requiredFeatures: ['siem'] },
   ];
 
   private readonly allPermissionCategories = [
@@ -192,10 +199,11 @@ export class UsersSection implements OnInit, OnDestroy {
     { title: 'SECURITY',   keys: ['intel', 'rules', 'evidence'] },
     { title: 'ENFORCE',    keys: ['honeypots', 'retrospective'] },
     { title: 'OPERATIONS', keys: ['health', 'soar', 'ai-activity', 'ai-report'] },
+    { title: 'SIEM',       keys: ['siem-dashboard', 'siem-logs', 'siem-sources'] },
   ];
 
   get permissionCategories() {
-    const feats = this.tenantFeatures;
+    const feats = this._tenantFeatures();
     const licensed = this.permissionOptions.filter(p => {
       if (!p.requiredFeatures || p.requiredFeatures.length === 0) return true;
       // OR logic: page is accessible if tenant has ANY of the required features
@@ -236,6 +244,21 @@ export class UsersSection implements OnInit, OnDestroy {
           .map((p: string) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ')) || 'Organization';
       }
     }
+    // Loaded as a route child — @Input() tenantFeatures may never be bound.
+    // Seed from JWT immediately, then refresh live from DB.
+    if (!this._tenantFeatures().length) {
+      const jwtFeats = this.auth.getTenantFeatures();
+      this._tenantFeatures.set(jwtFeats.length ? jwtFeats : ['ndr']);
+    }
+    this.api.getTenantFeatures().subscribe({
+      next: (res: any) => {
+        const live: string[] = Array.isArray(res?.features) ? res.features
+          : typeof res?.features === 'string'
+            ? res.features.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : [];
+        if (live.length) this._tenantFeatures.set(live);
+      },
+    });
     this.loadUsers();
     this.loadSensorData();
   }

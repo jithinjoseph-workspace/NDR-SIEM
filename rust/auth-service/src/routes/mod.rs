@@ -8,3 +8,4 @@ pub mod users;
 pub mod tenants;
 pub mod profile;
 pub mod forgot;
+pub mod announcements;

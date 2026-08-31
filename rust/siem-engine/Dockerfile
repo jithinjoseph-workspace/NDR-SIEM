@@ -1,5 +1,5 @@
 # Build context: ./rust  (one level above this file)
-FROM rust:bookworm AS builder
+FROM rust:1-bookworm AS builder
 WORKDIR /app
 
 COPY provigil-common ./provigil-common

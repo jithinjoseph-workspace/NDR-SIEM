@@ -1,9 +1,20 @@
-<section class="dashboard-shell">
+<!-- SIEM-only view (no NDR licence) -->
+<app-siem-dashboard *ngIf="!hasNdr && hasSiem"></app-siem-dashboard>
+
+<section class="dashboard-shell" *ngIf="hasNdr">
   <div class="dashboard-header">
     <div>
-      <div class="eyebrow">Network Detection & Response</div>
-      <h2>Operational Overview</h2>
-      <p>Live infrastructure telemetry, correlated detections, and source activity.</p>
+      <!-- Unified header when both features are licensed -->
+      <ng-container *ngIf="hasNdr && hasSiem; else ndrOnlyEyebrow">
+        <div class="eyebrow">Security Operations Center</div>
+        <h2>Unified Overview</h2>
+        <p>NDR telemetry, SIEM log ingestion, correlated detections and pipeline status.</p>
+      </ng-container>
+      <ng-template #ndrOnlyEyebrow>
+        <div class="eyebrow">Network Detection & Response</div>
+        <h2>Operational Overview</h2>
+        <p>Live infrastructure telemetry, correlated detections, and source activity.</p>
+      </ng-template>
     </div>
 
     <div class="dashboard-actions">
@@ -67,6 +78,52 @@
     <div>Refresh interval: 30s</div>
     <div>{{ eventsLastHour() }} events in the last hour</div>
   </div>
+
+  <!-- Unified KPI strip — only when analyst has both NDR + SIEM -->
+  <div class="unified-kpi-strip" *ngIf="hasNdr && hasSiem">
+    <div class="ukpi-card">
+      <span class="ukpi-label">NDR Events</span>
+      <span class="ukpi-value">{{ uNdrEvents().toLocaleString() }}</span>
+      <span class="ukpi-sub">today</span>
+    </div>
+    <div class="ukpi-divider"></div>
+    <div class="ukpi-card">
+      <span class="ukpi-label">SIEM Logs</span>
+      <span class="ukpi-value">{{ uSiemLogs().toLocaleString() }}</span>
+      <span class="ukpi-sub">{{ uSiemEps() }} eps</span>
+    </div>
+    <div class="ukpi-divider"></div>
+    <div class="ukpi-card">
+      <span class="ukpi-label">Correlation Hits</span>
+      <span class="ukpi-value">{{ uCorrHits().toLocaleString() }}</span>
+      <span class="ukpi-sub">last hour</span>
+    </div>
+    <div class="ukpi-divider"></div>
+    <div class="ukpi-card" [class.ukpi-warn]="uCritical() > 0 || uHigh() > 0">
+      <span class="ukpi-label">Active Alerts</span>
+      <span class="ukpi-value">{{ (uCritical() + uHigh()).toLocaleString() }}</span>
+      <span class="ukpi-sub">
+        <span class="ukpi-sev ukpi-crit" *ngIf="uCritical() > 0">{{ uCritical() }} CRIT</span>
+        <span class="ukpi-sev ukpi-high" *ngIf="uHigh() > 0">{{ uHigh() }} HIGH</span>
+        <span *ngIf="uCritical() === 0 && uHigh() === 0">{{ uMedium() }} medium</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- Module tab switcher — only shown when both NDR + SIEM are licensed -->
+  <div class="module-tabs" *ngIf="hasNdr && hasSiem">
+    <button class="module-tab" [class.active]="activeTab() === 'ndr'" (click)="activeTab.set('ndr')">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>
+      NDR
+    </button>
+    <button class="module-tab" [class.active]="activeTab() === 'siem'" (click)="activeTab.set('siem')">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 7h6M5 10h4"/></svg>
+      SIEM
+    </button>
+  </div>
+
+  <!-- NDR content — hidden when SIEM tab active -->
+  <ng-container *ngIf="!hasSiem || activeTab() === 'ndr'">
 
   <!-- Threat Prediction Banner -->
   <div *ngIf="activePredictions().length > 0" class="threat-prediction-banner" (click)="openPredictionModal(activePredictions()[0])">
@@ -484,4 +541,12 @@
       </div>
     </div>
   </div>
+
+  </ng-container><!-- /NDR content -->
+
+  <!-- SIEM tab content — inline within the same section -->
+  <ng-container *ngIf="hasSiem && activeTab() === 'siem'">
+    <app-siem-dashboard></app-siem-dashboard>
+  </ng-container>
+
 </section>

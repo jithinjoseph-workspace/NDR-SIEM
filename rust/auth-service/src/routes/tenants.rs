@@ -93,6 +93,29 @@ pub async fn list(
 #[derive(Deserialize)]
 pub struct CreateTenantPayload {
     pub name: String,
+    pub id:   Option<String>,
+}
+
+/// Convert any string to a URL-safe slug: lowercase, hyphens only, no leading/trailing hyphens.
+fn slugify(s: &str) -> String {
+    let slug = s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    let slug = slug.trim_matches('-').to_string();
+    // Collapse consecutive hyphens
+    let mut out = String::new();
+    let mut prev_hyphen = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_hyphen { out.push(c); }
+            prev_hyphen = true;
+        } else {
+            out.push(c);
+            prev_hyphen = false;
+        }
+    }
+    out
 }
 
 pub async fn create(
@@ -116,7 +139,17 @@ pub async fn create(
             Json(json!({ "status": "error", "message": "Tenant name is required" }))).into_response();
     }
 
-    let id = Uuid::new_v4().to_string();
+    // Use the frontend-supplied ID (slugified) or derive one from the name
+    let raw_id = payload.id.as_deref().unwrap_or(name);
+    let id = slugify(raw_id);
+    let id = if id.is_empty() { Uuid::new_v4().to_string() } else { id };
+
+    // Reject duplicate IDs — same check ndr-engine does
+    if state.db.tenant_id_exists(&id).await {
+        return (StatusCode::CONFLICT,
+            Json(json!({ "status": "error", "message": format!("Tenant ID '{}' already exists", id) }))).into_response();
+    }
+
     match state.db.create_tenant(&id, name).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": id, "message": "Tenant created" }))).into_response(),
         Err(e) => {
@@ -230,6 +263,41 @@ pub async fn set_ai_enabled(
             tracing::error!("set_tenant_ai_enabled error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "status": "error", "message": "Failed to update AI setting" }))).into_response()
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/auth/tenants/:id/features
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SetFeaturesPayload {
+    pub features: Vec<String>,
+}
+
+pub async fn set_features(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(payload): Json<SetFeaturesPayload>,
+) -> impl IntoResponse {
+    let claims = match auth(&headers, &state).await {
+        Ok(c)  => c,
+        Err((s, j)) => return (s, j).into_response(),
+    };
+
+    if claims.role != "super_admin" {
+        return (StatusCode::FORBIDDEN,
+            Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
+    }
+
+    match state.db.set_tenant_features(&id, &payload.features).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response(),
+        Err(e) => {
+            tracing::error!("set_tenant_features error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "Failed to update features" }))).into_response()
         }
     }
 }

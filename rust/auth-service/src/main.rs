@@ -109,6 +109,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/tenants/:id",                  put(routes::tenants::update))
         .route("/api/auth/tenants/:id/status",           post(routes::tenants::set_status))
         .route("/api/auth/tenants/:id/ai-enabled",       post(routes::tenants::set_ai_enabled))
+        .route("/api/auth/tenants/:id/features",         post(routes::tenants::set_features))
+        // Announcements — common to all product modes
+        .route("/api/announcements",                     get(routes::announcements::list))
+        .route("/api/announcements/active",              get(routes::announcements::list_active))
+        .route("/api/announcements",                     post(routes::announcements::create))
+        .route("/api/announcements/:id",                 put(routes::announcements::update))
+        .route("/api/announcements/:id/read",            post(routes::announcements::mark_read))
+        .route("/api/announcements/:id",                 delete(routes::announcements::delete))
         // Profile
         .route("/api/auth/me/gmail",                     put(routes::profile::update_gmail))
         .route("/api/auth/me/regenerate-secret",         post(routes::profile::regenerate_secret))
