@@ -187,14 +187,13 @@ services:
     mem_limit: 512m
     ports:
       - "127.0.0.1:3002:3002"
-    networks:
-      - default
-      - ndr-internal
-    ports:
       - "3002:3002"     # HTTP API — direct access (bypasses nginx, useful for siem-only deploy)
       - "601:601"       # Syslog TCP (RFC 6587) — NXLog / Winlogbeat
       - "6514:6514"     # Syslog TCP TLS
       - "514:514/udp"   # Syslog UDP (legacy devices)
+    networks:
+      - default
+      - ndr-internal
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123
