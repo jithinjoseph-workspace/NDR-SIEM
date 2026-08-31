@@ -72,6 +72,67 @@
 
   </div>
 
+  <!-- Active alerts section -->
+  <div *ngIf="!loading() && !error()" class="alerts-section">
+
+    <!-- Alert count pills -->
+    <div class="alert-counts">
+      <div class="alert-count-card crit" [class.alert-count-zero]="alertCritical() === 0">
+        <span class="ac-num">{{ alertCritical() }}</span>
+        <span class="ac-label">Critical</span>
+      </div>
+      <div class="alert-count-card high" [class.alert-count-zero]="alertHigh() === 0">
+        <span class="ac-num">{{ alertHigh() }}</span>
+        <span class="ac-label">High</span>
+      </div>
+      <div class="alert-count-card med" [class.alert-count-zero]="alertMedium() === 0">
+        <span class="ac-num">{{ alertMedium() }}</span>
+        <span class="ac-label">Medium</span>
+      </div>
+      <div class="alert-total">
+        <lucide-icon [name]="ShieldIcon" class="w-4 h-4"></lucide-icon>
+        <span>{{ alertTotal() }} active alert{{ alertTotal() !== 1 ? 's' : '' }} (last 24h)</span>
+        <a routerLink="/analyst/alerts" class="view-all-link">View all →</a>
+      </div>
+    </div>
+
+    <!-- Recent alerts list -->
+    <div class="recent-alerts-wrap" *ngIf="recentAlerts().length > 0">
+      <div class="table-header">
+        <span class="table-title">
+          <lucide-icon [name]="ClockIcon" class="w-4 h-4"></lucide-icon>
+          Recent Alerts
+        </span>
+      </div>
+      <table class="sources-table">
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Rule</th>
+            <th>Title</th>
+            <th>Source</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let a of recentAlerts()">
+            <td><span class="sev-pill" [class]="sevClass(a.severity)">{{ a.severity }}</span></td>
+            <td class="mono muted">{{ a.rule_name }}</td>
+            <td class="alert-title">{{ a.title }}</td>
+            <td><span class="type-chip">{{ a.source }}</span></td>
+            <td class="mono muted">{{ relativeTime(a.created_at) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="no-alerts" *ngIf="recentAlerts().length === 0 && alertTotal() === 0">
+      <lucide-icon [name]="CheckIcon" class="w-5 h-5"></lucide-icon>
+      No active alerts in the last 24 hours
+    </div>
+
+  </div>
+
   <!-- Source health table -->
   <div *ngIf="!loading() && !error()" class="sources-table-wrap">
     <div class="table-header">
@@ -99,7 +160,7 @@
           <td><span class="type-chip">{{ sourceTypeLabel(src.source_type) }}</span></td>
           <td><span class="status-dot" [class]="statusClass(src.status)"></span> {{ src.status }}</td>
           <td class="mono">{{ src.eps }}</td>
-          <td class="mono muted">{{ src.last_seen_at | date:'HH:mm:ss' }}</td>
+          <td class="mono muted">{{ (src.last_seen_at && !src.last_seen_at.startsWith('1970')) ? (src.last_seen_at | date:'HH:mm:ss') : 'Never' }}</td>
         </tr>
       </tbody>
     </table>

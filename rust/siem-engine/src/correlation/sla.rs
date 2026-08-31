@@ -102,23 +102,48 @@ pub fn spawn_sla_checker(ch: Client, redis_url: String) {
     });
 }
 
-/// Query unified_alerts for alerts whose sla_breached_at has passed and status != Resolved/Closed.
+fn tenant_db(tenant_id: &str) -> String {
+    if tenant_id == "default" || tenant_id.is_empty() {
+        "ndr".to_string()
+    } else {
+        format!("ndr_{}", tenant_id.replace('-', "_"))
+    }
+}
+
+/// Query all per-tenant siem_alerts for SLA breaches.
 async fn run_breach_check(ch: &Client) -> Result<()> {
     let now = Utc::now().timestamp() as u32;
 
-    let sql = format!(
-        "SELECT \
-            alert_id, tenant_id, rule_id, severity, title, \
-            toUnixTimestamp(sla_breached_at) AS sla_breached_at \
-         FROM ndr.unified_alerts FINAL \
-         WHERE sla_breached_at IS NOT NULL \
-           AND toUnixTimestamp(sla_breached_at) < {} \
-           AND status NOT IN ('Resolved', 'Closed', 'Suppressed') \
-         LIMIT 500",
-        now
-    );
+    // Get all tenant IDs from the global tenants table
+    #[derive(serde::Deserialize, clickhouse::Row)]
+    struct TRow { id: String }
+    let tenant_ids: Vec<String> = ch
+        .query("SELECT id FROM ndr.tenants FINAL")
+        .fetch_all::<TRow>().await.unwrap_or_default()
+        .into_iter().map(|r| r.id).collect();
 
-    let rows: Vec<BreachRow> = ch.query(&sql).fetch_all().await?;
+    let mut dbs: Vec<String> = vec!["ndr".to_string()];
+    for tid in &tenant_ids {
+        let db = tenant_db(tid);
+        if !dbs.contains(&db) { dbs.push(db); }
+    }
+
+    let mut rows: Vec<BreachRow> = vec![];
+    for db in &dbs {
+        let sql = format!(
+            "SELECT \
+                alert_id, tenant_id, rule_id, severity, title, \
+                toUnixTimestamp(sla_breached_at) AS sla_breached_at \
+             FROM {db}.siem_alerts FINAL \
+             WHERE sla_breached_at IS NOT NULL \
+               AND toUnixTimestamp(sla_breached_at) < {now} \
+               AND status NOT IN ('Resolved', 'Closed', 'Suppressed') \
+             LIMIT 500",
+            db = db, now = now,
+        );
+        let mut db_rows: Vec<BreachRow> = ch.query(&sql).fetch_all().await.unwrap_or_default();
+        rows.append(&mut db_rows);
+    }
 
     if rows.is_empty() {
         tracing::debug!("SLA checker: no breached alerts found");

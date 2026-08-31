@@ -83,7 +83,7 @@ pub async fn handle(
             "syslog" => pipeline.process_syslog(&raw, "0.0.0.0", &tenant_id, &source_id).await,
             "cef"    => pipeline.process_cef(&raw, &tenant_id, &source_id).await,
             "wec"    => pipeline.process_wec(&raw, &tenant_id, &source_id).await,
-            _        => pipeline.process_generic(&raw, &tenant_id, &source_id).await,
+            _        => pipeline.process_unknown(&raw, &tenant_id, &source_id).await,
         }
     });
 

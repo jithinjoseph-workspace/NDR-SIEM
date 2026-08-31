@@ -2,7 +2,7 @@
   <div class="panel-head">
     <div>
       <h3>AI Providers</h3>
-      <p>Add multiple providers — tried in priority order. Falls back to env vars (GROQ_API_KEY → OPENAI_API_KEY) if all fail.</p>
+      <p>Add multiple providers — tried in priority order. AI features are disabled if no provider is configured.</p>
     </div>
     <button class="primary-action" (click)="showAddProviderForm = !showAddProviderForm">
       <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
@@ -22,7 +22,7 @@
 
   <div *ngIf="!loadingProviders && providers.length === 0 && !showAddProviderForm" class="empty-state">
     <strong>No providers configured</strong>
-    <span>Add one below — or set GROQ_API_KEY / OPENAI_API_KEY in your .env as a fallback.</span>
+    <span>Add a provider below to enable ARIA chat, threat verdict, and AI log parser features.</span>
   </div>
 
   <div *ngIf="providers.length > 0" class="admin-table">

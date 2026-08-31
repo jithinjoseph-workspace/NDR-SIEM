@@ -12,6 +12,8 @@ pub mod ueba;
 pub mod alerts;
 pub mod sla;
 pub mod genome;
+pub mod corroboration;
+pub mod sigma_eval;
 
 use std::sync::Arc;
 use clickhouse::Client;
@@ -95,6 +97,18 @@ pub async fn start(
 
     // Spawn Living Genome scorer
     genome::spawn_genome_scorer(ch.clone(), valkey_url.clone());
+
+    // Spawn NDR↔SIEM cross-corroboration (safe no-op if NDR not running or IP_TOKEN_KEY unset)
+    corroboration::spawn_corroboration(ch.clone());
+
+    // Spawn Sigma community rules sync — keeps ndr.sigma_rules populated for SIEM-only deployments
+    let rules_dir = std::env::var("RULES_DIR").unwrap_or_else(|_| "/tmp/sigma_rules".to_string());
+    provigil_common::sigma_sync::spawn_sigma_sync(ch.clone(), rules_dir, |count| {
+        tracing::info!("sigma_sync: SIEM engine notified — {} new community rules saved", count);
+    });
+
+    // Spawn Sigma scheduled evaluator — queries siem_logs every 5 min, writes siem_alerts
+    sigma_eval::spawn_sigma_evaluator(ch.clone());
 
     tracing::info!("SIEM Correlation Engine: all subsystems started");
     Ok(())

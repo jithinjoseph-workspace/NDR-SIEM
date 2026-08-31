@@ -75,8 +75,13 @@ export const authGuard: CanActivateFn = (route: ActivatedRouteSnapshot, state: R
 
       return true;
     }),
-    catchError(() => {
-      auth.logout();
+    catchError((err) => {
+      // Only logout on explicit auth failures — network errors / 5xx should not wipe the session.
+      if (err?.status === 401 || err?.status === 403) {
+        auth.logout();
+      } else {
+        router.navigate(['/login'], { replaceUrl: true });
+      }
       return of(false);
     })
   );

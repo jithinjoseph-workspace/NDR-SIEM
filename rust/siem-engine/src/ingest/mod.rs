@@ -9,3 +9,4 @@ pub mod kafka_publisher;
 pub mod dedup;
 pub mod clickhouse_consumer;
 pub mod pipeline;
+pub mod ai_parser;

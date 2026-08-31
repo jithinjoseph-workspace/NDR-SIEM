@@ -254,6 +254,35 @@ CREATE TABLE IF NOT EXISTS __DB__.siem_sla_config ON CLUSTER ndr_cluster (
 ORDER BY tenant_id
 SETTINGS index_granularity = 8192;
 
+-- ─── SIEM correlation alerts ──────────────────────────────────────────────────
+-- SIEM rule engine writes here (source = 'siem').
+-- Corroboration writes to ndr.unified_alerts (source = 'corroborated') separately.
+
+CREATE TABLE IF NOT EXISTS __DB__.siem_alerts ON CLUSTER ndr_cluster (
+    alert_id          String,
+    tenant_id         LowCardinality(String),
+    severity          LowCardinality(String),   -- CRITICAL | HIGH | MEDIUM | LOW | INFO
+    rule_id           String,
+    rule_name         String,
+    title             String,
+    description       String,
+    affected_hosts    Array(String),
+    mitre_techniques  Array(String),
+    mitre_sources     Array(String),
+    mitre_confidences Array(Float32),
+    status            LowCardinality(String) DEFAULT 'New',
+    linked_siem_log_ids Array(String),
+    sla_started_at    Nullable(DateTime),
+    sla_breached_at   Nullable(DateTime),
+    created_at        DateTime DEFAULT now(),
+    updated_at        DateTime DEFAULT now()
+) ENGINE = ReplicatedReplacingMergeTree(
+    '/clickhouse/tables/{shard}/__DB__/siem_alerts', '{replica}', updated_at
+)
+ORDER BY (tenant_id, alert_id)
+TTL created_at + INTERVAL 180 DAY
+SETTINGS index_granularity = 8192;
+
 -- ─── Parse errors ─────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS __DB__.siem_parse_errors ON CLUSTER ndr_cluster (

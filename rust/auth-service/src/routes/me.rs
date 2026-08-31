@@ -35,13 +35,17 @@ pub async fn handle(
     // Check session is still alive in Valkey (catches force-logout)
     let session_key = format!("provigil:session:{}", claims.jti);
     let mut conn = state.valkey.clone();
-    let alive: bool = conn.exists(&session_key).await.unwrap_or(false);
+    // unwrap_or(true): Valkey transient error → assume alive; JWT expiry is the safety net.
+    // unwrap_or(false) was causing random logouts on multiple rapid page refreshes.
+    let alive: bool = conn.exists(&session_key).await.unwrap_or(true);
     if !alive {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "status": "error", "message": "Session revoked — please log in again" })),
         ).into_response();
     }
+    // Sliding TTL — refresh session on each /me call so active users never expire mid-session.
+    let _: redis::RedisResult<bool> = conn.expire(&session_key, state.token_ttl).await;
 
     // Re-fetch live user data — catches role changes, disables, etc.
     let user = match state.db.get_user(&claims.sub, &claims.tenant_id).await {
@@ -82,7 +86,28 @@ pub async fn handle(
     } else {
         state.db.get_tenant_features(&user.tenant_id).await.unwrap_or_else(|_| vec!["ndr".into()])
     };
-    let ai_enabled = user.role == "super_admin" || state.db.get_tenant_ai_enabled(&user.tenant_id).await;
+    let ai_enabled = if user.role == "super_admin" {
+        true
+    } else {
+        // Check Redis cache first (TTL 300s) to avoid a ClickHouse round-trip on every /me poll.
+        let cache_key = format!("ndr:ai_enabled:{}", user.tenant_id);
+        let cached: Option<String> = conn.get(&cache_key).await.unwrap_or(None);
+        match cached.as_deref() {
+            Some("1") => true,
+            Some("0") => false,
+            _ => {
+                let enabled = state.db.get_tenant_ai_enabled(&user.tenant_id).await;
+                let _: redis::RedisResult<()> = redis::cmd("SET")
+                    .arg(&cache_key)
+                    .arg(if enabled { "1" } else { "0" })
+                    .arg("EX")
+                    .arg(300u64)
+                    .query_async(&mut conn)
+                    .await;
+                enabled
+            }
+        }
+    };
     let sensor_ids = if user.role == "super_admin" || user.role == "tenant_admin" {
         vec![]
     } else {
