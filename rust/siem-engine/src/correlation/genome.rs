@@ -109,32 +109,56 @@ pub fn spawn_genome_scorer(ch: Client, redis_url: String) {
 // Fitness scoring logic
 // ─────────────────────────────────────────────────────────────────────────────
 
+fn tenant_db(tenant_id: &str) -> String {
+    if tenant_id == "default" || tenant_id.is_empty() {
+        "ndr".to_string()
+    } else {
+        format!("ndr_{}", tenant_id.replace('-', "_"))
+    }
+}
+
 /// Score all rules across all tenants and write results to siem_rule_fitness.
 /// Returns the number of rule-tenant pairs scored.
 async fn run_fitness_scoring(ch: &Client) -> Result<usize> {
-    // Query: aggregate alert stats per (rule_id, tenant_id) over the last 30 days
-    let sql = r#"
-        SELECT
-            rule_id,
-            tenant_id,
-            count()                                              AS total_alerts,
-            countIf(status IN ('Resolved', 'Closed'))           AS resolved_count,
-            countIf(status = 'Suppressed')                      AS suppressed_count,
-            avg(
-                if(
-                    status IN ('Resolved', 'Closed') AND updated_at > created_at,
-                    dateDiff('minute', created_at, updated_at),
-                    0
-                )
-            )                                                    AS avg_resolve_minutes
-        FROM ndr.unified_alerts FINAL
-        WHERE source = 'corroborated'
-          AND created_at >= now() - INTERVAL 30 DAY
-          AND rule_id != ''
-        GROUP BY rule_id, tenant_id
-    "#;
+    // Get all tenant IDs to scan each per-tenant unified_alerts table
+    #[derive(serde::Deserialize, clickhouse::Row)]
+    struct TRow { id: String }
+    let tenant_ids: Vec<String> = ch
+        .query("SELECT id FROM ndr.tenants FINAL")
+        .fetch_all::<TRow>().await.unwrap_or_default()
+        .into_iter().map(|r| r.id).collect();
 
-    let stats: Vec<RuleStat> = ch.query(sql).fetch_all().await?;
+    let mut dbs: Vec<String> = vec!["ndr".to_string()];
+    for tid in &tenant_ids {
+        let db = tenant_db(tid);
+        if !dbs.contains(&db) { dbs.push(db); }
+    }
+
+    let mut stats: Vec<RuleStat> = vec![];
+    for db in &dbs {
+        let sql = format!(r#"
+            SELECT
+                rule_id,
+                tenant_id,
+                count()                                              AS total_alerts,
+                countIf(status IN ('Resolved', 'Closed'))           AS resolved_count,
+                countIf(status = 'Suppressed')                      AS suppressed_count,
+                avg(
+                    if(
+                        status IN ('Resolved', 'Closed') AND updated_at > created_at,
+                        dateDiff('minute', created_at, updated_at),
+                        0
+                    )
+                )                                                    AS avg_resolve_minutes
+            FROM {db}.unified_alerts FINAL
+            WHERE source = 'corroborated'
+              AND created_at >= now() - INTERVAL 30 DAY
+              AND rule_id != ''
+            GROUP BY rule_id, tenant_id
+        "#, db = db);
+        let mut db_stats: Vec<RuleStat> = ch.query(&sql).fetch_all().await.unwrap_or_default();
+        stats.append(&mut db_stats);
+    }
     let count = stats.len();
 
     let scored_at = Utc::now();

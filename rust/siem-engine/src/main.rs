@@ -49,7 +49,15 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .expect("Invalid LISTEN_ADDR");
 
-    // ── SIEM schema init (idempotent — IF NOT EXISTS everywhere) ─────────
+    // ── Common shared-table migrations (provigil-common) ─────────────────
+    // Creates ndr.users, ndr.tenants, ndr.sigma_rules, ndr.siem_rules, etc.
+    // Safe to run on every boot — all statements are IF NOT EXISTS.
+    {
+        let ch = provigil_common::clickhouse::ClickHouseConfig::from_env().build_client();
+        provigil_common::migrations::run_common_migrations(&ch).await;
+    }
+
+    // ── SIEM schema init (per-tenant tables) ─────────────────────────────
     // Runs siem_init.sql for the default tenant DB on startup.
     // Per-tenant DBs are initialised by ndr-engine when a tenant is created.
     if let Err(e) = db_init::run(&clickhouse_url, "ndr").await {

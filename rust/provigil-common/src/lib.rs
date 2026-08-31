@@ -1,11 +1,14 @@
+pub mod ai;
 pub mod auth;
 pub mod clickhouse;
 pub mod detection;
 pub mod enrichment;
 #[cfg(feature = "kafka")]
 pub mod kafka;
+pub mod migrations;
 pub mod normalizer;
 pub mod siem;
+pub mod sigma_sync;
 pub mod soar;
 pub mod tenant;
 pub mod threat_intel;

@@ -76,7 +76,7 @@ impl AlertStatus {
 pub struct SiemAlert {
     pub alert_id: String,
     pub tenant_id: String,
-    /// Always "corroborated" for Dev 2 output
+    /// "siem" for SIEM-engine rule output; "corroborated" only when NDR+SIEM cross-match
     pub source: String,
     /// CRITICAL / HIGH / MEDIUM / LOW / INFO
     pub severity: String,
@@ -128,7 +128,7 @@ impl SiemAlert {
         Self {
             alert_id: uuid::Uuid::new_v4().to_string(),
             tenant_id: tenant_id.into(),
-            source: "corroborated".to_string(),
+            source: "siem".to_string(),
             severity: severity_str,
             rule_id,
             rule_name: rule_name.into(),

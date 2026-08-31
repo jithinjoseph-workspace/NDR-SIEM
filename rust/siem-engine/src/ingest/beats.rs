@@ -146,7 +146,7 @@ pub async fn bulk_ingest(
             match st.as_str() {
                 "wec"    => pl.process_wec(&raw, &tid, &sid).await,
                 "syslog" => pl.process_syslog(&raw, "0.0.0.0", &tid, &sid).await,
-                _        => pl.process_generic(&raw, &tid, &sid).await,
+                _        => pl.process_unknown(&raw, &tid, &sid).await,
             }
         });
 

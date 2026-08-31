@@ -1,6 +1,8 @@
-// SIEM Correlation Engine — ClickHouse Alert Write/Query Layer
-// All writes target ndr.unified_alerts (schema: init.sql line 968).
-// source = 'corroborated' for all SIEM correlation engine output.
+// SIEM Correlation Engine — Alert Write/Query Layer
+//
+// Write targets:
+//   ndr_{tenant}.siem_alerts    ← SIEM rule engine output (per-tenant DB)
+//   ndr_{tenant}.unified_alerts ← corroboration module ONLY (per-tenant DB)
 // License: Apache-2.0
 
 use anyhow::Result;
@@ -10,15 +12,22 @@ use chrono::Utc;
 
 use crate::correlation::types::SiemAlert;
 
+pub fn tenant_db(tenant_id: &str) -> String {
+    if tenant_id == "default" || tenant_id.is_empty() {
+        "ndr".to_string()
+    } else {
+        format!("ndr_{}", tenant_id.replace('-', "_"))
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// ClickHouse row struct for INSERT (matches init.sql schema exactly)
+// ClickHouse row struct — matches ndr.siem_alerts schema
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
-pub struct UnifiedAlertRow {
+pub struct SiemAlertRow {
     pub alert_id:             String,
     pub tenant_id:            String,
-    pub source:               String,
     pub severity:             String,
     pub rule_id:              String,
     pub rule_name:            String,
@@ -30,45 +39,46 @@ pub struct UnifiedAlertRow {
     pub mitre_confidences:    Vec<f32>,
     pub status:               String,
     pub linked_siem_log_ids:  Vec<String>,
-    pub sla_started_at:       Option<u32>,  // ClickHouse Nullable(DateTime) as Unix epoch
+    pub sla_started_at:       Option<u32>,
     pub sla_breached_at:      Option<u32>,
-    pub created_at:           u32,           // DateTime as Unix epoch for clickhouse crate
+    pub created_at:           u32,
     pub updated_at:           u32,
 }
 
-impl From<&SiemAlert> for UnifiedAlertRow {
+impl From<&SiemAlert> for SiemAlertRow {
     fn from(a: &SiemAlert) -> Self {
         Self {
-            alert_id:          a.alert_id.clone(),
-            tenant_id:         a.tenant_id.clone(),
-            source:            a.source.clone(),
-            severity:          a.severity.clone(),
-            rule_id:           a.rule_id.clone(),
-            rule_name:         a.rule_name.clone(),
-            title:             a.title.clone(),
-            description:       a.description.clone(),
-            affected_hosts:    a.affected_hosts.clone(),
-            mitre_techniques:  a.mitre_techniques.clone(),
-            mitre_sources:     a.mitre_sources.clone(),
-            mitre_confidences: a.mitre_confidences.clone(),
-            status:            a.status.clone(),
+            alert_id:            a.alert_id.clone(),
+            tenant_id:           a.tenant_id.clone(),
+            severity:            a.severity.clone(),
+            rule_id:             a.rule_id.clone(),
+            rule_name:           a.rule_name.clone(),
+            title:               a.title.clone(),
+            description:         a.description.clone(),
+            affected_hosts:      a.affected_hosts.clone(),
+            mitre_techniques:    a.mitre_techniques.clone(),
+            mitre_sources:       a.mitre_sources.clone(),
+            mitre_confidences:   a.mitre_confidences.clone(),
+            status:              a.status.clone(),
             linked_siem_log_ids: a.linked_siem_log_ids.clone(),
-            sla_started_at:    a.sla_started_at.map(|dt| dt.timestamp() as u32),
-            sla_breached_at:   a.sla_breached_at.map(|dt| dt.timestamp() as u32),
-            created_at:        a.created_at.timestamp() as u32,
-            updated_at:        a.updated_at.timestamp() as u32,
+            sla_started_at:      a.sla_started_at.map(|dt| dt.timestamp() as u32),
+            sla_breached_at:     a.sla_breached_at.map(|dt| dt.timestamp() as u32),
+            created_at:          a.created_at.timestamp() as u32,
+            updated_at:          a.updated_at.timestamp() as u32,
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Write operations
+// Write operations — target: ndr.siem_alerts
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// INSERT a new alert row into ndr.unified_alerts.
+/// INSERT a new SIEM rule alert into the tenant's siem_alerts table.
 pub async fn write_alert(ch: &Client, alert: &SiemAlert) -> Result<()> {
-    let row = UnifiedAlertRow::from(alert);
-    let mut insert = ch.insert("ndr.unified_alerts")?;
+    let db  = tenant_db(&alert.tenant_id);
+    let row = SiemAlertRow::from(alert);
+    let table = format!("{db}.siem_alerts");
+    let mut insert = ch.insert(&table)?;
     insert.write(&row).await?;
     insert.end().await?;
     tracing::info!(
@@ -76,22 +86,20 @@ pub async fn write_alert(ch: &Client, alert: &SiemAlert) -> Result<()> {
         rule_id  = %alert.rule_id,
         severity = %alert.severity,
         tenant   = %alert.tenant_id,
-        "New corroborated alert written to unified_alerts"
+        "SIEM alert written to ndr.siem_alerts"
     );
     Ok(())
 }
 
-/// UPDATE an existing alert: bump updated_at.
-/// ClickHouse ReplacingMergeTree deduplicates on (tenant_id, alert_id);
-/// we re-INSERT (SELECT) with same alert_id but updated `updated_at` and optionally `status`.
+/// UPDATE an existing SIEM alert: bump updated_at / change status.
 pub async fn update_alert(
     ch:         &Client,
     alert_id:   &str,
     tenant_id:  &str,
     new_status: Option<&str>,
 ) -> Result<()> {
-    let updated_at = chrono::Utc::now().timestamp() as u32;
-
+    let db         = tenant_db(tenant_id);
+    let updated_at = Utc::now().timestamp() as u32;
     let status_expr = if let Some(s) = new_status {
         format!("'{}' AS status", escape(s))
     } else {
@@ -99,25 +107,25 @@ pub async fn update_alert(
     };
 
     let sql = format!(
-        "INSERT INTO ndr.unified_alerts \
-         (alert_id, tenant_id, source, severity, rule_id, rule_name, title, description, \
+        "INSERT INTO {db}.siem_alerts \
+         (alert_id, tenant_id, severity, rule_id, rule_name, title, description, \
           affected_hosts, mitre_techniques, mitre_sources, mitre_confidences, \
           status, linked_siem_log_ids, sla_started_at, sla_breached_at, created_at, updated_at) \
          SELECT \
-          alert_id, tenant_id, source, severity, rule_id, rule_name, title, description, \
+          alert_id, tenant_id, severity, rule_id, rule_name, title, description, \
           affected_hosts, mitre_techniques, mitre_sources, mitre_confidences, \
           {status}, linked_siem_log_ids, sla_started_at, sla_breached_at, \
           created_at, {ts} AS updated_at \
-         FROM ndr.unified_alerts FINAL \
-         WHERE tenant_id = '{tid}' AND alert_id = '{aid}'",
+         FROM {db}.siem_alerts FINAL \
+         WHERE alert_id = '{aid}'",
+        db     = db,
         status = status_expr,
         ts     = updated_at,
-        tid    = escape(tenant_id),
         aid    = escape(alert_id),
     );
 
     ch.query(&sql).execute().await?;
-    tracing::debug!(alert_id = %alert_id, "Alert updated (dedup hit)");
+    tracing::debug!(alert_id = %alert_id, "SIEM alert updated");
     Ok(())
 }
 
@@ -128,7 +136,7 @@ pub async fn update_alert(
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct AlertListRow {
     pub alert_id:         String,
-    pub source:           String,
+    pub source:           String,   // always "siem" for ndr.siem_alerts rows
     pub severity:         String,
     pub rule_id:          String,
     pub rule_name:        String,
@@ -146,76 +154,84 @@ pub struct AlertQuery {
     pub tenant_id:  String,
     pub status:     Option<String>,
     pub severity:   Option<String>,
-    pub source:     Option<String>,
+    pub source:     Option<String>,  // optional filter; "siem" returns rows, anything else returns empty
     pub limit:      u32,
     pub offset:     u32,
 }
 
-/// Query unified_alerts with filters for the REST API.
+/// Query the tenant's siem_alerts with filters for the REST API.
 pub async fn get_alerts(ch: &Client, q: &AlertQuery) -> Result<Vec<AlertListRow>> {
+    if let Some(ref s) = q.source {
+        if s != "siem" { return Ok(vec![]); }
+    }
+
+    let db = tenant_db(&q.tenant_id);
     let mut conditions = vec![
         format!("tenant_id = '{}'", escape(&q.tenant_id))
     ];
-    if let Some(ref s) = q.status {
-        conditions.push(format!("status = '{}'", escape(s)));
-    }
-    if let Some(ref s) = q.severity {
-        conditions.push(format!("severity = '{}'", escape(s)));
-    }
-    if let Some(ref s) = q.source {
-        conditions.push(format!("source = '{}'", escape(s)));
-    }
+    if let Some(ref s) = q.status   { conditions.push(format!("status = '{}'",   escape(s))); }
+    if let Some(ref s) = q.severity { conditions.push(format!("severity = '{}'", escape(s))); }
 
-    let where_clause = conditions.join(" AND ");
     let sql = format!(
-        "SELECT alert_id, source, severity, rule_id, rule_name, title, description, \
+        "SELECT alert_id, 'siem' AS source, severity, rule_id, rule_name, title, description, \
                 affected_hosts, mitre_techniques, status, \
                 toUnixTimestamp(created_at) AS created_at, \
                 toUnixTimestamp(updated_at) AS updated_at, \
                 toUnixTimestamp(sla_breached_at) AS sla_breached_at \
-         FROM ndr.unified_alerts FINAL \
-         WHERE {} \
+         FROM {db}.siem_alerts FINAL \
+         WHERE {where_clause} \
          ORDER BY created_at DESC \
-         LIMIT {} OFFSET {}",
-        where_clause, q.limit, q.offset
+         LIMIT {limit} OFFSET {offset}",
+        db = db,
+        where_clause = conditions.join(" AND "),
+        limit        = q.limit,
+        offset       = q.offset,
     );
 
     let rows = ch.query(&sql).fetch_all::<AlertListRow>().await?;
     Ok(rows)
 }
 
-/// Count total matching alerts (for pagination metadata).
+/// Count total matching SIEM alerts (for pagination).
 pub async fn count_alerts(ch: &Client, q: &AlertQuery) -> Result<u64> {
+    if let Some(ref s) = q.source {
+        if s != "siem" { return Ok(0); }
+    }
+
+    let db = tenant_db(&q.tenant_id);
     let mut conditions = vec![
         format!("tenant_id = '{}'", escape(&q.tenant_id))
     ];
-    if let Some(ref s) = q.status   { conditions.push(format!("status = '{}'", escape(s))); }
+    if let Some(ref s) = q.status   { conditions.push(format!("status = '{}'",   escape(s))); }
     if let Some(ref s) = q.severity { conditions.push(format!("severity = '{}'", escape(s))); }
-    if let Some(ref s) = q.source   { conditions.push(format!("source = '{}'", escape(s))); }
 
     let sql = format!(
-        "SELECT count() FROM ndr.unified_alerts FINAL WHERE {}",
-        conditions.join(" AND ")
+        "SELECT count() FROM {db}.siem_alerts FINAL WHERE {where_clause}",
+        db           = db,
+        where_clause = conditions.join(" AND "),
     );
     let count: u64 = ch.query(&sql).fetch_one().await?;
     Ok(count)
 }
 
-/// Update sla_breached status on an alert (called by sla.rs checker).
+/// Mark SLA as breached on a SIEM alert (called by sla.rs).
 pub async fn mark_sla_breached(ch: &Client, alert_id: &str, tenant_id: &str) -> Result<()> {
+    let db  = tenant_db(tenant_id);
     let now = Utc::now().timestamp() as u32;
     let sql = format!(
-        "INSERT INTO ndr.unified_alerts \
-         (alert_id, tenant_id, source, severity, rule_id, rule_name, title, description, \
+        "INSERT INTO {db}.siem_alerts \
+         (alert_id, tenant_id, severity, rule_id, rule_name, title, description, \
           affected_hosts, mitre_techniques, mitre_sources, mitre_confidences, status, \
           linked_siem_log_ids, sla_started_at, sla_breached_at, created_at, updated_at) \
-         SELECT alert_id, tenant_id, source, severity, rule_id, rule_name, title, description, \
+         SELECT alert_id, tenant_id, severity, rule_id, rule_name, title, description, \
                 affected_hosts, mitre_techniques, mitre_sources, mitre_confidences, \
                 status, linked_siem_log_ids, sla_started_at, sla_breached_at, \
-                created_at, {} AS updated_at \
-         FROM ndr.unified_alerts FINAL \
-         WHERE tenant_id = '{}' AND alert_id = '{}'",
-        now, escape(tenant_id), escape(alert_id)
+                created_at, {now} AS updated_at \
+         FROM {db}.siem_alerts FINAL \
+         WHERE alert_id = '{aid}'",
+        db  = db,
+        now = now,
+        aid = escape(alert_id),
     );
     ch.query(&sql).execute().await?;
     Ok(())
@@ -225,7 +241,6 @@ pub async fn mark_sla_breached(ch: &Client, alert_id: &str, tenant_id: &str) -> 
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Minimal SQL string escaping (single-quote doubling).
 fn escape(s: &str) -> String {
     s.replace('\'', "''")
 }

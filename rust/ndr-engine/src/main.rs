@@ -242,6 +242,12 @@ async fn main() {
         });
     }
 
+    // ── Common shared-table migrations (provigil-common) ─────────────────
+    {
+        let ch = provigil_common::clickhouse::ClickHouseConfig::from_env().build_client();
+        provigil_common::migrations::run_common_migrations(&ch).await;
+    }
+
     let ch_storage_arc = {
         let ch = Arc::new(storage::ClickhouseStorage::new());
         ch.init_tables().await;
