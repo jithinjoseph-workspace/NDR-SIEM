@@ -263,7 +263,10 @@ async fn write_sigma_alert(
 /// Returns None for unsupported conditions (e.g. count-based aggregations).
 fn compile_rule_to_sql(rule: &SigmaRule) -> Option<String> {
     let sql = compile_expr(&rule.condition_expr, &rule.selections);
-    if sql.is_empty() || sql == "0" { None } else { Some(sql) }
+    if sql.is_empty() || sql == "0" { return None; }
+    // Replace Sigma single-char wildcard '?' with SQL '_'.
+    // Also prevents clickhouse-rs from treating '?' as an unbound query parameter.
+    Some(sql.replace('?', "_"))
 }
 
 fn compile_expr(expr: &ConditionExpr, selections: &HashMap<String, SelectionGroup>) -> String {

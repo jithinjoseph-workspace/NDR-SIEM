@@ -159,25 +159,6 @@ async fn run_migrations(ch: &Client) {
             )
             ORDER BY (tenant_id, id)"#,
         ),
-        // ── siem_rules (correlation rule metadata + enable/disable) ──────────
-        (
-            "siem_rules",
-            r#"CREATE TABLE IF NOT EXISTS ndr.siem_rules ON CLUSTER ndr_cluster
-            (
-                id          String,
-                name        String,
-                description String  DEFAULT '',
-                severity    String  DEFAULT 'MEDIUM',
-                enabled     UInt8   DEFAULT 1,
-                tenant_id   String  DEFAULT '*',
-                created_at  DateTime DEFAULT now(),
-                updated_at  DateTime DEFAULT now()
-            )
-            ENGINE = ReplicatedReplacingMergeTree(
-                '/clickhouse/tables/{shard}/ndr/siem_rules', '{replica}', updated_at
-            )
-            ORDER BY (tenant_id, id)"#,
-        ),
         // ── siem_rule_fitness (Living Genome output) ─────────────────────────
         (
             "siem_rule_fitness",
@@ -231,11 +212,12 @@ async fn run_migrations(ch: &Client) {
 /// Insert the 10 OOTB rule rows into ndr.siem_rules (idempotent).
 async fn seed_ootb_rules(ch: &Client) {
     let rules = RuleEngine::rule_catalog();
-    for rule in rules {
+    for rule in &rules {
         let sql = format!(
-            "INSERT INTO ndr.siem_rules (id, name, description, severity, enabled, tenant_id) \
-             SELECT '{}', '{}', '{}', '{}', 1, '*' \
-             WHERE NOT EXISTS (SELECT 1 FROM ndr.siem_rules FINAL WHERE id = '{}')",
+            "INSERT INTO ndr.siem_rules \
+             (rule_id, tenant_id, name, description, severity, enabled) \
+             SELECT '{}', '*', '{}', '{}', '{}', 1 \
+             WHERE NOT EXISTS (SELECT 1 FROM ndr.siem_rules FINAL WHERE rule_id = '{}')",
             rule.id, escape(&rule.name), escape(&rule.description), rule.severity, rule.id
         );
         if let Err(e) = ch.query(&sql).execute().await {
@@ -252,16 +234,16 @@ async fn seed_ootb_rules(ch: &Client) {
 async fn load_rule_overrides(ch: &Client, engine: &RuleEngine) {
     use std::collections::HashMap;
 
-    let sql = "SELECT id, enabled FROM ndr.siem_rules FINAL WHERE tenant_id = '*'";
+    let sql = "SELECT rule_id, enabled FROM ndr.siem_rules FINAL WHERE tenant_id = '*'";
 
     #[derive(serde::Deserialize, clickhouse::Row)]
-    struct RuleRow { id: String, enabled: u8 }
+    struct RuleRow { rule_id: String, enabled: u8 }
 
     match ch.query(sql).fetch_all::<RuleRow>().await {
         Ok(rows) => {
             let map: HashMap<String, bool> = rows
                 .into_iter()
-                .map(|r| (r.id, r.enabled != 0))
+                .map(|r| (r.rule_id, r.enabled != 0))
                 .collect();
             engine.set_enabled_rules(map).await;
             tracing::debug!("Rule override map refreshed");

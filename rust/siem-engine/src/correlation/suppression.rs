@@ -39,6 +39,8 @@ impl SuppressionCache {
     /// Load suppression rules from ClickHouse.
     /// Called at startup and every 5 minutes.
     pub async fn refresh(&self) {
+        // No FINAL — siem_suppression_rules may be plain ReplicatedMergeTree on existing installs.
+        // Suppression reads are best-effort; occasional duplicates are harmless.
         let sql = r#"
             SELECT
                 id,
@@ -47,7 +49,7 @@ impl SuppressionCache {
                 hostname_pattern,
                 username_pattern,
                 enabled
-            FROM ndr.siem_suppression_rules FINAL
+            FROM ndr.siem_suppression_rules
             WHERE enabled = 1
         "#;
 
