@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 
-use super::{DetectionEngine, parse_rule_content};
+use super::DetectionEngine;
 pub use provigil_common::sigma_sync::GLOBAL_RULE_BLOCKLIST;
 
 /// Spawn the weekly Sigma sync using the shared provigil-common implementation.
@@ -75,5 +75,3 @@ async fn reload_engine(
     }
 }
 
-// Re-export parse_rule_content so detection/mod.rs continues to compile
-pub use provigil_common::detection::parse_rule_content as _parse_rule_content;

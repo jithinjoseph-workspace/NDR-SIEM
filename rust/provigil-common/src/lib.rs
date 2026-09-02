@@ -10,6 +10,7 @@ pub mod normalizer;
 pub mod siem;
 #[cfg(feature = "soar")]
 pub mod soar;
+pub mod sigma_sync;
 pub mod tenant;
 pub mod threat_intel;
 
