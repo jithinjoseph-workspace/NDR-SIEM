@@ -3,6 +3,11 @@ use totp_rs::{Algorithm, Secret, TOTP};
 
 /// Verify a TOTP code against the user's stored base32 secret.
 /// Compatible with Google Authenticator and any RFC 6238 app.
+///
+/// Not called yet — routes/mfa.rs::handle doesn't invoke this because there's
+/// no per-user secret column in the schema to check against. Kept ready for
+/// when MFA enrollment is actually built.
+#[allow(dead_code)]
 pub fn verify_totp(secret_base32: &str, code: &str) -> Result<bool> {
     let totp = TOTP::new(
         Algorithm::SHA1,

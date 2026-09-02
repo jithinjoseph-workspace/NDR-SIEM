@@ -4,12 +4,14 @@ use redis::AsyncCommands;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{AppState, mfa as totp_verify};
+use crate::AppState;
 use super::login::issue_full_token;
 
 #[derive(Deserialize)]
 pub struct MfaPayload {
     pub mfa_session: String,
+    // Accepted from the client but not yet verified — see NOT WIRED UP note below.
+    #[allow(dead_code)]
     pub code:        String,
 }
 
@@ -50,7 +52,12 @@ pub async fn handle(
         ).into_response(),
     };
 
-    // MFA fields not in current schema — placeholder for future support
+    // NOT WIRED UP: payload.code is never checked against crate::mfa::verify_totp
+    // because there is no per-user TOTP secret column in the schema yet, and
+    // nothing in login.rs currently creates a `provigil:mfa_pending:*` session
+    // or requires this step — so this endpoint is unreachable through normal
+    // login today. Finishing MFA needs: a secret-storage column + enrollment
+    // flow, login.rs deciding when to require it, and a real code check here.
     // Consume the one-time MFA session token
     let _: redis::RedisResult<()> = conn.del(&pending_key).await;
 

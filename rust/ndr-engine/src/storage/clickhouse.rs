@@ -292,24 +292,6 @@ fn sql_array_literal(values: &[String]) -> String {
     format!("[{}]", items)
 }
 
-pub fn default_permissions(role: &str) -> String {
-  match role {
-    "super_admin" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup,evidence,assets,ai-activity,ai-report",
-    "admin" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,users,setup,evidence,assets,ai-activity,ai-report",
-    "tenant_admin" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,users,evidence,assets,ai-activity,ai-report",
-    "default_user" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,settings,health,setup,evidence,assets,ai-activity,ai-report",
-    "senior_analyst" =>
-      "dashboard,alerts,logs,live,rules,soar,network-map,intel,health,evidence,assets,ai-activity,ai-report",
-    "analyst" =>
-      "dashboard,alerts,logs,live,network-map,intel,health,evidence,assets,ai-activity,ai-report",
-    _ => "dashboard,alerts,health",
-  }.to_string()
-}
-
 fn tenant_db(tenant_id: &str) -> String {
     if tenant_id == "default" {
         "ndr".to_string()
@@ -2026,6 +2008,7 @@ pub async fn update_integration(
 
 
 //save soar config
+#[cfg(feature = "soar")]
 pub async fn save_soar_config_by_tenant(
     &self, key: &str, value: &str, tenant_id: &str
 ) -> anyhow::Result<()> {
@@ -2039,12 +2022,14 @@ pub async fn save_soar_config_by_tenant(
     Ok(())
 }
 
+#[cfg(feature = "soar")]
 pub async fn save_soar_config(&self, key: &str, value: &str) -> anyhow::Result<()> {
     self.save_soar_config_by_tenant(key, value, "default").await
 }
 
 
 //get soar config
+#[cfg(feature = "soar")]
 pub async fn get_soar_config_by_tenant(
     &self, tenant_id: &str
 ) -> anyhow::Result<serde_json::Value> {
@@ -2066,12 +2051,14 @@ pub async fn get_soar_config_by_tenant(
     Ok(serde_json::Value::Object(map))
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_config(&self) -> anyhow::Result<serde_json::Value> {
     self.get_soar_config_by_tenant("default").await
 }
 
 
 //soar playbooks
+#[cfg(feature = "soar")]
 pub async fn get_soar_playbooks_by_tenant(
     &self, tenant_id: &str
 ) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -2104,11 +2091,13 @@ pub async fn get_soar_playbooks_by_tenant(
     })).collect())
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_playbooks(&self) -> anyhow::Result<Vec<serde_json::Value>> {
     self.get_soar_playbooks_by_tenant("default").await
 }
 
 //enable/disable playbook
+#[cfg(feature = "soar")]
 pub async fn update_playbook_enabled(
     &self, id: &str, enabled: bool, tenant_id: &str
 ) -> anyhow::Result<()> {
@@ -2127,6 +2116,7 @@ pub async fn update_playbook_enabled(
     Ok(())
 }
 
+#[cfg(feature = "soar")]
 pub async fn create_playbook(
     &self,
     id: &str,
@@ -4457,6 +4447,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn get_native_playbooks(&self, tenant_id: &str) -> anyhow::Result<Vec<crate::soar::SoarNativePlaybook>> {
         let db = tenant_db(tenant_id);
         #[derive(clickhouse::Row, serde::Deserialize)]
@@ -4569,6 +4560,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn insert_soar_case(
         &self,
         id: &str,
@@ -4601,6 +4593,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn update_soar_case_fields(
         &self,
         id: &str,
@@ -4633,6 +4626,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn insert_soar_playbook_run(
         &self,
         run: &crate::soar::SoarPlaybookRun,
@@ -4660,6 +4654,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn get_soar_cases(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
         let sensor_where = if sensor_ids.is_empty() {
@@ -4699,6 +4694,7 @@ pub async fn clear_sensor_command(
         })).collect())
     }
 
+#[cfg(feature = "soar")]
     pub async fn update_soar_case_status(&self, id: &str, status: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         // INSERT SELECT: ReplacingMergeTree(updated_at) forbids ALTER TABLE UPDATE on the version key.
@@ -4724,6 +4720,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn get_soar_case_comments(&self, case_id: &str, tenant_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
         let result = self.client
@@ -4736,6 +4733,7 @@ pub async fn clear_sensor_command(
         })).collect())
     }
 
+#[cfg(feature = "soar")]
     pub async fn insert_soar_case_comment(&self, case_id: &str, author: &str, comment: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         let id = uuid::Uuid::new_v4().to_string();
@@ -4747,6 +4745,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn insert_native_playbook(&self, pb: &crate::soar::SoarNativePlaybook) -> anyhow::Result<()> {
         let db = tenant_db(&pb.tenant_id);
         let query = format!(
@@ -4760,6 +4759,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn update_native_playbook(&self, id: &str, name: &str, description: &str, enabled: u8, cond_field: &str, cond_op: &str, cond_value: &str, action_type: &str, action_config: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         // INSERT SELECT preserves run_count/last_run/created_at and sets updated_at = now().
@@ -4789,6 +4789,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn delete_native_playbook(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         let query = format!(
@@ -4799,6 +4800,7 @@ pub async fn clear_sensor_command(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn get_soar_playbook_runs(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
         let hit_filter = if sensor_ids.is_empty() {
@@ -6262,6 +6264,7 @@ pub async fn get_ioc_hits(
 
     // ── Active Blocks ─────────────────────────────────────────────────────────
 
+#[cfg(feature = "soar")]
     pub async fn insert_active_block(&self, b: &crate::soar::ActiveBlock) -> anyhow::Result<()> {
         let q = format!(
             "INSERT INTO ndr.active_blocks \
@@ -6282,6 +6285,7 @@ pub async fn get_ioc_hits(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn list_active_blocks(&self, tenant_id: &str) -> anyhow::Result<Vec<crate::soar::ActiveBlock>> {
         let where_clause = if tenant_id == "superadmin" {
             "1=1".to_string()
@@ -6318,6 +6322,7 @@ pub async fn get_ioc_hits(
         }).collect())
     }
 
+#[cfg(feature = "soar")]
     pub async fn revoke_active_block(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<crate::soar::ActiveBlock>> {
         // Fetch the block first (need firewall_rule_id, firewall_type, src_ip for cleanup)
         let blocks = self.list_active_blocks(tenant_id).await?;
@@ -6338,6 +6343,7 @@ pub async fn get_ioc_hits(
 
     // ── Device isolations ──────────────────────────────────────────────────
 
+#[cfg(feature = "soar")]
     pub async fn insert_isolation(&self, iso: &crate::soar::DeviceIsolation) -> anyhow::Result<()> {
         let q = format!(
             "INSERT INTO ndr.device_isolations \
@@ -6355,6 +6361,7 @@ pub async fn get_ioc_hits(
         Ok(())
     }
 
+#[cfg(feature = "soar")]
     pub async fn list_isolations(&self, tenant_id: &str) -> anyhow::Result<Vec<crate::soar::DeviceIsolation>> {
         let where_clause = if tenant_id == "superadmin" {
             "status = 'active'".to_string()
@@ -6586,6 +6593,7 @@ pub async fn get_ioc_hits(
         Ok(rows.into_iter().map(|r| (r.ioc_type, r.ioc_value)).collect())
     }
 
+#[cfg(feature = "soar")]
     pub async fn restore_isolation(&self, id: &str, tenant_id: &str) -> anyhow::Result<Option<crate::soar::DeviceIsolation>> {
         let isolations = self.list_isolations(tenant_id).await?;
         let iso = isolations.into_iter().find(|i| i.id == id);
@@ -7252,8 +7260,10 @@ fn cidr_host_count(cidr: &str) -> usize {
 
 // ── SoarStore — bridge between provigil-common SOAR execution and ndr-engine storage ──
 
+#[cfg(feature = "soar")]
 use provigil_common::soar::{SoarStore, ActiveBlock, SoarPlaybookRun};
 
+#[cfg(feature = "soar")]
 #[async_trait::async_trait]
 impl SoarStore for ClickhouseStorage {
     async fn soar_get_integrations(&self, tenant_id: &str) -> Vec<serde_json::Value> {

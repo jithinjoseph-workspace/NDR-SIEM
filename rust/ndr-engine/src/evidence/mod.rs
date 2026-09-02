@@ -52,6 +52,11 @@ async fn query_ch(
 /// For ndr_hits rows whose sigma_hits is empty, rule_name comes from
 /// arrayElement(sigma_hits,1) which returns "". This function patches those
 /// rows by looking up the actual Suricata signature from ndr_events.raw.
+///
+/// If no signature can be recovered, the fallback label is picked from the
+/// row's own `correlation_status` (agent_s_only / agent_z_only / etc.) rather
+/// than assuming Suricata — a hit can just as well have come from Zeek+Sigma,
+/// and mislabeling it "Suricata IDS Alert" misattributes the detection.
 async fn fill_rule_names(
     mut rows: Value,
     http: &reqwest::Client,
@@ -77,15 +82,22 @@ async fn fill_rule_names(
         db, community_id
     )).await;
 
-    let fallback = sig_rows.get(0)
+    let recovered_sig = sig_rows.get(0)
         .and_then(|r| r["sig"].as_str())
         .filter(|s| !s.is_empty())
-        .unwrap_or("Suricata IDS Alert")
-        .to_string();
+        .map(|s| s.to_string());
 
     if let Value::Array(ref mut arr) = rows {
         for row in arr.iter_mut() {
             if row["rule_name"].as_str().map(|s| s.is_empty()).unwrap_or(true) {
+                let fallback = recovered_sig.clone().unwrap_or_else(|| {
+                    match row["correlation_status"].as_str().unwrap_or("") {
+                        "agent_s_only" => "Agent-S Alert (signature unavailable)".to_string(),
+                        "agent_z_only" | "zeek_only" => "Agent-Z Sigma Match (rule name unavailable)".to_string(),
+                        other if !other.is_empty() => format!("NDR Correlation Alert ({})", other),
+                        _ => "NDR Correlation Alert".to_string(),
+                    }
+                });
                 row["rule_name"] = json!(fallback);
             }
         }
@@ -722,7 +734,8 @@ pub async fn fetch_live_investigation(
             "SELECT src_ip, dst_ip, severity, score, \
              tags, sigma_hits, \
              arrayElement(sigma_hits, 1) as rule_name, \
-             src_country, dst_country, toString(timestamp) as timestamp \
+             src_country, dst_country, toString(timestamp) as timestamp, \
+             correlation_status \
              FROM {}.ndr_hits WHERE community_id = '{}' ORDER BY timestamp DESC",
             db, community_id
         )).await;
@@ -1243,7 +1256,8 @@ async fn build_evidence_bundle_inner(
              tags, sigma_hits, \
              arrayElement(sigma_hits, 1) as rule_name, \
              src_country, dst_country, \
-             toString(timestamp) as timestamp \
+             toString(timestamp) as timestamp, \
+             correlation_status \
              FROM {}.ndr_hits \
              WHERE community_id = '{}' \
              ORDER BY timestamp DESC",

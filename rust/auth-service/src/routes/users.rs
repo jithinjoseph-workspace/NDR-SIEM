@@ -12,6 +12,7 @@ use redis::AsyncCommands;
 use crate::AppState;
 use provigil_common::validate_jwt;
 use super::login::{default_permissions, validate_password_strength};
+use super::forgot::send_email;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Token extraction helper (cookie first, then Bearer header)
@@ -186,7 +187,22 @@ pub async fn create(
     };
 
     match state.db.create_user(&username, &hash, &role, &tenant_id, &permissions, &gmail, &secret_code).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "message": "User created" }))).into_response(),
+        Ok(()) => {
+            if role == "tenant_admin" && !gmail.is_empty() {
+                let db = state.db.clone();
+                let to_email = gmail.clone();
+                let username_clone = username.clone();
+                let secret_code_clone = secret_code.clone();
+                tokio::spawn(async move {
+                    let subject = "Your NDR Tenant Admin Secret Code";
+                    let body = format!("Hello {},\n\nYour secret code is: {}\n\nPLEASE DO NOT DELETE THIS MESSAGE.\nYou will need this secret code to reset your password if you ever forget it.\n\nThank you,\nNDR Security Team", username_clone, secret_code_clone);
+                    if let Err(e) = send_email(&db, &to_email, subject, &body).await {
+                        tracing::error!("Failed to send secret code email to {}: {}", to_email, e);
+                    }
+                });
+            }
+            (StatusCode::OK, Json(json!({ "status": "ok", "message": "User created" }))).into_response()
+        },
         Err(e) => {
             tracing::error!("create_user error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR,
@@ -235,7 +251,13 @@ pub async fn update(
                 Json(json!({ "status": "error", "message": "DB error" }))).into_response();
         }
     };
-    let (_existing_username, existing_role, existing_tenant) = identity;
+    let (existing_username, existing_role, existing_tenant) = identity;
+
+    // Nobody edits their own account or a super_admin account through this route.
+    if existing_username == claims.sub || existing_role == "super_admin" {
+        return (StatusCode::FORBIDDEN,
+            Json(json!({ "status": "error", "message": "This user cannot be edited here" }))).into_response();
+    }
 
     // tenant_admin may only update users in own tenant
     if claims.role == "tenant_admin" && existing_tenant != claims.tenant_id {
@@ -300,6 +322,21 @@ pub async fn set_status(
             Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
     }
 
+    if let Ok(Some((username, role, target_tenant))) = state.db.get_user_identity(&id).await {
+        if username == claims.sub || role == "super_admin" {
+            return (StatusCode::FORBIDDEN,
+                Json(json!({ "status": "error", "message": "This user cannot be deactivated here" }))).into_response();
+        }
+        if claims.role == "tenant_admin" && target_tenant != claims.tenant_id {
+            return (StatusCode::FORBIDDEN,
+                Json(json!({ "status": "error", "message": "Cannot modify users outside your tenant" }))).into_response();
+        }
+        if claims.role == "tenant_admin" && (role == "tenant_admin" || role == "admin") {
+            return (StatusCode::FORBIDDEN,
+                Json(json!({ "status": "error", "message": "Cannot modify admin users" }))).into_response();
+        }
+    }
+
     match state.db.set_user_active(&id, payload.active).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response(),
         Err(e) => {
@@ -330,7 +367,27 @@ pub async fn set_permissions(
         Err((s, j)) => return (s, j).into_response(),
     };
 
-    if claims.role != "super_admin" && claims.role != "tenant_admin" {
+    let target = match state.db.get_user_by_id(&id).await {
+        Ok(Some(u))  => u,
+        Ok(None)     => return (StatusCode::NOT_FOUND,
+            Json(json!({ "status": "error", "message": "User not found" }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_user_by_id error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "DB error" }))).into_response();
+        }
+    };
+
+    if target.role == "super_admin" {
+        return (StatusCode::FORBIDDEN,
+            Json(json!({ "status": "error", "message": "Super admin permissions cannot be changed here" }))).into_response();
+    } else if claims.role == "tenant_admin" {
+        let manageable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
+        if claims.tenant_id != target.tenant_id || !manageable_roles.contains(&target.role.as_str()) {
+            return (StatusCode::FORBIDDEN,
+                Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
+        }
+    } else if claims.role != "super_admin" {
         return (StatusCode::FORBIDDEN,
             Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
     }
@@ -367,7 +424,27 @@ pub async fn reset_password(
         Err((s, j)) => return (s, j).into_response(),
     };
 
-    if claims.role != "super_admin" && claims.role != "tenant_admin" {
+    let target = match state.db.get_user_by_id(&id).await {
+        Ok(Some(u))  => u,
+        Ok(None)     => return (StatusCode::NOT_FOUND,
+            Json(json!({ "status": "error", "message": "User not found" }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_user_by_id error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "DB error" }))).into_response();
+        }
+    };
+
+    if target.role == "super_admin" {
+        return (StatusCode::FORBIDDEN,
+            Json(json!({ "status": "error", "message": "Super admin password cannot be changed here" }))).into_response();
+    } else if claims.role == "tenant_admin" {
+        let manageable_roles = ["analyst", "senior_analyst", "viewer"];
+        if claims.tenant_id != target.tenant_id || !manageable_roles.contains(&target.role.as_str()) {
+            return (StatusCode::FORBIDDEN,
+                Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
+        }
+    } else if claims.role != "super_admin" {
         return (StatusCode::FORBIDDEN,
             Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
     }
@@ -411,7 +488,30 @@ pub async fn delete(
         Err((s, j)) => return (s, j).into_response(),
     };
 
-    if claims.role != "super_admin" && claims.role != "tenant_admin" {
+    let target = match state.db.get_user_identity(&id).await {
+        Ok(Some(t))  => t,
+        Ok(None)     => return (StatusCode::NOT_FOUND,
+            Json(json!({ "status": "error", "message": "User not found" }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_user_identity error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "DB error" }))).into_response();
+        }
+    };
+    let (username, role, tenant_id) = target;
+
+    if claims.role == "super_admin" {
+        if username == claims.sub || role == "super_admin" {
+            return (StatusCode::FORBIDDEN,
+                Json(json!({ "status": "error", "message": "This user cannot be deleted here" }))).into_response();
+        }
+    } else if claims.role == "tenant_admin" {
+        let protected_roles = ["super_admin", "admin", "tenant_admin"];
+        if tenant_id != claims.tenant_id || protected_roles.contains(&role.as_str()) {
+            return (StatusCode::FORBIDDEN,
+                Json(json!({ "status": "error", "message": "Tenant admins can only delete tenant users" }))).into_response();
+        }
+    } else {
         return (StatusCode::FORBIDDEN,
             Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
     }

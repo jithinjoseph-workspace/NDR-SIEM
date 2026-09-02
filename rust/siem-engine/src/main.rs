@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
-use axum::{Router, Json, middleware, http::StatusCode};
+use axum::{Router, Json};
 use serde_json::{json, Value};
 use tower_http::cors::{CorsLayer, Any};
 use tracing::info;

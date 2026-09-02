@@ -281,6 +281,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 }
                                 tracing::info!(sha256 = %sha_log, tenant = %tid_cl, "malware hash matched — hit created");
                                 let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+#[cfg(feature = "soar")]
                                 if feats.iter().any(|f| f == "soar") {
                                     crate::soar::execute_native_playbooks(
                                         &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
@@ -402,6 +403,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 }
                                 tracing::info!(ja3 = %ja3_log, tenant = %tid_cl, "malicious JA3 matched — hit created");
                                 let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+#[cfg(feature = "soar")]
                                 if feats.iter().any(|f| f == "soar") {
                                     crate::soar::execute_native_playbooks(
                                         &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
@@ -494,6 +496,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                         return;
                                     }
                                     tracing::info!(src = %src_log, tenant = %tid_cl, "DoH evasion detected — hit created");
+#[cfg(feature = "soar")]
                                     crate::soar::execute_native_playbooks(
                                         &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
                                     ).await;
@@ -937,6 +940,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 }
                                 tracing::info!(domain = %dom_log, tenant = %tid_cl, "malicious domain in DNS query — hit created");
                                 let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+#[cfg(feature = "soar")]
                                 if feats.iter().any(|f| f == "soar") {
                                     crate::soar::execute_native_playbooks(
                                         &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
@@ -1188,6 +1192,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     "Suricata alert promoted to hit"
                                 );
                                 let feats = crate::api::get_effective_features(&state_soar, &tid_cl).await;
+#[cfg(feature = "soar")]
                                 if feats.iter().any(|f| f == "soar") {
                                     crate::soar::execute_native_playbooks(
                                         &state_soar, hit_soar, risk_soar, enrich_soar, &tid_cl,
@@ -1351,6 +1356,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 return;
                             }
                             // GAP 3: SOAR playbooks
+#[cfg(feature = "soar")]
                             crate::soar::execute_native_playbooks(
                                 &state_soar, hit_soar, risk_soar, enrich_soar, &tid_clone,
                             ).await;

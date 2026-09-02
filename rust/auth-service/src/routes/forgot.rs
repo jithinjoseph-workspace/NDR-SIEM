@@ -175,7 +175,7 @@ pub async fn reset_password(
 // Email sending helper via lettre + SMTP settings from DB
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn send_email(
+pub(crate) async fn send_email(
     db: &Arc<AuthDb>,
     to: &str,
     subject: &str,

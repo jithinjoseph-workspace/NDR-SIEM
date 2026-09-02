@@ -6,6 +6,7 @@ description = "Shared types, JWT, SOAR, threat-intel, ClickHouse, Kafka, and ten
 
 [features]
 kafka = ["dep:rdkafka"]
+soar  = []
 
 [dependencies]
 jsonwebtoken = "9"

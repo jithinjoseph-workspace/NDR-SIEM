@@ -53,7 +53,6 @@ use std::time::Duration;
 use rdkafka::producer::Producer;
 use rdkafka::util::Timeout;
 use crate::evidence;
-use jsonwebtoken::{decode, Validation, DecodingKey};
 
 
 use base64::Engine;
@@ -64,6 +63,50 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // Standalone handlers that don't carry AppState use this module-level instance.
 static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
     std::sync::LazyLock::new(reqwest::Client::new);
+
+/// Batch geo-lookup for the threat/attack map widgets.
+///
+/// Tries the local GeoLite2-City DB first (state.enrichment.geoip) — offline,
+/// instant, and doesn't generate outbound traffic that our own Suricata rules
+/// flag ("ET INFO External IP Lookup Domain" fires on ip-api.com DNS lookups
+/// from the engine's own dashboard queries). Only IPs the local DB can't
+/// resolve fall back to ip-api.com, so most requests never leave the box.
+async fn geo_lookup_batch(state: &AppState, ips: &[String]) -> Vec<Value> {
+    let mut results = Vec::with_capacity(ips.len());
+    let mut unresolved: Vec<&String> = Vec::new();
+
+    for ip in ips {
+        match state.enrichment.geoip.as_ref().and_then(|g| g.lookup(ip)) {
+            Some(geo) if !geo.country_code.is_empty() => {
+                results.push(json!({
+                    "query":       ip,
+                    "status":      "success",
+                    "country":     geo.country_name,
+                    "countryCode": geo.country_code,
+                    "lat":         geo.latitude.unwrap_or(0.0),
+                    "lon":         geo.longitude.unwrap_or(0.0),
+                }));
+            }
+            _ => unresolved.push(ip),
+        }
+    }
+
+    if !unresolved.is_empty() {
+        let batch: Vec<Value> = unresolved.iter().map(|ip| json!({ "query": ip })).collect();
+        if let Ok(resp) = HTTP_CLIENT
+            .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
+            .json(&batch)
+            .send()
+            .await
+        {
+            if let Ok(fallback) = resp.json::<Vec<Value>>().await {
+                results.extend(fallback);
+            }
+        }
+    }
+
+    results
+}
 
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
@@ -235,28 +278,15 @@ pub fn publish_event_deduped(
 
 
 
-// JWT Claims extractor
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct AuthClaims {
-    pub sub: String,
-    pub role: String,
-    pub tenant_id: String,
-    pub permissions: Vec<String>,
-    pub exp: usize,
-    #[serde(default)]
-    pub jti: Option<String>,
-    #[serde(default)]
-    pub sensor_ids: Vec<String>,
-}
+// JWT Claims extractor — the shared struct auth-service actually signs into
+// every token, so ndr-engine sees the same `features`/`iat` fields it carries
+// instead of silently dropping them.
+pub type AuthClaims = provigil_common::Claims;
 
 #[allow(dead_code)]
 pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
-    let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
-    decode::<AuthClaims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default()
-    ).ok().map(|d| d.claims)
+    let secret = std::env::var("JWT_SECRET").ok()?;
+    provigil_common::validate_jwt(token, &secret).ok()
 }
 
 pub fn extract_claims(
@@ -283,13 +313,9 @@ pub fn extract_claims(
 
     let token = token_from_cookie.or_else(token_from_header)?;
 
-    let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
+    let secret = std::env::var("JWT_SECRET").ok()?;
 
-    decode::<AuthClaims>(
-        &token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default()
-    ).ok().map(|d| d.claims)
+    provigil_common::validate_jwt(&token, &secret).ok()
 }
 
 fn require_super_admin(
@@ -308,24 +334,9 @@ fn require_super_admin(
     }
 }
 
-fn permissions_from_payload(payload: &Value, role: &str) -> String {
-    match payload.get("permissions") {
-        Some(val) => {
-            if let Some(arr) = val.as_array() {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            } else if let Some(s) = val.as_str() {
-                s.to_string()
-            } else {
-                crate::storage::clickhouse::default_permissions(role)
-            }
-        }
-        None => crate::storage::clickhouse::default_permissions(role),
-    }
-}
-
+// Announcements live entirely in ndr-engine on this branch — nginx has no
+// specific /api/announcements block here, so the generic /api catch-all
+// sends this traffic to ndr-engine, not auth-service.
 fn string_list_from_payload(payload: &Value, key: &str) -> Vec<String> {
     match payload.get(key) {
         Some(Value::Array(values)) => values
@@ -394,8 +405,9 @@ pub async fn auth_middleware(
 ) -> axum::response::Response {
     let path = request.uri().path().to_string();
     
-    // Public routes - no auth needed
-    let public = ["/api/auth/login", "/api/auth/check-username", "/api/auth/forgot", "/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh"];
+    // Public routes - no auth needed. (/api/auth/* itself is not registered
+    // here at all — nginx proxies it straight to auth-service.)
+    let public = ["/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -409,7 +421,8 @@ pub async fn auth_middleware(
                 // ── Session JTI gate — force-logout / session revocation ───────
                 // Checks that the session still exists in Redis. Deleted by force-logout
                 // or explicit logout. Falls back to allow if Redis is unavailable.
-                if let Some(jti) = &claims.jti {
+                if !claims.jti.is_empty() {
+                    let jti = &claims.jti;
                     let session_key = format!("ndr:session:{}", jti);
                     let result: Result<bool, _> = redis::cmd("EXISTS")
                         .arg(&session_key)
@@ -1469,6 +1482,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 // Native playbooks were previously ungated and fired for every alert regardless
 // of score, which caused duplicate notifications alongside the legacy path below.
 // All three paths now share the same soar_threshold check.
+#[cfg(feature = "soar")]
 if risk.score >= soar_threshold {
     // 1. Native playbooks — tenant-scoped, each evaluates its own condition
     crate::soar::execute_native_playbooks(state, hit.clone(), risk.clone(), enrichment.clone(), &tenant_id).await;
@@ -1585,6 +1599,7 @@ for pb in &playbooks {
 
 
 // 3. Integrations — tenant-scoped (was hardcoded to "default" tenant)
+#[cfg(feature = "soar")]
 if risk.score >= soar_threshold {
 let integrations = state.ch_storage
     .get_integrations_by_tenant(&tenant_id).await
@@ -2471,17 +2486,9 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
         return Json(json!({ "countries": [] }));
     }
 
-    // Batch geo-lookup via ip-api.com (free, no key, ≤100 IPs per batch)
-    let batch: Vec<Value> = ip_rows.iter().take(100).map(|(ip, _)| json!({ "query": ip })).collect();
-    let geo_results: Vec<Value> = match HTTP_CLIENT
-        .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
-        .json(&batch)
-        .send()
-        .await
-    {
-        Ok(resp) => resp.json::<Vec<Value>>().await.unwrap_or_default(),
-        Err(_)   => vec![],
-    };
+    // Geo-lookup: local GeoLite2 DB first, ip-api.com only for what it can't resolve
+    let ips: Vec<String> = ip_rows.iter().take(100).map(|(ip, _)| ip.clone()).collect();
+    let geo_results = geo_lookup_batch(&state, &ips).await;
 
     // Build a count map from the DB rows
     let count_map: std::collections::HashMap<String, u64> = ip_rows.into_iter().collect();
@@ -2538,15 +2545,8 @@ pub async fn get_threat_intel_map(State(state): State<AppState>, headers: axum::
         return Json(json!({ "countries": [] }));
     }
 
-    let batch: Vec<Value> = ip_hits.keys().take(100)
-        .map(|ip| json!({ "query": ip })).collect();
-    let geo_results: Vec<Value> = match HTTP_CLIENT
-        .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
-        .json(&batch).send().await
-    {
-        Ok(resp) => resp.json::<Vec<Value>>().await.unwrap_or_default(),
-        Err(_)   => vec![],
-    };
+    let ips: Vec<String> = ip_hits.keys().take(100).cloned().collect();
+    let geo_results = geo_lookup_batch(&state, &ips).await;
 
     let mut country_map: std::collections::HashMap<String, (String, f64, f64, u64, u64, Vec<String>)> =
         std::collections::HashMap::new();
@@ -2912,6 +2912,7 @@ pub async fn get_effective_features(state: &AppState, tenant_id: &str) -> Vec<St
 }
 
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_status(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap
@@ -2938,6 +2939,7 @@ pub async fn get_soar_status(
 
 
 
+#[cfg(feature = "soar")]
 pub async fn toggle_playbook(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -2966,6 +2968,7 @@ pub async fn toggle_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn create_playbook(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4293,6 +4296,7 @@ tr:nth-child(even){{background:#f9f9f9}}
 
 
 // GET /api/soar/integrations
+#[cfg(feature = "soar")]
 pub async fn get_integrations(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap
@@ -4311,6 +4315,7 @@ pub async fn get_integrations(
 }
 
 // POST /api/soar/integrations
+#[cfg(feature = "soar")]
 pub async fn save_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4522,6 +4527,7 @@ async fn test_integration(
 }
 
 // POST /api/soar/integrations/test
+#[cfg(feature = "soar")]
 pub async fn test_integration_endpoint(
     State(_state): State<AppState>,
     Json(payload): Json<Value>,
@@ -4539,6 +4545,7 @@ pub async fn test_integration_endpoint(
 }
 
 // POST /api/soar/integrations/toggle
+#[cfg(feature = "soar")]
 pub async fn toggle_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4564,6 +4571,7 @@ pub async fn toggle_integration(
 }
 
 // DELETE /api/soar/integrations
+#[cfg(feature = "soar")]
 pub async fn delete_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4586,6 +4594,7 @@ pub async fn delete_integration(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4639,1088 +4648,6 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
                 "low": 0
             }))
         }
-    }
-}
-
-fn is_safe_username(username: &str) -> bool {
-    !username.is_empty() && username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '@' || c == '.' || c == '-')
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_safe_username() {
-        assert!(is_safe_username("john.doe"));
-        assert!(is_safe_username("user123"));
-        assert!(is_safe_username("admin@company.com"));
-        assert!(is_safe_username("test-user_name"));
-
-        assert!(!is_safe_username("../../../etc/passwd"));
-        assert!(!is_safe_username("..\\..\\windows\\system32"));
-        assert!(!is_safe_username("/root/secret"));
-        assert!(!is_safe_username("C:\\Users\\admin"));
-        assert!(!is_safe_username("user name"));
-        assert!(!is_safe_username("admin' OR 1=1--"));
-        assert!(!is_safe_username("admin; ls -la"));
-        assert!(!is_safe_username(""));
-    }
-}
-
-// GET /api/auth/check-username?username=xxx
-// Public, read-only — only confirms existence, never reveals password or role.
-pub async fn check_username(
-    State(state): State<AppState>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Json<Value> {
-    let username = params.get("username").map(|s| s.trim().to_string()).unwrap_or_default();
-
-    if !is_safe_username(&username) {
-        return Json(json!({ "exists": false }));
-    }
-
-    match state.ch_storage.get_user_by_username(&username).await {
-        Ok(Some(_)) => Json(json!({ "exists": true })),
-        _           => Json(json!({ "exists": false })),
-    }
-}
-
-fn validate_password_strength(password: &str) -> Result<(), &'static str> {
-    if password.len() < 8 {
-        return Err("Password must be at least 8 characters.");
-    }
-    if !password.chars().any(|c| c.is_uppercase()) {
-        return Err("Password must contain at least one uppercase letter.");
-    }
-    if !password.chars().any(|c| c.is_ascii_digit()) {
-        return Err("Password must contain at least one number.");
-    }
-    if !password.chars().any(|c| "!@#$%^&*()_+-=[]{}|;':\",./<>?".contains(c)) {
-        return Err("Password must contain at least one special character.");
-    }
-    Ok(())
-}
-
-fn parse_device_from_ua(ua: &str) -> String {
-    let u = ua.to_lowercase();
-    let os = if u.contains("iphone")                        { "iPhone" }
-        else if u.contains("ipad")                          { "iPad" }
-        else if u.contains("android")                       { "Android" }
-        else if u.contains("windows")                       { "Windows" }
-        else if u.contains("mac os") || u.contains("macintosh") { "macOS" }
-        else if u.contains("linux")                         { "Linux" }
-        else                                                { "Unknown" };
-    let browser = if u.contains("edg/")   { "Edge" }
-        else if u.contains("chrome")      { "Chrome" }
-        else if u.contains("firefox")     { "Firefox" }
-        else if u.contains("safari")      { "Safari" }
-        else                              { "Browser" };
-    format!("{} / {}", browser, os)
-}
-
-fn get_client_ip(headers: &axum::http::HeaderMap) -> String {
-    headers.get("X-Forwarded-For")
-        .or_else(|| headers.get("X-Real-IP"))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-// POST /api/auth/login — login is handled by auth-service (provigil-auth:3001).
-// nginx routes /api/auth/login → auth-service before this engine sees it.
-pub async fn login(
-    _state: State<AppState>,
-    _headers: axum::http::HeaderMap,
-    _body: axum::body::Body,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    (
-        StatusCode::GONE,
-        Json(json!({
-            "status": "error",
-            "message": "Login endpoint has moved to auth-service. Use /api/auth/login via the platform gateway."
-        }))
-    ).into_response()
-}
-
-
-// GET /api/auth/me
-pub async fn get_me(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Json<Value> {
-    let username = match extract_claims(&headers) {
-        Some(c) => c.sub,
-        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
-    };
-
-    match state.ch_storage.get_user_by_username(&username).await {
-        Ok(Some(user)) => {
-            let role = user["role"].as_str().unwrap_or("analyst");
-
-            // Roles that Tenant Admin can block are re-validated here so
-            // the 30-second session poll picks up a block promptly.
-            let blockable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
-            if blockable_roles.contains(&role) {
-                match state.ch_storage.is_user_active(&username).await {
-                    Ok(false) => {
-                        tracing::info!(
-                            "🚫 get_me: blocked user '{}' — returning USER_DISABLED",
-                            username
-                        );
-                        return Json(json!({
-                            "status": "error",
-                            "message": "Your account has been disabled by your administrator.",
-                            "code": "USER_DISABLED"
-                        }));
-                    }
-                    Err(e) => {
-                        tracing::warn!("User active check error in get_me for '{}': {}", username, e);
-                    }
-                    Ok(true) => {}
-                }
-            }
-
-            let permissions_str = if role == "super_admin" || role == "tenant_admin" {
-                crate::storage::clickhouse::default_permissions(role)
-            } else {
-                let stored = user["permissions"].as_str().unwrap_or("").to_string();
-                if stored.is_empty() {
-                    crate::storage::clickhouse::default_permissions(role)
-                } else {
-                    stored
-                }
-            };
-            let permissions: Vec<String> = permissions_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            let tenant_id = user["tenant_id"].as_str().unwrap_or("default");
-            let features = get_effective_features(&state, tenant_id).await;
-            Json(json!({
-                "status": "ok",
-                "user": {
-                    "id": user["id"].as_str().unwrap_or(""),
-                    "username": username,
-                    "role": role,
-                    "tenant_id": tenant_id,
-                    "permissions": permissions,
-                    "features": features,
-                    "secret_code": user["secret_code"].as_str().unwrap_or(""),
-                    "gmail": user["gmail"].as_str().unwrap_or("")
-                }
-            }))
-        }
-        Ok(None) => Json(json!({
-            "status": "error",
-            "message": "User not found"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        })),
-    }
-}
-
-// PUT /api/auth/me/gmail
-pub async fn update_me_gmail(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let username = match extract_claims(&headers) {
-        Some(c) => c.sub,
-        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
-    };
-    match state.ch_storage.get_user_by_username(&username).await {
-        Ok(Some(user)) => {
-            let id = user["id"].as_str().unwrap_or("");
-            let gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
-
-            if gmail.is_empty() {
-                return Json(json!({"status": "error", "message": "Email address cannot be empty"}));
-            }
-            if !gmail.contains('@') {
-                return Json(json!({"status": "error", "message": "Invalid email address format"}));
-            }
-
-            match state.ch_storage.update_user_gmail(id, &gmail).await {
-                Ok(_) => Json(json!({"status": "ok", "message": "Recovery email updated successfully"})),
-                Err(e) => {
-                    tracing::error!("Failed to update recovery email for user '{}': {}", username, e);
-                    Json(json!({"status": "error", "message": "Failed to update recovery email"}))
-                }
-            }
-        },
-        _ => Json(json!({"status": "error", "message": "User not found"}))
-    }
-}
-
-// POST /api/auth/logout
-pub async fn logout() -> axum::response::Response {
-    use axum::response::IntoResponse;
-    let mut resp = (
-        StatusCode::OK,
-        Json(json!({
-            "status": "ok",
-            "message": "Logged out"
-        }))
-    ).into_response();
-    // Expire the httpOnly cookie immediately
-    if let Ok(v) = "ndr_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0"
-        .parse::<axum::http::HeaderValue>()
-    {
-        resp.headers_mut().insert(axum::http::header::SET_COOKIE, v);
-    }
-    resp
-}
-
-// POST /api/auth/me/regenerate-secret
-pub async fn regenerate_secret_code(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Json<Value> {
-    let username = match extract_claims(&headers) {
-        Some(c) => c.sub,
-        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
-    };
-    let user = match state.ch_storage.get_user_by_username(&username).await {
-        Ok(Some(u)) => u,
-        _ => return Json(json!({"status": "error", "message": "User not found"})),
-    };
-    let id = user["id"].as_str().unwrap_or("").to_string();
-    // ThreadRng is !Send — keep it in its own block so it drops before the .await
-    let code: String = {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        (0..6).map(|_| {
-            let idx = rng.gen_range(0..36usize);
-            if idx < 10 { (b'0' + idx as u8) as char } else { (b'A' + (idx - 10) as u8) as char }
-        }).collect()
-    };
-    match state.ch_storage.update_user_secret_code(&id, &code).await {
-        Ok(_) => Json(json!({"status": "ok", "secret_code": code})),
-        Err(e) => {
-            tracing::error!("Failed to regenerate secret_code for '{}': {}", username, e);
-            Json(json!({"status": "error", "message": "Failed to generate code"}))
-        }
-    }
-}
-
-// ── Password Reset Flow (Tenant Admins) ─────────────────────────────────────
-
-// POST /api/auth/forgot/verify-secret
-pub async fn forgot_verify_secret(
-    State(state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let username = payload["username"].as_str().unwrap_or("").trim().to_string();
-    let secret_code = payload["secret_code"].as_str().unwrap_or("").trim().to_string();
-
-    if username.is_empty() || secret_code.is_empty() {
-        return Json(json!({"status": "error", "message": "Username and secret code are required"}));
-    }
-
-    match state.ch_storage.verify_tenant_admin_secret(&username, &secret_code).await {
-        Ok(Some(gmail)) => {
-            if gmail.is_empty() {
-                return Json(json!({"status": "error", "message": "No recovery email is configured for this account. Please contact the platform admin."}));
-            }
-            // Mask the gmail: j***@gmail.com
-            let parts: Vec<&str> = gmail.split('@').collect();
-            let hint = if parts.len() == 2 {
-                let name = parts[0];
-                let domain = parts[1];
-                if name.len() > 1 {
-                    format!("{}***@{}", &name[0..1], domain)
-                } else {
-                    format!("***@{}", domain)
-                }
-            } else {
-                "***".to_string()
-            };
-            Json(json!({"status": "ok", "gmail_hint": hint}))
-        }
-        Ok(None) => Json(json!({"status": "error", "message": "Invalid username or secret code"})),
-        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
-    }
-}
-
-// POST /api/auth/forgot/send-otp
-pub async fn forgot_send_otp(
-    State(state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let username = payload["username"].as_str().unwrap_or("").trim().to_string();
-    let input_gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
-
-    if username.is_empty() || input_gmail.is_empty() {
-        return Json(json!({"status": "error", "message": "Username and email are required"}));
-    }
-
-    // Cross-check DB
-    match state.ch_storage.get_gmail_for_user(&username).await {
-        Ok(Some(db_gmail)) => {
-            if db_gmail.to_lowercase() != input_gmail.to_lowercase() {
-                return Json(json!({"status": "error", "message": "Invalid email address"}));
-            }
-
-            // Generate OTP
-            use rand::Rng;
-            let otp: String = (0..6).map(|_| {
-                let digit = rand::thread_rng().gen_range(0..10);
-                (b'0' + digit as u8) as char
-            }).collect();
-
-            // Store in Redis (10 min TTL)
-            let redis_key = format!("otp_reset:{}", username);
-            let mut redis_conn = state.redis_mux.clone();
-            use redis::AsyncCommands;
-            if let Err(e) = redis_conn.set_ex::<_, _, ()>(&redis_key, &otp, 600).await {
-                tracing::error!("Failed to set OTP in redis: {}", e);
-                return Json(json!({"status": "error", "message": "Internal error (Redis)"}));
-            }
-
-            // Send Email using lettre
-            let subject = "NDR Password Reset OTP";
-            let body = format!("Your password reset OTP is: {}\n\nThis code will expire in 10 minutes.\nIf you did not request this, please ignore this email.", otp);
-            
-            if let Err(e) = send_system_email(&state, &input_gmail, subject, &body).await {
-                if e == "SMTP credentials not configured" {
-                    return Json(json!({"status": "error", "message": "Email delivery is not configured on this server. Please contact the administrator."}));
-                } else {
-                    tracing::error!("Failed to send OTP email: {}", e);
-                    return Json(json!({"status": "error", "message": e}));
-                }
-            }
-            
-            Json(json!({"status": "ok", "message": "OTP sent successfully"}))
-        },
-        Ok(None) => Json(json!({"status": "error", "message": "Invalid request"})),
-        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
-    }
-}
-
-// POST /api/auth/forgot/reset-password
-pub async fn forgot_reset_password(
-    State(state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let username = payload["username"].as_str().unwrap_or("").trim().to_string();
-    let otp = payload["otp"].as_str().unwrap_or("").trim().to_string();
-    let new_password = payload["new_password"].as_str().unwrap_or("").trim().to_string();
-
-    if username.is_empty() || otp.is_empty() || new_password.is_empty() {
-        return Json(json!({"status": "error", "message": "Username, OTP, and new password are required"}));
-    }
-    if let Err(msg) = validate_password_strength(&new_password) {
-        return Json(json!({"status": "error", "message": msg}));
-    }
-
-    // Check OTP in Redis
-    let redis_key = format!("otp_reset:{}", username);
-    let mut redis_conn = state.redis_mux.clone();
-    use redis::AsyncCommands;
-    let stored_otp: Option<String> = match redis_conn.get(&redis_key).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!("Failed to get OTP from redis: {}", e);
-            return Json(json!({"status": "error", "message": "Internal error (Redis)"}));
-        }
-    };
-
-    match stored_otp {
-        Some(val) if val == otp => {
-            // OTP is correct, hash and update password
-            let hash = bcrypt::hash(&new_password, 12).unwrap_or_default();
-            match state.ch_storage.reset_password_by_username_direct(&username, &hash).await {
-                Ok(_) => {
-                    // Delete OTP
-                    let _: () = redis_conn.del(&redis_key).await.unwrap_or_default();
-                    Json(json!({"status": "ok", "message": "Password reset successfully"}))
-                }
-                Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
-            }
-        }
-        _ => Json(json!({"status": "error", "message": "Invalid or expired OTP"}))
-    }
-}
-// GET /api/auth/users
-pub async fn get_users(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Json<Value> {
-    let claims = match extract_claims(&headers) {
-        Some(claims) => claims,
-        None => return Json(json!({
-            "status": "error",
-            "message": "Unauthorized",
-            "users": []
-        })),
-    };
-
-    let result = if claims.role == "super_admin" {
-        state.ch_storage.get_users().await
-    } else if claims.role == "tenant_admin" {
-        state.ch_storage.get_users_by_tenant(&claims.tenant_id).await
-    } else {
-        return Json(json!({
-            "status": "error",
-            "message": "Forbidden",
-            "users": []
-        }));
-    };
-
-    match result {
-        Ok(users) => Json(json!({
-            "status": "ok",
-            "users": users
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "users": [],
-            "message": e.to_string()
-        }))
-    }
-}
-
-// POST /api/auth/users
-pub async fn create_user(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let username = payload["username"]
-        .as_str().unwrap_or("").to_string();
-    let password = payload["password"]
-        .as_str().unwrap_or("").to_string();
-    let requested_role = payload["role"]
-        .as_str().unwrap_or("analyst").to_string();
-    let requested_tenant_id = payload["tenant_id"]
-        .as_str().unwrap_or("default").to_string();
-
-    let claims = match extract_claims(&headers) {
-        Some(claims) => claims,
-        None => return Json(json!({
-            "status": "error",
-            "message": "Unauthorized"
-        })),
-    };
-
-    let is_super_admin = claims.role == "super_admin";
-
-    let (role, tenant_id) = if is_super_admin {
-        let allowed_roles = ["tenant_admin", "default_user"];
-        if !allowed_roles.contains(&requested_role.as_str()) {
-            return Json(json!({
-                "status": "error",
-                "message": "Invalid role"
-            }));
-        }
-        if requested_role == "tenant_admin" {
-            if requested_tenant_id.is_empty() || requested_tenant_id == "default" {
-                return Json(json!({
-                    "status": "error",
-                    "message": "Tenant Admin must be assigned to a tenant"
-                }));
-            }
-            ("tenant_admin".to_string(), requested_tenant_id)
-        } else if requested_role == "default_user" {
-            ("default_user".to_string(), "default".to_string())
-        } else if requested_tenant_id.is_empty() {
-            (requested_role, "default".to_string())
-        } else {
-            (requested_role, requested_tenant_id)
-        }
-    } else if claims.role == "tenant_admin" {
-        let allowed_roles = ["analyst", "senior_analyst", "viewer"];
-        if !allowed_roles.contains(&requested_role.as_str()) {
-            return Json(json!({
-                "status": "error",
-                "message": "Tenant admins can only create tenant users"
-            }));
-        }
-        (requested_role, claims.tenant_id)
-    } else {
-        return Json(json!({
-            "status": "error",
-            "message": "Forbidden"
-        }));
-    };
-
-    let permissions = permissions_from_payload(&payload, &role);
-
-    if username.is_empty() || password.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "Username and password required"
-        }));
-    }
-    if let Err(msg) = validate_password_strength(&password) {
-        return Json(json!({"status": "error", "message": msg}));
-    }
-
-    // Gmail (optional but strongly encouraged for tenant_admin, for password recovery)
-    let gmail = payload["gmail"].as_str().unwrap_or("").trim().to_string();
-
-    // Auto-generate a 6-char uppercase alphanumeric secret_code for tenant_admin
-    let secret_code = if role == "tenant_admin" {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        (0..6)
-            .map(|_| {
-                let idx = rng.gen_range(0..36usize);
-                if idx < 10 {
-                    (b'0' + idx as u8) as char
-                } else {
-                    (b'A' + (idx - 10) as u8) as char
-                }
-            })
-            .collect::<String>()
-    } else {
-        String::new()
-    };
-
-    let hash = bcrypt::hash(&password, 12)
-        .unwrap_or_default();
-
-    match state.ch_storage.create_user(
-        &username, &hash, &role, &tenant_id, &permissions, &gmail, &secret_code
-    ).await {
-        Ok(_) => {
-            if role == "tenant_admin" && !gmail.is_empty() {
-                let state_clone = state.clone();
-                let to_email = gmail.clone();
-                let username_clone = username.clone();
-                let secret_code_clone = secret_code.clone();
-                tokio::spawn(async move {
-                    let subject = "Your NDR Tenant Admin Secret Code";
-                    let body = format!("Hello {},\n\nYour secret code is: {}\n\nPLEASE DO NOT DELETE THIS MESSAGE.\nYou will need this secret code to reset your password if you ever forget it.\n\nThank you,\nNDR Security Team", username_clone, secret_code_clone);
-                    if let Err(e) = send_system_email(&state_clone, &to_email, subject, &body).await {
-                        tracing::error!("Failed to send secret code email to {}: {}", to_email, e);
-                    }
-                });
-            }
-            Json(json!({
-                "status": "ok",
-                "message": format!("User {} created!", username)
-            }))
-        },
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-
-// PUT /api/auth/users/:id
-pub async fn update_user_api(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let claims = match require_super_admin(&headers) {
-        Ok(claims) => claims,
-        Err(response) => return response,
-    };
-
-    if let Ok(Some((username, role, _tenant_id))) = state.ch_storage.get_user_identity(&id).await {
-        if username == claims.sub || role == "super_admin" {
-            return Json(json!({
-                "status": "error",
-                "message": "This user cannot be edited here"
-            }));
-        }
-    }
-
-    let role = payload["role"]
-        .as_str().unwrap_or("analyst").to_string();
-    let tenant_id = payload["tenant_id"]
-        .as_str().unwrap_or("default").to_string();
-    let active = payload["active"].as_bool().unwrap_or(true);
-    let password = payload["password"].as_str().unwrap_or("").to_string();
-    let allowed_roles = [
-        "tenant_admin",
-        "default_user",
-        "admin",
-        "senior_analyst",
-        "analyst",
-        "viewer",
-    ];
-
-    if !allowed_roles.contains(&role.as_str()) {
-        return Json(json!({
-            "status": "error",
-            "message": "Invalid role"
-        }));
-    }
-    if role == "tenant_admin" && (tenant_id.is_empty() || tenant_id == "default") {
-        return Json(json!({
-            "status": "error",
-            "message": "Tenant Admin must be assigned to a tenant"
-        }));
-    }
-    let tenant_id = if role == "default_user" {
-        "default".to_string()
-    } else {
-        tenant_id
-    };
-
-    let permissions = permissions_from_payload(&payload, &role);
-    let hash = if password.is_empty() {
-        None
-    } else {
-        Some(bcrypt::hash(&password, 12).unwrap_or_default())
-    };
-
-    match state.ch_storage.update_user(
-        &id, &role, &tenant_id, &permissions, active, hash.as_deref()
-    ).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "User updated"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-// POST /api/auth/users/:id/status
-pub async fn set_user_status_api(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    // Allow super_admin and tenant_admin
-    let claims = match extract_claims(&headers) {
-        Some(claims) if claims.role == "super_admin" || claims.role == "tenant_admin" => claims,
-        Some(_) => return Json(json!({
-            "status": "error",
-            "message": "Forbidden: admin role required"
-        })),
-        None => return Json(json!({
-            "status": "error",
-            "message": "Unauthorized"
-        })),
-    };
-
-    // Look up the target user to validate permissions
-    if let Ok(Some((username, role, target_tenant))) = state.ch_storage.get_user_identity(&id).await {
-        // Cannot deactivate yourself or other super_admins
-        if username == claims.sub || role == "super_admin" {
-            return Json(json!({
-                "status": "error",
-                "message": "This user cannot be deactivated here"
-            }));
-        }
-        // Tenant admins can only manage users in their own tenant
-        if claims.role == "tenant_admin" && target_tenant != claims.tenant_id {
-            return Json(json!({
-                "status": "error",
-                "message": "Cannot modify users outside your tenant"
-            }));
-        }
-        // Tenant admins cannot deactivate other admins
-        if claims.role == "tenant_admin" && (role == "tenant_admin" || role == "admin") {
-            return Json(json!({
-                "status": "error",
-                "message": "Cannot modify admin users"
-            }));
-        }
-    }
-
-    let active = payload["active"].as_bool().unwrap_or(true);
-
-    match state.ch_storage.set_user_active(&id, active).await {
-        Ok(_) => {
-            info!("{} {} user {} (id={})",
-                claims.sub,
-                if active { "activated" } else { "deactivated" },
-                id, claims.tenant_id
-            );
-            Json(json!({
-                "status": "ok",
-                "message": if active { "User activated" } else { "User deactivated" }
-            }))
-        }
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-
-// PUT /api/auth/users/:id/permissions
-pub async fn update_user_permissions_api(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let claims = match extract_claims(&headers) {
-        Some(claims) => claims,
-        None => return Json(json!({
-            "status": "error",
-            "message": "Unauthorized"
-        })),
-    };
-
-    let target_user = match state.ch_storage.get_user_by_id(&id).await {
-        Ok(Some(user)) => user,
-        Ok(None) => return Json(json!({
-            "status": "error",
-            "message": "User not found"
-        })),
-        Err(e) => return Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        })),
-    };
-
-    let target_role = target_user["role"].as_str().unwrap_or("");
-    let target_tenant_id = target_user["tenant_id"].as_str().unwrap_or("");
-    let is_super_admin = claims.role == "super_admin"
-        || (claims.role == "admin" && claims.tenant_id == "default");
-
-    if target_role == "super_admin" {
-        return Json(json!({
-            "status": "error",
-            "message": "Super admin permissions cannot be changed here"
-        }));
-    } else if claims.role == "tenant_admin" {
-        let manageable_roles = ["analyst", "senior_analyst", "viewer", "default_user"];
-        if claims.tenant_id != target_tenant_id || !manageable_roles.contains(&target_role) {
-            return Json(json!({
-                "status": "error",
-                "message": "Forbidden"
-            }));
-        }
-    } else if !is_super_admin {
-        return Json(json!({
-            "status": "error",
-            "message": "Forbidden"
-        }));
-    }
-
-    let permissions = match payload.get("permissions") {
-        Some(val) => {
-            if let Some(arr) = val.as_array() {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            } else if let Some(s) = val.as_str() {
-                s.to_string()
-            } else {
-                "".to_string()
-            }
-        }
-        None => "".to_string(),
-    };
-
-    match state.ch_storage.update_user_permissions(&id, &permissions).await {
-        Ok(_) => Json(json!({
-            "status": "ok"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        })),
-    }
-}
-
-// POST /api/auth/users/:id/password
-pub async fn reset_user_password_api(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let claims = match extract_claims(&headers) {
-        Some(claims) => claims,
-        None => return Json(json!({
-            "status": "error",
-            "message": "Unauthorized"
-        })),
-    };
-
-    let target_user = match state.ch_storage.get_user_by_id(&id).await {
-        Ok(Some(user)) => user,
-        Ok(None) => return Json(json!({
-            "status": "error",
-            "message": "User not found"
-        })),
-        Err(e) => return Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        })),
-    };
-
-    let target_role = target_user["role"].as_str().unwrap_or("");
-    let target_tenant_id = target_user["tenant_id"].as_str().unwrap_or("");
-    let is_super_admin = claims.role == "super_admin"
-        || (claims.role == "admin" && claims.tenant_id == "default");
-
-    if target_role == "super_admin" {
-        return Json(json!({
-            "status": "error",
-            "message": "Super admin password cannot be changed here"
-        }));
-    } else if claims.role == "tenant_admin" {
-        let manageable_roles = ["analyst", "senior_analyst", "viewer"];
-        if claims.tenant_id != target_tenant_id || !manageable_roles.contains(&target_role) {
-            return Json(json!({
-                "status": "error",
-                "message": "Forbidden"
-            }));
-        }
-    } else if !is_super_admin {
-        return Json(json!({
-            "status": "error",
-            "message": "Forbidden"
-        }));
-    }
-
-    let password = match payload.get("password").and_then(|v| v.as_str()) {
-        Some(p) if !p.is_empty() => p,
-        _ => return Json(json!({
-            "status": "error",
-            "message": "Password is required"
-        })),
-    };
-    if let Err(msg) = validate_password_strength(password) {
-        return Json(json!({"status": "error", "message": msg}));
-    }
-
-    // Hash the new password using bcrypt
-    let password_hash = bcrypt::hash(password, 12).unwrap_or_default();
-
-    match state.ch_storage.set_user_password(&id, &password_hash).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "Password updated successfully"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        })),
-    }
-}
-
-// DELETE /api/auth/users/:id
-pub async fn delete_user(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-) -> Json<Value> {
-    let claims = match extract_claims(&headers) {
-        Some(claims) => claims,
-        None => return Json(json!({
-            "status": "error",
-            "message": "Unauthorized"
-        })),
-    };
-
-    let target = match state.ch_storage.get_user_identity(&id).await {
-        Ok(Some(target)) => target,
-        Ok(None) => return Json(json!({
-            "status": "error",
-            "message": "User not found"
-        })),
-        Err(e) => return Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        })),
-    };
-    let (username, role, tenant_id) = target;
-
-    if claims.role == "super_admin" {
-        if username == claims.sub || role == "super_admin" {
-            return Json(json!({
-                "status": "error",
-                "message": "This user cannot be deleted here"
-            }));
-        }
-    } else if claims.role == "tenant_admin" {
-        let protected_roles = ["super_admin", "admin", "tenant_admin"];
-        if tenant_id != claims.tenant_id || protected_roles.contains(&role.as_str()) {
-            return Json(json!({
-                "status": "error",
-                "message": "Tenant admins can only delete tenant users"
-            }));
-        }
-    } else {
-        return Json(json!({
-            "status": "error",
-            "message": "Forbidden"
-        }));
-    }
-
-    match state.ch_storage.delete_user(&id).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "User deleted"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-// GET /api/auth/tenants
-pub async fn get_tenants(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Json<Value> {
-    if let Err(response) = require_super_admin(&headers) {
-        return response;
-    }
-
-    match state.ch_storage.get_tenants().await {
-        Ok(mut tenants) => {
-            // When a verified license is present for a real tenant (not "default"),
-            // hide the "default" placeholder from the list — the real tenant is the only org.
-            if let Some(lic) = &state.verified_license {
-                if lic.tenant_id != "default" {
-                    tenants.retain(|t| t.get("id").and_then(|v| v.as_str()) != Some("default"));
-                }
-            }
-            Json(json!({ "status": "ok", "tenants": tenants }))
-        }
-        Err(e) => Json(json!({ "status": "error", "tenants": [], "message": e.to_string() }))
-    }
-}
-
-// POST /api/auth/tenants
-pub async fn create_tenant(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    if let Err(response) = require_super_admin(&headers) {
-        return response;
-    }
-
-    let name = payload["name"]
-        .as_str().unwrap_or("").to_string();
-    let id = payload["id"]
-        .as_str().unwrap_or("").to_string();
-
-    if name.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "Tenant name required"
-        }));
-    }
-
-    match state.ch_storage
-        .create_tenant(&id, &name).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": format!("Tenant {} created!", name)
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-// PUT /api/auth/tenants/:id
-pub async fn update_tenant_api(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    if let Err(response) = require_super_admin(&headers) {
-        return response;
-    }
-    let name = payload["name"].as_str().unwrap_or("").to_string();
-    let active = payload["active"].as_bool().unwrap_or(true);
-
-    if id == "default" && !active {
-        return Json(json!({
-            "status": "error",
-            "message": "Default tenant cannot be deactivated"
-        }));
-    }
-    if name.is_empty() {
-        return Json(json!({
-            "status": "error",
-            "message": "Tenant name required"
-        }));
-    }
-
-    match state.ch_storage.update_tenant(&id, &name, active).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "Tenant updated"
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-// POST /api/auth/tenants/:id/status
-pub async fn set_tenant_status_api(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    if let Err(response) = require_super_admin(&headers) {
-        return response;
-    }
-    let active = payload["active"].as_bool().unwrap_or(true);
-
-    if id == "default" && !active {
-        return Json(json!({
-            "status": "error",
-            "message": "Default tenant cannot be deactivated"
-        }));
-    }
-
-    match state.ch_storage.set_tenant_active(&id, active).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": if active { "Tenant activated" } else { "Tenant deactivated" }
-        })),
-        Err(e) => Json(json!({
-            "status": "error",
-            "message": e.to_string()
-        }))
-    }
-}
-
-pub async fn set_tenant_ai_enabled_api(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    if let Err(response) = require_super_admin(&headers) {
-        return response;
-    }
-    let enabled = payload["enabled"].as_bool().unwrap_or(true);
-    match state.ch_storage.set_tenant_ai_enabled(&id, enabled).await {
-        Ok(_) => {
-            tracing::info!("AI {} for tenant {} by super_admin", if enabled { "enabled" } else { "disabled" }, id);
-            Json(json!({"status": "ok", "ai_enabled": enabled}))
-        },
-        Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
 }
 
@@ -6205,6 +5132,7 @@ docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
 }
 
 //jira ticket
+#[cfg(feature = "soar")]
 pub async fn get_jira_tickets(
     Json(payload): Json<Value>,
 ) -> Json<Value> {
@@ -8552,6 +7480,7 @@ lastPacket,node",
 
 // ── NATIVE SOAR API ENDPOINTS ───────────────────────────────────────────────
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_cases(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -8562,6 +7491,7 @@ pub async fn get_soar_cases(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_case_comments(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -8573,6 +7503,7 @@ pub async fn get_soar_case_comments(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn add_soar_case_comment(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -8589,6 +7520,7 @@ pub async fn add_soar_case_comment(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_soar_case_status(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -8605,6 +7537,7 @@ pub async fn update_soar_case_status(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn create_soar_case(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -8637,6 +7570,7 @@ pub async fn create_soar_case(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_soar_case(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -8654,6 +7588,7 @@ pub async fn update_soar_case(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_native_playbooks(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -8664,6 +7599,7 @@ pub async fn get_native_playbooks(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn create_native_playbook(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -8692,6 +7628,7 @@ pub async fn create_native_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_native_playbook(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -8715,6 +7652,7 @@ pub async fn update_native_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn delete_native_playbook(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -8726,6 +7664,7 @@ pub async fn delete_native_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_runs(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -10601,6 +9540,7 @@ pub async fn ai_suggest_trusted_domains(
 
 // ── Active Blocks ─────────────────────────────────────────────────────────
 
+#[cfg(feature = "soar")]
 pub async fn list_active_blocks(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -10617,12 +9557,14 @@ pub async fn list_active_blocks(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct RevokeBlockBody {
     pub id:                    String,
     #[allow(dead_code)]
     pub sensor_id: Option<String>,
 }
 
+#[cfg(feature = "soar")]
 pub async fn revoke_active_block(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -10666,6 +9608,7 @@ pub async fn revoke_active_block(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct ManualBlockBody {
     pub src_ip:         String,
     pub src_port:       Option<u16>,
@@ -10674,6 +9617,7 @@ pub struct ManualBlockBody {
     pub reason:         Option<String>,
 }
 
+#[cfg(feature = "soar")]
 pub async fn manual_block(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -10809,6 +9753,7 @@ pub async fn update_incident_status(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn list_isolations(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -10825,6 +9770,7 @@ pub async fn list_isolations(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct IsolateBody {
     pub target_ip:       String,
     pub gateway_ip:      Option<String>,
@@ -10833,6 +9779,7 @@ pub struct IsolateBody {
     pub reason:          Option<String>,
 }
 
+#[cfg(feature = "soar")]
 pub async fn isolate_device_handler(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -10923,10 +9870,12 @@ pub async fn isolate_device_handler(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct UnisolateBody {
     pub id: String,
 }
 
+#[cfg(feature = "soar")]
 pub async fn unisolate_device_handler(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -11032,92 +9981,6 @@ pub async fn delete_doh_provider(
         *state.doh_ips.write().await = set;
     }
     Json(json!({"status":"ok","removed":ip}))
-}
-
-pub async fn send_system_email(state: &AppState, to_email: &str, subject: &str, body: &str) -> Result<(), String> {
-    let (smtp_host, port_str, smtp_user, smtp_pass) = state.ch_storage.get_global_smtp_settings().await.unwrap_or_else(|_| ("smtp.gmail.com".to_string(), "587".to_string(), "".to_string(), "".to_string()));
-    let smtp_port = port_str.parse::<u16>().unwrap_or(587);
-    
-    if smtp_user.is_empty() || smtp_pass.is_empty() {
-        return Err("SMTP credentials not configured".to_string());
-    }
-
-    use lettre::{Message, SmtpTransport, Transport};
-    use lettre::transport::smtp::authentication::Credentials;
-    use lettre::message::{MultiPart, SinglePart, header::ContentType, header::ContentDisposition, header::ContentId};
-
-    let html_body = format!(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{ font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0d1420; color: #f8fafc; margin: 0; padding: 20px; }}
-        .container {{ max-width: 600px; margin: 0 auto; background: linear-gradient(180deg, #ffffff 0%, #eefbf3 60%, #0d1420 100%); padding: 32px 24px; border-radius: 8px; text-align: center; }}
-        .header {{ margin-bottom: 24px; }}
-        .title {{ margin: 0; font-size: 24px; font-weight: 800; color: #064e3b; letter-spacing: 0.08em; text-transform: uppercase; }}
-        .tagline {{ margin: 4px 0 0 0; font-size: 10px; font-weight: 700; color: #166534; letter-spacing: 0.28em; text-transform: uppercase; }}
-        .message-box {{ background: rgba(255, 255, 255, 0.95); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 24px; margin-bottom: 32px; text-align: left; color: #0f172a; box-shadow: 0 4px 12px rgba(34,197,94,0.05); font-size: 14px; line-height: 1.6; white-space: pre-wrap; }}
-        .badge-container {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 6px; padding: 8px 14px; box-shadow: 0 4px 12px rgba(34,197,94,0.05); }}
-        .badge-text {{ color: #0f172a; font-size: 9px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; opacity: 0.85; margin: 0; padding-right: 8px; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1 class="title">PromaAlpha</h1>
-            <p class="tagline">NDR Platform</p>
-        </div>
-        <div class="message-box">
-{}
-        </div>
-        <div class="badge-container">
-            <span class="badge-text">powered by</span>
-            <img src="cid:promasecure_logo" alt="PromaSecure" style="height: 24px;" />
-        </div>
-    </div>
-</body>
-</html>"#,
-        body
-    );
-
-    let logo_part = SinglePart::builder()
-        .header(ContentType::parse("image/png").unwrap())
-        .header(ContentDisposition::inline())
-        .header(ContentId::from("<promasecure_logo>".to_string()))
-        .body(include_bytes!("../assets/promasecure.png").to_vec());
-
-    let multi = MultiPart::related()
-        .singlepart(SinglePart::html(html_body))
-        .singlepart(logo_part);
-
-    let email = Message::builder()
-        .from(format!("PromaAlpha NDR <{}>", smtp_user).parse().map_err(|e| format!("Invalid from address: {}", e))?)
-        .to(to_email.parse().map_err(|e| format!("Invalid to address: {}", e))?)
-        .subject(subject)
-        .multipart(multi)
-        .map_err(|e| format!("Failed to build email: {}", e))?;
-
-    let creds = Credentials::new(smtp_user.clone(), smtp_pass.clone());
-    
-    let result = tokio::task::spawn_blocking(move || {
-        let builder = if smtp_port == 465 {
-            SmtpTransport::relay(&smtp_host).unwrap()
-        } else {
-            SmtpTransport::starttls_relay(&smtp_host).unwrap()
-        };
-
-        let mailer = builder
-            .port(smtp_port)
-            .credentials(creds)
-            .build();
-        mailer.send(&email)
-    }).await;
-
-    match result {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(format!("Failed to send email: {}", e)),
-        Err(_) => Err("Internal thread error".to_string()),
-    }
 }
 
 // GET /api/admin/active-sessions — returns all active sessions for the caller's tenant
@@ -11589,11 +10452,11 @@ pub async fn list_retrospective_scans(
     if let Ok(rows) = state.ch_storage.list_retro_scans_for_tenant(&claims.tenant_id).await {
         for row in rows {
             if seen_ids.contains(&row.id) { continue; }
-            let started = chrono::NaiveDateTime::from_timestamp_opt(row.started_at as i64, 0)
-                .map(|dt| dt.and_utc().to_rfc3339()).unwrap_or_default();
+            let started = chrono::DateTime::from_timestamp(row.started_at as i64, 0)
+                .map(|dt| dt.to_rfc3339()).unwrap_or_default();
             let completed: Option<String> = if row.completed_at > 0 {
-                chrono::NaiveDateTime::from_timestamp_opt(row.completed_at as i64, 0)
-                    .map(|dt| dt.and_utc().to_rfc3339())
+                chrono::DateTime::from_timestamp(row.completed_at as i64, 0)
+                    .map(|dt| dt.to_rfc3339())
             } else { None };
             scans.push(json!({
                 "id":           row.id,
@@ -11648,11 +10511,11 @@ pub async fn get_retrospective_scan(
             // Fallback: look up persisted scan in ClickHouse
             match state.ch_storage.get_retro_scan_by_id(&claims.tenant_id, &id).await {
                 Ok(Some(row)) => {
-                    let started = chrono::NaiveDateTime::from_timestamp_opt(row.started_at as i64, 0)
-                        .map(|dt| dt.and_utc().to_rfc3339()).unwrap_or_default();
+                    let started = chrono::DateTime::from_timestamp(row.started_at as i64, 0)
+                        .map(|dt| dt.to_rfc3339()).unwrap_or_default();
                     let completed: Option<String> = if row.completed_at > 0 {
-                        chrono::NaiveDateTime::from_timestamp_opt(row.completed_at as i64, 0)
-                            .map(|dt| dt.and_utc().to_rfc3339())
+                        chrono::DateTime::from_timestamp(row.completed_at as i64, 0)
+                            .map(|dt| dt.to_rfc3339())
                     } else { None };
                     let matches: Vec<serde_json::Value> =
                         serde_json::from_str(&row.matches).unwrap_or_default();
