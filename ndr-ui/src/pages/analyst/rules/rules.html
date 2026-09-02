@@ -48,7 +48,7 @@
       </div>
       <div class="metric-body">
         <span class="metric-label">Total Rules</span>
-        <strong class="metric-val">{{ rules.length }}</strong>
+        <strong class="metric-val">{{ rulesTotal + agentSRules.length }}</strong>
       </div>
     </article>
     <article class="metric-card mc-active">
@@ -311,11 +311,11 @@
   <div *ngIf="!loading" class="engine-tabs">
     <button [class]="'engine-tab' + (activeTab === 'all' ? ' active' : '')" (click)="activeTab = 'all'">
       All
-      <span class="engine-tab-count">{{ rules.length + agentSRules.length }}</span>
+      <span class="engine-tab-count">{{ rulesTotal + agentSRules.length }}</span>
     </button>
     <button [class]="'engine-tab engine-tab-az' + (activeTab === 'agent-z' ? ' active' : '')" (click)="activeTab = 'agent-z'">
       Agent-Z
-      <span class="engine-tab-count">{{ rules.length }}</span>
+      <span class="engine-tab-count">{{ rulesTotal }}</span>
     </button>
     <button [class]="'engine-tab engine-tab-as' + (activeTab === 'agent-s' ? ' active' : '')" (click)="activeTab = 'agent-s'">
       Agent-S
@@ -338,6 +338,19 @@
         <lucide-icon [name]="GavelIcon" class="list-title-icon"></lucide-icon>
         <span>DETECTION RULES</span>
       </div>
+      <div class="rules-search-wrap">
+        <input
+          class="rules-search"
+          type="text"
+          placeholder="Search rule name or tag…"
+          [(ngModel)]="searchTerm"
+          (ngModelChange)="onSearchInput()"
+        />
+        <span *ngIf="searching" class="rules-search-status">Checking full rule set…</span>
+        <button *ngIf="searchTerm" class="rules-search-clear" (click)="clearSearch()" type="button">
+          <lucide-icon [name]="XIcon" class="w-3.5 h-3.5"></lucide-icon>
+        </button>
+      </div>
       <div class="topbar-right">
         <div class="sev-filters">
           <button
@@ -348,7 +361,7 @@
           >{{ sev }} <span>{{ severityCounts[sev] || 0 }}</span></button>
         </div>
         <div class="list-count-pill">
-          {{ displayRules.length }}<span *ngIf="categoryFilter || severityFilter"> / {{ rules.length }}</span> rules
+          {{ displayRules.length }}<span *ngIf="categoryFilter || severityFilter || searchTerm"> / {{ rulesTotal + agentSRules.length }}</span> rules
         </div>
       </div>
     </div>
@@ -408,11 +421,28 @@
         <div class="empty-orb">
           <lucide-icon [name]="GavelIcon" class="w-8 h-8"></lucide-icon>
         </div>
-        <span *ngIf="rules.length === 0">No SIGMA rules loaded</span>
-        <span *ngIf="rules.length > 0">No rules match filters</span>
-        <p *ngIf="rules.length === 0">Click "New Rule" to create one, or sync community rules.</p>
-        <p *ngIf="rules.length > 0">Try adjusting the category or severity filter.</p>
+        <ng-container *ngIf="dbSearchActive; else notSearching">
+          <span>No rule matching "{{ searchTerm }}" exists</span>
+          <p>Checked the full rule set — it's not just outside the loaded pages, it doesn't exist.</p>
+        </ng-container>
+        <ng-template #notSearching>
+          <span *ngIf="rulesTotal + agentSRules.length === 0">No SIGMA rules loaded</span>
+          <span *ngIf="rulesTotal + agentSRules.length > 0">No rules match filters</span>
+          <p *ngIf="rulesTotal + agentSRules.length === 0">Click "New Rule" to create one, or sync community rules.</p>
+          <p *ngIf="rulesTotal + agentSRules.length > 0">Try adjusting the category, severity, or search.</p>
+        </ng-template>
       </div>
+
+      <!-- Load more (Agent-Z / SIGMA rules — paginated) -->
+      <button
+        *ngIf="hasMoreRules && !dbSearchActive && activeTab !== 'agent-s' && !categoryFilter && !severityFilter && !searchTerm"
+        class="rules-load-more"
+        [disabled]="loadingMore"
+        (click)="loadMoreRules()"
+        type="button"
+      >
+        {{ loadingMore ? 'Loading…' : 'Load ' + pageSize + ' more (' + rules.length + ' / ' + rulesTotal + ')' }}
+      </button>
     </div>
   </section>
 

@@ -183,6 +183,22 @@ export class Api {
     return this.http.get<any[]>(`${this.baseUrl}/rules?q=${encodeURIComponent(q)}`);
   }
 
+  // Paginated rule listing — used by the analyst Rules page so it doesn't
+  // pull the entire (1000+ row) rule set on every load. X-Total-Count /
+  // X-Active-Count let the caller show accurate summary stats even though
+  // only one page of rows actually came back.
+  getRulesPage(limit: number, offset: number, q?: string): Observable<{ rules: any[]; total: number; activeTotal: number }> {
+    let url = `${this.baseUrl}/rules?limit=${limit}&offset=${offset}`;
+    if (q) url += `&q=${encodeURIComponent(q)}`;
+    return this.http.get<any[]>(url, { observe: 'response' }).pipe(
+      map(resp => ({
+        rules: resp.body || [],
+        total: parseInt(resp.headers.get('X-Total-Count') || '0', 10),
+        activeTotal: parseInt(resp.headers.get('X-Active-Count') || '0', 10),
+      }))
+    );
+  }
+
 
 
   createRule(rule: any): Observable<any> {

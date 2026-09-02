@@ -128,6 +128,7 @@ export class Alerts implements OnInit, OnDestroy {
   selectedIncident:  any|null = null;
   isolatingIp                 = '';
   isolateResult               = '';
+  isolatedIps                 = new Set<string>();
 
   private subs: Subscription[] = [];
   sensorIds: string[] = [];
@@ -802,6 +803,21 @@ export class Alerts implements OnInit, OnDestroy {
       },
       error: () => { this.incidentsLoading = false; this.cdr.detectChanges(); }
     });
+    this.loadIsolatedIps();
+  }
+
+  // Isolations persist server-side (device_isolations table) — refresh the
+  // in-memory set from there so "Isolated" survives a page reload instead of
+  // only reflecting whatever happened in this browser session.
+  loadIsolatedIps() {
+    this.api.listIsolations().subscribe({
+      next: (res: any) => {
+        const rows = res.data || [];
+        this.isolatedIps = new Set(rows.map((r: any) => r.target_ip));
+        this.cdr.detectChanges();
+      },
+      error: () => {}
+    });
   }
 
   openIncident(inc: any) {
@@ -826,7 +842,9 @@ export class Alerts implements OnInit, OnDestroy {
     this.api.isolateDevice({ target_ip: ip, enforcement: 'arp', reason: 'Isolated via incident story' }).subscribe({
       next: (res: any) => {
         this.isolatingIp = '';
-        this.isolateResult = res.status === 'ok' ? `${ip} isolated` : (res.message || 'Failed');
+        const ok = res.status === 'ok';
+        if (ok) this.isolatedIps.add(ip);
+        this.isolateResult = ok ? `${ip} isolated` : (res.message || 'Failed');
         this.showToast(this.isolateResult);
         this.cdr.detectChanges();
       },
