@@ -387,6 +387,7 @@ h2 {
   width: 4px; background: var(--emerald); border-radius: 2px;
   box-shadow: 0 0 8px rgba(16,185,129,0.4);
   transform-origin: bottom;
+  will-change: transform; /* hint GPU compositor for the animation */
 }
 /* Tuned for a slow, smooth, enterprise-grade data wave */
 .spark-bar:nth-child(1) { height: 14px; animation: spark-anim 2.0s ease-in-out infinite alternate; animation-delay: 0.0s; }
@@ -425,9 +426,7 @@ h2 {
 
 /* Premium KPI Cards */
 .prop-card {
-  background: rgba(11, 15, 25, 0.6);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(11, 15, 25, 0.85);
   border-radius: 24px;
   padding: 28px 32px;
   display: flex;
@@ -509,9 +508,7 @@ h2 {
 .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 
 .chart-card {
-  background: rgba(11, 15, 25, 0.6);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(11, 15, 25, 0.85);
   border-radius: 24px;
   padding: 32px;
   display: flex; flex-direction: column;
@@ -580,9 +577,7 @@ h2 {
 
 /* ── DATA GRID ───────────────────────────────────────────────────── */
 .enterprise-grid {
-  background: rgba(11, 15, 25, 0.6);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(11, 15, 25, 0.85);
   border-radius: 24px;
   overflow: hidden;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);

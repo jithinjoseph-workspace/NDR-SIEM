@@ -125,7 +125,8 @@
     *ngIf="activeTab() === 'users'"
     [tenantId]="tenantId()"
     [tenantName]="tenantName()"
-    [tenantFeatures]="tenantFeatures()">
+    [tenantFeatures]="tenantFeatures()"
+    [parentSensorKeys]="sensorKeys()">
   </app-users>
 
   <app-trusted-domains

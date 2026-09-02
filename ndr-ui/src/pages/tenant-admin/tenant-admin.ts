@@ -10,7 +10,8 @@ import {
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
 import { Router } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Subscription, Subject, forkJoin } from 'rxjs';
+import { takeUntil } from 'rxjs/operators';
 
 import { UsersSection }    from './users/users';
 import { TrustedDomains }  from './trusted-domains/trusted-domains';
@@ -55,6 +56,7 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   // System status
   readonly tenantSystemStatus = signal<'OPERATIONAL' | 'DEGRADED' | 'CHECKING...'>('CHECKING...');
+  readonly sensorKeys         = signal<any[]>([]);  // populated by status poll — shared with child
 
   // Software update
   readonly updateAvailable  = signal(false);
@@ -70,6 +72,9 @@ export class TenantAdmin implements OnInit, OnDestroy {
   readonly pageSubtitle = () => `Manage analysts and page access for ${this.tenantName()}.`;
 
   private statusInterval: ReturnType<typeof setInterval> | null = null;
+  private messageTimer: ReturnType<typeof setTimeout> | null = null;
+  // Cancels the previous inflight status poll before starting a new one
+  private readonly statusPoll$ = new Subject<void>();
 
   constructor(
     private api: Api,
@@ -107,6 +112,9 @@ export class TenantAdmin implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     if (this.statusInterval) clearInterval(this.statusInterval);
+    if (this.messageTimer) clearTimeout(this.messageTimer);
+    this.statusPoll$.next();
+    this.statusPoll$.complete();
   }
 
   switchTab(tab: 'users' | 'trusted-domains' | 'sessions' | 'profile') {
@@ -176,25 +184,32 @@ export class TenantAdmin implements OnInit, OnDestroy {
   // ── System status ─────────────────────────────────────────────────────────
 
   private refreshTenantSystemStatus() {
-    this.api.getSensorKeys().subscribe({
-      next: (sensors: any[]) => {
+    // Cancel any previous inflight poll before starting a new one
+    this.statusPoll$.next();
+
+    // Run both requests in parallel instead of waterfall
+    forkJoin({
+      sensors: this.api.getSensorKeys(),
+      stats:   this.api.getDashboardStats(),
+    })
+    .pipe(takeUntil(this.statusPoll$))
+    .subscribe({
+      next: ({ sensors, stats }: { sensors: any[]; stats: any }) => {
+        // Share sensor keys with the child UsersSection via @Input so it doesn't
+        // need to make its own getSensorKeys() call.
+        this.sensorKeys.set(sensors);
+
         const healthyPipeline = sensors.length === 0 ||
-          sensors.some(s =>
+          sensors.some((s: any) =>
             s.active !== false &&
             (this.isRunning(s['agent-z']) || this.isRunning(s['agent-s']) || this.isRunning(s.vector))
           );
-
-        this.api.getDashboardStats().subscribe({
-          next: data => {
-            const svc = data?.services || {};
-            const platformHealthy =
-              this.isRunning(svc.kafka) &&
-              this.isRunning(svc.clickhouse) &&
-              this.isRunning(svc.engine || 'running');
-            this.tenantSystemStatus.set(healthyPipeline && platformHealthy ? 'OPERATIONAL' : 'DEGRADED');
-          },
-          error: () => { this.tenantSystemStatus.set('DEGRADED'); },
-        });
+        const svc = stats?.services || {};
+        const platformHealthy =
+          this.isRunning(svc.kafka) &&
+          this.isRunning(svc.clickhouse) &&
+          this.isRunning(svc.engine || 'running');
+        this.tenantSystemStatus.set(healthyPipeline && platformHealthy ? 'OPERATIONAL' : 'DEGRADED');
       },
       error: () => { this.tenantSystemStatus.set('DEGRADED'); },
     });
@@ -209,7 +224,8 @@ export class TenantAdmin implements OnInit, OnDestroy {
   showMessage(message: string, type: 'success' | 'error') {
     this.message.set(message);
     this.messageType.set(type);
-    setTimeout(() => this.message.set(''), 5000);
+    if (this.messageTimer) clearTimeout(this.messageTimer);
+    this.messageTimer = setTimeout(() => { this.message.set(''); this.messageTimer = null; }, 5000);
   }
 
   private formatTenantName(tenantId: string) {

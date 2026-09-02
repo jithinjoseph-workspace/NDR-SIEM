@@ -166,10 +166,11 @@
       </div>
       <span class="role-pill">{{ getRoleLabel(user.role) }}</span>
       <div class="permission-list">
-        <span *ngFor="let label of getPermissionLabels(user).slice(0, 3)">{{ label }}</span>
-        <span *ngIf="getPermissionLabels(user).length > 3"
+        @let permLabels = getPermissionLabels(user);
+        <span *ngFor="let label of permLabels.slice(0, 3)">{{ label }}</span>
+        <span *ngIf="permLabels.length > 3"
               style="color: var(--blue-hover); border-color: rgba(59,130,246,0.2); background: var(--blue-dim)">
-          +{{ getPermissionLabels(user).length - 3 }}
+          +{{ permLabels.length - 3 }}
         </span>
       </div>
       <span [class]="'status-pill ' + getUserStatus(user)">{{ getUserStatus(user) }}</span>
@@ -442,11 +443,11 @@
         <div class="permissions-header">
           <div class="permissions-header-left"><strong>PAGE ACCESS</strong></div>
           <div class="perm-count-badge">
-            <span class="perm-count-num">{{ visibleEnabledCount }}</span><span> of {{ licensedPermissionOptions.length }} Enabled</span>
+            <span class="perm-count-num">{{ visibleEnabledCount() }}</span><span> of {{ licensedPermissionOptions().length }} Enabled</span>
           </div>
         </div>
         <div class="permissions-scroll-area">
-          <div *ngFor="let cat of licensedPermissionCategories" class="perm-category-block">
+          <div *ngFor="let cat of licensedPermissionCategories()" class="perm-category-block">
             <div class="perm-category-label">{{ cat.title }}</div>
             <div class="permission-grid">
               <button *ngFor="let p of cat.options" type="button" class="perm-btn"
@@ -466,10 +467,10 @@
       <div class="modal-action-copy">
         <div class="modal-progress">
           <div class="modal-progress-label">
-            <span class="prog-count">{{ visibleEnabledCount }}</span>&nbsp;Permissions Enabled
+            <span class="prog-count">{{ visibleEnabledCount() }}</span>&nbsp;Permissions Enabled
           </div>
           <div class="progress-bar">
-            <div class="progress-fill" [style.width.%]="(visibleEnabledCount / licensedPermissionOptions.length) * 100">
+            <div class="progress-fill" [style.width.%]="(visibleEnabledCount() / licensedPermissionOptions().length) * 100">
               <div class="progress-glow"></div>
             </div>
           </div>

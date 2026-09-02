@@ -1,6 +1,6 @@
 import {
   Component, Input, OnInit, OnDestroy, ChangeDetectionStrategy,
-  signal, computed, HostListener, ViewEncapsulation,
+  signal, computed, ViewEncapsulation,
 } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -50,6 +50,14 @@ export class UsersSection implements OnInit, OnDestroy {
   @Input() tenantId = '';
   @Input() tenantName = 'Organization';
   @Input() set tenantFeatures(v: string[]) { if (v?.length) this._tenantFeatures.set(v); }
+  /** Sensor keys forwarded from the parent shell (already fetched in the status poll).
+   *  When provided, loadSensorData() skips its own getSensorKeys() call. */
+  @Input() set parentSensorKeys(keys: any[]) {
+    if (keys?.length) {
+      const tid = this.tenantId;
+      this.sensorKeys.set(keys.filter((k: any) => k.tenant_id === tid && k.active !== false));
+    }
+  }
   private readonly _tenantFeatures = signal<string[]>([]);
 
   UsersIcon        = UsersLucide;
@@ -202,7 +210,11 @@ export class UsersSection implements OnInit, OnDestroy {
     { title: 'SIEM',       keys: ['siem-dashboard', 'siem-logs', 'siem-sources'] },
   ];
 
-  get permissionCategories() {
+  // ── License-aware permission computed signals ──────────────────────────────
+  // Using computed() so these only recompute when _tenantFeatures changes,
+  // not on every change-detection cycle like a plain getter would.
+
+  readonly permissionCategories = computed(() => {
     const feats = this._tenantFeatures();
     const licensed = this.permissionOptions.filter(p => {
       if (!p.requiredFeatures || p.requiredFeatures.length === 0) return true;
@@ -215,7 +227,7 @@ export class UsersSection implements OnInit, OnDestroy {
         options: cat.keys.map(k => licensed.find(p => p.key === k)!).filter(Boolean),
       }))
       .filter(cat => cat.options.length > 0);
-  }
+  });
 
   readonly roleOptions = [
     { value: 'analyst',        label: 'Analyst',        tier: 'blue' },
@@ -227,8 +239,11 @@ export class UsersSection implements OnInit, OnDestroy {
 
   private usernameTimer: ReturnType<typeof setTimeout> | null = null;
   private usernameCheckSub: Subscription | null = null;
+  private messageTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly usernamePattern = /^[A-Za-z0-9._-]+$/;
   private permLabelsCache = new Map<string, string[]>();
+  // Lazy document click listener — only attached while a sensor dropdown is open
+  private docClickListener: (() => void) | null = null;
 
   trackByUserId(_: number, user: TenantUser) { return user.id; }
   trackByIndex(i: number)                    { return i; }
@@ -244,27 +259,21 @@ export class UsersSection implements OnInit, OnDestroy {
           .map((p: string) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ')) || 'Organization';
       }
     }
-    // Loaded as a route child — @Input() tenantFeatures may never be bound.
-    // Seed from JWT immediately, then refresh live from DB.
+    // @Input() tenantFeatures is bound by the parent (TenantAdmin) which already
+    // fetches the live value. Only seed from JWT here as a fallback for cases where
+    // this component is loaded as a standalone route without a parent binding.
     if (!this._tenantFeatures().length) {
       const jwtFeats = this.auth.getTenantFeatures();
       this._tenantFeatures.set(jwtFeats.length ? jwtFeats : ['ndr']);
     }
-    this.api.getTenantFeatures().subscribe({
-      next: (res: any) => {
-        const live: string[] = Array.isArray(res?.features) ? res.features
-          : typeof res?.features === 'string'
-            ? res.features.split(',').map((s: string) => s.trim()).filter(Boolean)
-            : [];
-        if (live.length) this._tenantFeatures.set(live);
-      },
-    });
     this.loadUsers();
     this.loadSensorData();
   }
 
   ngOnDestroy() {
     this.clearUsernameCheck();
+    this.removeDocClickListener();
+    if (this.messageTimer) clearTimeout(this.messageTimer);
   }
 
   // ── Getters ───────────────────────────────────────────────────────────────
@@ -347,12 +356,16 @@ export class UsersSection implements OnInit, OnDestroy {
     this.sensorAssignLoading.set(true);
     const tid = this.tenantId;
 
-    this.api.getSensorKeys().subscribe({
-      next: (keys) => {
-        this.sensorKeys.set(keys.filter(k => k.tenant_id === tid && k.active !== false));
-      },
-      error: () => {}
-    });
+    // Skip the getSensorKeys request if the parent shell already provided them
+    // via @Input() parentSensorKeys (populated during its status poll forkJoin).
+    if (!this.sensorKeys().length) {
+      this.api.getSensorKeys().subscribe({
+        next: (keys) => {
+          this.sensorKeys.set(keys.filter(k => k.tenant_id === tid && k.active !== false));
+        },
+        error: () => {}
+      });
+    }
 
     this.api.getSensorAssignments().subscribe({
       next: (res) => {
@@ -377,16 +390,33 @@ export class UsersSection implements OnInit, OnDestroy {
     return this.sensorKeys().filter(k => !assigned.has(k.key_prefix));
   }
 
-  @HostListener('document:click')
-  closeAllSensorDropdowns() {
-    const open = this.sensorDropdownOpen();
-    if (Object.keys(open).some(k => open[k])) this.sensorDropdownOpen.set({});
+  private addDocClickListener() {
+    if (this.docClickListener) return; // already attached
+    this.docClickListener = () => {
+      const open = this.sensorDropdownOpen();
+      if (Object.keys(open).some(k => open[k])) this.sensorDropdownOpen.set({});
+      this.removeDocClickListener();
+    };
+    document.addEventListener('click', this.docClickListener);
+  }
+
+  private removeDocClickListener() {
+    if (this.docClickListener) {
+      document.removeEventListener('click', this.docClickListener);
+      this.docClickListener = null;
+    }
   }
 
   toggleSensorDropdown(userId: string, event: Event) {
     event.stopPropagation();
     const wasOpen = !!this.sensorDropdownOpen()[userId];
-    this.sensorDropdownOpen.set(wasOpen ? {} : { [userId]: true });
+    if (wasOpen) {
+      this.sensorDropdownOpen.set({});
+      this.removeDocClickListener();
+    } else {
+      this.sensorDropdownOpen.set({ [userId]: true });
+      this.addDocClickListener();
+    }
   }
 
   isSensorSelected(userId: string, sensorId: string): boolean {
@@ -734,7 +764,8 @@ export class UsersSection implements OnInit, OnDestroy {
   showMessage(message: string, type: 'success' | 'error') {
     this.message.set(message);
     this.messageType.set(type);
-    setTimeout(() => this.message.set(''), 5000);
+    if (this.messageTimer) clearTimeout(this.messageTimer);
+    this.messageTimer = setTimeout(() => { this.message.set(''); this.messageTimer = null; }, 5000);
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
@@ -758,23 +789,21 @@ export class UsersSection implements OnInit, OnDestroy {
 
   // ── License-aware permission helpers ──────────────────────────────────────
 
-  get licensedPermissionOptions(): PermissionOption[] {
-    // permissionCategories getter already filters by tenantFeatures — flatten it
-    return this.permissionCategories.flatMap(c => c.options);
-  }
+  readonly licensedPermissionOptions = computed(() =>
+    this.permissionCategories().flatMap(c => c.options)
+  );
 
-  get licensedPermissionCategories() {
-    // permissionCategories already applies feature gating; return it directly
-    return this.permissionCategories;
-  }
+  readonly licensedPermissionCategories = computed(() =>
+    this.permissionCategories()
+  );
 
-  get visibleEnabledCount(): number {
-    const licensed = new Set(this.licensedPermissionOptions.map(p => p.key));
+  readonly visibleEnabledCount = computed(() => {
+    const licensed = new Set(this.licensedPermissionOptions().map(p => p.key));
     return this.userForm.permissions.filter(p => licensed.has(p)).length;
-  }
+  });
 
   private defaultPermissionsFor(role: string): string[] {
-    const licensed = this.licensedPermissionOptions.map(p => p.key);
+    const licensed = this.licensedPermissionOptions().map(p => p.key);
     if (role === 'viewer')         return ['dashboard', 'health'].filter(k => licensed.includes(k));
     if (role === 'senior_analyst') return licensed;
     // analyst: dashboard + everything except enforce pages (honeypots/retrospective)
