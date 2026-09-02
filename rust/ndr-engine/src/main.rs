@@ -16,6 +16,7 @@ mod scoring;
 mod storage;
 mod evidence;
 mod ai;
+#[cfg(feature = "soar")]
 pub mod soar;
 mod monitor;
 mod threat;
@@ -35,6 +36,38 @@ use enrichment::{AsnLookup, AssetIdentifier, EnrichmentPipeline, GeoIpLookup, Th
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
+
+#[cfg(feature = "soar")]
+fn soar_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/soar/status",  get(api::get_soar_status))
+        .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
+        .route("/api/soar/playbook/create",post(api::create_playbook))
+        .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))
+        .route("/api/soar/integrations/test",post(api::test_integration_endpoint))
+        .route("/api/soar/integrations/toggle",post(api::toggle_integration))
+        .route("/api/soar/cases", get(api::get_soar_cases).post(api::create_soar_case))
+        .route("/api/soar/cases/:id", put(api::update_soar_case))
+        .route("/api/soar/cases/:id/comments", get(api::get_soar_case_comments).post(api::add_soar_case_comment))
+        .route("/api/soar/cases/:id/status", put(api::update_soar_case_status))
+        .route("/api/soar/native/playbooks", get(api::get_native_playbooks).post(api::create_native_playbook))
+        .route("/api/soar/native/playbooks/:id", put(api::update_native_playbook).delete(api::delete_native_playbook))
+        .route("/api/soar/runs", get(api::get_soar_runs))
+        .route("/api/soar/integrations/delete",post(api::delete_integration)) // legacy
+        .route("/api/soar/integrations/:id", put(api::update_integration).delete(api::delete_integration))
+        .route("/api/soar/jira/tickets", post(api::get_jira_tickets))
+        .route("/api/blocks",          get(api::list_active_blocks))
+        .route("/api/blocks/manual",   post(api::manual_block))
+        .route("/api/blocks/revoke",   post(api::revoke_active_block))
+        .route("/api/isolations",      get(api::list_isolations))
+        .route("/api/isolate",         post(api::isolate_device_handler))
+        .route("/api/unisolate",       post(api::unisolate_device_handler))
+}
+
+#[cfg(not(feature = "soar"))]
+fn soar_routes() -> Router<AppState> {
+    Router::new()
+}
 
 #[tokio::main]
 async fn main() {
@@ -760,7 +793,6 @@ async fn main() {
         .route("/api/licenses/:id",          axum::routing::delete(api::delete_license))
         .route("/api/tenant/features",       get(api::get_tenant_features))
         .route("/api/tenant/features/:id",   post(api::set_tenant_features))
-        .route("/api/soar/status",  get(api::get_soar_status))
         .route("/api/settings", get(api::get_settings).post(api::update_settings))
         .route("/api/settings/smtp", get(api::get_global_smtp).post(api::update_global_smtp))
         .route("/api/settings/ai", get(api::get_ai_config).post(api::update_ai_config))
@@ -778,24 +810,23 @@ async fn main() {
         .route("/api/assets/:ip/trusted",      patch(api::set_asset_trusted_handler))
         .route("/api/assets/subnet-roles",     get(api::get_subnet_roles).put(api::set_subnet_roles))
         .route("/api/ipam/subnets", get(api::get_ipam_subnets))
-        .route("/api/soar/playbook/toggle",post(api::toggle_playbook))
-        .route("/api/soar/playbook/create",post(api::create_playbook))
-        .route("/api/soar/integrations",get(api::get_integrations).post(api::save_integration))
-        .route("/api/soar/integrations/test",post(api::test_integration_endpoint))
-        .route("/api/soar/integrations/toggle",post(api::toggle_integration))
-        .route("/api/soar/cases", get(api::get_soar_cases).post(api::create_soar_case))
-        .route("/api/soar/cases/:id", put(api::update_soar_case))
-        .route("/api/soar/cases/:id/comments", get(api::get_soar_case_comments).post(api::add_soar_case_comment))
-        .route("/api/soar/cases/:id/status", put(api::update_soar_case_status))
-        .route("/api/soar/native/playbooks", get(api::get_native_playbooks).post(api::create_native_playbook))
-        .route("/api/soar/native/playbooks/:id", put(api::update_native_playbook).delete(api::delete_native_playbook))
-        .route("/api/soar/runs", get(api::get_soar_runs))
-        .route("/api/soar/integrations/delete",post(api::delete_integration)) // legacy
-        .route("/api/soar/integrations/:id", put(api::update_integration).delete(api::delete_integration))
-        .route("/api/soar/jira/tickets", post(api::get_jira_tickets))
-        // Auth, users, tenants, and announcements are owned by auth-service
-        // (provigil-auth:3001) — nginx proxies /api/auth/*, /api/announcements
-        // there directly, so no duplicate handlers live in ndr-engine.
+        .merge(soar_routes())
+        // Auth, users, and tenants are owned by auth-service (provigil-auth:3001) —
+        // nginx proxies /api/auth/login, /api/auth/users, /api/auth/tenants,
+        // /api/auth/me/, /api/auth/forgot/ there directly, so no duplicate
+        // handlers live in ndr-engine for those.
+        //
+        // Announcements stay here: nginx has no dedicated /api/announcements
+        // block on this branch, so this traffic falls through the generic
+        // /api catch-all straight to ndr-engine.
+        .route("/api/announcements",
+            get(api::get_announcements_api)
+            .post(api::create_announcement_api))
+        .route("/api/announcements/active", get(api::get_active_announcements_api))
+        .route("/api/announcements/:id/read", post(api::mark_announcement_read_api))
+        .route("/api/announcements/:id",
+            put(api::update_announcement_api)
+            .delete(api::delete_announcement_api))
         .route("/api/support/messages", get(api::get_support_messages).post(api::create_support_message))
         .route("/api/support/messages/:id/review", post(api::review_support_message))
         .route("/api/support/messages/:id/reply", post(api::reply_support_message))
@@ -852,16 +883,10 @@ async fn main() {
 .route("/api/ai-suppressions",                get(api::list_ai_suppressions).post(api::create_manual_suppression))
 .route("/api/ai-suppressions/:id/deactivate", patch(api::deactivate_ai_suppression_handler))
 .route("/api/ai-suppressions/:id", delete(api::delete_ai_suppression_handler))
-.route("/api/blocks",          get(api::list_active_blocks))
-.route("/api/blocks/manual",   post(api::manual_block))
-.route("/api/blocks/revoke",   post(api::revoke_active_block))
 .route("/api/incidents",                          get(api::list_incidents))
 .route("/api/incidents/:id/status/:status",       post(api::update_incident_status))
 .route("/api/doh-providers",                      get(api::list_doh_providers).post(api::add_doh_provider))
 .route("/api/doh-providers/:ip",                  delete(api::delete_doh_provider))
-.route("/api/isolations",      get(api::list_isolations))
-.route("/api/isolate",         post(api::isolate_device_handler))
-.route("/api/unisolate",       post(api::unisolate_device_handler))
 .route("/api/threat/predictions",         get(api::get_threat_predictions))
 .route("/api/threat/predictions/history", get(api::get_threat_predictions_history))
 .route("/api/threat/exposure",            get(api::get_threat_exposure))

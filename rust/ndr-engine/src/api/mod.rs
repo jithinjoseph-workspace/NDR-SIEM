@@ -53,7 +53,6 @@ use std::time::Duration;
 use rdkafka::producer::Producer;
 use rdkafka::util::Timeout;
 use crate::evidence;
-use jsonwebtoken::{decode, Validation, DecodingKey};
 
 
 use base64::Engine;
@@ -64,6 +63,50 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // Standalone handlers that don't carry AppState use this module-level instance.
 static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
     std::sync::LazyLock::new(reqwest::Client::new);
+
+/// Batch geo-lookup for the threat/attack map widgets.
+///
+/// Tries the local GeoLite2-City DB first (state.enrichment.geoip) — offline,
+/// instant, and doesn't generate outbound traffic that our own Suricata rules
+/// flag ("ET INFO External IP Lookup Domain" fires on ip-api.com DNS lookups
+/// from the engine's own dashboard queries). Only IPs the local DB can't
+/// resolve fall back to ip-api.com, so most requests never leave the box.
+async fn geo_lookup_batch(state: &AppState, ips: &[String]) -> Vec<Value> {
+    let mut results = Vec::with_capacity(ips.len());
+    let mut unresolved: Vec<&String> = Vec::new();
+
+    for ip in ips {
+        match state.enrichment.geoip.as_ref().and_then(|g| g.lookup(ip)) {
+            Some(geo) if !geo.country_code.is_empty() => {
+                results.push(json!({
+                    "query":       ip,
+                    "status":      "success",
+                    "country":     geo.country_name,
+                    "countryCode": geo.country_code,
+                    "lat":         geo.latitude.unwrap_or(0.0),
+                    "lon":         geo.longitude.unwrap_or(0.0),
+                }));
+            }
+            _ => unresolved.push(ip),
+        }
+    }
+
+    if !unresolved.is_empty() {
+        let batch: Vec<Value> = unresolved.iter().map(|ip| json!({ "query": ip })).collect();
+        if let Ok(resp) = HTTP_CLIENT
+            .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
+            .json(&batch)
+            .send()
+            .await
+        {
+            if let Ok(fallback) = resp.json::<Vec<Value>>().await {
+                results.extend(fallback);
+            }
+        }
+    }
+
+    results
+}
 
 fn agent_url() -> String {
     env::var("NDR_AGENT_URL")
@@ -235,28 +278,15 @@ pub fn publish_event_deduped(
 
 
 
-// JWT Claims extractor
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct AuthClaims {
-    pub sub: String,
-    pub role: String,
-    pub tenant_id: String,
-    pub permissions: Vec<String>,
-    pub exp: usize,
-    #[serde(default)]
-    pub jti: Option<String>,
-    #[serde(default)]
-    pub sensor_ids: Vec<String>,
-}
+// JWT Claims extractor — the shared struct auth-service actually signs into
+// every token, so ndr-engine sees the same `features`/`iat` fields it carries
+// instead of silently dropping them.
+pub type AuthClaims = provigil_common::Claims;
 
 #[allow(dead_code)]
 pub fn extract_claims_with_token(token: &str) -> Option<AuthClaims> {
-    let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
-    decode::<AuthClaims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default()
-    ).ok().map(|d| d.claims)
+    let secret = std::env::var("JWT_SECRET").ok()?;
+    provigil_common::validate_jwt(token, &secret).ok()
 }
 
 pub fn extract_claims(
@@ -283,13 +313,9 @@ pub fn extract_claims(
 
     let token = token_from_cookie.or_else(token_from_header)?;
 
-    let Ok(secret) = std::env::var("JWT_SECRET") else { return None };
+    let secret = std::env::var("JWT_SECRET").ok()?;
 
-    decode::<AuthClaims>(
-        &token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default()
-    ).ok().map(|d| d.claims)
+    provigil_common::validate_jwt(&token, &secret).ok()
 }
 
 fn require_super_admin(
@@ -306,6 +332,68 @@ fn require_super_admin(
             "message": "Unauthorized"
         }))),
     }
+}
+
+// Announcements live entirely in ndr-engine on this branch — nginx has no
+// specific /api/announcements block here, so the generic /api catch-all
+// sends this traffic to ndr-engine, not auth-service.
+fn string_list_from_payload(payload: &Value, key: &str) -> Vec<String> {
+    match payload.get(key) {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        Some(Value::String(value)) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn announcement_status_from_payload(payload: &Value) -> String {
+    if let Some(status) = payload["status"].as_str() {
+        return status.trim().to_string();
+    }
+    match payload["active"].as_bool() {
+        Some(true) => "active".to_string(),
+        Some(false) => "inactive".to_string(),
+        None => "draft".to_string(),
+    }
+}
+
+fn announcement_targets_from_payload(payload: &Value) -> (String, Vec<String>, Vec<String>) {
+    let audience = payload["audience"].as_str().unwrap_or("all").trim().to_string();
+    let mut target_roles = string_list_from_payload(payload, "target_roles");
+    let mut target_tenants = string_list_from_payload(payload, "target_tenants");
+
+    match audience.as_str() {
+        "tenant_admins" if target_roles.is_empty() => {
+            target_roles.push("tenant_admin".to_string());
+        }
+        "tenant" => {
+            if target_tenants.is_empty() {
+                if let Some(tenant_id) = payload["tenant_id"].as_str() {
+                    let tenant_id = tenant_id.trim();
+                    if !tenant_id.is_empty() {
+                        target_tenants.push(tenant_id.to_string());
+                    }
+                }
+            }
+        }
+        "all" if target_roles.is_empty() && target_tenants.is_empty() => {
+            target_roles.push("all".to_string());
+            target_tenants.push("all".to_string());
+        }
+        _ => {}
+    }
+
+    (audience, target_roles, target_tenants)
 }
 
 // Auth middleware
@@ -333,7 +421,8 @@ pub async fn auth_middleware(
                 // ── Session JTI gate — force-logout / session revocation ───────
                 // Checks that the session still exists in Redis. Deleted by force-logout
                 // or explicit logout. Falls back to allow if Redis is unavailable.
-                if let Some(jti) = &claims.jti {
+                if !claims.jti.is_empty() {
+                    let jti = &claims.jti;
                     let session_key = format!("ndr:session:{}", jti);
                     let result: Result<bool, _> = redis::cmd("EXISTS")
                         .arg(&session_key)
@@ -1393,6 +1482,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
 // Native playbooks were previously ungated and fired for every alert regardless
 // of score, which caused duplicate notifications alongside the legacy path below.
 // All three paths now share the same soar_threshold check.
+#[cfg(feature = "soar")]
 if risk.score >= soar_threshold {
     // 1. Native playbooks — tenant-scoped, each evaluates its own condition
     crate::soar::execute_native_playbooks(state, hit.clone(), risk.clone(), enrichment.clone(), &tenant_id).await;
@@ -1509,6 +1599,7 @@ for pb in &playbooks {
 
 
 // 3. Integrations — tenant-scoped (was hardcoded to "default" tenant)
+#[cfg(feature = "soar")]
 if risk.score >= soar_threshold {
 let integrations = state.ch_storage
     .get_integrations_by_tenant(&tenant_id).await
@@ -2343,17 +2434,9 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
         return Json(json!({ "countries": [] }));
     }
 
-    // Batch geo-lookup via ip-api.com (free, no key, ≤100 IPs per batch)
-    let batch: Vec<Value> = ip_rows.iter().take(100).map(|(ip, _)| json!({ "query": ip })).collect();
-    let geo_results: Vec<Value> = match HTTP_CLIENT
-        .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
-        .json(&batch)
-        .send()
-        .await
-    {
-        Ok(resp) => resp.json::<Vec<Value>>().await.unwrap_or_default(),
-        Err(_)   => vec![],
-    };
+    // Geo-lookup: local GeoLite2 DB first, ip-api.com only for what it can't resolve
+    let ips: Vec<String> = ip_rows.iter().take(100).map(|(ip, _)| ip.clone()).collect();
+    let geo_results = geo_lookup_batch(&state, &ips).await;
 
     // Build a count map from the DB rows
     let count_map: std::collections::HashMap<String, u64> = ip_rows.into_iter().collect();
@@ -2410,15 +2493,8 @@ pub async fn get_threat_intel_map(State(state): State<AppState>, headers: axum::
         return Json(json!({ "countries": [] }));
     }
 
-    let batch: Vec<Value> = ip_hits.keys().take(100)
-        .map(|ip| json!({ "query": ip })).collect();
-    let geo_results: Vec<Value> = match HTTP_CLIENT
-        .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
-        .json(&batch).send().await
-    {
-        Ok(resp) => resp.json::<Vec<Value>>().await.unwrap_or_default(),
-        Err(_)   => vec![],
-    };
+    let ips: Vec<String> = ip_hits.keys().take(100).cloned().collect();
+    let geo_results = geo_lookup_batch(&state, &ips).await;
 
     let mut country_map: std::collections::HashMap<String, (String, f64, f64, u64, u64, Vec<String>)> =
         std::collections::HashMap::new();
@@ -2784,6 +2860,7 @@ pub async fn get_effective_features(state: &AppState, tenant_id: &str) -> Vec<St
 }
 
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_status(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap
@@ -2810,6 +2887,7 @@ pub async fn get_soar_status(
 
 
 
+#[cfg(feature = "soar")]
 pub async fn toggle_playbook(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -2838,6 +2916,7 @@ pub async fn toggle_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn create_playbook(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4165,6 +4244,7 @@ tr:nth-child(even){{background:#f9f9f9}}
 
 
 // GET /api/soar/integrations
+#[cfg(feature = "soar")]
 pub async fn get_integrations(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap
@@ -4183,6 +4263,7 @@ pub async fn get_integrations(
 }
 
 // POST /api/soar/integrations
+#[cfg(feature = "soar")]
 pub async fn save_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4394,6 +4475,7 @@ async fn test_integration(
 }
 
 // POST /api/soar/integrations/test
+#[cfg(feature = "soar")]
 pub async fn test_integration_endpoint(
     State(_state): State<AppState>,
     Json(payload): Json<Value>,
@@ -4411,6 +4493,7 @@ pub async fn test_integration_endpoint(
 }
 
 // POST /api/soar/integrations/toggle
+#[cfg(feature = "soar")]
 pub async fn toggle_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4436,6 +4519,7 @@ pub async fn toggle_integration(
 }
 
 // DELETE /api/soar/integrations
+#[cfg(feature = "soar")]
 pub async fn delete_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4458,6 +4542,7 @@ pub async fn delete_integration(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_integration(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -4511,6 +4596,232 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
                 "low": 0
             }))
         }
+    }
+}
+
+// GET /api/announcements
+pub async fn get_announcements_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    match state.ch_storage.get_announcements().await {
+        Ok(announcements) => Json(json!({
+            "status": "ok",
+            "announcements": announcements
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "announcements": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+// GET /api/announcements/active
+pub async fn get_active_announcements_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "announcements": [],
+            "message": "Unauthorized"
+        })),
+    };
+
+    match state.ch_storage
+        .get_active_announcements(&claims.role, &claims.tenant_id, &claims.sub)
+        .await {
+        Ok(announcements) => Json(json!({
+            "status": "ok",
+            "announcements": announcements
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "announcements": [],
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/announcements/:id/read
+pub async fn mark_announcement_read_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(claims) => claims,
+        None => return Json(json!({
+            "status": "error",
+            "message": "Unauthorized"
+        })),
+    };
+
+    match state.ch_storage.mark_announcement_read(&id, &claims.sub).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Announcement marked as read"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// POST /api/announcements
+pub async fn create_announcement_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match require_super_admin(&headers) {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+
+    let title = payload["title"].as_str().unwrap_or("").trim().to_string();
+    let message = payload["message"].as_str().unwrap_or("").trim().to_string();
+    let announcement_type = payload["announcement_type"]
+        .as_str()
+        .or_else(|| payload["type"].as_str())
+        .unwrap_or("info")
+        .trim()
+        .to_string();
+    let status = announcement_status_from_payload(&payload);
+    let (audience, target_roles, target_tenants) = announcement_targets_from_payload(&payload);
+    let start_at = payload["start_at"].as_str()
+        .or_else(|| payload["starts_at"].as_str());
+    let end_at = payload["end_at"].as_str()
+        .or_else(|| payload["ends_at"].as_str());
+
+    if title.is_empty() || message.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Title and message are required"
+        }));
+    }
+    if !["draft", "active", "inactive"].contains(&status.as_str()) {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid status"
+        }));
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    match state.ch_storage.create_announcement(
+        &id,
+        &title,
+        &message,
+        &announcement_type,
+        &audience,
+        &status,
+        &target_roles,
+        &target_tenants,
+        start_at,
+        end_at,
+        &claims.sub,
+    ).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "id": id,
+            "message": "Announcement created"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// PUT /api/announcements/:id
+pub async fn update_announcement_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    let title = payload["title"].as_str().unwrap_or("").trim().to_string();
+    let message = payload["message"].as_str().unwrap_or("").trim().to_string();
+    let announcement_type = payload["announcement_type"]
+        .as_str()
+        .or_else(|| payload["type"].as_str())
+        .unwrap_or("info")
+        .trim()
+        .to_string();
+    let status = announcement_status_from_payload(&payload);
+    let (audience, target_roles, target_tenants) = announcement_targets_from_payload(&payload);
+    let start_at = payload["start_at"].as_str()
+        .or_else(|| payload["starts_at"].as_str());
+    let end_at = payload["end_at"].as_str()
+        .or_else(|| payload["ends_at"].as_str());
+
+    if title.is_empty() || message.is_empty() {
+        return Json(json!({
+            "status": "error",
+            "message": "Title and message are required"
+        }));
+    }
+    if !["draft", "active", "inactive"].contains(&status.as_str()) {
+        return Json(json!({
+            "status": "error",
+            "message": "Invalid status"
+        }));
+    }
+
+    match state.ch_storage.update_announcement(
+        &id,
+        &title,
+        &message,
+        &announcement_type,
+        &audience,
+        &status,
+        &target_roles,
+        &target_tenants,
+        start_at,
+        end_at,
+    ).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Announcement updated"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
+    }
+}
+
+// DELETE /api/announcements/:id
+pub async fn delete_announcement_api(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    match state.ch_storage.delete_announcement(&id).await {
+        Ok(_) => Json(json!({
+            "status": "ok",
+            "message": "Announcement deleted"
+        })),
+        Err(e) => Json(json!({
+            "status": "error",
+            "message": e.to_string()
+        }))
     }
 }
 
@@ -4769,6 +5080,7 @@ docker exec ndr-nginx nginx -s reload && echo "Nginx reloaded"
 }
 
 //jira ticket
+#[cfg(feature = "soar")]
 pub async fn get_jira_tickets(
     Json(payload): Json<Value>,
 ) -> Json<Value> {
@@ -7116,6 +7428,7 @@ lastPacket,node",
 
 // ── NATIVE SOAR API ENDPOINTS ───────────────────────────────────────────────
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_cases(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -7126,6 +7439,7 @@ pub async fn get_soar_cases(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_case_comments(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -7137,6 +7451,7 @@ pub async fn get_soar_case_comments(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn add_soar_case_comment(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -7153,6 +7468,7 @@ pub async fn add_soar_case_comment(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_soar_case_status(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -7169,6 +7485,7 @@ pub async fn update_soar_case_status(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn create_soar_case(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -7201,6 +7518,7 @@ pub async fn create_soar_case(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_soar_case(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -7218,6 +7536,7 @@ pub async fn update_soar_case(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_native_playbooks(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -7228,6 +7547,7 @@ pub async fn get_native_playbooks(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn create_native_playbook(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -7256,6 +7576,7 @@ pub async fn create_native_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn update_native_playbook(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -7279,6 +7600,7 @@ pub async fn update_native_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn delete_native_playbook(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -7290,6 +7612,7 @@ pub async fn delete_native_playbook(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn get_soar_runs(
     State(state): State<AppState>,
     axum::extract::Extension(claims): axum::extract::Extension<AuthClaims>,
@@ -9165,6 +9488,7 @@ pub async fn ai_suggest_trusted_domains(
 
 // ── Active Blocks ─────────────────────────────────────────────────────────
 
+#[cfg(feature = "soar")]
 pub async fn list_active_blocks(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -9181,12 +9505,14 @@ pub async fn list_active_blocks(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct RevokeBlockBody {
     pub id:                    String,
     #[allow(dead_code)]
     pub sensor_id: Option<String>,
 }
 
+#[cfg(feature = "soar")]
 pub async fn revoke_active_block(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -9230,6 +9556,7 @@ pub async fn revoke_active_block(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct ManualBlockBody {
     pub src_ip:         String,
     pub src_port:       Option<u16>,
@@ -9238,6 +9565,7 @@ pub struct ManualBlockBody {
     pub reason:         Option<String>,
 }
 
+#[cfg(feature = "soar")]
 pub async fn manual_block(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -9373,6 +9701,7 @@ pub async fn update_incident_status(
     }
 }
 
+#[cfg(feature = "soar")]
 pub async fn list_isolations(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -9389,6 +9718,7 @@ pub async fn list_isolations(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct IsolateBody {
     pub target_ip:       String,
     pub gateway_ip:      Option<String>,
@@ -9397,6 +9727,7 @@ pub struct IsolateBody {
     pub reason:          Option<String>,
 }
 
+#[cfg(feature = "soar")]
 pub async fn isolate_device_handler(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -9487,10 +9818,12 @@ pub async fn isolate_device_handler(
 }
 
 #[derive(serde::Deserialize)]
+#[cfg(feature = "soar")]
 pub struct UnisolateBody {
     pub id: String,
 }
 
+#[cfg(feature = "soar")]
 pub async fn unisolate_device_handler(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -10067,11 +10400,11 @@ pub async fn list_retrospective_scans(
     if let Ok(rows) = state.ch_storage.list_retro_scans_for_tenant(&claims.tenant_id).await {
         for row in rows {
             if seen_ids.contains(&row.id) { continue; }
-            let started = chrono::NaiveDateTime::from_timestamp_opt(row.started_at as i64, 0)
-                .map(|dt| dt.and_utc().to_rfc3339()).unwrap_or_default();
+            let started = chrono::DateTime::from_timestamp(row.started_at as i64, 0)
+                .map(|dt| dt.to_rfc3339()).unwrap_or_default();
             let completed: Option<String> = if row.completed_at > 0 {
-                chrono::NaiveDateTime::from_timestamp_opt(row.completed_at as i64, 0)
-                    .map(|dt| dt.and_utc().to_rfc3339())
+                chrono::DateTime::from_timestamp(row.completed_at as i64, 0)
+                    .map(|dt| dt.to_rfc3339())
             } else { None };
             scans.push(json!({
                 "id":           row.id,
@@ -10126,11 +10459,11 @@ pub async fn get_retrospective_scan(
             // Fallback: look up persisted scan in ClickHouse
             match state.ch_storage.get_retro_scan_by_id(&claims.tenant_id, &id).await {
                 Ok(Some(row)) => {
-                    let started = chrono::NaiveDateTime::from_timestamp_opt(row.started_at as i64, 0)
-                        .map(|dt| dt.and_utc().to_rfc3339()).unwrap_or_default();
+                    let started = chrono::DateTime::from_timestamp(row.started_at as i64, 0)
+                        .map(|dt| dt.to_rfc3339()).unwrap_or_default();
                     let completed: Option<String> = if row.completed_at > 0 {
-                        chrono::NaiveDateTime::from_timestamp_opt(row.completed_at as i64, 0)
-                            .map(|dt| dt.and_utc().to_rfc3339())
+                        chrono::DateTime::from_timestamp(row.completed_at as i64, 0)
+                            .map(|dt| dt.to_rfc3339())
                     } else { None };
                     let matches: Vec<serde_json::Value> =
                         serde_json::from_str(&row.matches).unwrap_or_default();

@@ -5,6 +5,10 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Production-grade NDR correlation engine (Apache-2.0)"
 
+[features]
+default = ["soar"]
+soar    = ["provigil-common/soar"]
+
 [dependencies]
 provigil-common = { path = "../provigil-common", features = ["kafka"] }
 axum            = { version = "0.7", features = ["ws", "multipart"] }
