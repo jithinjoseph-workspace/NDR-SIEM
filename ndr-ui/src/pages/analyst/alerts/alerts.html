@@ -85,70 +85,36 @@
         <!-- Expanded detail -->
         <div *ngIf="selectedIncident?.id === inc.id" class="incident-detail">
 
-          <!-- Attack path SVG diagram -->
+          <!-- Attack path diagram -->
           <div class="detail-section">
             <div class="detail-section-label">Attack Path</div>
-            <div class="attack-graph">
-              <svg [attr.width]="inc.affected_ips.length * 130 + 40" height="120" class="chain-svg">
-                <defs>
-                  <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="4" orient="auto">
-                    <path d="M0,0 L0,8 L10,4 z" fill="var(--accent)"/>
-                  </marker>
-                  <radialGradient id="nodeHalo" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%"  stop-color="var(--accent)" stop-opacity="0.3"/>
-                    <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
-                  </radialGradient>
-                  <radialGradient id="originHalo" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%"  stop-color="#f87171" stop-opacity="0.35"/>
-                    <stop offset="100%" stop-color="#f87171" stop-opacity="0"/>
-                  </radialGradient>
-                </defs>
-
-                <ng-container *ngFor="let ip of inc.affected_ips; let i = index">
-                  <!-- Connector line -->
-                  <line *ngIf="i < inc.affected_ips.length - 1" class="path-line"
-                    [attr.x1]="i * 130 + 85" y1="42"
-                    [attr.x2]="i * 130 + 155" y2="42"
-                    stroke="var(--accent)" stroke-width="3" marker-end="url(#arrow)" />
-
-                  <!-- Origin pulse ring (patient zero only) -->
-                  <circle *ngIf="i === 0" class="pulse-ring" [attr.cx]="i * 130 + 55" cy="42" r="25"
-                    fill="none" stroke="#f87171" stroke-width="1.5"/>
-
-                  <!-- Halo glow behind node -->
-                  <circle [attr.cx]="i * 130 + 55" cy="42" r="34"
-                    [attr.fill]="i === 0 ? 'url(#originHalo)' : 'url(#nodeHalo)'"/>
-
-                  <!-- Node circle -->
-                  <circle class="chain-node" [class.origin-node]="i === 0"
-                    [attr.cx]="i * 130 + 55" cy="42" r="24"
-                    fill="var(--card-bg)" [attr.stroke]="i === 0 ? '#f87171' : 'var(--accent)'" stroke-width="1.75"/>
-
-                  <!-- IP label inside -->
-                  <text [attr.x]="i * 130 + 55" y="38" text-anchor="middle" class="svg-ip-top">
-                    {{ ip.split('.').slice(0,3).join('.') }}.
-                  </text>
-                  <text [attr.x]="i * 130 + 55" y="51" text-anchor="middle" class="svg-ip-bot">
-                    {{ ip.split('.')[3] }}
-                  </text>
-
-                  <!-- Role badge under node -->
-                  <rect [attr.x]="i * 130 + 28" y="70" width="54" height="14" rx="7" class="svg-role-badge"/>
-                  <text [attr.x]="i * 130 + 55" y="80" text-anchor="middle" class="svg-role-tag">
-                    {{ i === 0 ? 'SOURCE' : (i === inc.affected_ips.length - 1 ? 'TARGET' : 'HOP ' + i) }}
-                  </text>
-
-                  <!-- Isolate button under node -->
-                  <foreignObject [attr.x]="i * 130 + 21" y="90" width="68" height="24">
-                    <button xmlns="http://www.w3.org/1999/xhtml"
-                      class="svg-isolate-btn"
+            <div class="attack-path-container">
+              <div class="attack-path">
+                <ng-container *ngFor="let ip of inc.affected_ips; let i = index; let last = last">
+                  <div class="node" [ngClass]="i === 0 ? 'source' : (last ? 'target' : 'hop')" [class.is-isolated]="isolatedIps.has(ip)">
+                    <div class="node-ring"></div>
+                    <div class="node-core">
+                      <div class="node-ip">{{ ip }}</div>
+                      <div class="node-label">{{ i === 0 ? 'SOURCE' : (last ? 'TARGET' : 'HOP ' + i) }}</div>
+                    </div>
+                    <div *ngIf="isolatedIps.has(ip)" class="node-isolated-badge">
+                      <lucide-icon [name]="ShieldOffIcon" class="w-3 h-3"></lucide-icon>
+                      Isolated
+                    </div>
+                    <button *ngIf="!isolatedIps.has(ip)" class="isolate-btn"
                       [disabled]="isolatingIp === ip"
                       (click)="$event.stopPropagation(); isolateIp(ip)">
                       {{ isolatingIp === ip ? '…' : 'Isolate' }}
                     </button>
-                  </foreignObject>
+                  </div>
+
+                  <div class="connector" *ngIf="!last">
+                    <div class="connector-line"></div>
+                    <div class="connector-pulse"></div>
+                    <lucide-icon [name]="ChevronRightIcon" class="connector-arrow"></lucide-icon>
+                  </div>
                 </ng-container>
-              </svg>
+              </div>
               <div *ngIf="isolateResult" class="isolate-result">{{ isolateResult }}</div>
             </div>
           </div>
@@ -164,7 +130,7 @@
                   <div class="rule-chip-name">{{ ruleLabel(step.rule_name || 'Alert') }}</div>
                   <div class="rule-chip-flow">
                     <span class="flow-ip">{{ step.src_ip }}</span>
-                    <lucide-icon [name]="ChevronRightIcon" class="flow-arrow"></lucide-icon>
+                    <span class="rule-chip-arrow">→</span>
                     <span class="flow-ip">{{ step.dst_ip }}</span>
                   </div>
                 </div>

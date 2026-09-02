@@ -2374,13 +2374,13 @@ pub async fn get_rules(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Json<Value> {
+) -> impl IntoResponse {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
     let search = params.get("q").map(|s| s.to_lowercase()).unwrap_or_default();
 
     let db_rules = state.ch_storage.get_all_sigma_rules(&tenant_id).await.unwrap_or_default();
 
-    let result: Vec<serde_json::Value> = db_rules.iter()
+    let mut result: Vec<serde_json::Value> = db_rules.iter()
         .filter_map(|(id, name, content, _r_tenant_id, enabled, source)| {
             let parsed = crate::detection::parse_rule_content(content).ok();
             let conditions_len = parsed.as_ref().map(|p| p.conditions.len()).unwrap_or(0);
@@ -2418,7 +2418,24 @@ pub async fn get_rules(
         })
         .collect();
 
-    Json(json!(result))
+    let total = result.len();
+    let active_total = result.iter().filter(|r| r["enabled"] == json!(true)).count();
+
+    // Optional pagination — callers that don't pass limit/offset (e.g. the
+    // admin rules page) get the full search-filtered set exactly as before.
+    if let Some(limit) = params.get("limit").and_then(|v| v.parse::<usize>().ok()) {
+        let offset = params.get("offset").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+        result = result.into_iter().skip(offset).take(limit).collect();
+    }
+
+    let mut resp_headers = axum::http::HeaderMap::new();
+    if let Ok(v) = total.to_string().parse() {
+        resp_headers.insert("X-Total-Count", v);
+    }
+    if let Ok(v) = active_total.to_string().parse() {
+        resp_headers.insert("X-Active-Count", v);
+    }
+    (resp_headers, Json(json!(result)))
 }
 
 pub async fn get_rule_hit_counts(
@@ -9864,7 +9881,7 @@ pub async fn isolate_device_handler(
     };
 
     match state.ch_storage.insert_isolation(&iso).await {
-        Ok(_)  => Json(json!({"status":"success","id":iso_id,"target_ip":body.target_ip})),
+        Ok(_)  => Json(json!({"status":"ok","id":iso_id,"target_ip":body.target_ip})),
         Err(e) => Json(json!({"status":"error","message":e.to_string()})),
     }
 }

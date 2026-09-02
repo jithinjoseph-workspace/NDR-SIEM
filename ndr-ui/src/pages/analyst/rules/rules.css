@@ -738,6 +738,41 @@
   letter-spacing: 0.1em;
 }
 
+.rules-search-wrap {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1; max-width: 320px; margin: 0 16px;
+  position: relative;
+}
+.rules-search {
+  width: 100%;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 6px 30px 6px 10px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.85);
+  font-family: var(--font-mono);
+}
+.rules-search:focus { outline: none; border-color: rgba(105,246,184,0.35); background: rgba(105,246,184,0.03); }
+.rules-search::placeholder { color: rgba(255,255,255,0.28); }
+.rules-search-status { font-size: 10px; color: rgba(105,246,184,0.6); white-space: nowrap; font-family: var(--font-mono); }
+.rules-search-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer;
+  color: rgba(255,255,255,0.3); display: flex; padding: 2px;
+}
+.rules-search-clear:hover { color: rgba(255,255,255,0.6); }
+
+.rules-load-more {
+  display: block; width: calc(100% - 32px); margin: 8px 16px 16px;
+  padding: 10px; border-radius: 8px; text-align: center;
+  background: rgba(105,246,184,0.05); border: 1px dashed rgba(105,246,184,0.25);
+  color: #69f6b8; font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.06em; cursor: pointer; transition: background 140ms ease, border-color 140ms ease;
+}
+.rules-load-more:hover:not(:disabled) { background: rgba(105,246,184,0.1); border-color: rgba(105,246,184,0.4); }
+.rules-load-more:disabled { opacity: 0.5; cursor: wait; }
+
 /* Rules list */
 .rules-list {
   position: relative;

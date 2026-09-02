@@ -188,6 +188,28 @@ export class Rules implements OnInit {
   activeTab: 'all' | 'agent-z' | 'agent-s' = 'all';
   agentSRules: any[] = [];
 
+  // ── Pagination (Agent-Z / SIGMA rules — the large set) ─────────────────────
+  pageSize = 20;
+  rulesOffset = 0;
+  rulesTotal = 0;
+  rulesActiveTotal = 0;
+  loadingMore = false;
+  private hitCountsCache: { [ruleName: string]: number } = {};
+
+  get hasMoreRules(): boolean {
+    return this.rules.length < this.rulesTotal;
+  }
+
+  // ── Search (checks what's already loaded first; falls back to a DB query
+  //    only when nothing loaded matches, so we can say for sure whether a
+  //    rule exists at all rather than just "not in the first page") ─────────
+  searchTerm = '';
+  searching = false;
+  dbSearchActive = false;
+  dbSearchChecked = false;
+  dbSearchResults: any[] = [];
+  private searchDebounce: any;
+
   get topCategories(): { tag: string; label: string; count: number }[] {
     const counts: { [key: string]: number } = {};
     for (const rule of this.rules) {
@@ -219,10 +241,15 @@ export class Rules implements OnInit {
   }
 
   get displayRules(): any[] {
+    if (this.dbSearchActive) return this.dbSearchResults;
+    const term = this.searchTerm.trim().toLowerCase();
     return this.allRules.filter(rule => {
       const catOk = !this.categoryFilter || (rule.tags || []).includes(this.categoryFilter);
       const sevOk = !this.severityFilter || rule.severity.toUpperCase() === this.severityFilter;
-      return catOk && sevOk;
+      const searchOk = !term
+        || (rule.name || '').toLowerCase().includes(term)
+        || (rule.tags || []).some((t: string) => t.toLowerCase().includes(term));
+      return catOk && sevOk && searchOk;
     });
   }
 
@@ -280,49 +307,38 @@ export class Rules implements OnInit {
   }
 
   get activeRulesCount() {
-    return this.rules.filter(r => r.status === 'ACTIVE').length;
+    // rulesActiveTotal comes from the backend (X-Active-Count) so this stays
+    // correct even though only one page of `rules` is actually loaded.
+    return this.rulesActiveTotal + this.agentSRules.filter(r => r.status === 'ACTIVE').length;
   }
 
   ngOnInit() { this.loadRules(); }
 
   loadRules() {
-    this.loading = true;
-    this.api.getRules().subscribe({
-      next: (data: any[]) => {
-        this.rules = data.map(r => ({
-          name: r.title || 'Unknown',
-          type: 'Agent-Z',
-          severity: (r.severity || 'medium').toUpperCase(),
-          status: r.enabled ? 'ACTIVE' : 'INACTIVE',
-          id: r.id,
-          description: r.description || '',
-          tags: r.tags || [],
-          conditions: r.conditions || 0,
-          hits: 0,
-        }));
-        this.loading = false;
-        this.cdr.detectChanges();
+    this.rules = [];
+    this.rulesOffset = 0;
+    this.rulesTotal = 0;
+    this.rulesActiveTotal = 0;
+    this.dbSearchActive = false;
+    this.dbSearchChecked = false;
 
-        // Load hit counts
-        this.api.getRuleHitCounts().subscribe({
-          next: (hitCounts: { [ruleName: string]: number }) => {
-            this.totalHits = Object.values(hitCounts).reduce((a, b) => a + b, 0);
-            this.rules = this.rules.map(r => ({
-              ...r,
-              hits: hitCounts[r.name] || 0
-            }));
-            this.cdr.detectChanges();
-          },
-          error: () => { }
-        });
-      },
-      error: () => {
-        this.loading = false;
+    this.fetchRulesPage(false);
+
+    // Hit counts are a cheap aggregate over ALL rules (not paginated) —
+    // fetch once, cache it, and apply to whichever page(s) get loaded.
+    this.api.getRuleHitCounts().subscribe({
+      next: (hitCounts: { [ruleName: string]: number }) => {
+        this.hitCountsCache = hitCounts;
+        this.totalHits = Object.values(hitCounts).reduce((a, b) => a + b, 0)
+          + this.agentSRules.reduce((s: number, r: any) => s + r.hits, 0);
+        this.rules = this.rules.map(r => ({ ...r, hits: hitCounts[r.name] || 0 }));
         this.cdr.detectChanges();
-      }
+      },
+      error: () => { }
     });
 
-    // Load Agent-S fired rules from ndr_hits.sigma_hits
+    // Load Agent-S fired rules from ndr_hits.sigma_hits — a small set (single
+    // digits typically), so no pagination needed here.
     this.api.getFiredRules().subscribe({
       next: (r: any) => {
         const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -344,6 +360,92 @@ export class Rules implements OnInit {
       },
       error: () => {}
     });
+  }
+
+  private mapAgentZRule(r: any): any {
+    return {
+      name: r.title || 'Unknown',
+      type: 'Agent-Z',
+      severity: (r.severity || 'medium').toUpperCase(),
+      status: r.enabled ? 'ACTIVE' : 'INACTIVE',
+      id: r.id,
+      description: r.description || '',
+      tags: r.tags || [],
+      conditions: r.conditions || 0,
+      hits: this.hitCountsCache[r.title] || 0,
+    };
+  }
+
+  private fetchRulesPage(append: boolean) {
+    if (append) this.loadingMore = true; else this.loading = true;
+    this.api.getRulesPage(this.pageSize, this.rulesOffset).subscribe({
+      next: (res) => {
+        const mapped = res.rules.map((r: any) => this.mapAgentZRule(r));
+        this.rules = append ? [...this.rules, ...mapped] : mapped;
+        this.rulesOffset = this.rules.length;
+        this.rulesTotal = res.total;
+        this.rulesActiveTotal = res.activeTotal;
+        this.loading = false;
+        this.loadingMore = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.loading = false;
+        this.loadingMore = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  loadMoreRules() {
+    if (this.loadingMore || !this.hasMoreRules) return;
+    this.fetchRulesPage(true);
+  }
+
+  // ── Search: filter what's loaded first; only hit the backend when that
+  // comes up empty, so we can tell the analyst whether the rule genuinely
+  // doesn't exist or just isn't in the pages fetched so far. ────────────────
+  onSearchInput() {
+    clearTimeout(this.searchDebounce);
+    this.dbSearchActive = false;
+    this.dbSearchChecked = false;
+    const term = this.searchTerm.trim();
+    if (!term) return;
+    this.searchDebounce = setTimeout(() => this.runSearch(term), 350);
+  }
+
+  private runSearch(term: string) {
+    const lower = term.toLowerCase();
+    const localMatch = this.allRules.some(r =>
+      (r.name || '').toLowerCase().includes(lower) ||
+      (r.tags || []).some((t: string) => t.toLowerCase().includes(lower))
+    );
+    if (localMatch) return; // already covered by displayRules' client-side filter
+
+    this.searching = true;
+    this.api.searchRules(term).subscribe({
+      next: (res: any[]) => {
+        this.searching = false;
+        this.dbSearchChecked = true;
+        this.dbSearchResults = (res || []).map(r => this.mapAgentZRule(r));
+        this.dbSearchActive = true;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.searching = false;
+        this.dbSearchChecked = true;
+        this.dbSearchResults = [];
+        this.dbSearchActive = true;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  clearSearch() {
+    this.searchTerm = '';
+    this.dbSearchActive = false;
+    this.dbSearchChecked = false;
+    this.dbSearchResults = [];
   }
 
   openAddForm() {
