@@ -793,32 +793,9 @@ async fn main() {
         .route("/api/soar/integrations/delete",post(api::delete_integration)) // legacy
         .route("/api/soar/integrations/:id", put(api::update_integration).delete(api::delete_integration))
         .route("/api/soar/jira/tickets", post(api::get_jira_tickets))
-        .route("/api/auth/login",          post(api::login))
-        .route("/api/auth/check-username",  get(api::check_username))
-        .route("/api/auth/logout",          post(api::logout))
-        .route("/api/auth/forgot/verify-secret", post(api::forgot_verify_secret))
-        .route("/api/auth/forgot/send-otp",      post(api::forgot_send_otp))
-        .route("/api/auth/forgot/reset-password",post(api::forgot_reset_password))
-        .route("/api/auth/me",              get(api::get_me))
-        .route("/api/auth/me/gmail",        put(api::update_me_gmail))
-        .route("/api/auth/me/regenerate-secret", post(api::regenerate_secret_code))
-        .route("/api/auth/users",get(api::get_users).post(api::create_user))
-        .route("/api/auth/users/:id",put(api::update_user_api).delete(api::delete_user))
-        .route("/api/auth/users/:id/status", post(api::set_user_status_api))
-        .route("/api/auth/users/:id/permissions", put(api::update_user_permissions_api))
-        .route("/api/auth/users/:id/password", post(api::reset_user_password_api))
-        .route("/api/auth/tenants",get(api::get_tenants).post(api::create_tenant))
-        .route("/api/auth/tenants/:id", put(api::update_tenant_api))
-        .route("/api/auth/tenants/:id/status", post(api::set_tenant_status_api))
-        .route("/api/auth/tenants/:id/ai-enabled", post(api::set_tenant_ai_enabled_api))
-        .route("/api/announcements",
-            get(api::get_announcements_api)
-            .post(api::create_announcement_api))
-        .route("/api/announcements/active", get(api::get_active_announcements_api))
-        .route("/api/announcements/:id/read", post(api::mark_announcement_read_api))
-        .route("/api/announcements/:id",
-            put(api::update_announcement_api)
-            .delete(api::delete_announcement_api))
+        // Auth, users, tenants, and announcements are owned by auth-service
+        // (provigil-auth:3001) — nginx proxies /api/auth/*, /api/announcements
+        // there directly, so no duplicate handlers live in ndr-engine.
         .route("/api/support/messages", get(api::get_support_messages).post(api::create_support_message))
         .route("/api/support/messages/:id/review", post(api::review_support_message))
         .route("/api/support/messages/:id/reply", post(api::reply_support_message))
