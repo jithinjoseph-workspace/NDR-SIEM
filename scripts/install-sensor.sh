@@ -14,11 +14,39 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
+# ── Persistent error log — survives a scrolled/closed terminal, unlike
+# plain echo. Falls back to /tmp if /var/log isn't writable yet (e.g. this
+# check runs before the root check below, in case someone sources this file).
+LOG_FILE="/var/log/ndr/install-$(date +%Y%m%d-%H%M%S).log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null && touch "$LOG_FILE" 2>/dev/null \
+  || LOG_FILE="/tmp/ndr-install-$(date +%Y%m%d-%H%M%S).log"
+touch "$LOG_FILE" 2>/dev/null || true
+
 # ── Log helpers ───────────────────────────────────
 log()  { echo -e "  ${GREEN}[+]${NC} $1"; }
 warn() { echo -e "  ${YELLOW}[!]${NC} $1"; }
-error(){ echo -e "  ${RED}[x]${NC} $1"; exit 1; }
+error(){ echo -e "  ${RED}[x]${NC} $1"; echo "[$(date '+%Y-%m-%d %H:%M:%S')] FATAL $1" >> "$LOG_FILE" 2>/dev/null; exit 1; }
 info() { echo -e "  ${BLUE}[>]${NC} $1"; }
+
+# record_error <component> <what went wrong> <how to fix it>
+# Logs a structured, timestamped line to $LOG_FILE AND prints a warning —
+# use this instead of a bare warn() for anything that leaves a component
+# non-functional, so the reason + fix survive after the terminal is gone.
+record_error() {
+    local component="$1" detail="$2" hint="$3"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR component=\"$component\" detail=\"$detail\" fix=\"$hint\"" >> "$LOG_FILE" 2>/dev/null
+    warn "$component: $detail"
+    [ -n "$hint" ] && warn "  → Fix: $hint"
+}
+
+# ── Must run as root ──────────────────────────────
+# Every failure mode we've seen in practice (can't write /etc/apt sources,
+# can't install packages, can't manage systemd units) traces back to this.
+# Check it up front with a clear message instead of dying 60 lines into the
+# script on a cryptic "Permission denied".
+if [ "$(id -u)" -ne 0 ]; then
+  error "This script must be run as root. Try: sudo bash $0"
+fi
 hdr()  {
     echo -e ""
     echo -e "  ${CYAN}${BOLD}┌─────────────────────────────────────────────┐${NC}"
@@ -57,7 +85,7 @@ spinner() {
 }
 
 # ── Banner ────────────────────────────────────────
-clear
+clear 2>/dev/null || true  # fails under set -e without a TTY/TERM (e.g. non-interactive/CI runs)
 printf "\n"
 printf "  ${CYAN}╔══════════════════════════════════════════════╗${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
@@ -215,24 +243,48 @@ sleep 2
 # ── Install dependencies ──────────────────────────
 step "Installing Dependencies"
 log "Updating package lists..."
-apt-get update -qq
+# Foundational step — curl/wget/docker installed here are required by nearly
+# everything downstream, so a hard stop is correct if this fails, but it
+# needs a clear reason instead of a silent set -e death.
+apt-get update -qq 2>/tmp/ndr_deps_err || error "apt-get update failed ($(cat /tmp/ndr_deps_err 2>/dev/null)) — check network/DNS connectivity before re-running."
+rm -f /tmp/ndr_deps_err
+# apt-get update can report success (exit 0) even when every index fetch failed
+# (it just warns and falls back to whatever is cached) — so the real check for
+# "are we actually offline" has to happen here, not above. curl/wget are load-
+# bearing for the rest of this script, so verify they actually landed instead
+# of trusting the install command's own exit code.
 (apt-get install -y -qq \
   curl wget git python3 python3-pip python3-requests \
   apt-transport-https gnupg2 \
   software-properties-common \
   libpcre3 libpcre3-dev \
   ethtool docker.io \
-  arp-scan iputils-arping snmp > /dev/null 2>&1 || true) &
-spinner $! "Installing base packages"
+  arp-scan iputils-arping snmp > /tmp/ndr_deps_install_err 2>&1) &
+DEPS_PID=$!
+spinner $DEPS_PID "Installing base packages"
+DEPS_RC=0
+wait $DEPS_PID || DEPS_RC=$?
+if ! command -v curl >/dev/null 2>&1 || ! command -v wget >/dev/null 2>&1; then
+    error "Base package install failed — curl/wget missing ($(tail -3 /tmp/ndr_deps_install_err 2>/dev/null | tr '\n' ' ')). Check network/DNS connectivity, then re-run: apt-get update && apt-get install -y curl wget git docker.io"
+elif [ "$DEPS_RC" -ne 0 ]; then
+    record_error "Base Packages" "some non-critical packages failed to install ($(tail -3 /tmp/ndr_deps_install_err 2>/dev/null | tr '\n' ' '))" "re-run manually once network is restored: apt-get install -y arp-scan iputils-arping snmp ethtool docker.io git python3 python3-pip"
+fi
+rm -f /tmp/ndr_deps_install_err
 
 # scapy needed for ARP isolation on the sensor
 pip3 install scapy --break-system-packages -q 2>/dev/null || pip3 install scapy -q 2>/dev/null || true
 log "Dependencies installed"
 
 # Allow sensor agent to run iptables without a password
-echo "${SENSOR_USER:-root} ALL=(root) NOPASSWD: /usr/sbin/iptables" \
-  > /etc/sudoers.d/ndr-iptables
-chmod 440 /etc/sudoers.d/ndr-iptables
+mkdir -p /etc/sudoers.d
+if echo "${SENSOR_USER:-root} ALL=(root) NOPASSWD: /usr/sbin/iptables" \
+    | tee /etc/sudoers.d/ndr-iptables > /dev/null 2>/tmp/ndr_sudoers_err; then
+  chmod 440 /etc/sudoers.d/ndr-iptables
+else
+  record_error "iptables sudoers" "could not write /etc/sudoers.d/ndr-iptables ($(cat /tmp/ndr_sudoers_err 2>/dev/null))" \
+    "ARP isolation (device quarantine) will not work until this is fixed manually: mkdir -p /etc/sudoers.d && echo '${SENSOR_USER:-root} ALL=(root) NOPASSWD: /usr/sbin/iptables' > /etc/sudoers.d/ndr-iptables && chmod 440 /etc/sudoers.d/ndr-iptables"
+fi
+rm -f /tmp/ndr_sudoers_err
 
 step "Capture Utilities"
 log "Checking packet capture tools..."
@@ -287,6 +339,7 @@ pip3 install requests --quiet 2>/dev/null || true
 # ── Install Agent-Z ───────────────────────────────
 step "Agent-Z  (Network Analyzer)"
 log "Installing Agent-Z..."
+ZEEK_OK=0
 if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
   OS_VERSION=$(lsb_release -rs 2>/dev/null || echo "22.04")
   ZEEK_UBUNTU_VER="$OS_VERSION"
@@ -298,54 +351,83 @@ if ! command -v /opt/zeek/bin/zeek &>/dev/null; then
     fi
   done
   log "Using Agent-Z repo for Ubuntu ${ZEEK_UBUNTU_VER}"
-  echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${ZEEK_UBUNTU_VER}/ /" \
-    > /etc/apt/sources.list.d/security:zeek.list
-  curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" \
-    | gpg --dearmor \
-    > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>/dev/null
-  apt-get update -qq
-  if apt-get install -y -qq zeek > /dev/null; then
+
+  # Every step below is an if/elif condition on purpose — under `set -e`, a
+  # bare (unguarded) command that fails kills the ENTIRE script immediately
+  # with no message. Wrapping each one in a condition is exempt from that,
+  # so a failure here is recorded and reported instead of silently fatal.
+  if ! echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_${ZEEK_UBUNTU_VER}/ /" \
+      | tee /etc/apt/sources.list.d/security:zeek.list > /dev/null 2>/tmp/ndr_zeek_err; then
+    record_error "Agent-Z" "could not write apt source list ($(cat /tmp/ndr_zeek_err 2>/dev/null))" \
+      "Run this script as root: sudo bash $0"
+  elif ! curl -fsSL "https://download.opensuse.org/repositories/security:zeek/xUbuntu_${ZEEK_UBUNTU_VER}/Release.key" 2>/tmp/ndr_zeek_err \
+      | gpg --dearmor > /etc/apt/trusted.gpg.d/security_zeek.gpg 2>>/tmp/ndr_zeek_err; then
+    record_error "Agent-Z" "could not fetch/import the repo signing key ($(cat /tmp/ndr_zeek_err 2>/dev/null))" \
+      "Check this host can reach download.opensuse.org (443) — no proxy/firewall blocking it."
+  elif ! apt-get update -qq 2>/tmp/ndr_zeek_err; then
+    record_error "Agent-Z" "apt-get update failed ($(cat /tmp/ndr_zeek_err 2>/dev/null))" \
+      "Check general network/DNS connectivity and existing /etc/apt sources."
+  elif apt-get install -y -qq zeek > /dev/null 2>/tmp/ndr_zeek_err; then
     log "Agent-Z installed"
+    echo 'export PATH=$PATH:/opt/zeek/bin' >> /etc/profile
+    export PATH=$PATH:/opt/zeek/bin
+    ZEEK_OK=1
   else
-    warn "Agent-Z install failed — check repo availability for Ubuntu ${ZEEK_UBUNTU_VER}"
+    record_error "Agent-Z" "package install failed for Ubuntu ${ZEEK_UBUNTU_VER} ($(cat /tmp/ndr_zeek_err 2>/dev/null))" \
+      "The security:zeek repo may not yet publish builds for this Ubuntu release — check https://download.opensuse.org/repositories/security:/zeek/ manually."
   fi
-  echo 'export PATH=$PATH:/opt/zeek/bin' >> /etc/profile
-  export PATH=$PATH:/opt/zeek/bin
+  rm -f /tmp/ndr_zeek_err
 else
   log "Agent-Z already installed"
+  ZEEK_OK=1
 fi
-log "✅ Agent-Z ready"
+if [ "$ZEEK_OK" = "1" ]; then
+  log "✅ Agent-Z ready"
+else
+  warn "❌ Agent-Z NOT installed — network traffic analysis (DNS/HTTP/TLS/connection logs) will be unavailable on this sensor."
+  warn "   Continuing with the rest of the install; see $LOG_FILE for details and re-run later once fixed."
+fi
 
 # ── Install Agent-S ───────────────────────────────
 step "Agent-S  (Threat Detection)"
 log "Installing Agent-S..."
+SURICATA_OK=0
 if ! command -v suricata &>/dev/null; then
-  apt-get update -qq 2>/dev/null || true
-  if apt-get install -y suricata 2>/dev/null; then
+  if ! apt-get update -qq 2>/tmp/ndr_suri_err; then
+    record_error "Agent-S" "apt-get update failed ($(cat /tmp/ndr_suri_err 2>/dev/null))" \
+      "Check general network/DNS connectivity."
+  elif apt-get install -y suricata 2>/tmp/ndr_suri_err; then
     log "Agent-S installed from repository"
+    SURICATA_OK=1
   else
-    warn "Agent-S install failed — skipping"
+    record_error "Agent-S" "package install failed ($(cat /tmp/ndr_suri_err 2>/dev/null))" \
+      "Ensure the 'universe' repo is enabled: sudo add-apt-repository universe && sudo apt-get update"
   fi
+  rm -f /tmp/ndr_suri_err
   systemctl disable suricata 2>/dev/null || true
   systemctl stop suricata 2>/dev/null || true
-  log "Agent-S ready"
 else
   log "Agent-S already installed"
+  SURICATA_OK=1
   systemctl disable suricata 2>/dev/null || true
   systemctl stop suricata 2>/dev/null || true
 fi
 suricata-update > /dev/null 2>&1 || true
-log "✅ Agent-S ready"
+if [ "$SURICATA_OK" = "1" ]; then
+  log "✅ Agent-S ready"
+else
+  warn "❌ Agent-S NOT installed — signature-based threat detection (ET rules) will be unavailable on this sensor."
+  warn "   Continuing with the rest of the install; see $LOG_FILE for details and re-run later once fixed."
+fi
 
 # ── Packet Recorder ───────────────────────────────
 step "Packet Recorder"
 log "Installing Packet Recorder..."
 ARKIME_VERSION="5.1.0"
 UBUNTU_MAJOR=$(lsb_release -rs | cut -d. -f1)
+ARKIME_OK=0
 
-if ! command -v /opt/arkime/bin/capture \
-    &>/dev/null; then
-
+if ! command -v /opt/arkime/bin/capture &>/dev/null; then
   if   [ "$UBUNTU_MAJOR" -le "21" ]; then
     DEB="arkime_${ARKIME_VERSION}-1.ubuntu2004_amd64.deb"
   elif [ "$UBUNTU_MAJOR" -le "23" ]; then
@@ -355,61 +437,94 @@ if ! command -v /opt/arkime/bin/capture \
   fi
 
   log "Downloading Arkime ${ARKIME_VERSION}..."
-  wget --timeout=120 --progress=dot:mega \
-    "https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${DEB}" \
-    -O /tmp/arkime.deb 2>&1 || \
-    error "Arkime download failed"
+  if ! wget --timeout=120 --progress=dot:mega \
+      "https://github.com/arkime/arkime/releases/download/v${ARKIME_VERSION}/${DEB}" \
+      -O /tmp/arkime.deb 2>/tmp/ndr_ark_err; then
+    record_error "Packet Recorder" "download failed for ${DEB} ($(cat /tmp/ndr_ark_err 2>/dev/null))" \
+      "Check internet access to github.com, or that Arkime ${ARKIME_VERSION} still publishes a build for Ubuntu ${UBUNTU_MAJOR}.x."
+  else
+    apt-get install -y -qq \
+      libwww-perl libjson-perl \
+      libyaml-dev librdkafka1 \
+      libmagic1 libmaxminddb0 \
+      libpcre2-8-0 > /dev/null 2>&1 || true
 
-  apt-get install -y -qq \
-    libwww-perl libjson-perl \
-    libyaml-dev librdkafka1 \
-    libmagic1 libmaxminddb0 \
-    libpcre2-8-0 > /dev/null 2>&1 || true
-
-  dpkg -i /tmp/arkime.deb > /dev/null 2>&1 || \
-    apt-get install -f -y > /dev/null 2>&1 || true
-  rm -f /tmp/arkime.deb
+    if dpkg -i /tmp/arkime.deb > /dev/null 2>/tmp/ndr_ark_err || apt-get install -f -y > /dev/null 2>>/tmp/ndr_ark_err; then
+      ARKIME_OK=1
+    else
+      record_error "Packet Recorder" "package install failed ($(cat /tmp/ndr_ark_err 2>/dev/null))" \
+        "Try: sudo dpkg -i /tmp/arkime.deb && sudo apt-get install -f -y  (dependency resolution)."
+    fi
+  fi
+  rm -f /tmp/arkime.deb /tmp/ndr_ark_err
+else
+  ARKIME_OK=1
 fi
-log "✅ Arkime: $(\
-  /opt/arkime/bin/capture --version \
-  2>/dev/null | head -1)"
+if command -v /opt/arkime/bin/capture &>/dev/null; then
+  ARKIME_OK=1
+  log "✅ Arkime: $(/opt/arkime/bin/capture --version 2>/dev/null | head -1)"
+else
+  warn "❌ Packet Recorder NOT installed — full-packet capture/PCAP evidence will be unavailable on this sensor."
+  warn "   Continuing with the rest of the install; see $LOG_FILE for details and re-run later once fixed."
+fi
 
 # ── Log Collector ─────────────────────────────────
 step "Log Collector"
 log "Installing Log Collector..."
+VECTOR_OK=0
 if ! command -v vector &>/dev/null; then
   ARCH=$(dpkg --print-architecture)
   VECTOR_VER="0.32.1"
 
-  curl -fsSL \
-    https://repositories.vector.dev/gpg.key \
-    | gpg --dearmor \
-    > /usr/share/keyrings/vector-keyring.gpg \
-    2>/dev/null
+  if ! curl -fsSL https://repositories.vector.dev/gpg.key 2>/tmp/ndr_vec_err \
+      | gpg --dearmor > /usr/share/keyrings/vector-keyring.gpg 2>>/tmp/ndr_vec_err; then
+    record_error "Log Collector" "could not fetch/import the Vector repo signing key ($(cat /tmp/ndr_vec_err 2>/dev/null))" \
+      "Check internet access to repositories.vector.dev — will fall back to a direct .deb download."
+  elif ! { echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/vector-keyring.gpg] https://repositories.vector.dev/ubuntu/ stable vector-0" \
+        | tee /etc/apt/sources.list.d/vector.list > /dev/null 2>/tmp/ndr_vec_err \
+      && apt-get update -qq 2>>/tmp/ndr_vec_err \
+      && apt-get install -y -qq vector > /dev/null 2>>/tmp/ndr_vec_err; }; then
+    record_error "Log Collector" "apt install failed ($(cat /tmp/ndr_vec_err 2>/dev/null)) — falling back to direct .deb download" ""
+  else
+    VECTOR_OK=1
+  fi
 
-  echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/vector-keyring.gpg] \
-    https://repositories.vector.dev/ubuntu/ \
-    stable vector-0" \
-    > /etc/apt/sources.list.d/vector.list
-
-  apt-get update -qq
-  apt-get install -y -qq vector \
-    > /dev/null 2>&1 || {
-    wget -q --timeout=60 \
-      "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VER}/vector_${VECTOR_VER}-1_${ARCH}.deb" \
-      -O /tmp/vector.deb && \
-      dpkg -i /tmp/vector.deb \
-        > /dev/null 2>&1
+  if [ "$VECTOR_OK" != "1" ]; then
+    # -nv (not -q) — quiet mode suppresses wget's own error text too, which
+    # would otherwise leave the captured error message blank below.
+    if wget -nv --timeout=60 \
+        "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VER}/vector_${VECTOR_VER}-1_${ARCH}.deb" \
+        -O /tmp/vector.deb 2>/tmp/ndr_vec_err \
+        && dpkg -i /tmp/vector.deb > /dev/null 2>>/tmp/ndr_vec_err; then
+      VECTOR_OK=1
+    else
+      record_error "Log Collector" "direct .deb fallback also failed ($(cat /tmp/ndr_vec_err 2>/dev/null))" \
+        "Check internet access to github.com, or install vector manually: https://vector.dev/docs/setup/installation/"
+    fi
     rm -f /tmp/vector.deb
-  }
+  fi
+  rm -f /tmp/ndr_vec_err
+else
+  VECTOR_OK=1
 fi
-log "✅ Log Collector: $(vector --version 2>/dev/null)"
+if command -v vector &>/dev/null; then
+  log "✅ Log Collector: $(vector --version 2>/dev/null)"
+else
+  warn "❌ Log Collector NOT installed — logs will not be shipped to the cloud from this sensor."
+  warn "   Continuing with the rest of the install; see $LOG_FILE for details and re-run later once fixed."
+fi
 
 # ── Endpoint Visibility ───────────────────────────
 step "Endpoint Visibility"
 log "Installing endpoint audit agent..."
-apt-get install -y -qq auditd audispd-plugins > /dev/null 2>&1 || true
-log "✅ Endpoint audit agent ready"
+if apt-get install -y -qq auditd audispd-plugins > /dev/null 2>/tmp/ndr_audit_err; then
+  log "✅ Endpoint audit agent ready"
+else
+  record_error "Endpoint Visibility" "auditd install failed ($(cat /tmp/ndr_audit_err 2>/dev/null))" \
+    "Ensure the 'universe' repo is enabled: sudo add-apt-repository universe && sudo apt-get update"
+  warn "❌ Endpoint audit agent NOT installed — Linux endpoint visibility (auditd) will be unavailable on this sensor."
+fi
+rm -f /tmp/ndr_audit_err
 
 # ── Create directories ────────────────────────────
 step "Directories & Configuration"
@@ -490,6 +605,14 @@ fi
 # Remove old container if exists
 docker rm -f opensearch-arkime 2>/dev/null || true
 
+# Fail fast with a clear reason if Docker itself isn't reachable, rather than
+# burning through 5 port retries with a misleading "may be allocated" guess
+# when the real problem is that the daemon never started.
+if ! docker info >/dev/null 2>/tmp/ndr_os_err; then
+  error "Docker is not reachable ($(cat /tmp/ndr_os_err 2>/dev/null)) — OpenSearch (required for Arkime) cannot start. Check: sudo systemctl status docker"
+fi
+rm -f /tmp/ndr_os_err
+
 PORT_ATTEMPTS=0
 MAX_PORT_RETRIES=5
 while [ $PORT_ATTEMPTS -lt $MAX_PORT_RETRIES ]; do
@@ -500,17 +623,18 @@ while [ $PORT_ATTEMPTS -lt $MAX_PORT_RETRIES ]; do
     -e "OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx512m" \
     -p "${OS_PORT}:9200" \
     --restart unless-stopped \
-    opensearchproject/opensearch:2.5.0; then
+    opensearchproject/opensearch:2.5.0 2>/tmp/ndr_os_err; then
     log "✅ OpenSearch container started on port ${OS_PORT}"
     break
   else
-    warn "Failed to start on port ${OS_PORT}. It may be allocated by Docker."
+    warn "Failed to start on port ${OS_PORT} ($(tail -2 /tmp/ndr_os_err 2>/dev/null | tr '\n' ' '))."
     docker rm -f opensearch-arkime 2>/dev/null || true
     OS_PORT=$((OS_PORT+1))
     PORT_ATTEMPTS=$((PORT_ATTEMPTS+1))
     log "Trying next port: ${OS_PORT}..."
   fi
 done
+rm -f /tmp/ndr_os_err
 
 if [ $PORT_ATTEMPTS -eq $MAX_PORT_RETRIES ]; then
   error "Could not find a free port for OpenSearch after several attempts."
@@ -594,11 +718,18 @@ echo "yes" | timeout 90 \
   2>&1 || true
 
 # ── Create Arkime admin user ──────────────────────
-log "Creating Arkime admin user..."
-/opt/arkime/bin/arkime_add_user.sh \
-  admin "NDR Admin" "$ARKIME_PASS" \
-  --admin 2>/dev/null || true
-log "✅ Arkime admin: user=admin pass=$ARKIME_PASS"
+if [ "$ARKIME_OK" = "1" ]; then
+  log "Creating Arkime admin user..."
+  if /opt/arkime/bin/arkime_add_user.sh admin "NDR Admin" "$ARKIME_PASS" --admin 2>/tmp/ndr_ark_user_err; then
+    log "✅ Arkime admin: user=admin pass=$ARKIME_PASS"
+  else
+    record_error "Packet Recorder" "could not create the Arkime admin user ($(cat /tmp/ndr_ark_user_err 2>/dev/null))" \
+      "Run manually once Arkime is confirmed working: /opt/arkime/bin/arkime_add_user.sh admin \"NDR Admin\" '<password>' --admin"
+  fi
+  rm -f /tmp/ndr_ark_user_err
+else
+  warn "Skipping Arkime admin user creation — Packet Recorder was not installed."
+fi
 
 # ── FIX: Create Arkime CAPTURE service ───────────
 cat > /etc/systemd/system/arkime-capture.service \
@@ -863,13 +994,17 @@ else
 fi
 
 # Configure Suricata to load the threshold file
-if grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
-  sed -i "s|threshold-file:.*|threshold-file: $THRESHOLD_FILE|g" \
-    /etc/suricata/suricata.yaml
+if [ "$SURICATA_OK" = "1" ]; then
+  if grep -q "threshold-file:" /etc/suricata/suricata.yaml 2>/dev/null; then
+    sed -i "s|threshold-file:.*|threshold-file: $THRESHOLD_FILE|g" \
+      /etc/suricata/suricata.yaml
+  else
+    echo "threshold-file: $THRESHOLD_FILE" >> /etc/suricata/suricata.yaml
+  fi
+  log "✅ Suricata suppressions written to $THRESHOLD_FILE"
 else
-  echo "threshold-file: $THRESHOLD_FILE" >> /etc/suricata/suricata.yaml
+  warn "Skipping Suricata suppression config — Agent-S was not installed."
 fi
-log "✅ Suricata suppressions written to $THRESHOLD_FILE"
 
 # ── Configure auditd NDR rules ────────────────────
 log "Writing NDR auditd rules..."
@@ -2684,7 +2819,10 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
+systemctl daemon-reload 2>/tmp/ndr_svc_err || record_error "Service Setup" \
+  "systemctl daemon-reload failed ($(cat /tmp/ndr_svc_err 2>/dev/null)) — is this host running under real systemd (not just a container without an init system)?" \
+  "If this is a container, run the sensor on a real host/VM with systemd, or manage ndr-agent/vector/arkime-capture without systemd."
+rm -f /tmp/ndr_svc_err
 systemctl enable \
   ndr-vector \
   ndr-agent \
@@ -2704,7 +2842,13 @@ systemctl start ndr-agent 2>/dev/null || true
 # ── Register with cloud ───────────────────────────
 log "Registering sensor with cloud..."
 sleep 3
-REG=$(curl -s -X POST \
+# By this point every engine (Zeek, Suricata, Arkime, Vector, auditd) is
+# already installed and running — a network blip hitting this last curl call
+# must not take down the whole install. REG=$(...) on its own is NOT exempt
+# from `set -e` (only if/while/&&/|| guards are), so a bare assignment here
+# would silently kill the script on a DNS/connectivity hiccup with no message
+# at all, right after everything else already succeeded.
+REG=$(curl -sS -X POST \
   "$CLOUD_URL/api/sensor/register" \
   -H "X-Sensor-Key: $API_KEY" \
   -H "Content-Type: application/json" \
@@ -2713,11 +2857,15 @@ REG=$(curl -s -X POST \
     \"hostname\": \"$(hostname)\",
     \"interface\": \"$IFACE\",
     \"os\": \"$PRETTY_NAME\"
-  }" 2>/dev/null)
+  }" 2>/tmp/ndr_reg_err) || true
 
-echo "$REG" | grep -q '"status":"ok"' && \
-  log "✅ Registered with cloud" || \
-  warn "Cloud registration: $REG"
+if echo "$REG" | grep -q '"status":"ok"'; then
+  log "✅ Registered with cloud"
+else
+  record_error "Cloud Registration" "could not register with $CLOUD_URL (${REG:-$(cat /tmp/ndr_reg_err 2>/dev/null)})" \
+    "Sensor is fully installed and running locally — re-register manually once cloud connectivity is confirmed: curl -X POST $CLOUD_URL/api/sensor/register -H 'X-Sensor-Key: $API_KEY' -H 'Content-Type: application/json' -d '{\"tenant_id\":\"$TENANT_ID\",\"hostname\":\"'\"\$(hostname)\"'\",\"interface\":\"$IFACE\"}'"
+fi
+rm -f /tmp/ndr_reg_err
 
 # ── Verify services ───────────────────────────────
 log "Waiting for engines to initialize (up to 30s)..."

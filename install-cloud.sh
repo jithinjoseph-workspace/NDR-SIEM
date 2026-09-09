@@ -84,10 +84,36 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+LOG_FILE="/var/log/ndr/install-cloud-$(date +%Y%m%d-%H%M%S).log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null && touch "$LOG_FILE" 2>/dev/null \
+  || LOG_FILE="/tmp/ndr-install-cloud-$(date +%Y%m%d-%H%M%S).log"
+touch "$LOG_FILE" 2>/dev/null || true
+
 log()  { echo -e "${GREEN}[NDR]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-err()  { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
+err()  { echo -e "${RED}[ERR]${NC} $1"; echo "[$(date '+%Y-%m-%d %H:%M:%S')] FATAL $1" >> "$LOG_FILE" 2>/dev/null; exit 1; }
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+
+# record_error <component> <what went wrong> <how to fix it>
+# Use instead of a bare warn() for anything that leaves a component
+# non-functional but shouldn't abort the whole install — logs a structured,
+# timestamped line to $LOG_FILE (survives a scrolled/closed terminal) in
+# addition to the on-screen warning.
+record_error() {
+    local component="$1" detail="$2" hint="$3"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR component=\"$component\" detail=\"$detail\" fix=\"$hint\"" >> "$LOG_FILE" 2>/dev/null
+    warn "$component: $detail"
+    [ -n "$hint" ] && warn "  → Fix: $hint"
+}
+
+# This script runs as a normal user and prefixes individual privileged
+# commands with sudo (unlike install-sensor.sh, which expects to run as
+# root outright) — so validate sudo access up front instead of requiring
+# root, and instead of letting a no-sudo user hit a wall deep inside the
+# script at whatever the first `sudo` command happens to be.
+if [ "$(id -u)" -ne 0 ] && ! sudo -v 2>/dev/null; then
+  err "This script needs sudo access to install Docker/system packages. Add this user to the sudoers group, or re-run as root."
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -166,39 +192,62 @@ sudo apt-get update -qq 2>&1 | grep -E "^Get|^Hit|^Err" | head -10 || true
 step "Installing system dependencies"
 
 log "Installing packages..."
-sudo apt-get install -y \
+if sudo apt-get install -y \
     curl wget git jq \
     python3 python3-pip python3-requests \
     net-tools iproute2 \
     ufw \
     apt-transport-https ca-certificates gnupg \
-    lsb-release openssl
-log "✅ System packages installed"
+    lsb-release openssl 2>/tmp/ndr_cloud_err; then
+  log "✅ System packages installed"
+else
+  record_error "System packages" "apt-get install failed ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
+    "Check network connectivity and available disk space, then re-run this script."
+fi
+rm -f /tmp/ndr_cloud_err
 
 # ── Docker ────────────────────────────────────
+DOCKER_OK=0
 if ! command -v docker &>/dev/null; then
     log "Installing Docker..."
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    DOCKER_CODENAME="${UBUNTU_CODENAME}"
-    # Fall back to noble if Docker repo doesn't exist for this codename yet
-    if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
-               --max-time 5 -o /dev/null 2>/dev/null; then
-        log "Docker repo not yet available for '${DOCKER_CODENAME}' — falling back to noble"
-        DOCKER_CODENAME="noble"
+    if ! curl -fsSL https://download.docker.com/linux/ubuntu/gpg 2>/tmp/ndr_cloud_err \
+        | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg 2>>/tmp/ndr_cloud_err; then
+      record_error "Docker" "could not fetch/import the Docker repo signing key ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
+        "Check internet access to download.docker.com (443) — no proxy/firewall blocking it."
+    else
+      DOCKER_CODENAME="${UBUNTU_CODENAME}"
+      # Fall back to noble if Docker repo doesn't exist for this codename yet
+      if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
+                 --max-time 5 -o /dev/null 2>/dev/null; then
+          log "Docker repo not yet available for '${DOCKER_CODENAME}' — falling back to noble"
+          DOCKER_CODENAME="noble"
+      fi
+      if ! { echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
+          https://download.docker.com/linux/ubuntu ${DOCKER_CODENAME} stable" \
+          | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null 2>/tmp/ndr_cloud_err \
+          && sudo apt-get update -qq 2>>/tmp/ndr_cloud_err \
+          && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>>/tmp/ndr_cloud_err; }; then
+        record_error "Docker" "install failed ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
+          "Check network connectivity, or install Docker manually: https://docs.docker.com/engine/install/ubuntu/"
+      else
+        sudo usermod -aG docker "$USERNAME" 2>/dev/null || true
+        if sudo systemctl enable docker 2>/tmp/ndr_cloud_err && sudo systemctl start docker 2>>/tmp/ndr_cloud_err; then
+          DOCKER_OK=1
+          log "✅ Docker installed"
+        else
+          record_error "Docker" "installed but the service would not start ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
+            "Check systemd is available on this host, then: sudo systemctl status docker"
+        fi
+      fi
     fi
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
-        https://download.docker.com/linux/ubuntu ${DOCKER_CODENAME} stable" \
-        | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    sudo usermod -aG docker "$USERNAME"
-    sudo systemctl enable docker
-    sudo systemctl start docker
-    log "✅ Docker installed"
+    rm -f /tmp/ndr_cloud_err
 else
+    DOCKER_OK=1
     log "✅ Docker already installed"
+fi
+if [ "$DOCKER_OK" != "1" ]; then
+  err "Docker is required for every step from here on — fix the issue above (see $LOG_FILE) and re-run this script."
 fi
 
 # ── Docker daemon config ──────────────────────────────────────────────────────
@@ -208,7 +257,11 @@ sudo tee /etc/docker/daemon.json > /dev/null << 'DOCKEREOF'
   "log-opts": { "max-size": "10m", "max-file": "3" }
 }
 DOCKEREOF
-sudo systemctl restart docker
+if ! sudo systemctl restart docker 2>/tmp/ndr_cloud_err; then
+  record_error "Docker" "could not restart the docker service after writing daemon.json ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
+    "Check: sudo journalctl -u docker -n 50"
+fi
+rm -f /tmp/ndr_cloud_err
 sleep 3
 
 # ── Step 2: Create NDR directories ────────────
@@ -425,8 +478,11 @@ log "Registry login successful"
 
 # ── Pull pre-built images ─────────────────────
 log "Pulling pre-built images..."
-sudo docker pull "${REGISTRY}/ndr-engine:latest"
-sudo docker pull "${REGISTRY}/ndr-ui:latest"
+sudo docker pull "${REGISTRY}/ndr-engine:latest" 2>/tmp/ndr_cloud_err \
+  || err "Could not pull ${REGISTRY}/ndr-engine:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
+sudo docker pull "${REGISTRY}/ndr-ui:latest" 2>/tmp/ndr_cloud_err \
+  || err "Could not pull ${REGISTRY}/ndr-ui:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
+rm -f /tmp/ndr_cloud_err
 
 # ── Write compose override (pre-built images, no build:) ─────────────
 cat > "$INSTALL_DIR/docker-compose.cloud.yml" << OVERRIDE
@@ -445,7 +501,9 @@ OVERRIDE
 cd "$INSTALL_DIR"
 sudo docker compose down 2>/dev/null || true
 
-sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d
+sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d 2>/tmp/ndr_cloud_err \
+  || err "docker compose up failed ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check: sudo docker compose logs, and confirm no port conflicts (8123/9092/6379/etc)."
+rm -f /tmp/ndr_cloud_err
 log "✅ Docker stack started with pre-built images"
 # docker compose up -d already waited for every depends_on:healthy condition
 # before returning, so ch1 and ch2 are guaranteed healthy at this point.
@@ -467,24 +525,33 @@ for i in {1..30}; do
 done
 echo ""
 
-sudo docker exec kafka1 \
+if sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:9092 \
     --create --if-not-exists \
     --topic ndr-events \
     --partitions 3 \
     --replication-factor 3 \
-    2>/dev/null || true
-log "✅ Kafka topic ndr-events created with 3 partitions, replication-factor 3"
+    2>/tmp/ndr_cloud_err; then
+  log "✅ Kafka topic ndr-events created with 3 partitions, replication-factor 3"
+else
+  record_error "Kafka" "topic creation failed ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
+    "Run manually once Kafka is confirmed healthy: sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic ndr-events --partitions 3 --replication-factor 3"
+fi
 
-sudo docker exec kafka1 \
+if sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-configs.sh \
     --bootstrap-server localhost:9092 \
     --alter --entity-type topics \
     --entity-name ndr-events \
     --add-config retention.ms=86400000 \
-    2>/dev/null || true
-log "✅ Kafka retention set to 24 hours"
+    2>/tmp/ndr_cloud_err; then
+  log "✅ Kafka retention set to 24 hours"
+else
+  record_error "Kafka" "setting retention.ms failed ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
+    "Non-fatal — topic still works with the broker default retention; adjust later via kafka-configs.sh."
+fi
+rm -f /tmp/ndr_cloud_err
 
 log "✅ Kafka topic and retention set"
 
