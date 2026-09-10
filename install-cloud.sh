@@ -207,29 +207,64 @@ fi
 rm -f /tmp/ndr_cloud_err
 
 # ── Docker ────────────────────────────────────
+# `command -v docker` alone misses hosts with a bare `docker.io` install (the
+# Ubuntu distro package, common when Docker was installed some other way) —
+# it has the `docker` binary but not the Compose v2 plugin, since that only
+# ships through Docker's own apt repo. Checking both here means a clear
+# message now instead of a confusing raw CLI error at `docker compose up`,
+# much later, after already spending time pulling large images.
 DOCKER_OK=0
+NEED_ENGINE=0
+NEED_COMPOSE=0
 if ! command -v docker &>/dev/null; then
-    log "Installing Docker..."
+    NEED_ENGINE=1
+    NEED_COMPOSE=1
+elif ! sudo docker compose version &>/dev/null; then
+    NEED_COMPOSE=1
+fi
+
+if [ "$NEED_ENGINE" = "1" ] || [ "$NEED_COMPOSE" = "1" ]; then
+    if [ "$NEED_ENGINE" = "1" ]; then
+        log "Installing Docker..."
+    else
+        log "Docker is installed but the Compose plugin is missing — installing it..."
+    fi
     if ! curl -fsSL https://download.docker.com/linux/ubuntu/gpg 2>/tmp/ndr_cloud_err \
         | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg 2>>/tmp/ndr_cloud_err; then
       record_error "Docker" "could not fetch/import the Docker repo signing key ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
         "Check internet access to download.docker.com (443) — no proxy/firewall blocking it."
     else
       DOCKER_CODENAME="${UBUNTU_CODENAME}"
-      # Fall back to noble if Docker repo doesn't exist for this codename yet
-      if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
-                 --max-time 5 -o /dev/null 2>/dev/null; then
+      # Fall back to noble if Docker repo doesn't exist for this codename yet.
+      # One retry so a single transient network blip can't wrongly trigger
+      # this — noble's packages need a newer glibc than older codenames
+      # ship, so a bad fallback here silently breaks the whole Docker
+      # install with a confusing "unmet dependencies" error much later.
+      REACHABLE=0
+      for _try in 1 2; do
+          if curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
+                     --max-time 5 -o /dev/null 2>/dev/null; then
+              REACHABLE=1
+              break
+          fi
+          sleep 2
+      done
+      if [ "$REACHABLE" != "1" ]; then
           log "Docker repo not yet available for '${DOCKER_CODENAME}' — falling back to noble"
           DOCKER_CODENAME="noble"
       fi
+      PKGS="docker-compose-plugin"
+      [ "$NEED_ENGINE" = "1" ] && PKGS="docker-ce docker-ce-cli containerd.io docker-compose-plugin"
       if ! { echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
           https://download.docker.com/linux/ubuntu ${DOCKER_CODENAME} stable" \
           | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null 2>/tmp/ndr_cloud_err \
           && sudo apt-get update -qq 2>>/tmp/ndr_cloud_err \
-          && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>>/tmp/ndr_cloud_err; }; then
+          && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y $PKGS 2>>/tmp/ndr_cloud_err; }; then
         record_error "Docker" "install failed ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
           "Check network connectivity, or install Docker manually: https://docs.docker.com/engine/install/ubuntu/"
+      elif [ "$NEED_ENGINE" != "1" ]; then
+        DOCKER_OK=1
+        log "✅ Docker Compose plugin installed"
       else
         sudo usermod -aG docker "$USERNAME" 2>/dev/null || true
         if sudo systemctl enable docker 2>/tmp/ndr_cloud_err && sudo systemctl start docker 2>>/tmp/ndr_cloud_err; then
@@ -613,11 +648,13 @@ else
     warn "  ⚠️  Kafka         — NOT running"
 fi
 
-# Redis container
-if sudo docker ps --format '{{.Names}}' | grep -q "^ndr-redis$"; then
-    log "  ✅ Redis         — running"
+# Redis (Valkey) container — the actual container/service name is
+# ndr-valkey, not ndr-redis; this check always warned regardless of real
+# health because it was looking for a container that never exists.
+if sudo docker ps --format '{{.Names}}' | grep -q "^ndr-valkey$"; then
+    log "  ✅ Redis (Valkey) — running"
 else
-    warn "  ⚠️  Redis         — NOT running"
+    warn "  ⚠️  Redis (Valkey) — NOT running"
 fi
 
 # Engine containers

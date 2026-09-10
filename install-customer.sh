@@ -689,6 +689,18 @@ mkdir -p "$HOME_DIR/ndr-config"
 sudo mkdir -p /opt/ndr/pcap /opt/ndr/evidence
 sudo chmod -R 755 /opt/ndr
 sudo chown -R "$USER:$USER" /opt/ndr
+
+# The vector container bind-mounts ${HOME_DIR}/.vector/vector.toml as a
+# read-only file — if that path doesn't exist yet, Docker auto-creates it
+# as a directory instead, and the container then fails to start with a
+# confusing "not a directory" mount error. A prior failed install run can
+# leave exactly that bad directory behind, so a plain re-run needs to
+# replace it, not just skip because "something" is already there.
+mkdir -p "$HOME_DIR/.vector/data"
+[ -d "$HOME_DIR/.vector/vector.toml" ] && rmdir "$HOME_DIR/.vector/vector.toml" 2>/dev/null
+if [ ! -f "$HOME_DIR/.vector/vector.toml" ]; then
+    cp "$INSTALL_DIR/config/vector.toml" "$HOME_DIR/.vector/vector.toml"
+fi
 log "Runtime directories created"
 
 # ── Detect host IP ────────────────────────────
@@ -857,9 +869,28 @@ sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
 DOCKER_CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
 case "$DOCKER_CODENAME" in
-    resolute|oracular|*)
-        if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
-               --max-time 5 -o /dev/null 2>/dev/null; then
+    jammy|noble|focal)
+        # Well-established codenames Docker's repo definitely carries —
+        # skip the network check entirely so a transient blip can't wrongly
+        # trigger a fallback (see the * arm below for why that matters).
+        ;;
+    *)
+        # Unknown/bleeding-edge codename (e.g. resolute, oracular) — verify
+        # Docker's repo actually has it, with one retry so a single transient
+        # network blip doesn't wrongly fall back to noble: noble's packages
+        # need a newer glibc than older codenames ship, so a bad fallback
+        # here silently breaks the whole Docker install with a confusing
+        # "unmet dependencies" error much later instead of failing here.
+        REACHABLE=0
+        for _try in 1 2; do
+            if curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
+                   --max-time 5 -o /dev/null 2>/dev/null; then
+                REACHABLE=1
+                break
+            fi
+            sleep 2
+        done
+        if [ "$REACHABLE" != "1" ]; then
             log "Docker repo not available for '${DOCKER_CODENAME}' — falling back to noble"
             DOCKER_CODENAME="noble"
         fi
