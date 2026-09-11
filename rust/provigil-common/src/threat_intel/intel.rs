@@ -83,6 +83,85 @@ impl ThreatIntel {
         }
     }
 
+    pub fn snapshot_entries(&self, source: &str) -> Vec<crate::threat_intel::ThreatIntelEntry> {
+        let snap = self.snapshot();
+        let mut entries = Vec::new();
+
+        for ip in snap.malicious_ips {
+            entries.push(crate::threat_intel::ThreatIntelEntry {
+                source: source.to_string(),
+                attack_type: "general_threat".to_string(),
+                severity: "HIGH".to_string(),
+                ioc_type: "ip".to_string(),
+                ioc_value: ip.to_string(),
+                description: "Runtime threat intel snapshot".to_string(),
+                threat_pattern: "runtime_snapshot".to_string(),
+            });
+        }
+
+        for hash in snap.malicious_hashes {
+            entries.push(crate::threat_intel::ThreatIntelEntry {
+                source: source.to_string(),
+                attack_type: "file_hash".to_string(),
+                severity: "HIGH".to_string(),
+                ioc_type: "hash".to_string(),
+                ioc_value: hash,
+                description: "Runtime threat intel snapshot".to_string(),
+                threat_pattern: "runtime_snapshot".to_string(),
+            });
+        }
+
+        for domain in snap.malicious_domains {
+            entries.push(crate::threat_intel::ThreatIntelEntry {
+                source: source.to_string(),
+                attack_type: "c2".to_string(),
+                severity: "HIGH".to_string(),
+                ioc_type: "domain".to_string(),
+                ioc_value: domain,
+                description: "Runtime threat intel snapshot".to_string(),
+                threat_pattern: "runtime_snapshot".to_string(),
+            });
+        }
+
+        for url in snap.malicious_urls {
+            entries.push(crate::threat_intel::ThreatIntelEntry {
+                source: source.to_string(),
+                attack_type: "malware_distribution".to_string(),
+                severity: "HIGH".to_string(),
+                ioc_type: "url".to_string(),
+                ioc_value: url,
+                description: "Runtime threat intel snapshot".to_string(),
+                threat_pattern: "runtime_snapshot".to_string(),
+            });
+        }
+
+        for ja3 in snap.malicious_ja3 {
+            entries.push(crate::threat_intel::ThreatIntelEntry {
+                source: source.to_string(),
+                attack_type: "ja3".to_string(),
+                severity: "HIGH".to_string(),
+                ioc_type: "ja3".to_string(),
+                ioc_value: ja3,
+                description: "Runtime threat intel snapshot".to_string(),
+                threat_pattern: "runtime_snapshot".to_string(),
+            });
+        }
+
+        for cidr in snap.malicious_cidrs {
+            entries.push(crate::threat_intel::ThreatIntelEntry {
+                source: source.to_string(),
+                attack_type: "botnet_c2".to_string(),
+                severity: "HIGH".to_string(),
+                ioc_type: "cidr".to_string(),
+                ioc_value: cidr.to_string(),
+                description: "Runtime threat intel snapshot".to_string(),
+                threat_pattern: "runtime_snapshot".to_string(),
+            });
+        }
+
+        entries
+    }
+
     pub fn replace_snapshot(&self, snapshot: ThreatIntelSnapshot) {
         self.malicious_ips.clear();
         for ip in snapshot.malicious_ips { self.malicious_ips.insert(ip); }

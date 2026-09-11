@@ -524,12 +524,20 @@ async fn main() {
     // Fix background refresh — refresh NOW then every 60 min
 {
     let ti = ti_ref.clone();
+    let ch_storage = ch_storage_arc.clone();
     tokio::spawn(async move {
         loop {
-            ti.refresh().await;  // ← refresh first
+            ti.refresh().await;
+            let snapshot_entries = ti.snapshot_entries("runtime_refresh");
+            if !snapshot_entries.is_empty() {
+                match ch_storage.persist_threat_intel_entries(snapshot_entries).await {
+                    Ok(inserted) => tracing::info!("Threat intel runtime snapshot persisted to ClickHouse: {} entries", inserted),
+                    Err(err) => tracing::warn!("Threat intel runtime snapshot persist failed: {}", err),
+                }
+            }
             tokio::time::sleep(
                 tokio::time::Duration::from_secs(3600)
-            ).await;  // ← then wait
+            ).await;
         }
     });
 }

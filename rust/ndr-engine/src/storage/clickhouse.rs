@@ -7479,3 +7479,24 @@ impl ThreatCollectorStore for ClickhouseStorage {
         saved
     }
 }
+
+impl ClickhouseStorage {
+    pub async fn persist_threat_intel_entries(&self, entries: Vec<ThreatIntelEntry>) -> anyhow::Result<usize> {
+        let existing = self.fetch_existing_iocs().await;
+        let mut saved = 0usize;
+
+        for e in entries {
+            if existing.contains(&(e.source.clone(), e.ioc_value.clone())) { continue; }
+            let q = format!(
+                "INSERT INTO ndr.threat_intel \
+                 (source, attack_type, severity, ioc_type, ioc_value, description, threat_pattern) \
+                 VALUES ('{}','{}','{}','{}','{}','{}','{}')",
+                sql_escape(&e.source), sql_escape(&e.attack_type), sql_escape(&e.severity),
+                sql_escape(&e.ioc_type), sql_escape(&e.ioc_value), sql_escape(&e.description), sql_escape(&e.threat_pattern)
+            );
+            if self.client.query(&q).execute().await.is_ok() { saved += 1; }
+        }
+
+        Ok(saved)
+    }
+}
