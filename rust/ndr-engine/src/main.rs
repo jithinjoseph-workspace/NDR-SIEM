@@ -630,34 +630,47 @@ async fn main() {
 
     let rules_dir = std::env::var("RULES_DIR").unwrap_or_else(|_| "rules".to_string());
 
-    // ── Migrate rules to ClickHouse ──────────────────────────────────────────
+    // ── Migrate rules to ClickHouse — leader only, once per startup ───────
     {
         let ch = state.ch_storage.clone();
         let rules_dir = rules_dir.clone();
-        
+        let election = election.clone();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         tokio::spawn(async move {
-            if let Ok(entries) = std::fs::read_dir(&rules_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if ext != "yml" && ext != "yaml" { continue; }
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Ok(doc) = serde_yaml::from_str::<std::collections::HashMap<String, serde_yaml::Value>>(&content) {
-                            let id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let name = doc.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            if !id.is_empty() {
-                                let exists = ch.get_sigma_rule_by_id(&id, "default").await.map(|r| r.is_some()).unwrap_or(false);
-                                if !exists {
-                                    if let Err(e) = ch.save_sigma_rule(&id, &name, &content, "default").await {
-                                        tracing::warn!("Failed to migrate rule {}: {}", id, e);
-                                    } else {
-                                        tracing::info!("Migrated rule {} to ClickHouse", id);
+            loop {
+                if !election.is_leader() {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+                if ran.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+
+                if let Ok(entries) = std::fs::read_dir(&rules_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        if ext != "yml" && ext != "yaml" { continue; }
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            if let Ok(doc) = serde_yaml::from_str::<std::collections::HashMap<String, serde_yaml::Value>>(&content) {
+                                let id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let name = doc.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                if !id.is_empty() {
+                                    let exists = ch.get_sigma_rule_by_id(&id, "default").await.map(|r| r.is_some()).unwrap_or(false);
+                                    if !exists {
+                                        if let Err(e) = ch.save_sigma_rule(&id, &name, &content, "default").await {
+                                            tracing::warn!("Failed to migrate rule {}: {}", id, e);
+                                        } else {
+                                            tracing::info!("Migrated rule {} to ClickHouse", id);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                break;
             }
         });
     }

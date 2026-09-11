@@ -2497,19 +2497,50 @@ pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http
     }));
     let feed_sources = state.ch_storage.get_threat_intel_feed_sources().await.unwrap_or_default();
 
+    let manual_iocs = state.ch_storage.get_watchlist_iocs_by_tenant(&tenant_id).await.unwrap_or_default();
+    let mut manual_by_type: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    for item in &manual_iocs {
+        let ioc_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if ioc_type.is_empty() || value.is_empty() {
+            continue;
+        }
+        manual_by_type.entry(ioc_type.clone()).or_default().insert(value);
+    }
+
+    let manual_ip_total = manual_by_type.get("ip").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_hash_total = manual_by_type.get("hash").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_domain_total = manual_by_type.get("domain").map(|s| s.len() as u64).unwrap_or(0);
+
+    let total_ips = summary["unique_ips"].as_u64().unwrap_or(0) + manual_ip_total;
+    let total_hashes = summary["unique_hashes"].as_u64().unwrap_or(0) + manual_hash_total;
+    let total_domains = summary["unique_domains"].as_u64().unwrap_or(0) + manual_domain_total;
+
+    let mut merged_sources = feed_sources;
+    for (ioc_type, values) in manual_by_type {
+        merged_sources.push(json!({
+            "source": "manual",
+            "ioc_type": ioc_type,
+            "rows": values.len(),
+            "unique_values": values.len(),
+        }));
+    }
+
     Json(json!({
-        "total_malicious_ips":     summary["unique_ips"].as_u64().unwrap_or(0),
-        "total_malicious_hashes":  summary["unique_hashes"].as_u64().unwrap_or(0),
-        "total_malicious_domains": summary["unique_domains"].as_u64().unwrap_or(0),
+        "total_malicious_ips":     total_ips,
+        "total_malicious_hashes":  total_hashes,
+        "total_malicious_domains": total_domains,
         "detected_in_network":     detected,
         "last_refresh":            summary["last_refresh"].as_str().unwrap_or("never"),
         "refresh_interval":        "Every 60 minutes",
         "feed_summary":            summary,
-        "sources":                feed_sources,
+        "sources":                merged_sources,
     }))
 }
 
-pub async fn get_threat_intel_feed_summary(State(state): State<AppState>, _headers: axum::http::HeaderMap) -> Json<Value> {
+pub async fn get_threat_intel_feed_summary(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
     let summary = state.ch_storage.get_threat_intel_summary().await.unwrap_or_else(|_| json!({
         "unique_ips": 0,
         "unique_hashes": 0,
@@ -2518,10 +2549,31 @@ pub async fn get_threat_intel_feed_summary(State(state): State<AppState>, _heade
         "last_refresh": "never",
     }));
     let feed_sources = state.ch_storage.get_threat_intel_feed_sources().await.unwrap_or_default();
+    let manual_iocs = state.ch_storage.get_watchlist_iocs_by_tenant(&tenant_id).await.unwrap_or_default();
+
+    let mut manual_by_type: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    for item in &manual_iocs {
+        let ioc_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if ioc_type.is_empty() || value.is_empty() {
+            continue;
+        }
+        manual_by_type.entry(ioc_type).or_default().insert(value);
+    }
+
+    let mut merged_sources = feed_sources;
+    for (ioc_type, values) in manual_by_type {
+        merged_sources.push(json!({
+            "source": "manual",
+            "ioc_type": ioc_type,
+            "rows": values.len(),
+            "unique_values": values.len(),
+        }));
+    }
 
     Json(json!({
         "summary": summary,
-        "sources": feed_sources,
+        "sources": merged_sources,
     }))
 }
 
