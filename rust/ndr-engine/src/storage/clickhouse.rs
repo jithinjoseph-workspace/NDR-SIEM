@@ -2756,6 +2756,127 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         Ok(rows)
     }
 
+    pub async fn get_public_threat_intel_ip_counts(&self) -> anyhow::Result<Vec<(String, u64)>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            ioc_value: String,
+            cnt: u64,
+        }
+
+        let rows = self.client
+            .query(
+                "SELECT ioc_value, count() AS cnt \
+                 FROM ndr.threat_intel \
+                 WHERE ioc_type = 'ip' \
+                   AND ioc_value != '' \
+                   AND NOT match(ioc_value, '^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.|127\\.|169\\.254\\.)') \
+                 GROUP BY ioc_value \
+                 ORDER BY cnt DESC \
+                 LIMIT 500"
+            )
+            .fetch_all::<Row>()
+            .await
+            .unwrap_or_default();
+
+        Ok(rows.into_iter().map(|r| (r.ioc_value, r.cnt)).collect())
+    }
+
+    pub async fn get_threat_intel_summary(&self) -> anyhow::Result<serde_json::Value> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            unique_ips: u64,
+            unique_hashes: u64,
+            unique_domains: u64,
+            unique_public_ips: u64,
+            ip_rows: u64,
+            hash_rows: u64,
+            domain_rows: u64,
+            public_ip_rows: u64,
+            total_rows: u64,
+            last_refresh: String,
+        }
+
+        let rows = self.client
+            .query(
+                "SELECT \
+                    uniqExactIf(ioc_value, ioc_type = 'ip' AND ioc_value != '') AS unique_ips, \
+                    uniqExactIf(ioc_value, ioc_type = 'hash' AND ioc_value != '') AS unique_hashes, \
+                    uniqExactIf(ioc_value, ioc_type = 'domain' AND ioc_value != '') AS unique_domains, \
+                    uniqExactIf(ioc_value, ioc_type = 'ip' AND ioc_value != '' AND NOT match(ioc_value, '^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.|127\\.|169\\.254\\.)')) AS unique_public_ips, \
+                    countIf(ioc_type = 'ip' AND ioc_value != '') AS ip_rows, \
+                    countIf(ioc_type = 'hash' AND ioc_value != '') AS hash_rows, \
+                    countIf(ioc_type = 'domain' AND ioc_value != '') AS domain_rows, \
+                    countIf(ioc_type = 'ip' AND ioc_value != '' AND NOT match(ioc_value, '^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.|127\\.|169\\.254\\.)')) AS public_ip_rows, \
+                    count() AS total_rows, \
+                    formatDateTime(max(collected_at), '%Y-%m-%d %H:%M UTC') AS last_refresh \
+                 FROM ndr.threat_intel \
+                 WHERE expires_at > now()"
+            )
+            .fetch_all::<Row>()
+            .await
+            .unwrap_or_default();
+
+        Ok(rows.into_iter().next().map(|r| {
+            serde_json::json!({
+                "unique_ips": r.unique_ips,
+                "unique_hashes": r.unique_hashes,
+                "unique_domains": r.unique_domains,
+                "unique_public_ips": r.unique_public_ips,
+                "ip_rows": r.ip_rows,
+                "hash_rows": r.hash_rows,
+                "domain_rows": r.domain_rows,
+                "public_ip_rows": r.public_ip_rows,
+                "total_rows": r.total_rows,
+                "last_refresh": r.last_refresh,
+            })
+        }).unwrap_or_else(|| serde_json::json!({
+            "unique_ips": 0,
+            "unique_hashes": 0,
+            "unique_domains": 0,
+            "unique_public_ips": 0,
+            "ip_rows": 0,
+            "hash_rows": 0,
+            "domain_rows": 0,
+            "public_ip_rows": 0,
+            "total_rows": 0,
+            "last_refresh": "never",
+        })))
+    }
+
+    pub async fn get_threat_intel_feed_sources(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            source: String,
+            ioc_type: String,
+            rows: u64,
+            unique_values: u64,
+        }
+
+        let rows = self.client
+            .query(
+                "SELECT \
+                    source, \
+                    ioc_type, \
+                    count() AS rows, \
+                    uniqExact(ioc_value) AS unique_values \
+                 FROM ndr.threat_intel \
+                 WHERE expires_at > now() \
+                 GROUP BY source, ioc_type \
+                 ORDER BY rows DESC \
+                 LIMIT 50"
+            )
+            .fetch_all::<Row>()
+            .await
+            .unwrap_or_default();
+
+        Ok(rows.into_iter().map(|r| serde_json::json!({
+            "source": r.source,
+            "ioc_type": r.ioc_type,
+            "rows": r.rows,
+            "unique_values": r.unique_values,
+        })).collect())
+    }
+
     pub async fn get_country_attack_tags(
         &self, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<std::collections::HashMap<String, Vec<(String, u64)>>> {

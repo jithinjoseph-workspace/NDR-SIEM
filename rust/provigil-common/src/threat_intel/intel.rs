@@ -34,6 +34,16 @@ fn is_shared_hosting(host: &str) -> bool {
 /// In-memory IOC cache shared across all engines (ndr-engine, siem-engine, etc.).
 /// Populated by calling `refresh()` or `refresh_with_settings()` on startup and
 /// periodically thereafter. All lookups are synchronous and lock-free (DashSet).
+#[derive(Debug, Clone, Default)]
+pub struct ThreatIntelSnapshot {
+    pub malicious_ips:     Vec<IpAddr>,
+    pub malicious_hashes:  Vec<String>,
+    pub malicious_domains: Vec<String>,
+    pub malicious_urls:    Vec<String>,
+    pub malicious_ja3:     Vec<String>,
+    pub malicious_cidrs:   Vec<IpNetwork>,
+}
+
 #[derive(Clone)]
 pub struct ThreatIntel {
     pub malicious_ips:     Arc<DashSet<IpAddr>>,
@@ -57,6 +67,40 @@ impl ThreatIntel {
             malicious_ja3:     Arc::new(DashSet::new()),
             malicious_cidrs:   Arc::new(RwLock::new(Vec::new())),
             last_refreshed_at: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    // ── Snapshot / atomic swap ───────────────────────────────────────────────
+
+    pub fn snapshot(&self) -> ThreatIntelSnapshot {
+        ThreatIntelSnapshot {
+            malicious_ips:     self.malicious_ips.iter().map(|ip| (*ip).clone()).collect(),
+            malicious_hashes:  self.malicious_hashes.iter().map(|v| (*v).clone()).collect(),
+            malicious_domains: self.malicious_domains.iter().map(|v| (*v).clone()).collect(),
+            malicious_urls:    self.malicious_urls.iter().map(|v| (*v).clone()).collect(),
+            malicious_ja3:     self.malicious_ja3.iter().map(|v| (*v).clone()).collect(),
+            malicious_cidrs:   self.malicious_cidrs.read().map(|v| v.clone()).unwrap_or_default(),
+        }
+    }
+
+    pub fn replace_snapshot(&self, snapshot: ThreatIntelSnapshot) {
+        self.malicious_ips.clear();
+        for ip in snapshot.malicious_ips { self.malicious_ips.insert(ip); }
+
+        self.malicious_hashes.clear();
+        for hash in snapshot.malicious_hashes { self.malicious_hashes.insert(hash); }
+
+        self.malicious_domains.clear();
+        for domain in snapshot.malicious_domains { self.malicious_domains.insert(domain); }
+
+        self.malicious_urls.clear();
+        for url in snapshot.malicious_urls { self.malicious_urls.insert(url); }
+
+        self.malicious_ja3.clear();
+        for ja3 in snapshot.malicious_ja3 { self.malicious_ja3.insert(ja3); }
+
+        if let Ok(mut guard) = self.malicious_cidrs.write() {
+            *guard = snapshot.malicious_cidrs;
         }
     }
 
@@ -189,7 +233,7 @@ impl ThreatIntel {
         let Ok(resp) = reqwest::get(url).await else { warn!("Feodo fetch error"); return; };
         let Ok(text) = resp.text().await         else { warn!("Feodo body error");  return; };
 
-        self.malicious_ips.clear();
+        let mut new_ips: Vec<IpAddr> = Vec::new();
         let mut loaded = 0usize;
         let mut header_parsed = false;
         let mut ip_col = 0usize;
@@ -209,9 +253,13 @@ impl ThreatIntel {
             let cols: Vec<&str> = line.split(',').collect();
             if let Some(ip_str) = cols.get(ip_col) {
                 let ip = ip_str.trim_matches('"').trim();
-                if let Ok(addr) = IpAddr::from_str(ip) { self.malicious_ips.insert(addr); loaded += 1; }
+                if let Ok(addr) = IpAddr::from_str(ip) { new_ips.push(addr); loaded += 1; }
             }
         }
+
+        let mut snap = self.snapshot();
+        snap.malicious_ips = new_ips;
+        self.replace_snapshot(snap);
         info!("Feodo: {} malicious IPs loaded", loaded);
     }
 
@@ -220,16 +268,20 @@ impl ThreatIntel {
         let Ok(resp) = reqwest::get(url).await else { warn!("MalwareBazaar fetch error"); return; };
         let Ok(text) = resp.text().await         else { warn!("MalwareBazaar body error");  return; };
 
-        self.malicious_hashes.clear();
+        let mut new_hashes: Vec<String> = Vec::new();
         let mut loaded = 0usize;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') || line.is_empty() { continue; }
             if line.len() == 64 && line.chars().all(|c| c.is_ascii_hexdigit()) {
-                self.malicious_hashes.insert(line.to_lowercase());
+                new_hashes.push(line.to_lowercase());
                 loaded += 1;
             }
         }
+
+        let mut snap = self.snapshot();
+        snap.malicious_hashes = new_hashes;
+        self.replace_snapshot(snap);
         info!("MalwareBazaar: {} malicious hashes loaded", loaded);
     }
 
@@ -238,7 +290,7 @@ impl ThreatIntel {
         let Ok(resp) = reqwest::get(url).await else { warn!("JA3 blocklist fetch error"); return; };
         let Ok(text) = resp.text().await         else { warn!("JA3 blocklist body error");  return; };
 
-        self.malicious_ja3.clear();
+        let mut new_ja3: Vec<String> = Vec::new();
         let mut loaded = 0usize;
         let mut header_skipped = false;
         for line in text.lines() {
@@ -248,11 +300,15 @@ impl ThreatIntel {
             if let Some(hash) = line.split(',').next() {
                 let h = hash.trim_matches('"').trim();
                 if h.len() == 32 && h.chars().all(|c| c.is_ascii_hexdigit()) {
-                    self.malicious_ja3.insert(h.to_lowercase());
+                    new_ja3.push(h.to_lowercase());
                     loaded += 1;
                 }
             }
         }
+
+        let mut snap = self.snapshot();
+        snap.malicious_ja3 = new_ja3;
+        self.replace_snapshot(snap);
         info!("JA3 blocklist: {} malicious fingerprints loaded", loaded);
     }
 
@@ -272,8 +328,11 @@ impl ThreatIntel {
                 if let Ok(net) = cidr.parse::<IpNetwork>() { cidrs.push(net); }
             }
         }
+
         let count = cidrs.len();
-        if let Ok(mut guard) = self.malicious_cidrs.write() { *guard = cidrs; }
+        let mut snap = self.snapshot();
+        snap.malicious_cidrs = cidrs;
+        self.replace_snapshot(snap);
         info!("Spamhaus DROP+EDROP: {} criminal CIDR blocks loaded", count);
     }
 
@@ -282,22 +341,29 @@ impl ThreatIntel {
         let Ok(resp) = reqwest::get(url).await else { warn!("URLhaus fetch error"); return; };
         let Ok(text) = resp.text().await         else { warn!("URLhaus body error");  return; };
 
-        self.malicious_domains.clear();
-        self.malicious_urls.clear();
+        let mut new_domains: Vec<String> = Vec::new();
+        let mut new_urls: Vec<String> = Vec::new();
+        let mut new_ips: Vec<IpAddr> = Vec::new();
         let mut loaded_domains = 0usize;
         let mut loaded_ips = 0usize;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') || line.is_empty() { continue; }
-            self.malicious_urls.insert(line.to_lowercase());
+            new_urls.push(line.to_lowercase());
             if let Some(host) = extract_host(line) {
                 if let Ok(ip) = IpAddr::from_str(&host) {
-                    self.malicious_ips.insert(ip); loaded_ips += 1;
+                    new_ips.push(ip); loaded_ips += 1;
                 } else if !is_shared_hosting(&host) {
-                    self.malicious_domains.insert(host); loaded_domains += 1;
+                    new_domains.push(host); loaded_domains += 1;
                 }
             }
         }
+
+        let mut snap = self.snapshot();
+        snap.malicious_domains = new_domains;
+        snap.malicious_urls = new_urls;
+        snap.malicious_ips.extend(new_ips);
+        self.replace_snapshot(snap);
         info!("URLhaus: {} malicious domains + {} IPs loaded", loaded_domains, loaded_ips);
     }
 
@@ -305,20 +371,29 @@ impl ThreatIntel {
         let Ok(resp) = reqwest::get(url).await else { warn!("Custom feed fetch error: {}", url); return; };
         let Ok(text) = resp.text().await         else { warn!("Custom feed body error: {}", url);  return; };
 
+        let mut new_ips: Vec<IpAddr> = Vec::new();
+        let mut new_hashes: Vec<String> = Vec::new();
+        let mut new_domains: Vec<String> = Vec::new();
         let (mut ips, mut hashes, mut domains) = (0usize, 0usize, 0usize);
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') || line.is_empty() { continue; }
             if let Ok(addr) = std::net::IpAddr::from_str(line) {
-                self.malicious_ips.insert(addr); ips += 1;
+                new_ips.push(addr); ips += 1;
             } else if (line.len() == 32 || line.len() == 40 || line.len() == 64)
                 && line.chars().all(|c| c.is_ascii_hexdigit())
             {
-                self.malicious_hashes.insert(line.to_lowercase()); hashes += 1;
+                new_hashes.push(line.to_lowercase()); hashes += 1;
             } else if line.contains('.') && !line.contains('/') {
-                self.malicious_domains.insert(line.to_lowercase()); domains += 1;
+                new_domains.push(line.to_lowercase()); domains += 1;
             }
         }
+
+        let mut snap = self.snapshot();
+        snap.malicious_ips.extend(new_ips);
+        snap.malicious_hashes.extend(new_hashes);
+        snap.malicious_domains.extend(new_domains);
+        self.replace_snapshot(snap);
         info!("Custom feed: {} IPs, {} hashes, {} domains loaded from {}", ips, hashes, domains, url);
     }
 }
@@ -327,4 +402,24 @@ fn extract_host(url: &str) -> Option<String> {
     let url = url.trim_start_matches("http://").trim_start_matches("https://");
     let host = url.split('/').next()?.split(':').next()?.to_lowercase().trim().to_string();
     if !host.is_empty() { Some(host) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_snapshot_replacement_preserves_malicious_iocs() {
+        let ti = ThreatIntel::new();
+        ti.add_ioc("ip", "1.2.3.4");
+
+        let snap = ti.snapshot();
+        let mut data = snap.clone();
+        data.malicious_ips.push(IpAddr::from_str("5.6.7.8").unwrap());
+
+        ti.replace_snapshot(data);
+
+        assert!(ti.is_malicious_ip("1.2.3.4"));
+        assert!(ti.is_malicious_ip("5.6.7.8"));
+    }
 }

@@ -5,9 +5,19 @@
     <div>
       <div class="tm-eyebrow">// LIVE THREAT INTELLIGENCE</div>
       <h2 class="tm-title">Attack Intelligence Map</h2>
-      <p class="tm-sub">Global threat landscape — external attackers targeting your network</p>
+      <p class="tm-sub">
+        {{ sourceMode === 'intel' ? 'Threat-intel source countries — only malicious-source attribution' : 'Global threat landscape — external attackers targeting your network' }}
+      </p>
     </div>
     <div class="tm-header-actions">
+      <div class="tm-mode-tabs">
+        <button type="button" class="tm-source-tab" [class.tm-source-tab-active]="sourceMode === 'traffic'" (click)="switchSourceMode('traffic')">
+          Live Traffic
+        </button>
+        <button type="button" class="tm-source-tab" [class.tm-source-tab-active]="sourceMode === 'intel'" (click)="switchSourceMode('intel')">
+          Threat Intel
+        </button>
+      </div>
       <div class="tm-live-pill">
         <span class="tm-live-dot"></span>
         Live telemetry

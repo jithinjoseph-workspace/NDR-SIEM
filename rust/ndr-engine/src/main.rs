@@ -478,6 +478,7 @@ async fn main() {
                 .collect()
         }),
         kafka_healthy,
+        soar_dedupe: Arc::new(dashmap::DashMap::new()),
         update_status: Arc::new(tokio::sync::RwLock::new(api::UpdateStatus {
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
@@ -787,6 +788,7 @@ async fn main() {
         .route("/api/threat-map",        get(api::get_threat_map))
         .route("/api/threat-intel-map",  get(api::get_threat_intel_map))
         .route("/api/threat-intel",                    get(api::get_threat_intel))
+        .route("/api/threat-intel/feeds",              get(api::get_threat_intel_feed_summary))
         .route("/api/threat-intel/add",               post(api::add_manual_ioc))
         .route("/api/threat-intel/watchlist",         get(api::get_watchlist_iocs))
         .route("/api/threat-intel/watchlist/:value",  axum::routing::delete(api::delete_watchlist_ioc))

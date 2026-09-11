@@ -45,6 +45,7 @@ export class ThreatMap implements OnInit, OnDestroy {
   private initSeq = 0;
   private cachedWorld: any = null;
   mapMode: 'flat' | 'globe' = 'flat';
+  sourceMode: 'traffic' | 'intel' = 'traffic';
 
   constructor(private http: HttpClient, private ngZone: NgZone, private cdr: ChangeDetectorRef) {}
 
@@ -58,6 +59,20 @@ export class ThreatMap implements OnInit, OnDestroy {
       this.ngZone.runOutsideAngular(() => this.drawMap(this.cachedWorld));
     }
     this.cdr.detectChanges();
+  }
+
+  switchSourceMode(mode: 'traffic' | 'intel') {
+    if (this.sourceMode === mode) return;
+    this.sourceMode = mode;
+    this.loading = true;
+    this.selectedCountry = null;
+    this.cdr.detectChanges();
+
+    if (mode === 'intel') {
+      this.loadThreatIntelMap();
+    } else {
+      this.loadThreatMap();
+    }
   }
 
   selectCountry(src: AttackSource) {
@@ -132,29 +147,56 @@ export class ThreatMap implements OnInit, OnDestroy {
     const seq = ++this.initSeq;
     if (this.rafId) cancelAnimationFrame(this.rafId);
 
-    const [world, data] = await Promise.all([
-      this.cachedWorld
-        ? Promise.resolve(this.cachedWorld)
-        : this.http.get('/assets/world-110m.json').toPromise(),
-      this.http.get<any>('/api/threat-map').toPromise().catch(() => ({ countries: [] }))
-    ]);
+    const world = await (this.cachedWorld
+      ? Promise.resolve(this.cachedWorld)
+      : this.http.get('/assets/world-110m.json').toPromise());
 
-    // Discard result if a newer init() was already started
     if (seq !== this.initSeq) return;
-
     this.cachedWorld = world;
-    const raw: any[] = data?.countries ?? [];
-    this.attackSources = raw.map((c, i) => ({
+    this.loadThreatMap();
+  }
+
+  private loadThreatMap() {
+    this.http.get<any>('/api/threat-map').subscribe({
+      next: (data) => this.applyCountryData(data?.countries ?? [], 'traffic'),
+      error: () => this.applyCountryData([], 'traffic'),
+    });
+  }
+
+  private loadThreatIntelMap() {
+    this.http.get<any>('/api/threat-intel-map').subscribe({
+      next: (data) => this.applyCountryData((data?.countries ?? []).map((c: any) => ({
+        country: c.country,
+        code: c.code,
+        lat: c.lat,
+        lon: c.lon,
+        count: c.hit_count ?? c.ip_count ?? c.count ?? 0,
+        attacks: c.attacks ?? [],
+      })), 'intel'),
+      error: () => this.applyCountryData([], 'intel'),
+    });
+  }
+
+  private applyCountryData(raw: any[], mode: 'traffic' | 'intel') {
+    const normalized = raw.map((c, i) => ({
       ...c,
-      color: ARC_COLORS[i % ARC_COLORS.length]
-    }));
-    this.totalAttacks = this.attackSources.reduce((s, c) => s + c.count, 0);
+      count: Number(c.count ?? c.hit_count ?? 0) || 0,
+      attacks: c.attacks ?? [],
+      color: ARC_COLORS[i % ARC_COLORS.length],
+    })).filter((c) => c.country && c.country !== 'Unknown' && c.count > 0)
+      .sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
+      .slice(0, 15);
+
+    this.attackSources = normalized;
+    this.totalAttacks = normalized.reduce((s, c) => s + (c.count ?? 0), 0);
     this.ngZone.run(() => {
       this.loading = false;
       this.cdr.detectChanges();
     });
 
-    this.ngZone.runOutsideAngular(() => this.drawMap(world));
+    if (this.cachedWorld) {
+      this.ngZone.runOutsideAngular(() => this.drawMap(this.cachedWorld));
+    }
   }
 
   private drawMap(world: any) {
