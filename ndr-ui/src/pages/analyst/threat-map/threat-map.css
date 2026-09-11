@@ -446,7 +446,38 @@
 .tm-detail-total {
   font-family: var(--font-mono);
   font-size: 9px;
-  color: #64748b;
+  color: #fb7185;
+}
+
+/* ── Preview Mode ────────────────────────────────────────────── */
+.tm-shell.tm-preview {
+  padding: 0;
+  min-height: 0;
+  background: transparent;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.tm-shell.tm-preview .tm-body {
+  grid-template-columns: 1fr;
+  min-height: 0;
+  margin: 0;
+  animation: none;
+}
+.tm-shell.tm-preview .tm-map-wrap {
+  min-height: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  border-radius: 0;
+}
+.tm-shell.tm-preview .tm-map-canvas {
+  height: 100%;
+  width: 100%;
 }
 
 .tm-detail-close {

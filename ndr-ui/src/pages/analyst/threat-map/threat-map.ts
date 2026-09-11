@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ElementRef, ViewChild, HostListener, NgZone, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ElementRef, ViewChild, HostListener, NgZone, ChangeDetectorRef, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import * as d3 from 'd3';
@@ -34,6 +34,7 @@ export class ThreatMap implements OnInit, OnDestroy {
   totalAttacks = 0;
   loading = true;
   selectedCountry: AttackSource | null = null;
+  @Input() previewMode = false;
 
   RadarIcon  = Radio;
   ShieldIcon = Shield;
@@ -210,7 +211,8 @@ export class ThreatMap implements OnInit, OnDestroy {
     oceanGrad.append('stop').attr('offset', '0%').attr('stop-color', '#091828');
     oceanGrad.append('stop').attr('offset', '100%').attr('stop-color', '#040c18');
 
-    const proj  = d3.geoNaturalEarth1().scale(W / 6.2).translate([W / 2, H / 2]);
+    const scaleFactor = this.previewMode ? Math.min(W, H * 1.8) / 6.2 : W / 6.2;
+    const proj  = d3.geoNaturalEarth1().scale(scaleFactor).translate([W / 2, H / 2]);
     const pathFn = d3.geoPath().projection(proj);
 
     svg.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'url(#f-ocean)');

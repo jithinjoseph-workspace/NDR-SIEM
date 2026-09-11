@@ -250,6 +250,54 @@
     </article>
   </div>
 
+  <div class="maps-grid">
+    <article
+      class="map-card threat-map-card clickable-card"
+      role="button" tabindex="0"
+      (click)="openThreatMap()"
+      (keydown.enter)="openThreatMap()"
+      (keydown.space)="openThreatMap()">
+      <div class="map-card-header">
+        <div class="map-card-title-group">
+          <div class="map-icon-wrapper">
+            <lucide-icon [name]="MapIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div>
+            <h3>Global Attack Map</h3>
+            <p>Real-time threat visualization</p>
+          </div>
+        </div>
+        <lucide-icon [name]="ArrowIcon" class="w-5 h-5 map-link-icon"></lucide-icon>
+      </div>
+      <div class="map-preview-container">
+        <app-threat-map [previewMode]="true"></app-threat-map>
+      </div>
+    </article>
+
+    <article
+      class="map-card network-map-card clickable-card"
+      role="button" tabindex="0"
+      (click)="openNetworkMap()"
+      (keydown.enter)="openNetworkMap()"
+      (keydown.space)="openNetworkMap()">
+      <div class="map-card-header">
+        <div class="map-card-title-group">
+          <div class="map-icon-wrapper">
+            <lucide-icon [name]="NetworkIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div>
+            <h3>Network Topology</h3>
+            <p>Interactive node relationship map</p>
+          </div>
+        </div>
+        <lucide-icon [name]="ArrowIcon" class="w-5 h-5 map-link-icon"></lucide-icon>
+      </div>
+      <div class="map-preview-container">
+        <app-network-map [previewMode]="true"></app-network-map>
+      </div>
+    </article>
+  </div>
+
   <div class="dashboard-grid">
     <section class="panel chart-panel">
       <div class="panel-header">

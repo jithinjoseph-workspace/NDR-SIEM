@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../../services/api/api';
 import { ArkimeService } from '../../../services/arkime/arkime';
@@ -68,6 +68,7 @@ export class NetworkMap implements OnInit, OnDestroy {
   edgeCount: number = 0;
   viewState: 'loading' | 'loaded' | 'error' | 'empty' = 'loading';
   errorMessage: string = '';
+  @Input() previewMode = false;
   selectedNode: any = null;
   lastUpdated: string = '--';
 
@@ -593,6 +594,10 @@ export class NetworkMap implements OnInit, OnDestroy {
     if (this.nodeCount > 50) targetScale = 0.3;
     else if (this.nodeCount > 20) targetScale = 0.5;
     else targetScale = 0.8;
+
+    if (this.previewMode) {
+      targetScale *= 0.55;
+    }
 
     const transform = d3.zoomIdentity
         .translate(width / 2 * (1 - targetScale), height / 2 * (1 - targetScale))

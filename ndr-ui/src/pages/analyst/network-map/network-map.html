@@ -1,14 +1,14 @@
-<section class="network-shell">
+<section class="network-shell" [class.nm-preview]="previewMode">
 
   <!-- Ambient background glow orbs -->
-  <div class="ambient-orbs" aria-hidden="true">
+  <div class="ambient-orbs" aria-hidden="true" *ngIf="!previewMode">
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
     <div class="orb orb-3"></div>
   </div>
 
   <!-- ── Page Header ─────────────────────────────── -->
-  <header class="network-header">
+  <header class="network-header" *ngIf="!previewMode">
     <div class="header-left">
       <div class="eyebrow">
         <span class="eyebrow-dot"></span>
@@ -47,7 +47,7 @@
     </div>
   </header>
   <!-- ── Status Bar ──────────────────────────────── -->
-  <div class="status-bar">
+  <div class="status-bar" *ngIf="!previewMode">
     <div class="status-bar__left">
       <div class="live-indicator">
         <span class="live-dot"></span>
@@ -67,7 +67,7 @@
   </div>
 
   <!-- ── Device Selector Bar ───────────────────── -->
-  <div class="device-selector-bar" *ngIf="viewState === 'loaded' || focusMode">
+  <div class="device-selector-bar" *ngIf="!previewMode && (viewState === 'loaded' || focusMode)">
     <div class="dsb-label">
       <span class="dsb-pulse"></span>
       <span class="dsb-label__text">LOCAL DEVICES</span>
@@ -98,7 +98,7 @@
   </div>
 
   <!-- ── Network Path Strip ────────────────────────── -->
-  <div class="path-strip" *ngIf="selectedPathNode">
+  <div class="path-strip" *ngIf="!previewMode && selectedPathNode">
     <!-- Internet -->
     <div class="path-node path-node--wan">
       <div class="path-node__orb">
@@ -187,7 +187,7 @@
       <div class="map-grid-overlay" aria-hidden="true"></div>
 
       <!-- Toolbar row -->
-      <div class="map-toolbar">
+      <div class="map-toolbar" *ngIf="!previewMode">
         <div class="toolbar-row">
 
           <!-- Node type command bar -->
@@ -246,7 +246,7 @@
       </div>
 
       <!-- State overlays -->
-      <div *ngIf="viewState === 'loading'" class="state-overlay">
+      <div *ngIf="!previewMode && viewState === 'loading'" class="state-overlay">
         <div class="state-card">
           <div class="state-spinner">
             <div class="spinner-ring"></div>
@@ -259,7 +259,7 @@
         </div>
       </div>
 
-      <div *ngIf="viewState === 'error'" class="state-overlay state-overlay--error">
+      <div *ngIf="!previewMode && viewState === 'error'" class="state-overlay state-overlay--error">
         <div class="state-card state-card--error">
           <div class="state-icon-wrap state-icon-wrap--error">
             <lucide-icon [name]="ThreatIcon" class="w-6 h-6"></lucide-icon>
@@ -273,7 +273,7 @@
         </div>
       </div>
 
-      <div *ngIf="viewState === 'empty'" class="state-overlay">
+      <div *ngIf="!previewMode && viewState === 'empty'" class="state-overlay">
         <div class="state-card">
           <div class="state-icon-wrap state-icon-wrap--muted">
             <lucide-icon [name]="ServerIcon" class="w-6 h-6"></lucide-icon>
@@ -300,7 +300,7 @@
 
     <!-- Device Drawer -->
     <app-device-drawer
-      *ngIf="selectedNode"
+      *ngIf="!previewMode && selectedNode"
       [node]="selectedNode"
       [focusModeActive]="focusMode"
       (closeDrawer)="clearSelection()"

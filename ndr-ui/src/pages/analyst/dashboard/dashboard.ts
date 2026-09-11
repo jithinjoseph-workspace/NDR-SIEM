@@ -10,16 +10,18 @@ import { startWith, switchMap } from 'rxjs/operators';
 import { toSignal } from '@angular/core/rxjs-interop';
 import {
   LucideAngularModule,
-  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw, Bot, X, ChevronRight, Zap
+  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw, Bot, X, ChevronRight, Zap, Map, Network
 } from 'lucide-angular';
 import { Router } from '@angular/router';
 import * as d3 from 'd3';
 import { SiemDashboard } from '../../siem/dashboard/siem-dashboard';
+import { ThreatMap } from '../threat-map/threat-map';
+import { NetworkMap } from '../network-map/network-map';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, SiemDashboard],
+  imports: [CommonModule, LucideAngularModule, SiemDashboard, ThreatMap, NetworkMap],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })
@@ -64,6 +66,8 @@ export class Dashboard implements OnInit, OnDestroy {
   XIcon = X;
   ChevronRightIcon = ChevronRight;
   ZapIcon = Zap;
+  MapIcon = Map;
+  NetworkIcon = Network;
 
   liveEventStreamRef = viewChild<ElementRef>('liveEventStream');
   @ViewChild('severityDonutChart') severityDonutChartRef!: ElementRef;
@@ -269,6 +273,8 @@ export class Dashboard implements OnInit, OnDestroy {
   }
 
   openNetworkMap() { this.router.navigate(['/analyst/network-map']); }
+
+  openThreatMap() { this.router.navigate(['/analyst/threat-map']); }
 
   openAiReport() { this.router.navigate(['/analyst/ai-report']); }
 
