@@ -115,6 +115,8 @@
 .dashboard-header,
 .status-strip,
 .metrics-grid,
+.maps-grid,
+.secondary-charts-grid,
 .dashboard-grid {
   max-width: 1480px;
   margin-inline: auto;
@@ -655,6 +657,82 @@
   margin-top: 4px;
   color: #8d98ad;
   font-size: 18px;
+}
+
+/* Decorative Wave & Bars */
+.metric-wave {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 70px;
+  overflow: hidden;
+  z-index: 0;
+  opacity: 0.6;
+}
+
+.metric-wave svg {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  height: 100%;
+  animation: wave-slide 10s linear infinite;
+}
+
+.metric-wave svg:first-child {
+  opacity: 0.3;
+  animation-duration: 15s;
+}
+
+.wave-back { fill: var(--accent); opacity: 0.2; }
+.wave-front { fill: var(--accent); opacity: 0.4; }
+
+@keyframes wave-slide {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.metric-bars {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 60px;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 0 16px;
+  z-index: 0;
+  opacity: 0.25;
+}
+
+.metric-bars .bar {
+  flex: 1;
+  background: var(--accent);
+  border-radius: 4px 4px 0 0;
+  height: var(--h);
+  animation: bar-pulse 2s ease-in-out infinite alternate;
+}
+
+.metric-bars .bar:nth-child(odd) {
+  animation-duration: 2.5s;
+  animation-delay: 0.5s;
+}
+
+.metric-bars .bar:nth-child(3n) {
+  animation-duration: 3s;
+  animation-delay: 1s;
+}
+
+@keyframes bar-pulse {
+  0% { height: calc(var(--h) * 0.2); }
+  100% { height: var(--h); }
+}
+
+.metric-card > div:not(.metric-wave):not(.metric-bars) {
+  position: relative;
+  z-index: 10;
 }
 
 .metric-trend {

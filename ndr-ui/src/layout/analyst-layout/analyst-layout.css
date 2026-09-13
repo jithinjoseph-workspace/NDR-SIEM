@@ -1,12 +1,66 @@
 .analyst-layout {
-  display: flex;
+  display: block; /* Removed flex since sidebar is fixed */
   width: 100%;
   height: 100%;
   overflow: hidden;
 }
 
 .analyst-content {
-  flex: 1;
+  margin-left: 240px; /* Space for the absolute sidebar */
+  height: calc(100vh - 64px); /* Full height minus topbar */
   overflow-y: auto;
   position: relative;
+}
+
+/* Force app-sidebar to be fixed at the absolute top left */
+.analyst-layout app-sidebar .sidebar-shell {
+  position: fixed !important;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  height: 100vh !important;
+  z-index: 150;
+}
+
+/* ── Analyst Sidebar Enhancements ── */
+.analyst-layout app-sidebar .nav-section span {
+  font-size: 11px !important;
+  letter-spacing: 0.12em !important;
+}
+
+.analyst-layout app-sidebar .nav-label {
+  font-size: 14.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.02em !important;
+}
+
+.analyst-layout app-sidebar .nav-link {
+  min-height: 40px !important;
+  margin: 2px 8px !important;
+  padding: 0 12px 0 16px !important;
+  border-radius: 8px !important;
+}
+
+/* Active page highlighting */
+.analyst-layout app-sidebar .nav-link.active {
+  background: linear-gradient(90deg, #15803d, #22c55e) !important;
+  color: #ffffff !important;
+  border-color: #22c55e !important;
+  box-shadow: 0 4px 14px rgba(34, 197, 94, 0.4) !important;
+}
+
+.analyst-layout app-sidebar .nav-link.active .nav-icon {
+  color: #ffffff !important;
+  filter: none !important;
+}
+
+/* Hide the old left indicator bar on active items for a cleaner pill look */
+.analyst-layout app-sidebar .nav-link.active::before {
+  display: none !important;
+}
+
+/* Slightly enhance hover state */
+.analyst-layout app-sidebar .nav-link:hover:not(.active) {
+  background: rgba(34, 197, 94, 0.12) !important;
+  border-radius: 8px !important;
 }

@@ -666,9 +666,9 @@ export class NetworkMap implements OnInit, OnDestroy {
           .attr('class', (d: any) => (d.connections > 10 ? 'traffic-flow' : ''))
           .attr('stroke', (d: any) => {
             const w = Math.log((d.connections || 1) + 1);
-            return w > 3 ? '#f8a01080' : '#7ca3ff46';
+            return w > 3 ? '#fbbf24' : '#60a5fa80'; // brighter yellow for heavy traffic, brighter blue for normal
           })
-          .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1), 4))
+          .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1) * 2, 8)) // Bold edges
           .attr('stroke-linecap', 'round')
           .attr('marker-end', 'url(#arrow)')
           .style('opacity', (d: any) => {
@@ -694,10 +694,10 @@ export class NetworkMap implements OnInit, OnDestroy {
       .data(edges.filter((d: any) => d.connections > 5), (d: any) => `${d.source.id || d.source}-${d.target.id || d.target}`)
       .join(
          enter => enter.append('text')
-          .attr('fill', '#f8a010b0')
-          .attr('font-size', '8px')
-          .attr('font-family', 'monospace')
-          .attr('font-weight', '700')
+          .attr('fill', '#e2e8f0') // Clean white/gray
+          .attr('font-size', '10px') 
+          .attr('font-family', 'var(--font-sans)')
+          .attr('font-weight', '500')
           .text((d: any) => d.connections)
           .style('opacity', (d: any) => {
              if (!this.isSearchActive) return 1;
@@ -756,14 +756,14 @@ export class NetworkMap implements OnInit, OnDestroy {
                return base + bonus;
             })
             .attr('fill', (d: any) => {
-              if (d.threat) return '#2b1214';
-              return d.is_internal ? '#0c2a2c' : '#101c35';
+              if (d.threat) return '#450a0a'; // Deep red bg
+              return d.is_internal ? '#064e3b' : '#09090b'; // Deep emerald or black
             })
             .attr('stroke', (d: any) => {
-              if (d.threat) return '#ff716a';
-              return d.is_internal ? '#69f6b8' : '#7ca3ff';
+              if (d.threat) return '#f87171';
+              return d.is_internal ? '#34d399' : 'rgba(255, 255, 255, 0.4)'; // Crisp thin borders
             })
-            .attr('stroke-width', 1.4)
+            .attr('stroke-width', 1.5) // Sleeker node border
             .attr('filter', (d: any) => (d.is_internal ? 'url(#glow)' : ''));
 
           nodeEnter.append('path')
@@ -771,10 +771,10 @@ export class NetworkMap implements OnInit, OnDestroy {
             .attr('transform', (d: any) => (d.type === 'cluster' ? 'translate(-12, -12) scale(1)' : 'translate(-9, -9) scale(0.75)'))
             .attr('fill', 'none')
             .attr('stroke', (d: any) => {
-              if (d.threat) return '#ffb3ad';
-              return d.is_internal ? '#9ffbd0' : '#b8ccff';
+              if (d.threat) return '#fca5a5';
+              return d.is_internal ? '#6ee7b7' : '#e2e8f0';
             })
-            .attr('stroke-width', 2)
+            .attr('stroke-width', 1.5)
             .attr('stroke-linecap', 'round')
             .attr('stroke-linejoin', 'round')
             .style('display', (d: any) => (this.hasFavicon(d) ? 'none' : 'block'));
@@ -793,18 +793,14 @@ export class NetworkMap implements OnInit, OnDestroy {
 
           nodeEnter.append('text')
             .attr('text-anchor', 'middle')
-            .attr('y', 34)
-            .attr('stroke', '#0a101d')
-            .attr('stroke-width', 3)
-            .attr('stroke-linejoin', 'round')
-            .attr('paint-order', 'stroke')
+            .attr('y', 36)
             .attr('fill', (d: any) => {
-              if (d.threat) return '#ff918b';
-              return d.is_internal ? '#69f6b8' : '#9bb7ff';
+              if (d.threat) return '#fca5a5';
+              return d.is_internal ? '#a7f3d0' : '#fafafa'; 
             })
-            .attr('font-size', '10px')
-            .attr('font-weight', '700')
-            .attr('font-family', 'var(--font-mono)')
+            .attr('font-size', '12px') 
+            .attr('font-weight', '500')
+            .attr('font-family', 'var(--font-sans)')
             .text((d: any) => {
               const t = d.label || d.id;
               if (t.length > 20) return t.substring(0, 18) + '...';
@@ -813,10 +809,10 @@ export class NetworkMap implements OnInit, OnDestroy {
 
           nodeEnter.append('text')
             .attr('text-anchor', 'middle')
-            .attr('y', 46)
-            .attr('fill', '#6e7588')
-            .attr('font-size', '8px')
-            .attr('font-family', 'var(--font-mono)')
+            .attr('y', 50)
+            .attr('fill', '#71717a') // Muted gray
+            .attr('font-size', '10px')
+            .attr('font-family', 'var(--font-sans)')
             .text((d: any) => {
                 if (d.type === 'cluster') return '';
                 return d.type && d.type !== 'unknown' ? d.type : (d.is_internal ? 'internal' : 'external');
@@ -825,13 +821,13 @@ export class NetworkMap implements OnInit, OnDestroy {
           nodeEnter.filter((d: any) => (d.connections || 0) > 0)
             .append('text')
             .attr('class', 'connection-count')
-            .attr('x', 16)
-            .attr('y', -16)
+            .attr('x', 18)
+            .attr('y', -18)
             .attr('text-anchor', 'middle')
-            .attr('fill', '#d8deec')
-            .attr('font-size', '8px')
-            .attr('font-family', 'monospace')
-            .attr('font-weight', '800')
+            .attr('fill', '#e2e8f0') 
+            .attr('font-size', '10px') 
+            .attr('font-family', 'var(--font-sans)')
+            .attr('font-weight', '600')
             .text((d: any) => (d.connections > 0 ? `${d.connections}` : ''));
 
           nodeEnter.transition().duration(500).style('opacity', (d: any) => {

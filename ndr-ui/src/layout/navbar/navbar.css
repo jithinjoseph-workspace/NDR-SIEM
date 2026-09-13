@@ -9,10 +9,14 @@
   -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding: 0 24px;
-  transition: background 300ms ease;
+  transition: background 300ms ease, padding 300ms ease;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   position: relative;
   z-index: 110;
+}
+
+:host-context(body.has-analyst-sidebar) .topbar {
+  padding-left: 264px !important; /* 240px sidebar width + 24px default padding */
 }
 
 .topbar-left {
