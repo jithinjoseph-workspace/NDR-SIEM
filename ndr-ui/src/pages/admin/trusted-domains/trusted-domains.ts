@@ -1,9 +1,9 @@
-import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
-  Globe, Plus, RefreshCw, ShieldCheck, Trash2,
+  Globe, Plus, RefreshCw, ShieldCheck, Trash2, Clock, Sparkles, Activity, Layers, CheckCircle2, AlertTriangle, Search, Check, X, ShieldAlert, Building2
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 
@@ -16,12 +16,25 @@ import { Api } from '../../../services/api/api';
   templateUrl: './trusted-domains.html',
   styleUrl: './trusted-domains.css',
 })
-export class TrustedDomains implements OnInit {
-  GlobeIcon   = Globe;
-  PlusIcon    = Plus;
-  RefreshIcon = RefreshCw;
-  ShieldIcon  = ShieldCheck;
-  TrashIcon   = Trash2;
+export class TrustedDomains implements OnInit, OnDestroy {
+  Math = Math;
+
+  GlobeIcon       = Globe;
+  PlusIcon        = Plus;
+  RefreshIcon     = RefreshCw;
+  ShieldIcon      = ShieldCheck;
+  TrashIcon       = Trash2;
+  ClockIcon       = Clock;
+  SparklesIcon    = Sparkles;
+  ActivityIcon    = Activity;
+  LayersIcon      = Layers;
+  CheckIcon       = CheckCircle2;
+  AlertIcon       = AlertTriangle;
+  SearchIcon      = Search;
+  ApproveIcon     = Check;
+  DismissIcon     = X;
+  ShieldAlertIcon = ShieldAlert;
+  BuildingIcon    = Building2;
 
   tenants: any[]         = [];
   trustedDomains: any[]  = [];
@@ -35,14 +48,62 @@ export class TrustedDomains implements OnInit {
   tdAiAvailable: boolean | null = null;
   tdAiSuggestions: any[] = [];
 
+  domainSearch           = '';
+  scopeFilter            = 'all'; // 'all' | 'global' | 'tenant'
+
+  currentTime            = '';
+  currentDate            = '';
+  private clockTimer: any = null;
+
   constructor(private api: Api, private cdr: ChangeDetectorRef) {}
 
+  get globalDomains(): any[] { return this.trustedDomains.filter(d => d.scope === 'global'); }
+  get tenantDomains(): any[] { return this.trustedDomains.filter(d => d.scope === 'tenant'); }
+
+  get beaconCategoryCount(): number {
+    return this.trustedDomains.filter(d => d.category === 'dns_beacon').length;
+  }
+
+  get threatIntelCategoryCount(): number {
+    return this.trustedDomains.filter(d => d.category === 'threat_intel').length;
+  }
+
+  get filteredDomains(): any[] {
+    const q = this.domainSearch.trim().toLowerCase();
+    return this.trustedDomains.filter(d => {
+      const matchesSearch = !q ||
+        d.domain?.toLowerCase().includes(q) ||
+        d.note?.toLowerCase().includes(q) ||
+        d.category?.toLowerCase().includes(q);
+      const matchesScope = this.scopeFilter === 'all' || d.scope === this.scopeFilter;
+      return matchesSearch && matchesScope;
+    });
+  }
+
+  tenantName(tenantId: string): string {
+    const t = this.tenants.find(x => x.id === tenantId);
+    return t ? t.name : (tenantId || 'Default Organization');
+  }
+
+  private updateClock() {
+    const now = new Date();
+    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    this.cdr.detectChanges();
+  }
+
   ngOnInit() {
+    this.updateClock();
+    this.clockTimer = setInterval(() => this.updateClock(), 1000);
     this.loadTrustedDomains();
     this.api.getTenants().subscribe({
       next: (data: any) => { this.tenants = data.tenants || []; this.cdr.detectChanges(); },
       error: () => {},
     });
+  }
+
+  ngOnDestroy() {
+    if (this.clockTimer) clearInterval(this.clockTimer);
   }
 
   loadTrustedDomains() {
@@ -94,7 +155,4 @@ export class TrustedDomains implements OnInit {
   }
 
   dismissTdSuggestion(domain: string) { this.tdAiSuggestions = this.tdAiSuggestions.filter(s => s.domain !== domain); this.cdr.detectChanges(); }
-
-  get globalDomains() { return this.trustedDomains.filter(d => d.scope === 'global'); }
-  get tenantDomains() { return this.trustedDomains.filter(d => d.scope === 'tenant'); }
 }

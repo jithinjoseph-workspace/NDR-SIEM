@@ -1,9 +1,9 @@
-import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
-  Copy, KeyRound, RefreshCw, X,
+  Copy, KeyRound, RefreshCw, X, Radio, ShieldCheck, Wifi, CheckCircle2, AlertTriangle, Clock, Layers, Zap, Building2, Search, Trash2, Server, Lock, Activity, Terminal
 } from 'lucide-angular';
 import { Api, SensorKey } from '../../../services/api/api';
 
@@ -16,11 +16,28 @@ import { Api, SensorKey } from '../../../services/api/api';
   templateUrl: './sensors.html',
   styleUrl: './sensors.css',
 })
-export class Sensors implements OnInit {
-  CopyIcon    = Copy;
-  KeyIcon     = KeyRound;
-  RefreshIcon = RefreshCw;
-  XIcon       = X;
+export class Sensors implements OnInit, OnDestroy {
+  Math = Math;
+
+  CopyIcon          = Copy;
+  KeyIcon           = KeyRound;
+  RefreshIcon       = RefreshCw;
+  XIcon             = X;
+  RadioIcon         = Radio;
+  ShieldCheckIcon   = ShieldCheck;
+  WifiIcon          = Wifi;
+  CheckCircleIcon   = CheckCircle2;
+  AlertTriangleIcon = AlertTriangle;
+  ClockIcon         = Clock;
+  LayersIcon        = Layers;
+  ZapIcon           = Zap;
+  BuildingIcon      = Building2;
+  SearchIcon        = Search;
+  TrashIcon         = Trash2;
+  ServerIcon        = Server;
+  LockIcon          = Lock;
+  ActivityIcon      = Activity;
+  TerminalIcon      = Terminal;
 
   tenants: any[]          = [];
   sensorKeys: SensorKey[] = [];
@@ -30,18 +47,86 @@ export class Sensors implements OnInit {
   createdSensorKey: SensorKey | null = null;
   showSensorKeyModal      = false;
   installCommand          = '';
+  interfaces: string[]    = [];
+  sensorSearch            = '';
 
   msg     = '';
   msgType = '';
 
+  currentTime = '';
+  currentDate = '';
+  private clockTimer: any = null;
+
   constructor(private api: Api, private cdr: ChangeDetectorRef) {}
 
+  get activeSensorsCount(): number {
+    return this.sensorKeys.filter(s => s.active).length;
+  }
+
+  get activeRatioPercent(): number {
+    if (!this.sensorKeys.length) return 100;
+    return Math.round((this.activeSensorsCount / this.sensorKeys.length) * 100);
+  }
+
+  get tenantsCoveredCount(): number {
+    return new Set(this.sensorKeys.map(s => s.tenant_id)).size;
+  }
+
+  get tenantsCoveredPercent(): number {
+    if (!this.tenants.length) return 100;
+    return Math.round((this.tenantsCoveredCount / this.tenants.length) * 100);
+  }
+
+  get revokedSensorsCount(): number {
+    return this.sensorKeys.filter(s => !s.active).length;
+  }
+
+  isTenantCovered(tenantId: string): boolean {
+    return this.sensorKeys.some(s => s.tenant_id === tenantId && s.active);
+  }
+
+  get filteredSensorKeys(): SensorKey[] {
+    const q = this.sensorSearch.trim().toLowerCase();
+    if (!q) return this.sensorKeys;
+    return this.sensorKeys.filter(s =>
+      s.name?.toLowerCase().includes(q) ||
+      s.key_prefix?.toLowerCase().includes(q) ||
+      s.hostname?.toLowerCase().includes(q) ||
+      this.tenantName(s.tenant_id).toLowerCase().includes(q)
+    );
+  }
+
+  private updateClock() {
+    const now = new Date();
+    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    this.cdr.detectChanges();
+  }
+
   ngOnInit() {
+    this.updateClock();
+    this.clockTimer = setInterval(() => this.updateClock(), 1000);
+
     this.loadSensorKeys();
     this.api.getTenants().subscribe({
       next: (data: any) => { this.tenants = data.tenants || []; this.cdr.detectChanges(); },
       error: () => {},
     });
+    this.api.getInterfaces().subscribe({
+      next: (ifaces: any) => {
+        if (Array.isArray(ifaces) && ifaces.length > 0) {
+          this.interfaces = ifaces;
+        } else if (ifaces && Array.isArray(ifaces.interfaces)) {
+          this.interfaces = ifaces.interfaces;
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {}
+    });
+  }
+
+  ngOnDestroy() {
+    if (this.clockTimer) clearInterval(this.clockTimer);
   }
 
   loadSensorKeys() {

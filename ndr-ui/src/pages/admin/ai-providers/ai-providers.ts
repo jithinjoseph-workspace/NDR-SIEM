@@ -1,9 +1,10 @@
-import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
   Edit, Eye, EyeOff, LoaderCircle, Plus, Save, Trash2, X, Zap,
+  Sparkles, Bot, ShieldCheck, KeyRound, Cpu, Activity, Clock, RefreshCw, Layers, CheckCircle2, AlertTriangle, SlidersHorizontal
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 
@@ -22,16 +23,30 @@ interface AiProvider {
   templateUrl: './ai-providers.html',
   styleUrl: './ai-providers.css',
 })
-export class AiProviders implements OnInit {
-  EditIcon    = Edit;
-  EyeIcon     = Eye;
-  EyeOffIcon  = EyeOff;
-  LoadingIcon = LoaderCircle;
-  PlusIcon    = Plus;
-  SaveIcon    = Save;
-  TrashIcon   = Trash2;
-  TestIcon    = Zap;
-  XIcon       = X;
+export class AiProviders implements OnInit, OnDestroy {
+  Math = Math;
+
+  EditIcon        = Edit;
+  EyeIcon         = Eye;
+  EyeOffIcon      = EyeOff;
+  LoadingIcon     = LoaderCircle;
+  PlusIcon        = Plus;
+  SaveIcon        = Save;
+  TrashIcon       = Trash2;
+  TestIcon        = Zap;
+  XIcon           = X;
+  SparklesIcon    = Sparkles;
+  BotIcon         = Bot;
+  ShieldCheckIcon = ShieldCheck;
+  KeyRoundIcon    = KeyRound;
+  CpuIcon         = Cpu;
+  ActivityIcon    = Activity;
+  ClockIcon       = Clock;
+  RefreshIcon     = RefreshCw;
+  LayersIcon      = Layers;
+  CheckIcon       = CheckCircle2;
+  AlertIcon       = AlertTriangle;
+  SlidersIcon     = SlidersHorizontal;
 
   providers: AiProvider[] = [];
   loadingProviders  = false;
@@ -43,6 +58,10 @@ export class AiProviders implements OnInit {
   testingProvider   = '';
   showProviderKey   = false;
   isEditingProvider = false;
+
+  currentTime = '';
+  currentDate = '';
+  private clockTimer: any = null;
 
   newProvider = {
     name: '', provider_type: 'custom', api_key: '', model: '',
@@ -63,7 +82,49 @@ export class AiProviders implements OnInit {
 
   constructor(private api: Api, private cdr: ChangeDetectorRef) {}
 
-  ngOnInit() { this.loadProviders(); }
+  get activeProvidersCount(): number {
+    return this.providers.filter(p => p.enabled).length;
+  }
+
+  get activeRatio(): number {
+    if (!this.providers.length) return 0;
+    return Math.round((this.activeProvidersCount / this.providers.length) * 100);
+  }
+
+  get keySetCount(): number {
+    return this.providers.filter(p => p.key_set).length;
+  }
+
+  get chatProvidersCount(): number {
+    return this.providers.filter(p => p.enabled && (p.use_case === 'all' || p.use_case === 'chat')).length;
+  }
+
+  get threatProvidersCount(): number {
+    return this.providers.filter(p => p.enabled && (p.use_case === 'all' || p.use_case === 'threat')).length;
+  }
+
+  get primaryProvider(): AiProvider | null {
+    const active = this.providers.filter(p => p.enabled);
+    if (!active.length) return null;
+    return [...active].sort((a, b) => (a.priority || 99) - (b.priority || 99))[0];
+  }
+
+  private updateClock() {
+    const now = new Date();
+    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    this.cdr.detectChanges();
+  }
+
+  ngOnInit() {
+    this.updateClock();
+    this.clockTimer = setInterval(() => this.updateClock(), 1000);
+    this.loadProviders();
+  }
+
+  ngOnDestroy() {
+    if (this.clockTimer) clearInterval(this.clockTimer);
+  }
 
   loadProviders() {
     this.loadingProviders = true;

@@ -29,14 +29,17 @@ impl LeaderElection {
         let client = redis::Client::open(redis_url)
             .map_err(|e| anyhow::anyhow!("Redis connect failed: {}", e))?;
 
-        // hostname + PID + random suffix — unique even across restarts on same host
-        let hostname = hostname::get()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let pid:         u32 = std::process::id();
-        let rand_suffix: u32 = rand::random();
-        let instance_id = format!("{}-{}-{}", hostname, pid, rand_suffix);
+        // ENGINE_NAME (e.g. ndr-engine-1) if configured, else hostname + PID + random suffix
+        let instance_id = std::env::var("ENGINE_NAME")
+            .unwrap_or_else(|_| {
+                let hostname = hostname::get()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let pid:         u32 = std::process::id();
+                let rand_suffix: u32 = rand::random();
+                format!("{}-{}-{}", hostname, pid, rand_suffix)
+            });
 
         tracing::info!("Leader election instance_id: {}", instance_id);
 

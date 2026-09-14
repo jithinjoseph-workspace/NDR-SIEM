@@ -1,9 +1,9 @@
-import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
-  RefreshCw, ShieldCheck,
+  RefreshCw, ShieldCheck, Cloud, Sparkles, CheckCircle2, Trash2, Plus, Clock, Activity, Zap, Check, X, ShieldAlert
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 
@@ -16,9 +16,22 @@ import { Api } from '../../../services/api/api';
   templateUrl: './trusted-cloud.html',
   styleUrl: './trusted-cloud.css',
 })
-export class TrustedCloud implements OnInit {
-  RefreshIcon = RefreshCw;
-  ShieldIcon  = ShieldCheck;
+export class TrustedCloud implements OnInit, OnDestroy {
+  Math = Math;
+
+  RefreshIcon     = RefreshCw;
+  ShieldIcon      = ShieldCheck;
+  CloudIcon       = Cloud;
+  SparklesIcon    = Sparkles;
+  CheckIcon       = CheckCircle2;
+  TrashIcon       = Trash2;
+  PlusIcon        = Plus;
+  ClockIcon       = Clock;
+  ActivityIcon    = Activity;
+  ZapIcon         = Zap;
+  ApproveIcon     = Check;
+  RejectIcon      = X;
+  ShieldAlertIcon = ShieldAlert;
 
   trustedCloud: { keywords: string[]; domains: string[]; suggestions: { org: string; hits: number }[] } =
     { keywords: [], domains: [], suggestions: [] };
@@ -29,9 +42,40 @@ export class TrustedCloud implements OnInit {
   trustedCloudSaved  = false;
   loadingTrustedCloud = false;
 
+  currentTime = '';
+  currentDate = '';
+  private clockTimer: any = null;
+
   constructor(private api: Api, private cdr: ChangeDetectorRef) {}
 
-  ngOnInit() { this.loadTrustedCloud(); }
+  get totalCloudRules(): number {
+    return this.trustedCloud.keywords.length + this.trustedCloud.domains.length;
+  }
+
+  get aiSuggestionsCount(): number {
+    return this.trustedCloud.suggestions.length;
+  }
+
+  get totalHitsSuppressed(): number {
+    return this.trustedCloud.suggestions.reduce((acc, s) => acc + (s.hits || 0), 0);
+  }
+
+  private updateClock() {
+    const now = new Date();
+    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    this.cdr.detectChanges();
+  }
+
+  ngOnInit() {
+    this.updateClock();
+    this.clockTimer = setInterval(() => this.updateClock(), 1000);
+    this.loadTrustedCloud();
+  }
+
+  ngOnDestroy() {
+    if (this.clockTimer) clearInterval(this.clockTimer);
+  }
 
   loadTrustedCloud() {
     this.loadingTrustedCloud = true;

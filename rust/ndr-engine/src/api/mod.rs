@@ -9266,10 +9266,11 @@ pub async fn get_leader_status(
         return Json(json!({"error": "unauthorized"}));
     }
 
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let redis_url = std::env::var("VALKEY_URL")
+        .or_else(|_| std::env::var("REDIS_URL"))
+        .unwrap_or_else(|_| "redis://ndr-valkey:6379".to_string());
 
-    let (current_leader, ttl_ms) = match redis::Client::open(redis_url) {
+    let (current_leader, ttl_ms) = match redis::Client::open(redis_url.clone()) {
         Ok(client) => {
             match client.get_multiplexed_async_connection().await {
                 Ok(mut conn) => {
@@ -9285,16 +9286,22 @@ pub async fn get_leader_status(
                         .unwrap_or(-1);
                     (leader, ttl)
                 }
-                Err(_) => (None, -1),
+                Err(e) => {
+                    tracing::warn!("Failed to get multiplexed async connection to {}: {}", redis_url, e);
+                    (None, -1)
+                }
             }
         }
-        Err(_) => (None, -1),
+        Err(e) => {
+            tracing::warn!("Failed to open redis client for {}: {}", redis_url, e);
+            (None, -1)
+        }
     };
 
     Json(json!({
         "current_leader":  current_leader.unwrap_or_else(|| "none".to_string()),
         "ttl_ms":          ttl_ms,
-        "ttl_seconds":     if ttl_ms > 0 { ttl_ms / 1000 } else { -1 },
+        "ttl_seconds":     if ttl_ms > 0 { ttl_ms / 1000 } else { 0 },
         "leader_key":      "ndr:threat_leader",
         "election_info":   "Leader renewed every 10s, TTL=30s, failover < 30s",
     }))

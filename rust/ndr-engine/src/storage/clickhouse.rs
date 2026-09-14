@@ -2702,12 +2702,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db_name = tenant_db(tenant_id);
         let sf = Self::sensor_filter(sensor_ids);
-        let rows = self.client.query(&format!(
+        let mut rows = self.client.query(&format!(
             "SELECT proto, count() as cnt FROM {db}.ndr_events \
              WHERE proto != '' AND timestamp >= now() - INTERVAL 24 HOUR{sf} \
              GROUP BY proto ORDER BY cnt DESC LIMIT {limit}",
             db = db_name, sf = sf, limit = limit))
             .fetch_all::<(String, u64)>().await.unwrap_or_default();
+        if rows.is_empty() {
+            rows = self.client.query(&format!(
+                "SELECT proto, count() as cnt FROM {db}.ndr_events \
+                 WHERE proto != ''{sf} \
+                 GROUP BY proto ORDER BY cnt DESC LIMIT {limit}",
+                db = db_name, sf = sf, limit = limit))
+                .fetch_all::<(String, u64)>().await.unwrap_or_default();
+        }
         Ok(rows.iter().map(|r| serde_json::json!({ "proto": r.0, "count": r.1 })).collect())
     }
 

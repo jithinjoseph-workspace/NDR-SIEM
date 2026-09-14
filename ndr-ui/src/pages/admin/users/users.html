@@ -1,68 +1,290 @@
-<section class="admin-panel">
+<section class="admin-panel users-panel">
   <div *ngIf="msg" [class]="'admin-message ' + (msgType === 'success' ? 'success' : 'error')">{{ msg }}</div>
 
-  <div class="panel-head">
-    <div>
-      <h3>Users</h3>
-      <p>Create, edit, deactivate, and delete platform or tenant users.</p>
+  <!-- Cyber Hero Strip -->
+  <div class="cyber-hero-strip">
+    <div class="hero-brand">
+      <div class="hero-status-pill">
+        <span class="pulse-dot"></span>
+        <span class="status-text">IAM ACCESS DIRECTORY · GOVERNANCE ONLINE</span>
+      </div>
+      <h2 class="hero-title">Identity &amp; Access Governance</h2>
+      <p class="hero-subtext">
+        Multi-tenant RBAC enforcement, delegated tenant administrator scopes, and security analyst credential management.
+      </p>
     </div>
-    <button class="primary-action" type="button" (click)="showAddUser=true">
-      <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
-      Add User
-    </button>
-  </div>
 
-  <div class="toolbar user-toolbar">
-    <label class="search-field">
-      <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
-      <input [(ngModel)]="userSearch" type="search" placeholder="Search users or roles" />
-    </label>
-    <select [(ngModel)]="selectedTenant" class="tenant-filter">
-      <option value="all">All tenants</option>
-      <option *ngFor="let tenant of tenants" [value]="tenant.id">
-        {{ tenant.name }} - {{ tenant.active ? 'Active' : 'Inactive' }}
-      </option>
-    </select>
-    <button class="secondary-action" type="button" (click)="loadUsers()">
-      <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
-      Refresh
-    </button>
-  </div>
+    <div class="hero-actions">
+      <div class="system-time-pill" title="Synchronized Platform Time">
+        <lucide-icon [name]="ClockIcon" class="w-3.5 h-3.5 text-cyan-400"></lucide-icon>
+        <span>{{ currentTime || 'SYNCING' }}</span>
+        <span class="date-sep">·</span>
+        <span class="date-text">{{ currentDate }}</span>
+      </div>
 
-  <div class="user-summary">
-    <div>
-      <strong>{{ selectedTenantName }}</strong>
-      <span *ngIf="selectedTenant === 'all'">{{ filteredTenantAdmins.length }} users shown</span>
-      <span *ngIf="selectedTenant !== 'all'">
-        {{ tenantUserCount(selectedTenant) }} users
-        <span *ngIf="blockedUserCount(selectedTenant)">
-          - {{ blockedUserCount(selectedTenant) }} blocked by tenant
-        </span>
-      </span>
+      <button class="cyber-btn cyber-btn-ghost" type="button" (click)="loadUsers(); loadTenants()" title="Reload user directory">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4" [class.spinning]="loadingUsers"></lucide-icon>
+        <span>Refresh</span>
+      </button>
+
+      <button class="cyber-btn cyber-btn-primary" type="button" (click)="showAddUser = true">
+        <lucide-icon [name]="UserPlusIcon" class="w-4 h-4"></lucide-icon>
+        <span>Add Identity</span>
+      </button>
     </div>
-    <span *ngIf="selectedTenantIsInactive" class="status-pill inactive">Tenant inactive</span>
   </div>
 
+  <!-- ── 2. IAM & RBAC Security Governance Deck (Distinctive Style) ── -->
+  <section class="iam-governance-deck" aria-label="IAM Security Governance Deck">
+
+    <!-- Card 1: RBAC Privilege Spectrum & Role Breakdown -->
+    <div class="iam-deck-card iam-deck--spectrum">
+      <div class="iam-card-glow purple"></div>
+      <div class="iam-card-top">
+        <div class="iam-card-tag">
+          <lucide-icon [name]="ShieldCheckIcon" class="w-3.5 h-3.5 text-purple-400"></lucide-icon>
+          <span>RBAC PRIVILEGE SPECTRUM</span>
+        </div>
+        <span class="iam-status-pill purple">{{ totalUsersCount }} IDENTITIES</span>
+      </div>
+
+      <div class="iam-spectrum-body">
+        <div class="spectrum-lead-row">
+          <span class="spectrum-lead-num font-mono text-purple-300">{{ totalUsersCount }}</span>
+          <span class="spectrum-lead-sub">ACCOUNTS ASSIGNED</span>
+        </div>
+
+        <!-- Segmented Role Distribution Spectrum Bar -->
+        <div class="spectrum-bar-track" title="Segmented RBAC Role Distribution">
+          <div class="spec-segment seg-admin" [style.width.%]="adminPercent" [title]="'Admins: ' + superAdminCount"></div>
+          <div class="spec-segment seg-tenant-adm" [style.width.%]="tenantAdminPercent" [title]="'Tenant Admins: ' + tenantAdminCount"></div>
+          <div class="spec-segment seg-analyst" [style.width.%]="analystPercent" [title]="'Analysts: ' + analystCount"></div>
+          <div class="spec-segment seg-other" [style.width.%]="otherPercent" [title]="'Other Roles: ' + otherRolesCount"></div>
+        </div>
+
+        <div class="spectrum-legend-grid">
+          <div class="leg-item"><span class="leg-dot purple"></span><span>{{ superAdminCount }} Admin</span></div>
+          <div class="leg-item"><span class="leg-dot cyan"></span><span>{{ tenantAdminCount }} Org Adm</span></div>
+          <div class="leg-item"><span class="leg-dot emerald"></span><span>{{ analystCount }} Analyst</span></div>
+          <div class="leg-item"><span class="leg-dot slate"></span><span>{{ otherRolesCount }} Other</span></div>
+        </div>
+      </div>
+
+      <div class="iam-card-footer">
+        <span class="iam-chip">LEAST PRIVILEGE</span>
+        <span class="iam-chip">RBAC BOUND</span>
+        <span class="iam-chip purple">ENFORCED</span>
+      </div>
+    </div>
+
+    <!-- Card 2: Identity Verification & Security Posture Shield -->
+    <div class="iam-deck-card iam-deck--posture">
+      <div class="iam-card-glow emerald"></div>
+      <div class="iam-card-top">
+        <div class="iam-card-tag">
+          <lucide-icon [name]="CheckCircle2Icon" class="w-3.5 h-3.5 text-emerald-400"></lucide-icon>
+          <span>IDENTITY POSTURE</span>
+        </div>
+        <span class="iam-status-pill emerald">{{ activePercent }}% VERIFIED</span>
+      </div>
+
+      <div class="iam-posture-body">
+        <div class="posture-shield-row">
+          <div class="posture-score-box">
+            <span class="score-val text-emerald-400 font-mono">{{ activePercent }}%</span>
+            <span class="score-lbl">ACTIVE RATIO</span>
+          </div>
+          <div class="posture-meta-box">
+            <div class="posture-line">
+              <span class="p-lbl">Verified Active:</span>
+              <span class="p-val font-mono text-emerald-300 font-bold">{{ activeUsersCount }} users</span>
+            </div>
+            <div class="posture-line">
+              <span class="p-lbl">Suspended:</span>
+              <span class="p-val font-mono text-rose-400">{{ disabledCount }} users</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="posture-encryption-badge">
+          <span class="pulse-dot-green"></span>
+          <span>Credential Security: Bcrypt / Argon2 Hashed</span>
+        </div>
+      </div>
+
+      <div class="iam-card-footer">
+        <span class="iam-chip">HASHED SECRETS</span>
+        <span class="iam-chip">ZERO PLAINTEXT</span>
+        <span class="iam-chip success">VERIFIED</span>
+      </div>
+    </div>
+
+    <!-- Card 3: Delegated Governance Mesh -->
+    <div class="iam-deck-card iam-deck--delegation">
+      <div class="iam-card-glow blue"></div>
+      <div class="iam-card-top">
+        <div class="iam-card-tag">
+          <lucide-icon [name]="Building2Icon" class="w-3.5 h-3.5 text-cyan-400"></lucide-icon>
+          <span>TENANT DELEGATION</span>
+        </div>
+        <span class="iam-status-pill cyan">{{ tenantAdminCount }} ORG ADMINS</span>
+      </div>
+
+      <div class="iam-delegation-body">
+        <div class="delegation-lead-row">
+          <span class="del-num text-cyan-400 font-mono">{{ tenantAdminCount }}</span>
+          <div class="del-lead-sub">
+            <span class="del-title">DELEGATED SCOPES</span>
+            <span class="del-caption">Active in {{ tenants.length }} Managed Organizations</span>
+          </div>
+        </div>
+
+        <div class="delegation-matrix-box">
+          <div class="del-matrix-item">
+            <span class="m-lbl">CROSS-TENANT ACCESS</span>
+            <span class="m-val text-rose-400 font-mono">RESTRICTED</span>
+          </div>
+          <div class="del-matrix-item">
+            <span class="m-lbl">ORG BOUNDARY</span>
+            <span class="m-val text-cyan-300 font-mono">STRICT ISOLATION</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="iam-card-footer">
+        <span class="iam-chip">DELEGATED RBAC</span>
+        <span class="iam-chip">TENANT-LOCKED</span>
+        <span class="iam-chip cyan">ISOLATED</span>
+      </div>
+    </div>
+
+    <!-- Card 4: Current Operator Session & Audit Capsule -->
+    <div class="iam-deck-card iam-deck--session">
+      <div class="iam-card-glow amber"></div>
+      <div class="iam-card-top">
+        <div class="iam-card-tag">
+          <lucide-icon [name]="ClockIcon" class="w-3.5 h-3.5 text-amber-400"></lucide-icon>
+          <span>OPERATOR SESSION</span>
+        </div>
+        <span class="iam-status-pill amber">JWT AUTHENTICATED</span>
+      </div>
+
+      <div class="iam-session-body">
+        <div class="session-user-capsule">
+          <div class="session-avatar">
+            {{ (currentUser?.username || 'A').charAt(0).toUpperCase() }}
+          </div>
+          <div class="session-meta">
+            <span class="session-name font-mono font-bold text-amber-300">{{ currentUser?.username || 'super_admin' }}</span>
+            <span class="session-role">{{ currentUser?.role || 'Platform Administrator' }}</span>
+          </div>
+        </div>
+
+        <div class="session-audit-badge">
+          <span class="audit-dot"></span>
+          <span>ClickHouse Audit Trail Logging Active</span>
+        </div>
+      </div>
+
+      <div class="iam-card-footer">
+        <span class="iam-chip">BEARER TOKEN</span>
+        <span class="iam-chip">ACTIVE JWT</span>
+        <span class="iam-chip amber">SIGNED</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- Refined Filter Toolbar & Quick Role Tabs -->
+  <div class="cyber-toolbar-card">
+    <div class="toolbar-left">
+      <div class="cyber-search-box">
+        <lucide-icon [name]="SearchIcon" class="search-icon w-4 h-4"></lucide-icon>
+        <input [(ngModel)]="userSearch" type="search" placeholder="Search usernames, roles, tenant IDs..." />
+        <button *ngIf="userSearch" type="button" class="search-clear-btn" (click)="userSearch = ''">
+          <lucide-icon [name]="XIcon" class="w-3.5 h-3.5"></lucide-icon>
+        </button>
+      </div>
+
+      <div class="cyber-select-wrapper">
+        <select [(ngModel)]="selectedTenant" class="cyber-select">
+          <option value="all">All Organization Tenancy ({{ tenants.length }})</option>
+          <option *ngFor="let tenant of tenants" [value]="tenant.id">
+            {{ tenant.name }} ({{ tenant.active ? 'Active' : 'Inactive' }})
+          </option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Quick Role Filter Tabs -->
+    <div class="role-filter-tabs">
+      <button type="button" class="filter-tab-btn" [class.active]="selectedRoleFilter === 'all'" (click)="selectedRoleFilter = 'all'">
+        All ({{ totalUsersCount }})
+      </button>
+      <button type="button" class="filter-tab-btn" [class.active]="selectedRoleFilter === 'tenant_admin'" (click)="selectedRoleFilter = 'tenant_admin'">
+        Tenant Admins ({{ tenantAdminCount }})
+      </button>
+      <button type="button" class="filter-tab-btn" [class.active]="selectedRoleFilter === 'admin'" (click)="selectedRoleFilter = 'admin'">
+        Admins ({{ superAdminCount }})
+      </button>
+      <button type="button" class="filter-tab-btn" [class.active]="selectedRoleFilter === 'analyst'" (click)="selectedRoleFilter = 'analyst'">
+        Analysts ({{ analystCount }})
+      </button>
+      <button *ngIf="disabledCount > 0" type="button" class="filter-tab-btn danger" [class.active]="selectedRoleFilter === 'disabled'" (click)="selectedRoleFilter = 'disabled'">
+        Inactive ({{ disabledCount }})
+      </button>
+    </div>
+  </div>
+
+  <!-- Scope Banner -->
+  <div class="cyber-scope-banner" *ngIf="selectedTenant !== 'all' || selectedRoleFilter !== 'all'">
+    <div class="scope-info">
+      <lucide-icon [name]="LayersIcon" class="w-4 h-4 text-cyan-400"></lucide-icon>
+      <span>Filter Scope: <strong>{{ selectedTenantName }}</strong> · Showing <strong>{{ filteredTenantAdmins.length }}</strong> match{{ filteredTenantAdmins.length !== 1 ? 'es' : '' }}</span>
+    </div>
+    <div *ngIf="selectedTenantIsInactive" class="tenant-warning-pill">
+      <lucide-icon [name]="AlertTriangleIcon" class="w-3.5 h-3.5"></lucide-icon>
+      Tenant is Inactive — users blocked
+    </div>
+  </div>
+
+  <!-- Inactive Tenant Warning Banner -->
   <div *ngIf="selectedTenantIsInactive" class="tenant-blocked-banner">
-    This tenant is inactive. Active users in this tenant are blocked from access.
+    <lucide-icon [name]="AlertTriangleIcon" class="w-4 h-4"></lucide-icon>
+    <span>This tenant is marked inactive. Users assigned to this organization cannot authenticate into the platform.</span>
   </div>
 
-  <div *ngIf="loadingUsers" class="loading-state">Loading users...</div>
-
-  <div *ngIf="!loadingUsers && filteredTenantAdmins.length === 0" class="empty-state">
-    <strong>No users found</strong>
-    <span>Create a user or adjust your search.</span>
+  <!-- Loading State -->
+  <div *ngIf="loadingUsers" class="cyber-loading-box">
+    <lucide-icon [name]="RefreshIcon" class="w-7 h-7 spinning text-cyan-400"></lucide-icon>
+    <div class="loading-label">Synchronizing User Directory...</div>
   </div>
 
+  <!-- Empty State -->
+  <div *ngIf="!loadingUsers && filteredTenantAdmins.length === 0" class="cyber-empty-card">
+    <div class="empty-icon-ring">
+      <lucide-icon [name]="UsersIcon" class="w-8 h-8"></lucide-icon>
+    </div>
+    <h4>No User Identities Found</h4>
+    <p>No platform or tenant accounts matched your current search and role filters.</p>
+    <button class="cyber-btn cyber-btn-ghost" type="button" (click)="userSearch = ''; selectedTenant = 'all'; selectedRoleFilter = 'all'">
+      Clear Filter Query
+    </button>
+  </div>
+
+  <!-- Grouped Users List -->
   <div *ngIf="!loadingUsers && filteredTenantAdmins.length > 0" class="user-groups">
     <div *ngFor="let group of usersByTenant" class="tenant-group">
       <div class="tenant-group-header" (click)="toggleTenantGroup(group.tenantId)">
         <div class="tenant-group-title">
           <div class="tenant-mark">{{ group.tenantName.charAt(0).toUpperCase() }}</div>
-          <strong>{{ group.tenantName }}</strong>
+          <div class="tenant-details">
+            <strong>{{ group.tenantName }}</strong>
+            <span class="tenant-id-label">ORG-ID: {{ group.tenantId }}</span>
+          </div>
           <span class="group-count">{{ group.users.length }} user{{ group.users.length !== 1 ? 's' : '' }}</span>
           <span [class]="'status-pill ' + (group.isActive ? 'active' : 'inactive')">
-            {{ group.isActive ? 'Active' : 'Inactive' }}
+            {{ group.isActive ? 'Organization Active' : 'Organization Suspended' }}
           </span>
         </div>
         <lucide-icon [name]="isGroupCollapsed(group.tenantId) ? ChevronRightIcon : ChevronDownIcon" class="w-4 h-4 chevron-icon"></lucide-icon>
@@ -70,34 +292,41 @@
 
       <div *ngIf="!isGroupCollapsed(group.tenantId)" class="tenant-group-body admin-table">
         <div class="table-row table-head">
-          <span>User</span>
-          <span>Role</span>
+          <span>Identity / User</span>
+          <span>Assigned Role</span>
           <span>Status</span>
-          <span>Actions</span>
+          <span>Access Controls</span>
         </div>
         <div *ngFor="let user of group.users" class="table-row">
           <div class="user-cell">
-            <div class="avatar">{{ user.username.charAt(0).toUpperCase() }}</div>
-            <div>
-              <strong>{{ user.username }}</strong>
-              <span>{{ user.created_at | date:'short' }}</span>
+            <div class="avatar" [class.admin]="user.role === 'admin' || user.role === 'super_admin'" [class.tenant-adm]="user.role === 'tenant_admin'">
+              {{ user.username.charAt(0).toUpperCase() }}
+            </div>
+            <div class="user-meta">
+              <strong class="user-name">{{ user.username }}</strong>
+              <span class="user-sub">{{ user.created_at ? (user.created_at | date:'mediumDate') : 'System Provisioned' }} <span *ngIf="user.gmail">· {{ user.gmail }}</span></span>
             </div>
           </div>
           <span [class]="'role-pill ' + getRolePillClass(user.role)">{{ roleLabel(user.role) }}</span>
-          <span [class]="'status-pill ' + userStatusClass(user)">{{ userStatusLabel(user) }}</span>
+          <span [class]="'status-pill ' + userStatusClass(user)">
+            <span class="status-indicator-dot"></span>
+            {{ userStatusLabel(user) }}
+          </span>
           <div class="row-actions action-row">
-            <button class="icon-button" type="button" title="Edit user" (click)="openEditUser(user)">
-              <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+            <button class="cyber-icon-btn" type="button" title="Edit user permissions &amp; password" (click)="openEditUser(user)">
+              <lucide-icon [name]="EditIcon" class="w-3.5 h-3.5"></lucide-icon>
+              <span>Edit</span>
             </button>
-            <button *ngIf="user.username !== currentUser?.username" class="secondary-action compact-action" type="button"
+            <button *ngIf="user.username !== currentUser?.username" class="cyber-btn-compact" type="button"
+              [class.reactivate]="user.active === false"
               (click)="setUserActive(user, user.active === false)">
               {{ user.active === false ? 'Reactivate' : 'Deactivate' }}
             </button>
-            <button *ngIf="user.username !== currentUser?.username" class="danger-icon" type="button" title="Delete user"
+            <button *ngIf="user.username !== currentUser?.username" class="danger-icon-btn" type="button" title="Permanently delete account"
               (click)="requestDeleteUser(user)">
-              <lucide-icon [name]="TrashIcon" class="w-4 h-4"></lucide-icon>
+              <lucide-icon [name]="TrashIcon" class="w-3.5 h-3.5"></lucide-icon>
             </button>
-            <span *ngIf="user.username === currentUser?.username" class="muted-note">Current user</span>
+            <span *ngIf="user.username === currentUser?.username" class="current-user-tag">Current Session</span>
           </div>
         </div>
       </div>
