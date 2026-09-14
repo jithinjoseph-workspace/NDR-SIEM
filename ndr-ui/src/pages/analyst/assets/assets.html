@@ -53,85 +53,87 @@
       </div>
     </div>
   </div>
-  <div class="subnet-stats-row" *ngIf="subnets.length > 0 && !loading">
-    <div class="subnet-card" *ngFor="let s of subnets" (click)="setSubnetFilter(s.cidr)" [class.active]="filterSubnet === s.cidr">
-      <div class="subnet-cidr">{{ s.cidr }}</div>
-      <div class="subnet-iface">{{ s.interface }}{{ s.sensor_id ? ' · ' + s.sensor_id : '' }}</div>
-      <div class="subnet-bar-wrap">
-        <div class="subnet-bar" [style.width.%]="s.total_ips ? (s.used_ips / s.total_ips * 100) : 0"></div>
-      </div>
-      <div class="subnet-counts">
-        <span class="used">{{ s.used_ips }} used</span>
-        <span class="free">{{ s.free_ips }} free</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="top-dashboard" *ngIf="!loading && totalAssets > 0">
-    <div class="donut-container">
-      <div class="donut-label">ASSET TYPE DISTRIBUTION</div>
-      <div class="donut-chart-wrapper">
-        <svg viewBox="0 0 120 120" class="donut-svg">
-          <circle cx="60" cy="60" r="50" class="donut-bg"></circle>
-          <!-- The strokes will be set via CSS or we can just use a conic gradient background on a div for easier dynamic sizing. Let's use a pure CSS glowing conic gradient approach instead of complex SVG calculations for easier dynamic binding. -->
-        </svg>
-        <div class="donut-css" [style.background]="'conic-gradient(#3b82f6 0% ' + stats.workstations.percent + '%, #f43f5e ' + stats.workstations.percent + '% ' + (stats.workstations.percent + stats.iot.percent) + '%, #10b981 ' + (stats.workstations.percent + stats.iot.percent) + '% ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '%, #8b5cf6 ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '% 100%)'">
-        </div>
-        <div class="donut-inner">
-          <span class="total-number">{{ totalAssets }}</span>
-          <span class="total-label">Assets</span>
+  <div class="dashboard-layout-row" *ngIf="!loading">
+    
+    <div class="top-dashboard" *ngIf="totalAssets > 0">
+      <div class="donut-container">
+        <div class="donut-label">ASSET TYPE DISTRIBUTION</div>
+        <div class="donut-chart-wrapper">
+          <svg viewBox="0 0 120 120" class="donut-svg">
+            <circle cx="60" cy="60" r="50" class="donut-bg"></circle>
+          </svg>
+          <div class="donut-css" [style.background]="'conic-gradient(#3b82f6 0% ' + stats.workstations.percent + '%, #f43f5e ' + stats.workstations.percent + '% ' + (stats.workstations.percent + stats.iot.percent) + '%, #10b981 ' + (stats.workstations.percent + stats.iot.percent) + '% ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '%, #8b5cf6 ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '% 100%)'">
+          </div>
+          <div class="donut-inner">
+            <span class="total-number">{{ totalAssets }}</span>
+            <span class="total-label">Assets</span>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="stats-container">
-      <div class="stats-header">Asset Type Distribution</div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-icon-wrapper blue">
-            <lucide-icon [name]="MonitorIcon" class="w-5 h-5"></lucide-icon>
+      <div class="stats-container">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon-wrapper blue">
+              <lucide-icon [name]="MonitorIcon" class="w-5 h-5"></lucide-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-title">Workstations</div>
+              <div class="stat-count">{{ stats.workstations.count }} assets</div>
+            </div>
+            <div class="stat-percent">{{ stats.workstations.percent }}%</div>
           </div>
-          <div class="stat-info">
-            <div class="stat-title">Workstations</div>
-            <div class="stat-count">{{ stats.workstations.count }} assets</div>
-          </div>
-          <div class="stat-percent">{{ stats.workstations.percent }}%</div>
-        </div>
 
-        <div class="stat-card">
-          <div class="stat-icon-wrapper orange">
-            <lucide-icon [name]="LightbulbIcon" class="w-5 h-5"></lucide-icon>
+          <div class="stat-card">
+            <div class="stat-icon-wrapper orange">
+              <lucide-icon [name]="LightbulbIcon" class="w-5 h-5"></lucide-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-title">IoT Devices</div>
+              <div class="stat-count">{{ stats.iot.count }} assets</div>
+            </div>
+            <div class="stat-percent">{{ stats.iot.percent }}%</div>
           </div>
-          <div class="stat-info">
-            <div class="stat-title">IoT Devices</div>
-            <div class="stat-count">{{ stats.iot.count }} assets</div>
-          </div>
-          <div class="stat-percent">{{ stats.iot.percent }}%</div>
-        </div>
 
-        <div class="stat-card">
-          <div class="stat-icon-wrapper green">
-            <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+          <div class="stat-card">
+            <div class="stat-icon-wrapper green">
+              <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-title">Servers</div>
+              <div class="stat-count">{{ stats.servers.count }} assets</div>
+            </div>
+            <div class="stat-percent">{{ stats.servers.percent }}%</div>
           </div>
-          <div class="stat-info">
-            <div class="stat-title">Servers</div>
-            <div class="stat-count">{{ stats.servers.count }} assets</div>
-          </div>
-          <div class="stat-percent">{{ stats.servers.percent }}%</div>
-        </div>
 
-        <div class="stat-card">
-          <div class="stat-icon-wrapper purple">
-            <lucide-icon [name]="RouterIcon" class="w-5 h-5"></lucide-icon>
+          <div class="stat-card">
+            <div class="stat-icon-wrapper purple">
+              <lucide-icon [name]="RouterIcon" class="w-5 h-5"></lucide-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-title">Networking</div>
+              <div class="stat-count">{{ stats.networking.count }} assets</div>
+            </div>
+            <div class="stat-percent">{{ stats.networking.percent }}%</div>
           </div>
-          <div class="stat-info">
-            <div class="stat-title">Networking</div>
-            <div class="stat-count">{{ stats.networking.count }} assets</div>
-          </div>
-          <div class="stat-percent">{{ stats.networking.percent }}%</div>
         </div>
       </div>
     </div>
+
+    <div class="subnet-stats-sidebar" *ngIf="subnets.length > 0">
+      <div class="subnet-card" *ngFor="let s of subnets" (click)="setSubnetFilter(s.cidr)" [class.active]="filterSubnet === s.cidr">
+        <div class="subnet-cidr">{{ s.cidr }}</div>
+        <div class="subnet-iface">{{ s.interface }}{{ s.sensor_id ? ' · ' + s.sensor_id : '' }}</div>
+        <div class="subnet-bar-wrap">
+          <div class="subnet-bar" [style.width.%]="s.total_ips ? (s.used_ips / s.total_ips * 100) : 0"></div>
+        </div>
+        <div class="subnet-counts">
+          <span class="used">{{ s.used_ips }} used</span>
+          <span class="free">{{ s.free_ips }} free</span>
+        </div>
+      </div>
+    </div>
+    
   </div>
 
   <div class="asset-workspace" [class.has-selection]="selectedAsset">
