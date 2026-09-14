@@ -11,7 +11,7 @@
   min-height: 0;
   border-radius: 12px;
   border: 2px solid rgba(52, 211, 153, 0.3); /* Bold premium border */
-  background: rgba(2, 6, 23, 0.9); /* Deep slate */
+  background: #000000; /* Deep slate */
   backdrop-filter: blur(28px);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   overflow: hidden;
@@ -32,6 +32,7 @@
     rgba(105,246,184,0.05) 100%
   );
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;

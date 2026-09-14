@@ -139,6 +139,22 @@
   gap: 2px;
 }
 
+/* Custom thicker scrollbar for the sidebar */
+.nav-list::-webkit-scrollbar {
+  width: 10px;
+}
+.nav-list::-webkit-scrollbar-thumb {
+  background: rgba(34, 197, 94, 0.35);
+  border-radius: 4px;
+}
+.nav-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(34, 197, 94, 0.5);
+}
+.nav-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+
 /* ── Collapsible section header ───────────────────────────── */
 .nav-section {
   display: flex;

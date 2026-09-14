@@ -248,16 +248,16 @@
   min-height: calc(100vh - 210px);
 }
 
-.map-workspace.has-selection {
+.network-shell:not(.nm-preview) .map-workspace {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
 }
 
 .map-panel {
   position: relative;
   border-radius: 12px;
-  border: 2px solid #34d399; /* Vibrant bold green border */
-  background: #000000;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  box-shadow: none;
   overflow: hidden;
   min-height: 640px;
 }
@@ -1099,18 +1099,15 @@
 .device-selector-bar {
   position: relative;
   z-index: 1;
-  max-width: 1520px;
-  margin-inline: auto;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 12px;
   border: 2px solid rgba(52, 211, 153, 0.3); /* Bold premium border */
-  background: rgba(2, 6, 23, 0.8);
-  backdrop-filter: blur(12px);
+  background: #000000;
   overflow: hidden;
+  height: 100%;
 }
 
 .dsb-label {
@@ -1124,8 +1121,8 @@
   text-transform: uppercase;
   white-space: nowrap;
   flex-shrink: 0;
-  padding-right: 12px;
-  border-right: 1px solid rgba(255,255,255,0.15);
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
 }
 
 .dsb-label__text { color: #f8fafc; }
@@ -1153,9 +1150,10 @@
 
 .dsb-chips {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  overflow-x: auto;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
   scrollbar-width: none;
   padding: 2px 0;
@@ -1171,7 +1169,7 @@
   min-width: 112px;
   border-radius: 11px;
   border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(8, 14, 30, 0.72);
+  background: #0a0a0a;
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.13s;
@@ -1202,7 +1200,7 @@
   font-weight: 900;
   letter-spacing: 0.13em;
   text-transform: uppercase;
-  color: #2e3e56;
+  color: #94a3b8;
   transition: color 0.15s;
   line-height: 1;
 }
@@ -1241,7 +1239,7 @@
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 700;
-  color: #6a80a0;
+  color: #f8fafc;
   letter-spacing: 0.01em;
   line-height: 1.1;
   transition: color 0.15s;
@@ -1255,7 +1253,7 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #2e3e56;
+  color: #94a3b8;
   background: rgba(255,255,255,0.04);
   padding: 1px 5px;
   border-radius: 4px;
@@ -1516,6 +1514,7 @@
    HUD CORNER BRACKETS
 ══════════════════════════════════════════════════ */
 .hud-corners {
+  display: none;
   position: absolute;
   inset: 0;
   pointer-events: none;

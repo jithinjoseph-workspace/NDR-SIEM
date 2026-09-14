@@ -378,7 +378,7 @@
   flex-direction: column;
   min-height: 0;
   border-radius: 16px;
-  background: linear-gradient(155deg, rgba(5,11,26,0.99) 0%, rgba(3,7,18,1) 100%);
+  background: linear-gradient(155deg, #080c14 0%, #030712 100%);
   border: 1px solid rgba(105,246,184,0.1);
   box-shadow:
     0 0 0 1px rgba(105,246,184,0.04) inset,
@@ -400,6 +400,7 @@
     rgba(105,246,184,0.04) 100%
   );
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
@@ -525,11 +526,11 @@
   z-index: 3;
   min-height: 44px;
   padding: 0 28px;
-  background: rgba(3,7,18,0.95);
-  border-bottom: 1px solid rgba(105,246,184,0.07);
-  color: rgba(105,246,184,0.4);
+  background: #080c14;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  color: #e2e8f0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -559,7 +560,8 @@
 .log-row {
   min-height: 46px;
   padding: 0 28px;
-  border-left: 2px solid transparent;
+  border: 1px solid rgba(255,255,255,0.05);
+  border-top: none;
   transition: background 0.15s, border-color 0.15s;
   cursor: default;
 }
@@ -588,7 +590,7 @@
 
 /* ── Cell types ────────────────────────────────── */
 .log-time {
-  color: #2e3f56;
+  color: #94a3b8;
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
@@ -604,6 +606,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.src-ip { color: #22c55e !important; }
+.dst-ip { color: #ef4444 !important; }
 
 /* Empty / dash value */
 .ip-value:empty,

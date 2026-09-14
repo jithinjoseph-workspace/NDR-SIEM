@@ -3,6 +3,7 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
+  background-color: var(--color-surface);
 }
 
 .analyst-content {
@@ -63,4 +64,24 @@
 .analyst-layout app-sidebar .nav-link:hover:not(.active) {
   background: rgba(34, 197, 94, 0.12) !important;
   border-radius: 8px !important;
+}
+
+/* ── Analyst Custom Dark Theme Overrides ── */
+.analyst-layout {
+  /* Override global surface colors to be even darker for the Analyst section only */
+  --color-surface: #030712 !important; /* Very deep slate, darker than default #0d1117 */
+  --color-surface-container-low: #080c14 !important; /* Darker than default #111827 */
+  --color-surface-container-high: #0f1523 !important;
+  --color-surface-container-highest: #172033 !important;
+}
+
+/* ── Analyst Layout - Shared Components Overrides ── */
+.analyst-layout app-sidebar .sidebar-shell {
+  background: #030712 !important;
+}
+.analyst-layout app-sidebar .brand-block {
+  background: linear-gradient(180deg, #ffffff 0%, #eefbf3 60%, #030712 100%) !important;
+}
+body.has-analyst-sidebar app-navbar .topbar {
+  background: rgba(3, 7, 18, 0.85) !important;
 }
