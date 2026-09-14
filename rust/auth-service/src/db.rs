@@ -388,7 +388,7 @@ impl AuthDb {
             features: String, created_at: String,
         }
         let q = "SELECT id, name, active, ai_enabled, \
-                        coalesce(features,'[\"ndr\"]') AS features, \
+                        coalesce(features,'ndr') AS features, \
                         toString(created_at) AS created_at \
                  FROM tenants FINAL ORDER BY created_at DESC";
         let mut cur = self.client.query(q).fetch::<Row>()?;
@@ -405,9 +405,13 @@ impl AuthDb {
 
     pub async fn create_tenant(&self, id: &str, name: &str) -> Result<()> {
         // 1) global registry row
+        // features is stored comma-separated (e.g. "ndr,ai"), matching the
+        // column's own schema default and every existing tenant row — NOT a
+        // JSON array string, which get_tenant_features()'s comma-split
+        // parser (and has_feature()) can't read back correctly.
         let q = format!(
             "INSERT INTO tenants (id, name, active, ai_enabled, updated_at, created_at, features) \
-             VALUES ('{}', '{}', 1, 0, now(), now(), '[\"ndr\"]')",
+             VALUES ('{}', '{}', 1, 0, now(), now(), 'ndr')",
             escape(id), escape(name)
         );
         self.client.query(&q).execute().await?;

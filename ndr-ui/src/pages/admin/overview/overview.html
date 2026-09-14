@@ -111,7 +111,7 @@
           <lucide-icon [name]="LayersIcon" class="w-3.5 h-3.5 text-violet-400"></lucide-icon>
           <span class="tk-lbl">INGESTION BUS:</span>
           <span class="tk-val font-mono text-violet-300">{{ totalPartitions }} PARTITIONS ({{ totalPartitions > 0 ? (kafkaData?.replication_factor || 1) + 'x ISR' : 'ONLINE' }})</span>
-          <span class="tk-sub text-emerald-400">0 LAG</span>
+          <span class="tk-sub" [class.text-emerald-400]="totalKafkaLag === 0" [class.text-amber-400]="totalKafkaLag > 0">{{ totalKafkaLag }} LAG</span>
         </div>
       </div>
     </div>
@@ -185,7 +185,7 @@
         <div class="mod-meta-divider"></div>
         <div class="mod-meta-item">
           <span>FAILOVER</span>
-          <b class="text-emerald-400 font-mono">READY</b>
+          <b class="font-mono" [class.text-emerald-400]="isLeaderActive" [class.text-amber-400]="!isLeaderActive">{{ isLeaderActive ? 'READY' : 'ELECTING' }}</b>
         </div>
       </div>
 
@@ -315,8 +315,8 @@
         </div>
         <div class="mod-meta-divider"></div>
         <div class="mod-meta-item">
-          <span>PACKET DROP</span>
-          <b class="text-emerald-400 font-mono">0 Drops</b>
+          <span>SENSORS ARMED</span>
+          <b class="font-mono" [class.text-emerald-400]="activeSensorsCount === sensorKeys.length && sensorKeys.length > 0" [class.text-amber-400]="activeSensorsCount &lt; sensorKeys.length">{{ activeSensorsCount }}/{{ sensorKeys.length }}</b>
         </div>
         <div class="mod-meta-divider"></div>
         <div class="mod-meta-item">
@@ -400,7 +400,7 @@
       </div>
 
       <div class="mod-progress-track">
-        <div class="mod-progress-bar bar--violet" style="width: 100%"></div>
+        <div class="mod-progress-bar bar--violet" [style.width.%]="ruleRatioPercent"></div>
       </div>
     </div>
 
@@ -1038,7 +1038,7 @@
                 <span *ngFor="let p of g.partitions" class="partition-badge">P{{ p }}</span>
               </div>
               <div class="group-status">
-                <span class="sync-badge sync--ok" *ngIf="g.inSync">Replicated (3x)</span>
+                <span class="sync-badge sync--ok" *ngIf="g.inSync">Replicated ({{ kafkaData?.replication_factor || 1 }}x)</span>
                 <span class="sync-badge sync--warn" *ngIf="!g.inSync">Sync Warning</span>
                 <span class="lag-badge lag--ok" *ngIf="g.totalLag === 0">0 Lag ✓</span>
                 <span class="lag-badge lag--warn" *ngIf="g.totalLag > 0">{{ g.totalLag }} lag</span>

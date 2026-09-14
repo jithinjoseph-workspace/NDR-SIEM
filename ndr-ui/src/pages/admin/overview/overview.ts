@@ -486,7 +486,10 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         id: e.name || `engine-${idx + 1}`,
         name: e.name || `ndr-engine-${idx + 1}`,
         status: isUp ? 'ONLINE' : 'DEGRADED',
-        uptime: e.status || e.running || 'Running',
+        // e.running is Docker's real "RunningFor" duration (e.g. "35 minutes") —
+        // show that as uptime instead of re-displaying the status string under
+        // a mislabeled column.
+        uptime: e.running || e.status || 'Running',
         ip: '127.0.0.1 (Docker Host)',
         latency: isUp ? '< 1ms' : 'Timeout',
         throughput: this.eventsPerSec > 0 ? `${Math.round(this.eventsPerSec / Math.max(1, this.activeEngines))} eps` : (isUp ? 'Active' : '0 eps'),
@@ -767,7 +770,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
 
   exportUserAuditLogs() {
     const lines = this.userAuditLogs.map(l =>
-      `[${l.time}] [${l.category}] [user: ${l.user}] (${l.role}) ${l.action} [tenant: ${l.tenant || 'Global'}] [status: ${l.status}] [ip: ${l.ip || '127.0.0.1'}]`
+      `[${l.time}] [${l.category}] [user: ${l.user}] (${l.role}) ${l.action} [tenant: ${l.tenant || 'Global'}] [status: ${l.status}] [ip: ${l.ip || 'unknown'}]`
     );
     const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -788,7 +791,10 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     action: string,
     tenant = 'Default Organization',
     status: 'SUCCESS' | 'WARN' | 'BLOCKED' = 'SUCCESS',
-    ip = '10.0.4.18'
+    // The frontend has no reliable way to know the real client IP without a
+    // backend call, so entries generated here leave it unset rather than
+    // fabricate a plausible-looking address.
+    ip?: string
   ) {
     if (this.userAuditPaused) return;
     const now = new Date();
@@ -809,58 +815,65 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
   }
 
   initUserAuditLogs() {
+    // This terminal used to seed itself with fabricated actions attributed to
+    // other real usernames (secops_lead, analyst1, tenant_admin) that never
+    // actually happened — misleading for a security product. The only thing
+    // we can honestly claim here is the current session's own real start;
+    // everything else is populated by checkForRealAuditEvents() below, which
+    // only logs genuine, observed state changes.
     const curUser = this.auth?.getUser()?.username || 'admin';
     const curRole = this.auth?.getUser()?.role || 'super_admin';
     const primaryTenant = this.tenants[0]?.name || 'Global Security Mesh';
+    this.pushUserAuditLog('AUTH', curUser, curRole, 'Interactive administrator session established via encrypted JWT token', primaryTenant, 'SUCCESS');
+  }
 
-    this.pushUserAuditLog('AUTH', curUser, curRole, 'Interactive administrator session established via encrypted JWT token', primaryTenant, 'SUCCESS', '192.168.1.10');
-    this.pushUserAuditLog('CONFIG', curUser, curRole, `Raft consensus lease synchronized with leader ${this.leaderName}`, primaryTenant, 'SUCCESS', '192.168.1.10');
-    this.pushUserAuditLog('RULES', 'secops_lead', 'tenant_admin', 'Synchronized detection rule signatures across active engine instances', primaryTenant, 'SUCCESS', '10.0.1.42');
-    this.pushUserAuditLog('IAM', curUser, curRole, `Audited active multi-tenant RBAC permissions across ${this.tenants.length || 3} organizations`, primaryTenant, 'SUCCESS', '192.168.1.10');
-    this.pushUserAuditLog('POLICY', 'tenant_admin', 'tenant_admin', 'Validated trusted cloud ASN keywords and domain whitelist table', primaryTenant, 'SUCCESS', '10.0.2.15');
-    this.pushUserAuditLog('INVESTIGATE', 'analyst1', 'analyst', 'Queried ClickHouse deep-packet flow telemetry for top egress interfaces', primaryTenant, 'SUCCESS', '10.0.3.88');
+  // Real audit-log snapshot used to detect genuine state changes between
+  // poll cycles, instead of a scripted rotation of fabricated actions
+  // attributed to real usernames who never actually did them.
+  private auditWatchState = { leader: '', totalLag: 0, criticalCount: 0 };
+  private auditWatchInitialized = false;
+
+  private snapshotAuditWatchState() {
+    this.auditWatchState = {
+      leader: this.leaderStatus?.current_leader || '',
+      totalLag: this.totalKafkaLag,
+      criticalCount: this.severityData?.critical || 0,
+    };
+  }
+
+  checkForRealAuditEvents() {
+    if (this.userAuditPaused) return;
+    // Real data (leader/severity/kafka) hasn't necessarily loaded yet the
+    // first time this runs — establish the baseline silently rather than
+    // comparing against empty/zero placeholder state.
+    if (!this.auditWatchInitialized) {
+      this.auditWatchInitialized = true;
+      this.snapshotAuditWatchState();
+      return;
+    }
+    const prev = this.auditWatchState;
+    const curLeader = this.leaderStatus?.current_leader || '';
+    if (prev.leader && curLeader && curLeader !== prev.leader) {
+      this.pushUserAuditLog('CONFIG', 'System', 'system', `Raft leader election: cluster leadership transferred to ${curLeader}`, undefined, 'WARN');
+    }
+    const curLag = this.totalKafkaLag;
+    if (prev.totalLag === 0 && curLag > 0) {
+      this.pushUserAuditLog('CONFIG', 'System', 'system', `Kafka consumer lag detected: ${curLag} total lag across partitions`, undefined, 'WARN');
+    } else if (prev.totalLag > 0 && curLag === 0) {
+      this.pushUserAuditLog('CONFIG', 'System', 'system', `Kafka consumer lag cleared — all partitions caught up`, undefined, 'SUCCESS');
+    }
+    const curCritical = this.severityData?.critical || 0;
+    if (curCritical > prev.criticalCount) {
+      this.pushUserAuditLog('INVESTIGATE', 'System', 'system', `Critical severity alert count increased to ${curCritical}`, undefined, 'WARN');
+    }
+    this.snapshotAuditWatchState();
   }
 
   startUserAuditTicker() {
     if (this.userAuditTimer) return;
-    let step = 0;
-    this.userAuditTimer = setInterval(() => {
-      if (this.userAuditPaused) return;
-      step = (step + 1) % 8;
-
-      const userList = this.users.length > 0 ? this.users.map(u => u.username) : ['admin', 'secops_lead', 'soc_analyst', 'tenant_admin'];
-      const user = userList[step % userList.length];
-      const role = this.users.find(u => u.username === user)?.role || (user === 'admin' ? 'super_admin' : 'tenant_admin');
-      const tenant = this.tenants[step % (this.tenants.length || 1)]?.name || 'Enterprise Mesh';
-
-      switch (step) {
-        case 0:
-          this.pushUserAuditLog('AUTH', user, role, `User credential verification passed. HMAC session refreshed (TTL: 3600s)`, tenant, 'SUCCESS', `10.0.4.${20 + step}`);
-          break;
-        case 1:
-          this.pushUserAuditLog('INVESTIGATE', user, role, `Executed forensic timeline query on ClickHouse ndr.events partition`, tenant, 'SUCCESS', `10.0.4.${20 + step}`);
-          break;
-        case 2:
-          this.pushUserAuditLog('RULES', user, role, `Audited active intrusion signatures (${this.rulesCount || 3400} rules enabled)`, tenant, 'SUCCESS', `10.0.4.${20 + step}`);
-          break;
-        case 3:
-          this.pushUserAuditLog('POLICY', user, role, `Verified TLS fingerprint & domain bypass rule matrix`, tenant, 'SUCCESS', `10.0.4.${20 + step}`);
-          break;
-        case 4:
-          this.pushUserAuditLog('IAM', user, role, `Security posture token audit: 0 privilege escalation anomalies detected`, tenant, 'SUCCESS', `10.0.4.${20 + step}`);
-          break;
-        case 5:
-          this.pushUserAuditLog('CONFIG', user, role, `Engine telemetry poll cycle verified: ${this.activeEngines} nodes reporting normal status`, tenant, 'SUCCESS', `10.0.4.${20 + step}`);
-          break;
-        case 6:
-          this.pushUserAuditLog('INVESTIGATE', user, role, `Filtered suspicious IOC pivot for external threat attribution`, tenant, 'SUCCESS', `10.0.4.${20 + step}`);
-          break;
-        case 7:
-          this.pushUserAuditLog('AUTH', 'system_daemon', 'system', `Automatic background health verification acknowledged by cluster controller`, tenant, 'SUCCESS', '127.0.0.1');
-          break;
-      }
-    }, 5500);
+    this.userAuditTimer = setInterval(() => this.checkForRealAuditEvents(), 10000);
   }
+
 
   pushSocLog(level: 'OK' | 'INGEST' | 'RAFT' | 'WARN' | 'SECURITY', source: string, msg: string) {
     if (this.socLogPaused) return;
@@ -882,7 +895,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     this.pushSocLog('OK', 'SYSTEM', `Command Center initialized. Platform health index optimal.`);
     this.pushSocLog('RAFT', 'RAFT', `Distributed consensus quorum achieved. Current leader: ${leader}.`);
     this.pushSocLog('INGEST', 'CLICKHOUSE', `ReplacingMergeTree active. Vectorized SIMD storage online.`);
-    this.pushSocLog('OK', 'KAFKA', `Topic 'ndr-events' ${this.totalPartitions} partitions synchronized with 3x replication factor.`);
+    this.pushSocLog('OK', 'KAFKA', `Topic 'ndr-events' ${this.totalPartitions} partitions synchronized with ${this.kafkaData?.replication_factor || 1}x replication factor.`);
     this.pushSocLog('SECURITY', 'AGENT-S', `Agent-S signature inspection active across all tenant ingress ports.`);
   }
 
@@ -915,7 +928,11 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.pushSocLog('INGEST', 'AGENT-Z', `Agent-Z network flow analyzer active: ${(this.statsData.agent_z_events || 0).toLocaleString()} flows indexed`);
           break;
         case 5:
-          this.pushSocLog('OK', 'KAFKA', `Partition balance verified across ${this.totalPartitions} partitions. Zero consumer lag across active cluster brokers`);
+          this.pushSocLog(
+            this.totalKafkaLag === 0 ? 'OK' : 'WARN',
+            'KAFKA',
+            `Partition balance verified across ${this.totalPartitions} partitions. ${this.totalKafkaLag === 0 ? 'Zero consumer lag' : this.totalKafkaLag + ' total consumer lag'} across active cluster brokers`
+          );
           break;
       }
     }, 4500);
@@ -983,6 +1000,10 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
       g.totalLag += lag;
     }
     return Array.from(map.values());
+  }
+
+  get totalKafkaLag(): number {
+    return this.enginePartitionGroups.reduce((sum, g) => sum + g.totalLag, 0);
   }
 
   private loadFallbackTrafficMap() {
@@ -1411,6 +1432,9 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     this.isRefreshing = true;
     this.loadAllRealPlatformData();
     this.pollOverviewTelemetry();
+    const curUser = this.auth?.getUser()?.username || 'admin';
+    const curRole = this.auth?.getUser()?.role || 'super_admin';
+    this.pushUserAuditLog('CONFIG', curUser, curRole, 'Operator manually refreshed platform overview data', undefined, 'SUCCESS');
     setTimeout(() => {
       this.isRefreshing = false;
       this.cdr.detectChanges();
@@ -1421,8 +1445,12 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
 
   startOverviewTelemetryPolling() {
     if (this.overviewTelemetryPollTimer) return;
-    this.pollOverviewTelemetry();
-    this.overviewTelemetryPollTimer = setInterval(() => this.pollOverviewTelemetry(), 3000);
+    // loadAllRealPlatformData() (called moments earlier in ngOnInit) already
+    // fetched leader-status/severity/protocols once — only fetch telemetry
+    // (the one thing it doesn't cover) on this first tick, instead of
+    // re-fetching all four and doubling the page's initial request burst.
+    this.loadPlatformTelemetry();
+    this.overviewTelemetryPollTimer = setInterval(() => this.pollOverviewTelemetry(), 10000);
   }
 
   stopOverviewTelemetryPolling() {
@@ -1436,6 +1464,10 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     this.loadLeaderStatus();
     this.loadSeverityData();
     this.loadProtocolsData();
+    this.loadPlatformTelemetry();
+  }
+
+  private loadPlatformTelemetry() {
     this.api.getPlatformTelemetry().subscribe({
       next: (data: any) => {
         const cpu = Math.round(Number(data.cpu_usage_percent) || 0);
