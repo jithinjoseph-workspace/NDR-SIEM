@@ -10,10 +10,9 @@
   flex: 1;
   min-height: 0;
   border-radius: 12px;
-  border: 2px solid rgba(52, 211, 153, 0.3); /* Bold premium border */
-  background: #000000; /* Deep slate */
-  backdrop-filter: blur(28px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #000000;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
   overflow: hidden;
   animation: drawer-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -243,9 +242,9 @@
   width: 100%;
   padding: 11px 16px;
   border-radius: 10px;
-  border: 1px solid rgba(124, 163, 255, 0.32);
-  background: linear-gradient(135deg, rgba(124,163,255,0.14) 0%, rgba(105,246,184,0.08) 100%);
-  color: #a8c4ff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: #09090b;
+  color: #ffffff;
   font-size: 12.5px;
   font-weight: 800;
   cursor: pointer;
@@ -302,7 +301,7 @@
   border-radius: 20px;
   border: 1px solid transparent;
   background: transparent;
-  color: #4a5a74;
+  color: #ffffff;
   font-size: 11.5px;
   font-weight: 700;
   cursor: pointer;
@@ -317,9 +316,9 @@
 }
 
 .drawer-tabs button.active {
-  color: #7ca3ff;
-  background: rgba(124, 163, 255, 0.1);
-  border-color: rgba(124, 163, 255, 0.2);
+  color: #000000;
+  background: #ffffff;
+  border-color: #ffffff;
 }
 
 /* ══════════════════════════════════════════════════
@@ -360,8 +359,8 @@
   gap: 6px;
   padding: 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(5, 10, 22, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #09090b;
   transition: border-color 0.2s;
 }
 
@@ -370,7 +369,7 @@
 }
 
 .card-label {
-  color: #3e4e65;
+  color: #ffffff;
   font-size: 9.5px;
   font-weight: 900;
   letter-spacing: 0.12em;
@@ -397,8 +396,8 @@
   gap: 5px;
   padding: 11px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(5, 10, 22, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #09090b;
   transition: border-color 0.2s;
 }
 
@@ -407,7 +406,7 @@
 }
 
 .detail-label {
-  color: #3e4e65;
+  color: #ffffff;
   font-size: 9.5px;
   font-weight: 900;
   letter-spacing: 0.12em;
@@ -457,8 +456,8 @@
   gap: 6px;
   padding: 11px 13px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(5, 10, 22, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #09090b;
   font-family: var(--font-mono);
   font-size: 12px;
   transition: border-color 0.15s, background 0.15s;
@@ -518,7 +517,7 @@
 
 .conn-count,
 .alert-time {
-  color: #3e4e65;
+  color: #ffffff;
   font-size: 11px;
 }
 
@@ -601,20 +600,20 @@
   margin-bottom: 12px;
   padding: 22px 18px 18px;
   border-radius: 14px;
-  border: 1px solid rgba(61, 158, 255, 0.18);
-  background: linear-gradient(135deg, rgba(5,10,28,0.9) 0%, rgba(3,7,20,0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #09090b;
   overflow: hidden;
   min-height: 120px;
 }
 
 .ip-hero.internal {
-  border-color: rgba(105,246,184,0.22);
-  background: linear-gradient(135deg, rgba(4,12,24,0.9) 0%, rgba(3,8,18,0.95) 100%);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #09090b;
 }
 
 .ip-hero.threat {
-  border-color: rgba(255,113,106,0.25);
-  background: linear-gradient(135deg, rgba(14,5,10,0.92) 0%, rgba(8,3,8,0.96) 100%);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #09090b;
 }
 
 /* Animated radar rings — now truly visible */
@@ -795,8 +794,8 @@
   gap: 4px;
   padding: 10px 8px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(5, 10, 22, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #09090b;
   text-align: center;
 }
 
@@ -806,7 +805,7 @@
 }
 
 .stat-label {
-  color: #3e4e65;
+  color: #ffffff;
   font-size: 8.5px;
   font-weight: 900;
   letter-spacing: 0.12em;
@@ -814,7 +813,7 @@
 }
 
 .stat-val {
-  color: #c8d8f0;
+  color: #ffffff;
   font-family: var(--font-mono);
   font-size: 18px;
   font-weight: 700;
@@ -837,7 +836,7 @@
   align-items: center;
   gap: 6px;
   margin-bottom: 8px;
-  color: #5a6a84;
+  color: #ffffff;
   font-size: 9.5px;
   font-weight: 900;
   letter-spacing: 0.14em;
@@ -852,8 +851,8 @@
   height: 15px;
   padding: 0 5px;
   border-radius: 20px;
-  background: rgba(124, 163, 255, 0.1);
-  color: #7ca3ff;
+  background: rgba(255, 170, 0, 0.15);
+  color: #ffaa00;
   font-size: 9px;
   font-weight: 700;
   margin-left: auto;
@@ -1019,19 +1018,19 @@
 .activity-bar {
   flex: 1;
   border-radius: 2px 2px 0 0;
-  background: linear-gradient(to top, rgba(105,246,184,0.35), rgba(105,246,184,0.12));
+  background: rgba(255, 170, 0, 0.5);
   min-height: 5px;
   animation: bar-grow 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
   transform-origin: bottom;
 }
 
 .activity-bar--mid {
-  background: linear-gradient(to top, rgba(105,246,184,0.6), rgba(105,246,184,0.25));
+  background: rgba(255, 170, 0, 0.8);
 }
 
 .activity-bar--high {
-  background: linear-gradient(to top, rgba(105,246,184,0.9), rgba(105,246,184,0.45));
-  box-shadow: 0 0 8px rgba(105,246,184,0.3);
+  background: #ffaa00;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.4);
 }
 
 @keyframes bar-grow {
@@ -1084,7 +1083,7 @@
   font-size: 16px;
   font-weight: 900;
   line-height: 1;
-  color: #69f6b8;
+  color: #ffaa00;
 }
 
 .risk-score-val.risk-mid  { color: #f8c36a; }
@@ -1095,7 +1094,7 @@
   font-weight: 900;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #2e3e56;
+  color: #ffffff;
 }
 
 /* Protocols panel */
@@ -1116,7 +1115,7 @@
   font-weight: 900;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #3e4e65;
+  color: #ffffff;
 }
 
 .proto-chip-list {
@@ -1134,9 +1133,9 @@
   font-weight: 800;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  background: rgba(124, 163, 255, 0.09);
-  color: #7ca3ff;
-  border: 1px solid rgba(124, 163, 255, 0.2);
+  background: rgba(255, 170, 0, 0.15);
+  color: #ffaa00;
+  border: 1px solid rgba(255, 170, 0, 0.4);
 }
 
 .proto-chip--muted {
@@ -1174,7 +1173,7 @@
 .peer-row__ip {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: #7a90b0;
+  color: #ffffff;
   min-width: 95px;
   flex-shrink: 0;
   white-space: nowrap;
@@ -1193,7 +1192,7 @@
 .peer-row__fill {
   height: 100%;
   border-radius: 2px;
-  background: linear-gradient(90deg, rgba(105,246,184,0.4), rgba(105,246,184,0.75));
+  background: #ffaa00;
   transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 

@@ -666,7 +666,7 @@ export class NetworkMap implements OnInit, OnDestroy {
           .attr('class', (d: any) => (d.connections > 10 ? 'traffic-flow' : ''))
           .attr('stroke', (d: any) => {
             const w = Math.log((d.connections || 1) + 1);
-            return w > 3 ? '#fbbf24' : '#60a5fa80'; // brighter yellow for heavy traffic, brighter blue for normal
+            return w > 3 ? '#ffaa00' : 'rgba(0, 170, 255, 0.4)';
           })
           .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1) * 2, 8)) // Bold edges
           .attr('stroke-linecap', 'round')
@@ -756,24 +756,21 @@ export class NetworkMap implements OnInit, OnDestroy {
                return base + bonus;
             })
             .attr('fill', (d: any) => {
-              if (d.threat) return '#450a0a'; // Deep red bg
-              return d.is_internal ? '#064e3b' : '#09090b'; // Deep emerald or black
+              if (d.threat) return '#450a0a'; // Deep red
+              return d.is_internal ? '#0f5132' : '#0c3b73'; // Dark green / Dark blue
             })
             .attr('stroke', (d: any) => {
               if (d.threat) return '#f87171';
-              return d.is_internal ? '#34d399' : 'rgba(255, 255, 255, 0.4)'; // Crisp thin borders
+              return d.is_internal ? '#34d399' : '#60a5fa'; // Bright strokes
             })
-            .attr('stroke-width', 1.5) // Sleeker node border
+            .attr('stroke-width', 1.5)
             .attr('filter', (d: any) => (d.is_internal ? 'url(#glow)' : ''));
 
           nodeEnter.append('path')
             .attr('d', (d: any) => this.getNodeIconPath(d))
             .attr('transform', (d: any) => (d.type === 'cluster' ? 'translate(-12, -12) scale(1)' : 'translate(-9, -9) scale(0.75)'))
             .attr('fill', 'none')
-            .attr('stroke', (d: any) => {
-              if (d.threat) return '#fca5a5';
-              return d.is_internal ? '#6ee7b7' : '#e2e8f0';
-            })
+            .attr('stroke', '#ffffff')
             .attr('stroke-width', 1.5)
             .attr('stroke-linecap', 'round')
             .attr('stroke-linejoin', 'round')
@@ -794,13 +791,10 @@ export class NetworkMap implements OnInit, OnDestroy {
           nodeEnter.append('text')
             .attr('text-anchor', 'middle')
             .attr('y', 36)
-            .attr('fill', (d: any) => {
-              if (d.threat) return '#fca5a5';
-              return d.is_internal ? '#a7f3d0' : '#fafafa'; 
-            })
-            .attr('font-size', '12px') 
-            .attr('font-weight', '500')
+            .attr('fill', '#ffffff')
+            .attr('font-size', '11.5px')
             .attr('font-family', 'var(--font-sans)')
+            .attr('font-weight', '700')
             .text((d: any) => {
               const t = d.label || d.id;
               if (t.length > 20) return t.substring(0, 18) + '...';
