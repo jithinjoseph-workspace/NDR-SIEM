@@ -2651,6 +2651,30 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         }))
     }
 
+    /// Platform-wide event/hit totals — sums get_stats_by_tenant() across
+    /// every active tenant's own database (see get_severity_all_tenants for
+    /// why this loops instead of a single cross-database query).
+    pub async fn get_stats_all_tenants(&self) -> anyhow::Result<serde_json::Value> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let (mut events_total, mut hits_total, mut events_1h, mut hits_1h) = (0u64, 0u64, 0u64, 0u64);
+        let (mut agent_z, mut agent_s) = (0u64, 0u64);
+        for tid in &tenant_ids {
+            if let Ok(s) = self.get_stats_by_tenant(tid, &[]).await {
+                events_total += s["events_total"].as_u64().unwrap_or(0);
+                hits_total   += s["hits_total"].as_u64().unwrap_or(0);
+                events_1h    += s["events_1h"].as_u64().unwrap_or(0);
+                hits_1h      += s["hits_1h"].as_u64().unwrap_or(0);
+                agent_z      += s["agent_z_events"].as_u64().unwrap_or(0);
+                agent_s      += s["agent_s_events"].as_u64().unwrap_or(0);
+            }
+        }
+        Ok(serde_json::json!({
+            "events_total": events_total, "hits_total": hits_total,
+            "events_1h": events_1h,       "hits_1h": hits_1h,
+            "agent_z_events": agent_z,    "agent_s_events": agent_s,
+        }))
+    }
+
     pub async fn get_recent_events_by_tenant(
         &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -2762,6 +2786,119 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             db = db_name, sf = sf, limit = limit))
             .fetch_all::<(String, u64)>().await.unwrap_or_default();
         Ok(rows)
+    }
+
+    // ── Platform-wide (all-tenant) aggregates for the Super Admin Overview ──
+    // Each pulls a generous per-tenant slice, sums/merges by key across every
+    // tenant's own database, then truncates to the requested limit — so a
+    // count that's only a top offender in one tenant isn't lost before merge.
+
+    pub async fn get_top_protocols_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_top_protocols_by_tenant(50, tid, &[]).await.unwrap_or_default() {
+                let proto = row["proto"].as_str().unwrap_or("").to_string();
+                let cnt   = row["count"].as_u64().unwrap_or(0);
+                if proto.is_empty() { continue; }
+                *totals.entry(proto).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged.into_iter().map(|(proto, count)| serde_json::json!({ "proto": proto, "count": count })).collect())
+    }
+
+    pub async fn get_top_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_top_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+                let ip  = row["ip"].as_str().unwrap_or("").to_string();
+                let cnt = row["count"].as_u64().unwrap_or(0);
+                if ip.is_empty() { continue; }
+                *totals.entry(ip).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged.into_iter().map(|(ip, count)| serde_json::json!({ "ip": ip, "count": count })).collect())
+    }
+
+    pub async fn get_top_dst_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_top_dst_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+                let ip  = row["ip"].as_str().unwrap_or("").to_string();
+                let cnt = row["count"].as_u64().unwrap_or(0);
+                if ip.is_empty() { continue; }
+                *totals.entry(ip).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged.into_iter().map(|(ip, count)| serde_json::json!({ "ip": ip, "count": count })).collect())
+    }
+
+    pub async fn get_top_external_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<(String, u64)>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for (ip, cnt) in self.get_top_external_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+                *totals.entry(ip).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged)
+    }
+
+    pub async fn get_country_attack_tags_all_tenants(&self) -> anyhow::Result<std::collections::HashMap<String, Vec<(String, u64)>>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, std::collections::HashMap<String, u64>> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            if let Ok(per_country) = self.get_country_attack_tags(tid, &[]).await {
+                for (code, tags) in per_country {
+                    let entry = totals.entry(code).or_default();
+                    for (tag, cnt) in tags {
+                        *entry.entry(tag).or_insert(0) += cnt;
+                    }
+                }
+            }
+        }
+        Ok(totals.into_iter().map(|(code, tags)| {
+            let mut v: Vec<(String, u64)> = tags.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            (code, v)
+        }).collect())
+    }
+
+    pub async fn get_threat_intel_hits_all_tenants(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        // Keyed by (src_ip, dst_ip): sum hits, keep the latest last_seen.
+        let mut totals: std::collections::HashMap<(String, String), (u64, String)> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_threat_intel_hits_by_tenant(tid, &[]).await.unwrap_or_default() {
+                let src = row["src_ip"].as_str().unwrap_or("").to_string();
+                let dst = row["dst_ip"].as_str().unwrap_or("").to_string();
+                let hits = row["hits"].as_u64().unwrap_or(0);
+                let last_seen = row["last_seen"].as_str().unwrap_or("").to_string();
+                let entry = totals.entry((src, dst)).or_insert((0, String::new()));
+                entry.0 += hits;
+                if last_seen > entry.1 { entry.1 = last_seen; }
+            }
+        }
+        let mut merged: Vec<((String, String), (u64, String))> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        merged.truncate(50);
+        Ok(merged.into_iter().map(|((src_ip, dst_ip), (hits, last_seen))| serde_json::json!({
+            "src_ip": src_ip, "dst_ip": dst_ip, "hits": hits, "last_seen": last_seen,
+        })).collect())
     }
 
     pub async fn get_public_threat_intel_ip_counts(&self) -> anyhow::Result<Vec<(String, u64)>> {
@@ -3205,6 +3342,45 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::json!({
             "critical": row.0, "high": row.1,
             "medium": row.2,   "low": row.3
+        }))
+    }
+
+    /// Platform-wide severity totals for the Super Admin Overview — sums
+    /// countIf(severity=...) across every active tenant's own ndr_hits
+    /// table (each tenant has a dedicated ndr_<tenant_id> database; the
+    /// default tenant uses the base `ndr` database). A tenant whose DB/table
+    /// isn't provisioned yet (e.g. a partially-created tenant) just
+    /// contributes 0 rather than failing the whole aggregate.
+    pub async fn get_severity_all_tenants(&self) -> anyhow::Result<serde_json::Value> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let (mut critical, mut high, mut medium, mut low) = (0u64, 0u64, 0u64, 0u64);
+        let mut tenants_reporting = 0u32;
+
+        for tid in &tenant_ids {
+            let db = tenant_db(tid);
+            let query = format!(
+                "SELECT \
+                 countIf(lower(severity)='critical') as critical, \
+                 countIf(lower(severity)='high') as high, \
+                 countIf(lower(severity)='medium') as medium, \
+                 countIf(lower(severity)='low') as low \
+                 FROM {db}.ndr_hits",
+                db = db
+            );
+            if let Ok(row) = self.client.query(&query).fetch_one::<(u64, u64, u64, u64)>().await {
+                critical += row.0;
+                high += row.1;
+                medium += row.2;
+                low += row.3;
+                tenants_reporting += 1;
+            }
+        }
+
+        Ok(serde_json::json!({
+            "critical": critical, "high": high,
+            "medium": medium,     "low": low,
+            "tenants_total": tenant_ids.len(),
+            "tenants_reporting": tenants_reporting,
         }))
     }
 

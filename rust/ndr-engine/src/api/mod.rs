@@ -2099,6 +2099,23 @@ pub async fn get_stats(State(state): State<AppState>, headers: axum::http::Heade
     }
 }
 
+// GET /api/admin/stats-all-tenants — platform-wide event/hit totals (super admin only)
+pub async fn get_stats_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    match state.ch_storage.get_stats_all_tenants().await {
+        Ok(stats) => Json(stats),
+        Err(e) => {
+            tracing::warn!("All-tenant stats query error: {}", e);
+            Json(json!({
+                "events_total": 0, "hits_total": 0, "events_1h": 0,
+                "hits_1h": 0, "agent_z_events": 0, "agent_s_events": 0,
+            }))
+        }
+    }
+}
+
 pub async fn get_unified_stats(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
@@ -2207,6 +2224,19 @@ pub async fn get_top_ips(State(state): State<AppState>, headers: axum::http::Hea
     }))
 }
 
+// GET /api/admin/top-ips-all-tenants — platform-wide, merged/summed by IP across every tenant (super admin only)
+pub async fn get_top_ips_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let src = state.ch_storage.get_top_src_ips_all_tenants(10).await.unwrap_or_default();
+    let dst = state.ch_storage.get_top_dst_ips_all_tenants(10).await.unwrap_or_default();
+    Json(json!({
+        "top_src_ips": src,
+        "top_dst_ips": dst,
+    }))
+}
+
 
 pub async fn get_protocols(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let tenant_id = extract_claims(&headers)
@@ -2214,6 +2244,15 @@ pub async fn get_protocols(State(state): State<AppState>, headers: axum::http::H
         .unwrap_or_else(|| "default".to_string());
     let sensor_ids = extract_claims(&headers).map(|c| c.sensor_ids).unwrap_or_default();
     let protos = state.ch_storage.get_top_protocols_by_tenant(5, &tenant_id, &sensor_ids).await.unwrap_or_default();
+    Json(json!({ "protocols": protos }))
+}
+
+// GET /api/admin/protocols-all-tenants — platform-wide protocol distribution (super admin only)
+pub async fn get_protocols_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let protos = state.ch_storage.get_top_protocols_all_tenants(5).await.unwrap_or_default();
     Json(json!({ "protocols": protos }))
 }
 
@@ -2538,6 +2577,66 @@ pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http
     }))
 }
 
+// GET /api/admin/threat-intel-all-tenants — platform-wide threat-intel hits
+// merged across every tenant's own ndr_hits (super admin only). Feed-level
+// summary/sources are already global, only "detected_in_network" and the
+// manual-IOC counts were tenant-scoped before.
+pub async fn get_threat_intel_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let detected = state.ch_storage.get_threat_intel_hits_all_tenants().await.unwrap_or_default();
+    let summary = state.ch_storage.get_threat_intel_summary().await.unwrap_or_else(|_| json!({
+        "unique_ips": 0,
+        "unique_hashes": 0,
+        "unique_domains": 0,
+        "unique_public_ips": 0,
+        "last_refresh": "never",
+    }));
+    let feed_sources = state.ch_storage.get_threat_intel_feed_sources().await.unwrap_or_default();
+
+    let tenant_ids = state.ch_storage.get_all_tenants().await.unwrap_or_default();
+    let mut manual_by_type: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    for tid in &tenant_ids {
+        let manual_iocs = state.ch_storage.get_watchlist_iocs_by_tenant(tid).await.unwrap_or_default();
+        for item in &manual_iocs {
+            let ioc_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if ioc_type.is_empty() || value.is_empty() { continue; }
+            manual_by_type.entry(ioc_type).or_default().insert(value);
+        }
+    }
+
+    let manual_ip_total = manual_by_type.get("ip").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_hash_total = manual_by_type.get("hash").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_domain_total = manual_by_type.get("domain").map(|s| s.len() as u64).unwrap_or(0);
+
+    let total_ips = summary["unique_ips"].as_u64().unwrap_or(0) + manual_ip_total;
+    let total_hashes = summary["unique_hashes"].as_u64().unwrap_or(0) + manual_hash_total;
+    let total_domains = summary["unique_domains"].as_u64().unwrap_or(0) + manual_domain_total;
+
+    let mut merged_sources = feed_sources;
+    for (ioc_type, values) in manual_by_type {
+        merged_sources.push(json!({
+            "source": "manual",
+            "ioc_type": ioc_type,
+            "rows": values.len(),
+            "unique_values": values.len(),
+        }));
+    }
+
+    Json(json!({
+        "total_malicious_ips":     total_ips,
+        "total_malicious_hashes":  total_hashes,
+        "total_malicious_domains": total_domains,
+        "detected_in_network":     detected,
+        "last_refresh":            summary["last_refresh"].as_str().unwrap_or("never"),
+        "refresh_interval":        "Every 60 minutes",
+        "feed_summary":            summary,
+        "sources":                merged_sources,
+    }))
+}
+
 pub async fn get_threat_intel_feed_summary(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
@@ -2619,6 +2718,56 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
 
     let mut countries: Vec<Value> = country_map.into_iter().map(|(country, (code, lat, lon, count))| {
         // attack_tags is keyed by ISO country code (stored in ndr_hits.src_country)
+        let attacks: Vec<Value> = attack_tags.get(&code)
+            .map(|tags| tags.iter().map(|(t, c)| json!({ "tag": t, "count": c })).collect())
+            .unwrap_or_default();
+        json!({ "country": country, "code": code, "lat": lat, "lon": lon, "count": count, "attacks": attacks })
+    }).collect();
+    countries.sort_by(|a, b| b["count"].as_u64().unwrap_or(0).cmp(&a["count"].as_u64().unwrap_or(0)));
+    countries.truncate(15);
+
+    Json(json!({ "countries": countries }))
+}
+
+// GET /api/admin/threat-map-all-tenants — platform-wide attack map, merging
+// raw IP/country counts across every tenant before the geo-lookup + country
+// rollup (super admin only). Mirrors get_threat_map()'s aggregation logic.
+pub async fn get_threat_map_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    let (ip_rows, attack_tags) = tokio::join!(
+        state.ch_storage.get_top_external_src_ips_all_tenants(50),
+        state.ch_storage.get_country_attack_tags_all_tenants()
+    );
+    let ip_rows    = ip_rows.unwrap_or_default();
+    let attack_tags = attack_tags.unwrap_or_default();
+
+    if ip_rows.is_empty() {
+        return Json(json!({ "countries": [] }));
+    }
+
+    let ips: Vec<String> = ip_rows.iter().take(100).map(|(ip, _)| ip.clone()).collect();
+    let geo_results = geo_lookup_batch(&state, &ips).await;
+
+    let count_map: std::collections::HashMap<String, u64> = ip_rows.into_iter().collect();
+
+    let mut country_map: std::collections::HashMap<String, (String, f64, f64, u64)> = std::collections::HashMap::new();
+    for geo in &geo_results {
+        if geo.get("status").and_then(|s| s.as_str()) != Some("success") { continue; }
+        let ip      = geo["query"].as_str().unwrap_or("").to_string();
+        let country = geo["country"].as_str().unwrap_or("Unknown").to_string();
+        let code    = geo["countryCode"].as_str().unwrap_or("XX").to_string();
+        let lat     = geo["lat"].as_f64().unwrap_or(0.0);
+        let lon     = geo["lon"].as_f64().unwrap_or(0.0);
+        let cnt     = count_map.get(&ip).copied().unwrap_or(1);
+        country_map.entry(country.clone())
+            .and_modify(|e| e.3 += cnt)
+            .or_insert((code, lat, lon, cnt));
+    }
+
+    let mut countries: Vec<Value> = country_map.into_iter().map(|(country, (code, lat, lon, count))| {
         let attacks: Vec<Value> = attack_tags.get(&code)
             .map(|tags| tags.iter().map(|(t, c)| json!({ "tag": t, "count": c })).collect())
             .unwrap_or_default();
@@ -4766,6 +4915,25 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
                 "high": 0,
                 "medium": 0,
                 "low": 0
+            }))
+        }
+    }
+}
+
+// GET /api/admin/severity-all-tenants — platform-wide severity totals for
+// the Super Admin Overview (sums every tenant's own hits, not just the
+// caller's own tenant). Super-admin only.
+pub async fn get_severity_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    match state.ch_storage.get_severity_all_tenants().await {
+        Ok(data) => Json(data),
+        Err(e) => {
+            tracing::warn!("All-tenant severity query error: {}", e);
+            Json(json!({
+                "critical": 0, "high": 0, "medium": 0, "low": 0,
+                "tenants_total": 0, "tenants_reporting": 0
             }))
         }
     }
