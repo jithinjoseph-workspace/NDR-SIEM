@@ -104,8 +104,8 @@ export class Engines implements OnInit, OnDestroy {
     this.loadKafkaStatus();
     this.loadPlatformTelemetry();
 
-    this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 8000);
-    this.telemetryTimer = setInterval(() => this.loadPlatformTelemetry(), 4000);
+    this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 10000);
+    this.telemetryTimer = setInterval(() => this.loadPlatformTelemetry(), 10000);
   }
 
   loadPlatformTelemetry() {

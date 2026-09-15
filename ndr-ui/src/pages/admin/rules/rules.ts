@@ -157,11 +157,15 @@ export class AdminRules implements OnInit {
     });
   }
 
+  private searchDebounce: any;
+
   onSearch() {
+    clearTimeout(this.searchDebounce);
     const q = this.searchQuery.trim().toLowerCase();
     if (!q) {
       this.filteredRules = [...this.rules];
       this.displayCount = 20;
+      this.isSearching = false;
       this.cdr.detectChanges();
       return;
     }
@@ -174,13 +178,19 @@ export class AdminRules implements OnInit {
     if (local.length > 0) {
       this.filteredRules = local;
       this.displayCount = 20;
+      this.isSearching = false;
       this.cdr.detectChanges();
       return;
     }
-    // No local match — query backend
+    // No local match — query backend, debounced so a fast typist doesn't
+    // fire one request per keystroke (matches analyst/rules.ts's pattern).
     this.isSearching = true;
     this.filteredRules = [];
     this.cdr.detectChanges();
+    this.searchDebounce = setTimeout(() => this.runBackendSearch(q), 350);
+  }
+
+  private runBackendSearch(q: string) {
     this.api.searchRules(q).subscribe({
       next: (data: any[]) => {
         this.filteredRules = data.map(r => this.mapRule(r));

@@ -67,7 +67,7 @@ export class TenantSupport implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.loadSupportMessages();
-    this.refreshSub = timer(5000, 5000).subscribe(() => this.loadSupportMessages(true));
+    this.refreshSub = timer(10000, 10000).subscribe(() => this.loadSupportMessages(true));
   }
 
   ngOnDestroy(): void {

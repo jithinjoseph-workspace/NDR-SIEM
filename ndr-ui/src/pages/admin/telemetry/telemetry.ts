@@ -57,7 +57,7 @@ export class Telemetry implements OnInit, OnDestroy {
     this.updateClock();
     this.clockInterval = setInterval(() => this.updateClock(), 1000);
     this.loadAllTelemetry();
-    this.pollInterval = setInterval(() => this.pollLiveMetrics(), 4000);
+    this.pollInterval = setInterval(() => this.pollLiveMetrics(), 10000);
   }
 
   ngOnDestroy() {

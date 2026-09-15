@@ -4,7 +4,8 @@ import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
   ChevronDown, ChevronRight, Edit, RefreshCw, Search, Trash2, UserPlus, X,
-  ShieldCheck, Clock, Users as LucideUsers, Layers, Zap, Building2, CheckCircle2, AlertTriangle
+  ShieldCheck, Clock, Users as LucideUsers, Layers, Zap, Building2, CheckCircle2, AlertTriangle,
+  Shield, KeyRound, Mail, User, ChevronLeft, ArrowUpDown
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
@@ -37,6 +38,12 @@ export class Users implements OnInit, OnDestroy {
   Building2Icon      = Building2;
   CheckCircle2Icon   = CheckCircle2;
   AlertTriangleIcon  = AlertTriangle;
+  ShieldIcon         = Shield;
+  KeyRoundIcon       = KeyRound;
+  MailIcon           = Mail;
+  UserIcon           = User;
+  ChevronLeftIcon    = ChevronLeft;
+  ArrowUpDownIcon    = ArrowUpDown;
 
   currentUser: any = {};
 
@@ -147,14 +154,25 @@ export class Users implements OnInit, OnDestroy {
     return Math.max(0, 100 - this.adminPercent - this.tenantAdminPercent - this.analystPercent);
   }
 
-  get managedUsers()      { return this.users.filter(u => u.role !== 'super_admin'); }
+  get managedUsers()      { return this.users; }
   get tenantAdmins()      { return this.users.filter(u => u.role === 'tenant_admin'); }
 
-  get filteredTenantAdmins() {
+  // View Mode & Pagination (Tenant Cards with Member Rosters)
+  viewMode: 'grouped' | 'cards' | 'flat' = 'grouped';
+  tenantsPerPage: number = 3;
+  currentTenantPage: number = 1;
+  flatUsersPerPage: number = 10;
+  currentFlatPage: number = 1;
+
+  get allFilteredUsers() {
     const query = this.userSearch.trim().toLowerCase();
-    return this.managedUsers.filter(u => {
+    return this.users.filter(u => {
       const matchesTenant = this.selectedTenant === 'all' || u.tenant_id === this.selectedTenant;
-      const matchesQuery  = !query || u.username?.toLowerCase().includes(query) || u.role?.toLowerCase().includes(query) || u.tenant_id?.toLowerCase().includes(query);
+      const matchesQuery  = !query || 
+        u.username?.toLowerCase().includes(query) || 
+        u.role?.toLowerCase().includes(query) || 
+        u.tenant_id?.toLowerCase().includes(query) ||
+        (u.gmail && u.gmail.toLowerCase().includes(query));
       
       let matchesRole = true;
       if (this.selectedRoleFilter === 'admin') {
@@ -170,17 +188,116 @@ export class Users implements OnInit, OnDestroy {
     });
   }
 
-  get usersByTenant(): { tenantId: string; tenantName: string; isActive: boolean; users: any[] }[] {
+  get filteredTenantAdmins() {
+    return this.allFilteredUsers;
+  }
+
+  get allUsersByTenant(): { tenantId: string; tenantName: string; isActive: boolean; users: any[] }[] {
     const groups = new Map<string, any[]>();
-    for (const u of this.filteredTenantAdmins) {
+    for (const u of this.allFilteredUsers) {
       const tid = u.tenant_id || 'default';
       if (!groups.has(tid)) groups.set(tid, []);
       groups.get(tid)!.push(u);
     }
     return Array.from(groups.entries()).map(([tenantId, users]) => {
       const tenant = this.tenants.find(t => t.id === tenantId);
-      return { tenantId, tenantName: tenant?.name ?? tenantId, isActive: tenant?.active ?? true, users };
+      return { 
+        tenantId, 
+        tenantName: tenant?.name ?? (tenantId === 'default' ? 'Default Organization' : tenantId), 
+        isActive: tenant?.active ?? true, 
+        users 
+      };
     });
+  }
+
+  get totalTenantPages(): number {
+    return Math.max(1, Math.ceil(this.allUsersByTenant.length / this.tenantsPerPage));
+  }
+
+  get usersByTenant(): { tenantId: string; tenantName: string; isActive: boolean; users: any[] }[] {
+    const start = (this.currentTenantPage - 1) * this.tenantsPerPage;
+    return this.allUsersByTenant.slice(start, start + this.tenantsPerPage);
+  }
+
+  get pagedFlatUsers(): any[] {
+    const start = (this.currentFlatPage - 1) * this.flatUsersPerPage;
+    return this.allFilteredUsers.slice(start, start + this.flatUsersPerPage);
+  }
+
+  get totalFlatPages(): number {
+    return Math.max(1, Math.ceil(this.allFilteredUsers.length / this.flatUsersPerPage));
+  }
+
+  setRoleFilter(role: 'all' | 'admin' | 'tenant_admin' | 'analyst' | 'disabled') {
+    this.selectedRoleFilter = role;
+    this.currentTenantPage = 1;
+    this.currentFlatPage = 1;
+    this.cdr.detectChanges();
+  }
+
+  onFilterChange() {
+    this.currentTenantPage = 1;
+    this.currentFlatPage = 1;
+    this.cdr.detectChanges();
+  }
+
+  setTenantsPerPage(count: number) {
+    this.tenantsPerPage = count;
+    this.currentTenantPage = 1;
+    this.cdr.detectChanges();
+  }
+
+  setFlatUsersPerPage(count: number) {
+    this.flatUsersPerPage = count;
+    this.currentFlatPage = 1;
+    this.cdr.detectChanges();
+  }
+
+  nextTenantPage() {
+    if (this.currentTenantPage < this.totalTenantPages) {
+      this.currentTenantPage++;
+      this.cdr.detectChanges();
+    }
+  }
+
+  prevTenantPage() {
+    if (this.currentTenantPage > 1) {
+      this.currentTenantPage--;
+      this.cdr.detectChanges();
+    }
+  }
+
+  nextFlatPage() {
+    if (this.currentFlatPage < this.totalFlatPages) {
+      this.currentFlatPage++;
+      this.cdr.detectChanges();
+    }
+  }
+
+  prevFlatPage() {
+    if (this.currentFlatPage > 1) {
+      this.currentFlatPage--;
+      this.cdr.detectChanges();
+    }
+  }
+
+  setViewMode(mode: 'flat' | 'grouped' | 'cards') {
+    this.viewMode = mode;
+    this.cdr.detectChanges();
+  }
+
+  getPermissionsCount(user: any): string {
+    if (user.role === 'super_admin' || user.role === 'admin') return 'Full Platform Scope';
+    if (!user.permissions) return 'Standard Access';
+    const perms = user.permissions.split(',').filter((p: string) => p.trim().length > 0);
+    return perms.length > 0 ? `${perms.length} Permissions` : 'Standard Access';
+  }
+
+  getUserAvatarClass(user: any): string {
+    if (user.role === 'super_admin' || user.role === 'admin') return 'avatar--super-admin';
+    if (user.role === 'tenant_admin') return 'avatar--tenant-admin';
+    if (user.role === 'analyst' || user.role === 'senior_analyst') return 'avatar--analyst';
+    return 'avatar--default';
   }
 
   toggleTenantGroup(tenantId: string) {

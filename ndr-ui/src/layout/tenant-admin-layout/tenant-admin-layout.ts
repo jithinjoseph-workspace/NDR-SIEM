@@ -1,6 +1,6 @@
 import {
-  Component, OnInit, OnDestroy, ChangeDetectionStrategy,
-  signal, ViewEncapsulation,
+  Component, OnInit, ChangeDetectionStrategy,
+  signal, ViewEncapsulation, WritableSignal,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
@@ -11,6 +11,7 @@ import {
 } from 'lucide-angular';
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
+import { TenantStatusService } from '../../services/tenant-status/tenant-status';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
@@ -26,7 +27,7 @@ import { Subscription } from 'rxjs';
     '../../pages/tenant-admin/tenant-admin.css',
   ],
 })
-export class TenantAdminLayout implements OnInit, OnDestroy {
+export class TenantAdminLayout implements OnInit {
   UsersIcon         = Users;
   GlobeIcon         = Globe;
   ActivityIcon      = Activity;
@@ -46,7 +47,10 @@ export class TenantAdminLayout implements OnInit, OnDestroy {
   readonly tenantId   = signal('');
   readonly tenantName = signal('Organization');
 
-  readonly tenantSystemStatus = signal<'OPERATIONAL' | 'DEGRADED' | 'CHECKING...'>('CHECKING...');
+  // Shared poll (also used by the navbar) — see TenantStatusService.
+  // Assigned in the constructor body, not as a field initializer: field
+  // initializers can run before constructor-injected properties are set.
+  readonly tenantSystemStatus: WritableSignal<'OPERATIONAL' | 'DEGRADED' | 'CHECKING...'>;
 
   readonly updateAvailable  = signal(false);
   readonly currentVersion   = signal('');
@@ -57,13 +61,14 @@ export class TenantAdminLayout implements OnInit, OnDestroy {
   readonly message          = signal('');
   readonly messageType      = signal<'success' | 'error'>('success');
 
-  private statusInterval: ReturnType<typeof setInterval> | null = null;
-
   constructor(
     private api: Api,
     private auth: AuthService,
     private router: Router,
-  ) {}
+    private tenantStatusService: TenantStatusService,
+  ) {
+    this.tenantSystemStatus = this.tenantStatusService.status;
+  }
 
   ngOnInit() {
     const user = this.auth.getUser() || {};
@@ -76,13 +81,11 @@ export class TenantAdminLayout implements OnInit, OnDestroy {
     }
 
     this.hasSiem = this.auth.hasFeature('siem');
-    this.refreshTenantSystemStatus();
-    this.statusInterval = setInterval(() => this.refreshTenantSystemStatus(), 10000);
+    // Idempotent — no-ops if the navbar (or a prior mount of this layout)
+    // already started it. Shared for the whole session, not torn down in
+    // ngOnDestroy below, since the navbar depends on it too.
+    this.tenantStatusService.startPolling();
     this.checkForUpdates();
-  }
-
-  ngOnDestroy() {
-    if (this.statusInterval) clearInterval(this.statusInterval);
   }
 
   checkForUpdates() {
@@ -103,10 +106,8 @@ export class TenantAdminLayout implements OnInit, OnDestroy {
     this.updateApplying.set(true);
     this.updateMessage.set('');
 
-    if (this.statusInterval) { clearInterval(this.statusInterval); this.statusInterval = null; }
-    const resumePolling = () => {
-      this.statusInterval = setInterval(() => this.refreshTenantSystemStatus(), 10000);
-    };
+    this.tenantStatusService.stopPolling();
+    const resumePolling = () => this.tenantStatusService.startPolling();
 
     this.api.applyUpdate().subscribe({
       next: (data: any) => {
@@ -141,37 +142,6 @@ export class TenantAdminLayout implements OnInit, OnDestroy {
         resumePolling();
       }
     });
-  }
-
-  private refreshTenantSystemStatus() {
-    this.api.getSensorKeys().subscribe({
-      next: (sensors: any[]) => {
-        const healthyPipeline = sensors.length === 0 ||
-          sensors.some(s =>
-            s.active !== false &&
-            (this.isRunning(s['agent-z']) || this.isRunning(s['agent-s']) || this.isRunning(s.vector))
-          );
-
-        this.api.getDashboardStats().subscribe({
-          next: data => {
-            const svc = data?.services || {};
-            const platformHealthy =
-              this.isRunning(svc.kafka) &&
-              this.isRunning(svc.clickhouse) &&
-              this.isRunning(svc.engine || 'running');
-            this.tenantSystemStatus.set(healthyPipeline && platformHealthy ? 'OPERATIONAL' : 'DEGRADED');
-          },
-          error: () => { this.tenantSystemStatus.set('DEGRADED'); },
-        });
-      },
-      error: () => { this.tenantSystemStatus.set('DEGRADED'); },
-    });
-  }
-
-  private isRunning(status: unknown) {
-    const value = String(status || '').toLowerCase().trim();
-    if (['running', 'healthy', 'ok', 'up', 'active', 'started', 'unknown'].includes(value)) return true;
-    return /^\d+$/.test(value);
   }
 
   showMessage(message: string, type: 'success' | 'error') {
