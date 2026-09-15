@@ -105,11 +105,36 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
+LOG_FILE="/var/log/ndr/install-customer-$(date +%Y%m%d-%H%M%S).log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null && touch "$LOG_FILE" 2>/dev/null \
+  || LOG_FILE="/tmp/ndr-install-customer-$(date +%Y%m%d-%H%M%S).log"
+touch "$LOG_FILE" 2>/dev/null || true
+
 # ── Log helpers ───────────────────────────────
 log()  { echo -e "  ${GREEN}[+]${NC} $1"; }
 warn() { echo -e "  ${YELLOW}[!]${NC} $1"; }
-err()  { echo -e "  ${RED}[x]${NC} $1"; exit 1; }
+err()  { echo -e "  ${RED}[x]${NC} $1"; echo "[$(date '+%Y-%m-%d %H:%M:%S')] FATAL $1" >> "$LOG_FILE" 2>/dev/null; exit 1; }
 info() { echo -e "  ${BLUE}[>]${NC} $1"; }
+
+# record_error <component> <what went wrong> <how to fix it>
+# Use instead of a bare warn() for anything that leaves a component
+# non-functional but shouldn't abort the whole install — logs a structured,
+# timestamped line to $LOG_FILE (survives a scrolled/closed terminal) in
+# addition to the on-screen warning.
+record_error() {
+    local component="$1" detail="$2" hint="$3"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR component=\"$component\" detail=\"$detail\" fix=\"$hint\"" >> "$LOG_FILE" 2>/dev/null
+    warn "$component: $detail"
+    [ -n "$hint" ] && warn "  → Fix: $hint"
+}
+
+# This script runs as a normal user and prefixes individual privileged
+# commands with sudo — validate sudo access up front instead of letting a
+# no-sudo user hit a wall deep inside the script at whatever the first
+# `sudo` command happens to be.
+if [ "$(id -u)" -ne 0 ] && ! sudo -v 2>/dev/null; then
+  err "This script needs sudo access to install Docker/system packages. Add this user to the sudoers group, or re-run as root."
+fi
 hdr()  {
     echo -e ""
     echo -e "  ${CYAN}${BOLD}┌─────────────────────────────────────────────┐${NC}"
@@ -118,7 +143,7 @@ hdr()  {
 }
 
 # ── Banner ────────────────────────────────────
-clear
+clear 2>/dev/null || true  # fails under set -e without a TTY/TERM (e.g. non-interactive/CI runs)
 printf "\n"
 printf "  ${CYAN}╔══════════════════════════════════════════════╗${NC}\n"
 printf "  ${CYAN}║${NC}                                              ${CYAN}║${NC}\n"
@@ -664,6 +689,18 @@ mkdir -p "$HOME_DIR/ndr-config"
 sudo mkdir -p /opt/ndr/pcap /opt/ndr/evidence
 sudo chmod -R 755 /opt/ndr
 sudo chown -R "$USER:$USER" /opt/ndr
+
+# The vector container bind-mounts ${HOME_DIR}/.vector/vector.toml as a
+# read-only file — if that path doesn't exist yet, Docker auto-creates it
+# as a directory instead, and the container then fails to start with a
+# confusing "not a directory" mount error. A prior failed install run can
+# leave exactly that bad directory behind, so a plain re-run needs to
+# replace it, not just skip because "something" is already there.
+mkdir -p "$HOME_DIR/.vector/data"
+[ -d "$HOME_DIR/.vector/vector.toml" ] && rmdir "$HOME_DIR/.vector/vector.toml" 2>/dev/null
+if [ ! -f "$HOME_DIR/.vector/vector.toml" ]; then
+    cp "$INSTALL_DIR/config/vector.toml" "$HOME_DIR/.vector/vector.toml"
+fi
 log "Runtime directories created"
 
 # ── Detect host IP ────────────────────────────
@@ -819,19 +856,41 @@ step "Container Runtime  (Docker)"
 log "Installing Docker..."
 sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
 sudo apt-get update -qq 2>/dev/null || true
-sudo apt-get install -y ca-certificates curl gnupg lsb-release
+sudo apt-get install -y ca-certificates curl gnupg lsb-release 2>/tmp/ndr_cust_err \
+  || err "Could not install ca-certificates/curl/gnupg/lsb-release ($(cat /tmp/ndr_cust_err 2>/dev/null)) — check network connectivity and re-run."
 
 sudo mkdir -p /etc/apt/keyrings
 sudo rm -f /etc/apt/keyrings/docker.gpg
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg 2>/tmp/ndr_cust_err \
+    | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>>/tmp/ndr_cust_err \
+    || err "Could not fetch/import the Docker repo signing key ($(cat /tmp/ndr_cust_err 2>/dev/null)) — check internet access to download.docker.com (443)."
+rm -f /tmp/ndr_cust_err
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
 DOCKER_CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
 case "$DOCKER_CODENAME" in
-    resolute|oracular|*)
-        if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
-               --max-time 5 -o /dev/null 2>/dev/null; then
+    jammy|noble|focal)
+        # Well-established codenames Docker's repo definitely carries —
+        # skip the network check entirely so a transient blip can't wrongly
+        # trigger a fallback (see the * arm below for why that matters).
+        ;;
+    *)
+        # Unknown/bleeding-edge codename (e.g. resolute, oracular) — verify
+        # Docker's repo actually has it, with one retry so a single transient
+        # network blip doesn't wrongly fall back to noble: noble's packages
+        # need a newer glibc than older codenames ship, so a bad fallback
+        # here silently breaks the whole Docker install with a confusing
+        # "unmet dependencies" error much later instead of failing here.
+        REACHABLE=0
+        for _try in 1 2; do
+            if curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_CODENAME}/InRelease" \
+                   --max-time 5 -o /dev/null 2>/dev/null; then
+                REACHABLE=1
+                break
+            fi
+            sleep 2
+        done
+        if [ "$REACHABLE" != "1" ]; then
             log "Docker repo not available for '${DOCKER_CODENAME}' — falling back to noble"
             DOCKER_CODENAME="noble"
         fi
@@ -846,7 +905,9 @@ echo \
     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 sudo apt-get update -qq 2>/dev/null || true
 sudo apt-get install -y docker-ce docker-ce-cli \
-    containerd.io docker-buildx-plugin docker-compose-plugin
+    containerd.io docker-buildx-plugin docker-compose-plugin 2>/tmp/ndr_cust_err \
+    || err "Docker package install failed ($(cat /tmp/ndr_cust_err 2>/dev/null)) — check network connectivity and re-run."
+rm -f /tmp/ndr_cust_err
 log "Docker installed"
 
 sudo mkdir -p /etc/docker
@@ -861,7 +922,10 @@ sudo modprobe br_netfilter 2>/dev/null || true
 echo -e "overlay\nbr_netfilter" | sudo tee /etc/modules-load.d/docker.conf > /dev/null
 
 log "Starting Docker service..."
-sudo systemctl enable docker
+sudo systemctl enable docker 2>/tmp/ndr_cust_err \
+  || record_error "Docker" "systemctl enable docker failed ($(cat /tmp/ndr_cust_err 2>/dev/null))" \
+    "Is this host running under real systemd? Docker may still start manually: sudo dockerd &"
+rm -f /tmp/ndr_cust_err
 sudo systemctl start docker || true
 sudo usermod -aG docker "$USERNAME"
 # Socket stays at default 660 (root:docker) — engine containers run as root and have access
@@ -1017,9 +1081,11 @@ sudo docker compose --profile onpremise down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
 log "Pulling pre-built images..."
-sudo docker pull "${REGISTRY}/ndr-engine:latest"
-sudo docker pull "${REGISTRY}/provigil-auth:latest"
-sudo docker pull "${REGISTRY}/ndr-ui:latest"
+for IMG in ndr-engine provigil-auth ndr-ui; do
+  sudo docker pull "${REGISTRY}/${IMG}:latest" 2>/tmp/ndr_cust_err \
+    || err "Could not pull ${REGISTRY}/${IMG}:latest ($(cat /tmp/ndr_cust_err 2>/dev/null)) — check the registry token and network access, then re-run."
+done
+rm -f /tmp/ndr_cust_err
 
 # Write a compose override that replaces build: with the pre-built image
 cat > "$INSTALL_DIR/docker-compose.customer.yml" << OVERRIDE
@@ -1041,11 +1107,14 @@ OVERRIDE
 if [ "$DEPLOY_MODE" = "hybrid" ]; then
     log "Hybrid mode — using cloud: $CLOUD_KAFKA"
     sudo docker compose -f docker-compose.yml -f docker-compose.customer.yml \
-        --profile onpremise up -d vector ndr-engine-1 nginx ndr-ui
+        --profile onpremise up -d vector ndr-engine-1 nginx ndr-ui 2>/tmp/ndr_cust_err \
+        || err "docker compose up failed ($(cat /tmp/ndr_cust_err 2>/dev/null)) — check: sudo docker compose logs"
 else
     sudo docker compose -f docker-compose.yml -f docker-compose.customer.yml \
-        --profile onpremise up -d
+        --profile onpremise up -d 2>/tmp/ndr_cust_err \
+        || err "docker compose up failed ($(cat /tmp/ndr_cust_err 2>/dev/null)) — check: sudo docker compose logs"
 fi
+rm -f /tmp/ndr_cust_err
 log "Docker stack started"
 
 if [ "$DEPLOY_MODE" = "local" ]; then
@@ -1062,31 +1131,44 @@ if [ "$DEPLOY_MODE" = "local" ]; then
 
     if [ "${CH_NEEDS_IMPORT:-false}" = "true" ] && [ -d "/home/user/ch-export" ]; then
         log "Importing exported ClickHouse data into Docker container..."
-        bash "$INSTALL_DIR/scripts/ch-import.sh"
-        log "Data migration complete"
+        if bash "$INSTALL_DIR/scripts/ch-import.sh"; then
+            log "Data migration complete"
+        else
+            record_error "ClickHouse Import" "ch-import.sh exited with an error — pre-existing data may not be fully migrated" \
+                "Re-run manually once the stack is confirmed healthy: bash $INSTALL_DIR/scripts/ch-import.sh"
+        fi
     fi
 fi
 
 log "Configuring Kafka retention..."
 sleep 15
-sudo docker exec kafka1 \
+if sudo docker exec kafka1 \
     /opt/kafka/bin/kafka-configs.sh \
     --bootstrap-server localhost:9092 \
     --alter --entity-type topics \
     --entity-name ndr-events \
     --add-config retention.ms=86400000 \
-    2>/dev/null || true
-log "Kafka retention set to 24 hours"
+    2>/tmp/ndr_cust_err; then
+  log "Kafka retention set to 24 hours"
+else
+  record_error "Kafka" "setting retention.ms failed ($(cat /tmp/ndr_cust_err 2>/dev/null))" \
+    "Non-fatal — topic still works with the broker default retention."
+fi
 
 log "Creating Kafka topic with 3 partitions..."
-sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh \
+if sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:9092 \
     --create --if-not-exists \
     --topic ndr-events \
     --partitions 3 \
     --replication-factor 3 \
-    2>/dev/null || true
-log "Kafka topic ready"
+    2>/tmp/ndr_cust_err; then
+  log "Kafka topic ready"
+else
+  record_error "Kafka" "topic creation failed ($(cat /tmp/ndr_cust_err 2>/dev/null))" \
+    "Run manually once Kafka is confirmed healthy: sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic ndr-events --partitions 3 --replication-factor 3"
+fi
+rm -f /tmp/ndr_cust_err
 
 # ══════════════════════════════════════════════
 step "Search Index  (OpenSearch)"
@@ -1206,11 +1288,18 @@ TimeoutStartSec=300
 WantedBy=multi-user.target
 EOF
 
-sudo systemctl daemon-reload
-sudo systemctl enable ndr.service
-sudo systemctl enable --now ndr-updater.service
-log "NDR auto-start on boot enabled"
-log "NDR update watcher installed and running"
+if sudo systemctl daemon-reload 2>/tmp/ndr_cust_err; then
+  sudo systemctl enable ndr.service 2>/dev/null || true
+  log "NDR auto-start on boot enabled"
+else
+  record_error "Service Setup" "systemctl daemon-reload failed ($(cat /tmp/ndr_cust_err 2>/dev/null))" \
+    "Is this host running under real systemd? The Docker stack is already up regardless — this only affects auto-start-on-reboot."
+fi
+sudo systemctl enable --now ndr-updater.service 2>/tmp/ndr_cust_err \
+  && log "NDR update watcher installed and running" \
+  || record_error "Service Setup" "ndr-updater.service could not be started ($(cat /tmp/ndr_cust_err 2>/dev/null))" \
+    "Non-fatal — the platform runs fine without it, just won't auto-update. Check: sudo systemctl status ndr-updater"
+rm -f /tmp/ndr_cust_err
 
 # ══════════════════════════════════════════════
 step "Verification"

@@ -159,6 +159,7 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - CLICKHOUSE_DB=ndr
       - VALKEY_URL=redis://ndr-valkey:6379
+      - REDIS_URL=redis://ndr-valkey:6379
       - TOKEN_TTL_SECS=3600
       - REFRESH_TTL_SECS=604800
       - LISTEN_ADDR=0.0.0.0:3001
@@ -201,6 +202,7 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - CLICKHOUSE_DB=ndr
       - VALKEY_URL=redis://ndr-valkey:6379
+      - REDIS_URL=redis://ndr-valkey:6379
       - KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
       - IP_TOKEN_KEY=${IP_TOKEN_KEY}
       - LISTEN_ADDR=0.0.0.0:3002
@@ -222,6 +224,7 @@ services:
   ndr-engine-1:
     build: ./rust
     container_name: ndr-engine-1
+    hostname: ndr-engine-1
     restart: unless-stopped
     mem_limit: 1536m
     env_file:
@@ -238,7 +241,9 @@ services:
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - INSTANCE_ID=1
+      - ENGINE_NAME=ndr-engine-1
       - VALKEY_URL=redis://ndr-valkey:6379
+      - REDIS_URL=redis://ndr-valkey:6379
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
       - HOST_INSTALL_DIR=${INSTALL_DIR}
@@ -291,6 +296,7 @@ services:
   ndr-engine-2:
     build: ./rust
     container_name: ndr-engine-2
+    hostname: ndr-engine-2
     restart: unless-stopped
     mem_limit: 1536m
     env_file:
@@ -307,7 +313,9 @@ services:
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - INSTANCE_ID=2
+      - ENGINE_NAME=ndr-engine-2
       - VALKEY_URL=redis://ndr-valkey:6379
+      - REDIS_URL=redis://ndr-valkey:6379
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
       - HOST_INSTALL_DIR=${INSTALL_DIR}
@@ -360,6 +368,7 @@ services:
   ndr-engine-3:
     build: ./rust
     container_name: ndr-engine-3
+    hostname: ndr-engine-3
     restart: unless-stopped
     mem_limit: 1536m
     env_file:
@@ -376,7 +385,9 @@ services:
       - CLICKHOUSE_USER=ndr
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - INSTANCE_ID=3
+      - ENGINE_NAME=ndr-engine-3
       - VALKEY_URL=redis://ndr-valkey:6379
+      - REDIS_URL=redis://ndr-valkey:6379
       - INSTALL_DIR=${INSTALL_DIR}
       - RULES_DIR=/app/ndr-engine/rules
       - HOST_INSTALL_DIR=${INSTALL_DIR}

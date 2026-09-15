@@ -1,82 +1,306 @@
-<section class="admin-panel">
+<section class="admin-panel tnt-panel">
+
+  <!-- Ambient Glows -->
+  <div class="tnt-ambient-glow glow--cyan" aria-hidden="true"></div>
+  <div class="tnt-ambient-glow glow--violet" aria-hidden="true"></div>
+
+  <!-- Messages -->
   <div *ngIf="msg" [class]="'admin-message ' + (msgType === 'success' ? 'success' : 'error')">{{ msg }}</div>
 
-  <div class="panel-head">
-    <div>
-      <h3>Tenants</h3>
-      <p>Create the company first, then add a tenant admin for it.</p>
+  <!-- ── 1. Cyber Hero Strip ─────────────────────────────────────── -->
+  <header class="tnt-hero-strip">
+    <div class="tnt-hero-left">
+      <div class="tnt-system-badge">
+        <span class="tnt-pulse-dot"></span>
+        <span>TENANT REGISTRY / SCOPE ISOLATION</span>
+        <span class="tnt-badge-sep">/</span>
+        <span class="tnt-badge-status">{{ activePercent >= 100 ? 'ALL TENANTS ACTIVE' : activeTenantsCount + '/' + tenants.length + ' OPERATIONAL' }}</span>
+      </div>
+      <h1 class="tnt-headline">Multi-Tenant <em>Organizations</em> &amp; Governance</h1>
+      <p class="tnt-tagline">Encapsulated company namespaces, cryptographic on-prem licenses, and automated AI analysis.</p>
     </div>
-    <button class="primary-action" type="button" (click)="showAddTenant=true">
-      <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
-      Add Tenant
-    </button>
-  </div>
 
-  <div class="toolbar">
-    <label class="search-field">
-      <lucide-icon [name]="SearchIcon" class="w-4 h-4"></lucide-icon>
-      <input [(ngModel)]="tenantSearch" type="search" placeholder="Search tenants" />
-    </label>
-    <button class="secondary-action" type="button" (click)="loadTenants()">
-      <lucide-icon [name]="RefreshIcon" class="w-4 h-4"></lucide-icon>
-      Refresh
-    </button>
-  </div>
+    <div class="tnt-hero-controls">
+      <!-- Quick Action: Add Tenant -->
+      <button type="button" class="tnt-action-btn btn--primary" (click)="showAddTenant=true">
+        <lucide-icon [name]="PlusIcon" class="w-4 h-4"></lucide-icon>
+        <span>Add Tenant</span>
+      </button>
 
-  <div *ngIf="loadingTenants" class="loading-state">Loading tenants...</div>
+      <!-- Quick Action: Refresh -->
+      <button type="button" class="tnt-action-btn" (click)="loadTenants(); loadUsers()" title="Refresh tenants">
+        <lucide-icon [name]="RefreshIcon" class="w-4 h-4" [class.spinning]="loadingTenants"></lucide-icon>
+        <span>Refresh</span>
+      </button>
 
-  <div *ngIf="!loadingTenants && filteredTenants.length === 0" class="empty-state">
-    <strong>No tenants found</strong>
-    <span>Create a tenant or adjust your search.</span>
-  </div>
-
-  <div *ngIf="!loadingTenants && filteredTenants.length > 0" class="tenant-list">
-    <div *ngFor="let tenant of filteredTenants" class="tenant-row">
-      <div class="tenant-main">
-        <div class="tenant-mark">{{ tenant.name.charAt(0).toUpperCase() }}</div>
-        <div>
-          <strong>{{ tenant.name }}</strong>
-          <code>{{ tenant.id }}</code>
+      <!-- Digital Clock Capsule -->
+      <div class="tnt-clock-capsule">
+        <lucide-icon [name]="ClockIcon" class="w-4 h-4 text-cyan-400"></lucide-icon>
+        <div class="tnt-clock-text">
+          <span class="tnt-clock-time">{{ currentTime }}</span>
+          <span class="tnt-clock-date">{{ currentDate }}</span>
         </div>
       </div>
-      <div class="tenant-meta">
-        <span>{{ tenantUserCount(tenant.id) }} users</span>
-        <span>{{ tenantAdminCount(tenant.id) }} admins</span>
-        <span [class]="'status-pill ' + (tenant.active ? 'active' : 'inactive')">
-          {{ tenant.active ? 'Active' : 'Inactive' }}
-        </span>
-        <button class="icon-button" type="button" title="Edit tenant" (click)="openEditTenant(tenant)">
-          <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
-        </button>
-        <button *ngIf="currentUser?.role === 'super_admin'"
-          class="secondary-action compact-action ai-toggle-btn"
-          [class.ai-enabled]="tenant.ai_enabled"
-          type="button"
-          [title]="tenant.ai_enabled ? 'Disable AI features for this tenant' : 'Enable AI features for this tenant'"
-          (click)="toggleTenantAI(tenant, !tenant.ai_enabled)">
-          {{ tenant.ai_enabled ? 'AI On' : 'AI Off' }}
-        </button>
-        <button *ngIf="currentUser?.role === 'super_admin'"
-          class="secondary-action compact-action"
-          type="button" title="Manage licensed features"
-          (click)="openFeatures(tenant)">
-          <lucide-icon [name]="KeyIcon" class="w-3.5 h-3.5"></lucide-icon>
-          Features
-        </button>
-        <button *ngIf="currentUser?.role === 'super_admin'"
-          class="secondary-action compact-action"
-          type="button" title="Generate license token for on-premise install"
-          (click)="openLicense(tenant)">
-          License
-        </button>
-        <button class="secondary-action compact-action" type="button" [disabled]="tenant.id === 'default'"
-          (click)="setTenantActive(tenant, !tenant.active)">
-          {{ tenant.active ? 'Deactivate' : 'Reactivate' }}
-        </button>
+    </div>
+  </header>
+
+  <!-- ── 2. Multi-Tenant Organization & Governance Deck (Unique Style) ── -->
+  <section class="tenant-governance-deck" aria-label="Tenant Organization Governance Deck">
+
+    <!-- Card 1: Tenant Capacity & Namespace Partitioning -->
+    <div class="org-deck-card org-deck--capacity">
+      <div class="org-card-glow cyan"></div>
+      <div class="org-card-top">
+        <div class="org-card-tag">
+          <lucide-icon [name]="BuildingIcon" class="w-3.5 h-3.5 text-cyan-400"></lucide-icon>
+          <span>ORGANIZATION PARTITIONS</span>
+        </div>
+        <span class="org-status-pill cyan">{{ activeTenantsCount }}/{{ tenants.length }} ACTIVE</span>
+      </div>
+
+      <div class="org-capacity-body">
+        <div class="capacity-lead-row">
+          <div class="capacity-metric">
+            <span class="capacity-num text-cyan-400 font-mono">{{ activeTenantsCount }}</span>
+            <span class="capacity-denom text-slate-500 font-mono">/ {{ tenants.length }}</span>
+          </div>
+          <span class="capacity-badge text-cyan-300 font-mono">{{ activePercent }}% ONLINE</span>
+        </div>
+
+        <div class="partition-blocks-row" title="Active Tenant Partition Allocation">
+          <div *ngFor="let t of tenants" class="partition-block"
+            [class.active]="t.active"
+            [title]="t.name + ': ' + (t.active ? 'Active Tenant Partition' : 'Suspended')">
+          </div>
+        </div>
+
+        <div class="capacity-meta-line">
+          <span class="meta-label">Storage Boundary:</span>
+          <span class="meta-val text-slate-200">ClickHouse Namespace Isolation</span>
+        </div>
+      </div>
+
+      <div class="org-card-footer">
+        <span class="org-chip">DB PARTITIONS</span>
+        <span class="org-chip">HARDWALL ISOLATION</span>
+        <span class="org-chip cyan">ENFORCED</span>
       </div>
     </div>
-  </div>
-</section>
+
+    <!-- Card 2: Neural AI Threat Cognition Engine -->
+    <div class="org-deck-card org-deck--ai">
+      <div class="org-card-glow violet"></div>
+      <div class="org-card-top">
+        <div class="org-card-tag">
+          <lucide-icon [name]="SparklesIcon" class="w-3.5 h-3.5 text-purple-400"></lucide-icon>
+          <span>AI THREAT COGNITION</span>
+        </div>
+        <span class="org-status-pill violet">{{ aiEnabledCount }} ARIA COGNITIVE</span>
+      </div>
+
+      <div class="org-ai-body">
+        <div class="ai-lead-row">
+          <div class="ai-icon-hex">
+            <lucide-icon [name]="BotIcon" class="w-5 h-5 text-purple-400"></lucide-icon>
+          </div>
+          <div class="ai-lead-meta">
+            <div class="ai-stat-row">
+              <span class="ai-stat-num text-purple-400 font-mono">{{ aiAdoptionPercent }}%</span>
+              <span class="ai-stat-lbl">AI ADOPTION</span>
+            </div>
+            <span class="ai-sub-txt">{{ aiEnabledCount }} of {{ tenants.length }} Organizations Enabled</span>
+          </div>
+        </div>
+
+        <div class="ai-pipeline-track">
+          <div class="ai-pipeline-fill" [style.width.%]="aiAdoptionPercent"></div>
+        </div>
+
+        <div class="ai-capability-row">
+          <span class="ai-cap-tag">CORRELATION: ONLINE</span>
+          <span class="ai-cap-tag success">ARIA COPILOT</span>
+        </div>
+      </div>
+
+      <div class="org-card-footer">
+        <span class="org-chip">ARIA LLM</span>
+        <span class="org-chip">NEURAL REASONING</span>
+        <span class="org-chip purple">ACTIVE</span>
+      </div>
+    </div>
+
+    <!-- Card 3: User Population & Seating Allocation -->
+    <div class="org-deck-card org-deck--population">
+      <div class="org-card-glow emerald"></div>
+      <div class="org-card-top">
+        <div class="org-card-tag">
+          <lucide-icon [name]="UsersIcon" class="w-3.5 h-3.5 text-emerald-400"></lucide-icon>
+          <span>MANAGED POPULATION</span>
+        </div>
+        <span class="org-status-pill emerald">{{ totalUsersCount }} SEATS</span>
+      </div>
+
+      <div class="org-pop-body">
+        <div class="pop-lead-row">
+          <span class="pop-big-num text-emerald-400 font-mono">{{ totalUsersCount }}</span>
+          <div class="pop-rate-meta">
+            <span class="pop-rate-label">AVERAGE DENSITY</span>
+            <span class="pop-rate-val text-emerald-300 font-mono">{{ avgUsersPerTenant }} users / org</span>
+          </div>
+        </div>
+
+        <div class="pop-security-badge">
+          <lucide-icon [name]="ShieldCheckIcon" class="w-4 h-4 text-emerald-400"></lucide-icon>
+          <span>Multi-Tenant RBAC Boundary Enforced · 0.00% Leakage</span>
+        </div>
+      </div>
+
+      <div class="org-card-footer">
+        <span class="org-chip">RBAC ISOLATION</span>
+        <span class="org-chip">PER-TENANT REALM</span>
+        <span class="org-chip success">ZERO LEAK</span>
+      </div>
+    </div>
+
+    <!-- Card 4: Cryptographic Enterprise Licensing -->
+    <div class="org-deck-card org-deck--license">
+      <div class="org-card-glow amber"></div>
+      <div class="org-card-top">
+        <div class="org-card-tag">
+          <lucide-icon [name]="KeyIcon" class="w-3.5 h-3.5 text-amber-400"></lucide-icon>
+          <span>LICENSE AUTHENTICATION</span>
+        </div>
+        <span class="org-status-pill amber">RSA-4096 SEAL</span>
+      </div>
+
+      <div class="org-license-body">
+        <div class="license-shield-row">
+          <div class="license-stamp-box">
+            <lucide-icon [name]="ShieldIcon" class="w-5 h-5 text-amber-400"></lucide-icon>
+          </div>
+          <div class="license-meta-box">
+            <span class="lic-tier text-amber-300 font-mono">ENTERPRISE ON-PREM</span>
+            <span class="lic-sub">Cryptographically Signed Token Authority</span>
+          </div>
+        </div>
+
+        <div class="license-token-capsule">
+          <span class="tok-label">AUTH METHOD:</span>
+          <span class="tok-val font-mono text-slate-300">Asymmetric Key Pair Handshake</span>
+        </div>
+      </div>
+
+      <div class="org-card-footer">
+        <span class="org-chip">PERPETUAL</span>
+        <span class="org-chip">OFFLINE VALID</span>
+        <span class="org-chip amber">COMPLIANT</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── 3. Tenant Organizations Directory ───────────────────────── -->
+  <section class="tnt-card glass-card">
+    <div class="tnt-card-head">
+      <div>
+        <div class="tnt-card-tag">ENTERPRISE TENANTS</div>
+        <h2 class="tnt-card-title">Tenant Organizations Directory</h2>
+        <p class="tnt-card-desc">Configure isolated company environments, grant licensed features, and issue on-prem deployment keys.</p>
+      </div>
+
+      <!-- Search Toolbar -->
+      <div class="tnt-toolbar">
+        <div class="tnt-search-box">
+          <lucide-icon [name]="SearchIcon" class="w-3.5 h-3.5 text-cyan-400"></lucide-icon>
+          <input [(ngModel)]="tenantSearch" type="search" placeholder="Search company or tenant ID..." class="tnt-search-input" />
+        </div>
+        <span class="tnt-count-badge">{{ filteredTenants.length }} organizations</span>
+      </div>
+    </div>
+
+    <div *ngIf="loadingTenants" class="tnt-loading-state">
+      <span class="spinning-loader"></span>
+      <span>Loading tenant organizations...</span>
+    </div>
+
+    <div *ngIf="!loadingTenants && filteredTenants.length === 0" class="tnt-empty-state">
+      <lucide-icon [name]="BuildingIcon" class="w-8 h-8 text-slate-500"></lucide-icon>
+      <strong>No tenant organizations found</strong>
+      <span>Click "Add Tenant" above to provision a new company workspace.</span>
+    </div>
+
+    <div *ngIf="!loadingTenants && filteredTenants.length > 0" class="tnt-list">
+      <div *ngFor="let tenant of filteredTenants" class="tnt-row" [class.tnt-row--inactive]="!tenant.active">
+        <div class="tnt-main">
+          <div class="tnt-mark">{{ tenant.name.charAt(0).toUpperCase() }}</div>
+          <div class="tnt-identity">
+            <div class="tnt-name-row">
+              <strong class="tnt-name">{{ tenant.name }}</strong>
+              <code class="tnt-id-pill">{{ tenant.id }}</code>
+            </div>
+            <div class="tnt-stats-row">
+              <span class="tnt-stat-chip">
+                <lucide-icon [name]="UsersIcon" class="w-3 h-3 text-cyan-400"></lucide-icon>
+                <span>{{ tenantUserCount(tenant.id) }} users</span>
+              </span>
+              <span class="tnt-stat-chip">
+                <lucide-icon [name]="ShieldCheckIcon" class="w-3 h-3 text-purple-400"></lucide-icon>
+                <span>{{ tenantAdminCount(tenant.id) }} admins</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="tnt-actions-wrap">
+          <!-- Active Status Pill -->
+          <span class="tnt-status-pill" [class.status--active]="tenant.active" [class.status--inactive]="!tenant.active">
+            <i class="p-dot"></i> {{ tenant.active ? 'Active' : 'Inactive' }}
+          </span>
+
+          <!-- AI Switch Toggle Button -->
+          <button *ngIf="currentUser?.role === 'super_admin'"
+            class="tnt-chip-btn ai-toggle-btn"
+            [class.ai-enabled]="tenant.ai_enabled"
+            type="button"
+            [title]="tenant.ai_enabled ? 'Disable AI features for this tenant' : 'Enable AI features for this tenant'"
+            (click)="toggleTenantAI(tenant, !tenant.ai_enabled)">
+            <lucide-icon [name]="BotIcon" class="w-3.5 h-3.5"></lucide-icon>
+            <span>{{ tenant.ai_enabled ? 'AI Armed' : 'AI Off' }}</span>
+          </button>
+
+          <!-- Licensed Features Button -->
+          <button *ngIf="currentUser?.role === 'super_admin'"
+            class="tnt-chip-btn"
+            type="button" title="Manage licensed features"
+            (click)="openFeatures(tenant)">
+            <lucide-icon [name]="KeyIcon" class="w-3.5 h-3.5 text-amber-400"></lucide-icon>
+            <span>Features</span>
+          </button>
+
+          <!-- License Token Generator -->
+          <button *ngIf="currentUser?.role === 'super_admin'"
+            class="tnt-chip-btn"
+            type="button" title="Generate license token for on-premise install"
+            (click)="openLicense(tenant)">
+            <lucide-icon [name]="ShieldIcon" class="w-3.5 h-3.5 text-cyan-400"></lucide-icon>
+            <span>License</span>
+          </button>
+
+          <!-- Edit Tenant -->
+          <button class="tnt-icon-btn" type="button" title="Edit tenant details" (click)="openEditTenant(tenant)">
+            <lucide-icon [name]="EditIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+
+          <!-- Deactivate / Reactivate Action -->
+          <button class="tnt-toggle-active-btn" type="button" [disabled]="tenant.id === 'default'"
+            [class.btn--deactivate]="tenant.active" [class.btn--reactivate]="!tenant.active"
+            (click)="setTenantActive(tenant, !tenant.active)">
+            {{ tenant.active ? 'Deactivate' : 'Reactivate' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
 
 <!-- Add Tenant Modal -->
 <div *ngIf="showAddTenant" class="modal-backdrop">

@@ -1,9 +1,10 @@
-import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
   Edit, Plus, RefreshCw, Search, X, KeyRound, Copy, Trash2,
+  Building2, ShieldCheck, Users, Sparkles, Clock, CheckCircle2, AlertTriangle, Layers, Zap, Bot, Shield, Globe
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
@@ -17,15 +18,27 @@ import { AuthService } from '../../../services/auth/auth';
   templateUrl: './tenants.html',
   styleUrl: './tenants.css',
 })
-export class Tenants implements OnInit {
-  EditIcon    = Edit;
-  PlusIcon    = Plus;
-  RefreshIcon = RefreshCw;
-  SearchIcon  = Search;
-  XIcon       = X;
-  KeyIcon     = KeyRound;
-  CopyIcon    = Copy;
-  TrashIcon   = Trash2;
+export class Tenants implements OnInit, OnDestroy {
+  EditIcon        = Edit;
+  PlusIcon        = Plus;
+  RefreshIcon     = RefreshCw;
+  SearchIcon      = Search;
+  XIcon           = X;
+  KeyIcon         = KeyRound;
+  CopyIcon        = Copy;
+  TrashIcon       = Trash2;
+  BuildingIcon    = Building2;
+  ShieldCheckIcon = ShieldCheck;
+  UsersIcon       = Users;
+  SparklesIcon    = Sparkles;
+  ClockIcon       = Clock;
+  CheckCircleIcon = CheckCircle2;
+  AlertTriangleIcon = AlertTriangle;
+  LayersIcon      = Layers;
+  ZapIcon         = Zap;
+  BotIcon         = Bot;
+  ShieldIcon      = Shield;
+  GlobeIcon       = Globe;
 
   currentUser: any = {};
 
@@ -59,16 +72,63 @@ export class Tenants implements OnInit {
   msg     = '';
   msgType = '';
 
+  currentTime = '';
+  currentDate = '';
+  private clockTimer: any = null;
+
   constructor(
     private api: Api,
     private auth: AuthService,
     private cdr: ChangeDetectorRef,
   ) {}
 
+  Math = Math;
+
+  get activeTenantsCount(): number {
+    return this.tenants.filter(t => t.active).length;
+  }
+
+  get aiEnabledCount(): number {
+    return this.tenants.filter(t => t.ai_enabled).length;
+  }
+
+  get aiAdoptionPercent(): number {
+    if (!this.tenants.length) return 0;
+    return Math.round((this.aiEnabledCount / this.tenants.length) * 100);
+  }
+
+  get totalUsersCount(): number {
+    return this.users.filter(u => u.role !== 'super_admin').length;
+  }
+
+  get avgUsersPerTenant(): string {
+    if (!this.tenants.length) return '0.0';
+    return (this.totalUsersCount / this.tenants.length).toFixed(1);
+  }
+
+  get activePercent(): number {
+    if (!this.tenants.length) return 100;
+    return Math.round((this.activeTenantsCount / this.tenants.length) * 100);
+  }
+
+  private updateClock() {
+    const now = new Date();
+    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    this.cdr.detectChanges();
+  }
+
   ngOnInit() {
+    this.updateClock();
+    this.clockTimer = setInterval(() => this.updateClock(), 1000);
+
     this.currentUser = this.auth.getUser();
     this.loadTenants();
     this.loadUsers();
+  }
+
+  ngOnDestroy() {
+    if (this.clockTimer) clearInterval(this.clockTimer);
   }
 
   loadTenants() {

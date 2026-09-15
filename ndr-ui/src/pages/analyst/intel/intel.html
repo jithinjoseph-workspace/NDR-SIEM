@@ -91,10 +91,6 @@
       Watchlist
       <span *ngIf="watchlist.length > 0" class="tab-count">{{ watchlist.length }}</span>
     </button>
-    <button class="intel-tab" [class.active]="activeTab === 'feeds'"     (click)="switchTab('feeds')">
-      <lucide-icon [name]="DatabaseIcon" class="w-3.5 h-3.5"></lucide-icon>
-      Feed Sources
-    </button>
     <button class="intel-tab" [class.active]="activeTab === 'geo'"       (click)="switchTab('geo')">
       <lucide-icon [name]="GlobeIcon" class="w-3.5 h-3.5"></lucide-icon>
       Geo Intel
@@ -350,86 +346,6 @@
             </tr>
           </tbody>
         </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════════════════════════════════
-       TAB: FEED SOURCES
-       ══════════════════════════════════════════════════════════════════════ -->
-  <div *ngIf="activeTab === 'feeds'" class="intel-tab-body">
-
-    <div class="feed-cards-grid">
-      <div *ngFor="let feed of feedSources" class="feed-card">
-        <div class="feed-card-header">
-          <div class="feed-type-dot">{{ feedTypeIcon(feed.type) }}</div>
-          <div>
-            <div class="feed-name">{{ feed.name }}</div>
-            <div class="feed-type-label">{{ feed.type }}</div>
-          </div>
-          <span class="feed-status-pill">
-            <span class="status-dot"></span>
-            LIVE
-          </span>
-        </div>
-        <div class="feed-stat">
-          <div class="feed-count">{{ feedCount(feed.type).toLocaleString() }}</div>
-          <div class="feed-count-label">active indicators</div>
-        </div>
-        <div class="feed-footer">
-          <span class="feed-refresh-info">
-            <lucide-icon [name]="RefreshIcon" class="w-3 h-3"></lucide-icon>
-            Every 60 minutes
-          </span>
-          <a [href]="feed.url" target="_blank" rel="noopener" class="feed-url-link">
-            {{ feed.url | slice:8:40 }}…
-            <lucide-icon [name]="ExternalLinkIcon" class="w-3 h-3"></lucide-icon>
-          </a>
-        </div>
-      </div>
-
-      <!-- Fallback if backend returns no sources -->
-      <div *ngIf="feedSources.length === 0" class="feed-card">
-        <div class="feed-card-header">
-          <div class="feed-type-dot">🔴</div>
-          <div>
-            <div class="feed-name">Feodo Tracker</div>
-            <div class="feed-type-label">IP</div>
-          </div>
-          <span class="feed-status-pill"><span class="status-dot"></span>LIVE</span>
-        </div>
-        <div class="feed-stat">
-          <div class="feed-count">{{ totalMaliciousIps.toLocaleString() }}</div>
-          <div class="feed-count-label">active indicators</div>
-        </div>
-        <div class="feed-footer">
-          <span class="feed-refresh-info"><lucide-icon [name]="RefreshIcon" class="w-3 h-3"></lucide-icon>Every 60 minutes</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Feed info box -->
-    <div class="intel-card feed-info-box">
-      <div class="intel-card-header">
-        <span class="section-eyebrow">ABOUT THREAT FEEDS</span>
-      </div>
-      <div class="feed-info-grid">
-        <div class="feed-info-item">
-          <div class="feed-info-label">Feodo Tracker</div>
-          <div class="feed-info-desc">Tracks botnet C&C servers (Emotet, TrickBot, QakBot, AgentTesla, etc.). Updated multiple times per day.</div>
-        </div>
-        <div class="feed-info-item">
-          <div class="feed-info-label">MalwareBazaar</div>
-          <div class="feed-info-desc">Crowdsourced malware sample hashes (MD5/SHA256). Cross-referenced against traffic to detect known malware downloads.</div>
-        </div>
-        <div class="feed-info-item">
-          <div class="feed-info-label">URLhaus</div>
-          <div class="feed-info-desc">Malicious URLs and domains hosting malware. Used to detect drive-by downloads and C2 communications via DNS.</div>
-        </div>
-      </div>
-      <div class="feed-last-refresh">
-        <lucide-icon [name]="RefreshIcon" class="w-3 h-3"></lucide-icon>
-        Last feed refresh: {{ lastRefresh || 'Unknown' }}
       </div>
     </div>
   </div>

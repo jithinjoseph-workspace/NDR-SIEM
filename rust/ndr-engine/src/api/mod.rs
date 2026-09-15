@@ -46,6 +46,8 @@ use crate::storage::clickhouse::sql_escape;
 use axum::{extract::{State, Query}, Json, http::StatusCode};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::net::IpAddr;
+use std::str::FromStr;
 use tokio::sync::broadcast;
 use tracing::{debug, info, trace, warn};
 use std::env;
@@ -106,6 +108,33 @@ async fn geo_lookup_batch(state: &AppState, ips: &[String]) -> Vec<Value> {
     }
 
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_ip_candidate;
+
+    #[test]
+    fn public_ip_filter_keeps_only_external_addresses() {
+        assert!(is_public_ip_candidate("8.8.8.8"));
+        assert!(is_public_ip_candidate("1.1.1.1"));
+        assert!(!is_public_ip_candidate("192.168.1.70"));
+        assert!(!is_public_ip_candidate("10.0.0.5"));
+        assert!(!is_public_ip_candidate("172.16.0.1"));
+        assert!(!is_public_ip_candidate("127.0.0.1"));
+    }
+}
+
+fn is_public_ip_candidate(ip: &str) -> bool {
+    let trimmed = ip.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    match IpAddr::from_str(trimmed) {
+        Ok(addr) => !crate::enrichment::is_private_ip(&addr.to_string()),
+        Err(_) => false,
+    }
 }
 
 fn agent_url() -> String {
@@ -213,6 +242,9 @@ pub struct AppState {
     // Cached Kafka reachability — updated every 30s by a background spawn_blocking task.
     // The health endpoint reads this instead of blocking a Tokio thread on fetch_metadata.
     pub kafka_healthy: Arc<AtomicBool>,
+    // SOAR dedupe cache: incident_key -> last trigger time (prevents repeated actions
+    // for the same attacker/target pattern within the SOAR window).
+    pub soar_dedupe: Arc<dashmap::DashMap<String, std::time::Instant>>,
     // Update availability, refreshed every 6h from the GitHub VERSION file.
     // None when running in cloud mode (DEPLOY_MODE=cloud) or before first check.
     pub update_status: Arc<tokio::sync::RwLock<UpdateStatus>>,
@@ -2454,34 +2486,94 @@ pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
     let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
-    let ti = &state.enrichment.threat_intel;
     let detected = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id, &sensor_ids).await
         .unwrap_or_default();
+    let summary = state.ch_storage.get_threat_intel_summary().await.unwrap_or_else(|_| json!({
+        "unique_ips": 0,
+        "unique_hashes": 0,
+        "unique_domains": 0,
+        "unique_public_ips": 0,
+        "last_refresh": "never",
+    }));
+    let feed_sources = state.ch_storage.get_threat_intel_feed_sources().await.unwrap_or_default();
+
+    let manual_iocs = state.ch_storage.get_watchlist_iocs_by_tenant(&tenant_id).await.unwrap_or_default();
+    let mut manual_by_type: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    for item in &manual_iocs {
+        let ioc_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if ioc_type.is_empty() || value.is_empty() {
+            continue;
+        }
+        manual_by_type.entry(ioc_type.clone()).or_default().insert(value);
+    }
+
+    let manual_ip_total = manual_by_type.get("ip").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_hash_total = manual_by_type.get("hash").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_domain_total = manual_by_type.get("domain").map(|s| s.len() as u64).unwrap_or(0);
+
+    let total_ips = summary["unique_ips"].as_u64().unwrap_or(0) + manual_ip_total;
+    let total_hashes = summary["unique_hashes"].as_u64().unwrap_or(0) + manual_hash_total;
+    let total_domains = summary["unique_domains"].as_u64().unwrap_or(0) + manual_domain_total;
+
+    let mut merged_sources = feed_sources;
+    for (ioc_type, values) in manual_by_type {
+        merged_sources.push(json!({
+            "source": "manual",
+            "ioc_type": ioc_type,
+            "rows": values.len(),
+            "unique_values": values.len(),
+        }));
+    }
 
     Json(json!({
-        "total_malicious_ips":     ti.ip_count(),
-        "total_malicious_hashes":  ti.hash_count(),
-        "total_malicious_domains": ti.domain_count(),
+        "total_malicious_ips":     total_ips,
+        "total_malicious_hashes":  total_hashes,
+        "total_malicious_domains": total_domains,
         "detected_in_network":     detected,
-        "last_refresh": ti.last_refresh_iso(),
-        "refresh_interval": "Every 60 minutes",
-        "sources": [
-            {
-                "name": "Feodo Tracker",
-                "type": "IP",
-                "url":  "https://feodotracker.abuse.ch"
-            },
-            {
-                "name": "MalwareBazaar",
-                "type": "File Hash",
-                "url":  "https://bazaar.abuse.ch"
-            },
-            {
-                "name": "URLhaus",
-                "type": "Domain/URL",
-                "url":  "https://urlhaus.abuse.ch"
-            }
-        ]
+        "last_refresh":            summary["last_refresh"].as_str().unwrap_or("never"),
+        "refresh_interval":        "Every 60 minutes",
+        "feed_summary":            summary,
+        "sources":                merged_sources,
+    }))
+}
+
+pub async fn get_threat_intel_feed_summary(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
+    let summary = state.ch_storage.get_threat_intel_summary().await.unwrap_or_else(|_| json!({
+        "unique_ips": 0,
+        "unique_hashes": 0,
+        "unique_domains": 0,
+        "unique_public_ips": 0,
+        "last_refresh": "never",
+    }));
+    let feed_sources = state.ch_storage.get_threat_intel_feed_sources().await.unwrap_or_default();
+    let manual_iocs = state.ch_storage.get_watchlist_iocs_by_tenant(&tenant_id).await.unwrap_or_default();
+
+    let mut manual_by_type: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    for item in &manual_iocs {
+        let ioc_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if ioc_type.is_empty() || value.is_empty() {
+            continue;
+        }
+        manual_by_type.entry(ioc_type).or_default().insert(value);
+    }
+
+    let mut merged_sources = feed_sources;
+    for (ioc_type, values) in manual_by_type {
+        merged_sources.push(json!({
+            "source": "manual",
+            "ioc_type": ioc_type,
+            "rows": values.len(),
+            "unique_values": values.len(),
+        }));
+    }
+
+    Json(json!({
+        "summary": summary,
+        "sources": merged_sources,
     }))
 }
 
@@ -2538,45 +2630,55 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
     Json(json!({ "countries": countries }))
 }
 
-// Threat Intel Map — geo-locate detected threat intel IPs by country
+// Threat Intel Map — geo-locate public malicious IPs from the actual IOC feed.
 pub async fn get_threat_intel_map(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
-    let claims = extract_claims(&headers);
-    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
-    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
-
-    let detected = state.ch_storage.get_threat_intel_hits_by_tenant(&tenant_id, &sensor_ids).await
-        .unwrap_or_default();
-    if detected.is_empty() {
+    let _claims = extract_claims(&headers);
+    let rows = state.ch_storage.get_public_threat_intel_ip_counts().await.unwrap_or_default();
+    if rows.is_empty() {
         return Json(json!({ "countries": [] }));
     }
 
     let mut ip_hits: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    for h in &detected {
-        if let Some(ip) = h["src_ip"].as_str() {
-            if !ip.is_empty() {
-                *ip_hits.entry(ip.to_string()).or_default() += h["hits"].as_u64().unwrap_or(1);
-            }
+    for (ip, count) in rows {
+        if !is_public_ip_candidate(&ip) {
+            continue;
         }
+        *ip_hits.entry(ip).or_default() += count;
     }
     if ip_hits.is_empty() {
         return Json(json!({ "countries": [] }));
     }
 
-    let ips: Vec<String> = ip_hits.keys().take(100).cloned().collect();
+    let ips: Vec<String> = ip_hits.keys().take(200).cloned().collect();
     let geo_results = geo_lookup_batch(&state, &ips).await;
+    let geo_index: std::collections::HashMap<String, Value> = geo_results
+        .into_iter()
+        .filter(|g| g.get("status").and_then(|s| s.as_str()) == Some("success"))
+        .filter_map(|g| {
+            let query = g["query"].as_str().unwrap_or("").to_string();
+            if query.is_empty() { None } else { Some((query, g)) }
+        })
+        .collect();
 
     let mut country_map: std::collections::HashMap<String, (String, f64, f64, u64, u64, Vec<String>)> =
         std::collections::HashMap::new();
-    for geo in &geo_results {
-        if geo.get("status").and_then(|s| s.as_str()) != Some("success") { continue; }
-        let ip       = geo["query"].as_str().unwrap_or("").to_string();
-        let country  = geo["country"].as_str().unwrap_or("Unknown").to_string();
-        let code     = geo["countryCode"].as_str().unwrap_or("XX").to_string();
-        let lat      = geo["lat"].as_f64().unwrap_or(0.0);
-        let lon      = geo["lon"].as_f64().unwrap_or(0.0);
-        let hits     = ip_hits.get(&ip).copied().unwrap_or(1);
+
+    for (ip, hits) in ip_hits {
+        let Some(geo) = geo_index.get(&ip) else {
+            continue;
+        };
+
+        let country = geo["country"].as_str().unwrap_or("Unknown").to_string();
+        let code = geo["countryCode"].as_str().unwrap_or("XX").to_string();
+        let lat = geo["lat"].as_f64().unwrap_or(0.0);
+        let lon = geo["lon"].as_f64().unwrap_or(0.0);
+
         country_map.entry(code.clone())
-            .and_modify(|e| { e.3 += 1; e.4 += hits; e.5.push(ip.clone()); })
+            .and_modify(|e| {
+                e.3 += 1;
+                e.4 += hits;
+                e.5.push(ip.clone());
+            })
             .or_insert((country, lat, lon, 1, hits, vec![ip]));
     }
 
@@ -2591,6 +2693,7 @@ pub async fn get_threat_intel_map(State(state): State<AppState>, headers: axum::
             "ips":       ips,
         }))
         .collect();
+
     countries.sort_by(|a, b| b["hit_count"].as_u64().unwrap_or(0).cmp(&a["hit_count"].as_u64().unwrap_or(0)));
     Json(json!({ "countries": countries }))
 }
@@ -9163,10 +9266,11 @@ pub async fn get_leader_status(
         return Json(json!({"error": "unauthorized"}));
     }
 
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let redis_url = std::env::var("VALKEY_URL")
+        .or_else(|_| std::env::var("REDIS_URL"))
+        .unwrap_or_else(|_| "redis://ndr-valkey:6379".to_string());
 
-    let (current_leader, ttl_ms) = match redis::Client::open(redis_url) {
+    let (current_leader, ttl_ms) = match redis::Client::open(redis_url.clone()) {
         Ok(client) => {
             match client.get_multiplexed_async_connection().await {
                 Ok(mut conn) => {
@@ -9182,16 +9286,22 @@ pub async fn get_leader_status(
                         .unwrap_or(-1);
                     (leader, ttl)
                 }
-                Err(_) => (None, -1),
+                Err(e) => {
+                    tracing::warn!("Failed to get multiplexed async connection to {}: {}", redis_url, e);
+                    (None, -1)
+                }
             }
         }
-        Err(_) => (None, -1),
+        Err(e) => {
+            tracing::warn!("Failed to open redis client for {}: {}", redis_url, e);
+            (None, -1)
+        }
     };
 
     Json(json!({
         "current_leader":  current_leader.unwrap_or_else(|| "none".to_string()),
         "ttl_ms":          ttl_ms,
-        "ttl_seconds":     if ttl_ms > 0 { ttl_ms / 1000 } else { -1 },
+        "ttl_seconds":     if ttl_ms > 0 { ttl_ms / 1000 } else { 0 },
         "leader_key":      "ndr:threat_leader",
         "election_info":   "Leader renewed every 10s, TTL=30s, failover < 30s",
     }))

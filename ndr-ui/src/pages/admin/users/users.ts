@@ -1,9 +1,10 @@
-import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
   ChevronDown, ChevronRight, Edit, RefreshCw, Search, Trash2, UserPlus, X,
+  ShieldCheck, Clock, Users as LucideUsers, Layers, Zap, Building2, CheckCircle2, AlertTriangle
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
@@ -17,15 +18,25 @@ import { AuthService } from '../../../services/auth/auth';
   templateUrl: './users.html',
   styleUrl: './users.css',
 })
-export class Users implements OnInit {
-  ChevronDownIcon  = ChevronDown;
-  ChevronRightIcon = ChevronRight;
-  EditIcon         = Edit;
-  RefreshIcon      = RefreshCw;
-  SearchIcon       = Search;
-  TrashIcon        = Trash2;
-  UserPlusIcon     = UserPlus;
-  XIcon            = X;
+export class Users implements OnInit, OnDestroy {
+  Math = Math;
+
+  ChevronDownIcon    = ChevronDown;
+  ChevronRightIcon   = ChevronRight;
+  EditIcon           = Edit;
+  RefreshIcon        = RefreshCw;
+  SearchIcon         = Search;
+  TrashIcon          = Trash2;
+  UserPlusIcon       = UserPlus;
+  XIcon              = X;
+  ShieldCheckIcon    = ShieldCheck;
+  ClockIcon          = Clock;
+  UsersIcon          = LucideUsers;
+  LayersIcon         = Layers;
+  ZapIcon            = Zap;
+  Building2Icon      = Building2;
+  CheckCircle2Icon   = CheckCircle2;
+  AlertTriangleIcon  = AlertTriangle;
 
   currentUser: any = {};
 
@@ -35,8 +46,13 @@ export class Users implements OnInit {
   showAddUser     = false;
   userSearch      = '';
   selectedTenant  = 'all';
+  selectedRoleFilter: 'all' | 'admin' | 'tenant_admin' | 'analyst' | 'disabled' = 'all';
   pendingDeleteUser: any = null;
   editingUser: any       = null;
+
+  currentTime = '';
+  currentDate = '';
+  private clockTimer: any = null;
 
   newUser = { username: '', password: '', role: 'tenant_admin', tenant_id: '', gmail: '' };
   userForm = { role: 'tenant_admin', tenant_id: '', active: true, password: '', permissions: '' };
@@ -67,8 +83,25 @@ export class Users implements OnInit {
 
   ngOnInit() {
     this.currentUser = this.auth.getUser();
+    this.updateTime();
+    this.clockTimer = setInterval(() => {
+      this.updateTime();
+      this.cdr.detectChanges();
+    }, 1000);
     this.loadUsers();
     this.loadTenants();
+  }
+
+  ngOnDestroy() {
+    if (this.clockTimer) {
+      clearInterval(this.clockTimer);
+    }
+  }
+
+  private updateTime() {
+    const now = new Date();
+    this.currentTime = now.toTimeString().split(' ')[0] + ' UTC';
+    this.currentDate = now.toISOString().split('T')[0];
   }
 
   loadUsers() {
@@ -86,6 +119,34 @@ export class Users implements OnInit {
     });
   }
 
+  get totalUsersCount() { return this.users.length; }
+  get activeUsersCount() { return this.users.filter(u => u.active !== false && !this.isTenantInactive(u.tenant_id)).length; }
+  get superAdminCount() { return this.users.filter(u => u.role === 'super_admin' || u.role === 'admin').length; }
+  get tenantAdminCount() { return this.users.filter(u => u.role === 'tenant_admin').length; }
+  get analystCount() { return this.users.filter(u => u.role === 'analyst' || u.role === 'senior_analyst').length; }
+  get disabledCount() { return this.users.filter(u => u.active === false || this.isTenantInactive(u.tenant_id)).length; }
+  get activePercent() { return this.users.length ? Math.round((this.activeUsersCount / this.users.length) * 100) : 100; }
+
+  get otherRolesCount() {
+    return Math.max(0, this.totalUsersCount - this.superAdminCount - this.tenantAdminCount - this.analystCount);
+  }
+
+  get adminPercent() {
+    return this.totalUsersCount ? Math.round((this.superAdminCount / this.totalUsersCount) * 100) : 0;
+  }
+
+  get tenantAdminPercent() {
+    return this.totalUsersCount ? Math.round((this.tenantAdminCount / this.totalUsersCount) * 100) : 0;
+  }
+
+  get analystPercent() {
+    return this.totalUsersCount ? Math.round((this.analystCount / this.totalUsersCount) * 100) : 0;
+  }
+
+  get otherPercent() {
+    return Math.max(0, 100 - this.adminPercent - this.tenantAdminPercent - this.analystPercent);
+  }
+
   get managedUsers()      { return this.users.filter(u => u.role !== 'super_admin'); }
   get tenantAdmins()      { return this.users.filter(u => u.role === 'tenant_admin'); }
 
@@ -94,7 +155,18 @@ export class Users implements OnInit {
     return this.managedUsers.filter(u => {
       const matchesTenant = this.selectedTenant === 'all' || u.tenant_id === this.selectedTenant;
       const matchesQuery  = !query || u.username?.toLowerCase().includes(query) || u.role?.toLowerCase().includes(query) || u.tenant_id?.toLowerCase().includes(query);
-      return matchesTenant && matchesQuery;
+      
+      let matchesRole = true;
+      if (this.selectedRoleFilter === 'admin') {
+        matchesRole = u.role === 'admin' || u.role === 'super_admin';
+      } else if (this.selectedRoleFilter === 'tenant_admin') {
+        matchesRole = u.role === 'tenant_admin';
+      } else if (this.selectedRoleFilter === 'analyst') {
+        matchesRole = u.role === 'analyst' || u.role === 'senior_analyst';
+      } else if (this.selectedRoleFilter === 'disabled') {
+        matchesRole = u.active === false || this.isTenantInactive(u.tenant_id);
+      }
+      return matchesTenant && matchesQuery && matchesRole;
     });
   }
 

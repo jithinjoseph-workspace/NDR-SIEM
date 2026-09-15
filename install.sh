@@ -102,20 +102,65 @@ step() {
 }
 
 # ── Fix APT sources ───────────────────────────
+validate_ubuntu_codename() {
+    local candidate="${1:-}"
+    [ -n "$candidate" ] || return 1
+    curl -fsSL --max-time 8 "https://archive.ubuntu.com/ubuntu/dists/${candidate}/InRelease" > /dev/null 2>&1
+}
+
+resolve_ubuntu_codename() {
+    local candidate="${1:-}"
+    local fallback=""
+
+    if [ -n "$candidate" ] && validate_ubuntu_codename "$candidate"; then
+        echo "$candidate"
+        return 0
+    fi
+
+    case "${UBUNTU_MAJOR_VER:-}" in
+        24) fallback="noble" ;;
+        23) fallback="lunar" ;;
+        22) fallback="jammy" ;;
+        21) fallback="impish" ;;
+        20) fallback="focal" ;;
+        19) fallback="disco" ;;
+        18) fallback="bionic" ;;
+        17) fallback="zesty" ;;
+        16) fallback="xenial" ;;
+        15) fallback="wily" ;;
+        14) fallback="trusty" ;;
+        *) fallback="" ;;
+    esac
+
+    if [ -n "$fallback" ] && validate_ubuntu_codename "$fallback"; then
+        echo "$fallback"
+        return 0
+    fi
+
+    return 1
+}
+
 UBUNTU_CODENAME=$(. /etc/os-release 2>/dev/null && echo "$VERSION_CODENAME")
 UBUNTU_CODENAME=${UBUNTU_CODENAME:-$(lsb_release -cs 2>/dev/null)}
 UBUNTU_CODENAME=${UBUNTU_CODENAME:-$(grep -oP "(?<=UBUNTU_CODENAME=).+" /etc/os-release 2>/dev/null)}
 UBUNTU_MAJOR_VER=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID}" | cut -d. -f1)
-log "Ubuntu ${UBUNTU_CODENAME} (${UBUNTU_MAJOR_VER}.x) detected"
+
+if [ -n "$UBUNTU_CODENAME" ]; then
+    UBUNTU_CODENAME=$(resolve_ubuntu_codename "$UBUNTU_CODENAME" 2>/dev/null || echo "$UBUNTU_CODENAME")
+fi
+
+if [ -z "$UBUNTU_CODENAME" ]; then
+    UBUNTU_CODENAME="noble"
+    warn "Detected Ubuntu codename is unsupported or unreachable; using fallback codename 'noble'"
+fi
+
+log "Ubuntu ${UBUNTU_CODENAME} (${UBUNTU_MAJOR_VER:-unknown}.x) detected"
 
 if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
     log "ubuntu.sources found — clearing sources.list to avoid duplicates"
     sudo truncate -s 0 /etc/apt/sources.list
 else
     log "Writing sources.list for Ubuntu ${UBUNTU_CODENAME}..."
-    # Probe the security repo first — new Ubuntu releases (e.g. 26.04 "resolute")
-    # often lack it for weeks after launch, and adding a missing repo makes every
-    # subsequent apt-get update/install exit non-zero, killing the script via set -e.
     SECURITY_REPO_LINE=""
     if curl -fsSL --max-time 8 \
         "https://security.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-security/InRelease" \

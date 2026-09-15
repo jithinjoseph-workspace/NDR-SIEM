@@ -388,7 +388,7 @@ impl AuthDb {
             features: String, created_at: String,
         }
         let q = "SELECT id, name, active, ai_enabled, \
-                        coalesce(features,'[\"ndr\"]') AS features, \
+                        coalesce(features,'ndr') AS features, \
                         toString(created_at) AS created_at \
                  FROM tenants FINAL ORDER BY created_at DESC";
         let mut cur = self.client.query(q).fetch::<Row>()?;
@@ -404,12 +404,87 @@ impl AuthDb {
     }
 
     pub async fn create_tenant(&self, id: &str, name: &str) -> Result<()> {
+        // 1) global registry row
+        // features is stored comma-separated (e.g. "ndr,ai"), matching the
+        // column's own schema default and every existing tenant row — NOT a
+        // JSON array string, which get_tenant_features()'s comma-split
+        // parser (and has_feature()) can't read back correctly.
         let q = format!(
             "INSERT INTO tenants (id, name, active, ai_enabled, updated_at, created_at, features) \
-             VALUES ('{}', '{}', 1, 0, now(), now(), '[\"ndr\"]')",
+             VALUES ('{}', '{}', 1, 0, now(), now(), 'ndr')",
             escape(id), escape(name)
         );
         self.client.query(&q).execute().await?;
+
+        // 2) dedicated tenant database + tenant-specific schema
+        let db_name = format!("ndr_{}", id.replace('-', "_"));
+        self.client
+            .query(&format!(
+                "CREATE DATABASE IF NOT EXISTS {} ON CLUSTER ndr_cluster",
+                db_name
+            ))
+            .execute()
+            .await?;
+
+        let install_dir = std::env::var("INSTALL_DIR").unwrap_or_else(|_| ".".to_string());
+        let paths = vec![
+            "/app/config/clickhouse/init.sql".to_string(),
+            format!("{}/config/clickhouse/init.sql", install_dir),
+            "./config/clickhouse/init.sql".to_string(),
+        ];
+
+        let mut sql_content = None;
+        for sql_path in &paths {
+            if let Ok(sql) = std::fs::read_to_string(sql_path) {
+                sql_content = Some(sql);
+                break;
+            }
+        }
+
+        if let Some(sql) = sql_content {
+            for stmt in sql.split(';') {
+                let stmt = stmt.trim()
+                    .lines()
+                    .filter(|l| !l.trim().starts_with("--"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_string();
+
+                if stmt.is_empty() {
+                    continue;
+                }
+
+                if stmt.contains("CREATE DATABASE IF NOT EXISTS ndr")
+                    || stmt.contains("ndr.users")
+                    || stmt.contains("ndr.tenants")
+                    || stmt.contains("ndr.announcements")
+                    || stmt.contains("ndr.announcement_reads")
+                    || stmt.contains("ndr.rules_state")
+                    || stmt.contains("ndr.shared_iocs")
+                {
+                    continue;
+                }
+
+                let mut tenant_stmt = stmt.replace("ndr.", &format!("{}.", db_name));
+                tenant_stmt = tenant_stmt.replace(
+                    "/clickhouse/tables/{shard}/ndr/",
+                    &format!("/clickhouse/tables/{{shard}}/{}/", db_name),
+                );
+                tenant_stmt = tenant_stmt.replace("DEFAULT 'default'", &format!("DEFAULT '{}'", id));
+
+                if let Err(e) = self.client.query(&tenant_stmt).execute().await {
+                    tracing::warn!(
+                        "Dynamic tenant schema warning for {}: {}. Error: {}",
+                        db_name, tenant_stmt, e
+                    );
+                }
+            }
+            tracing::info!("✅ Tenant DB created and initialized: {}", db_name);
+        } else {
+            tracing::warn!("init.sql not found while provisioning tenant DB {}", db_name);
+        }
+
         Ok(())
     }
 

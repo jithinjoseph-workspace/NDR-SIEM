@@ -478,6 +478,7 @@ async fn main() {
                 .collect()
         }),
         kafka_healthy,
+        soar_dedupe: Arc::new(dashmap::DashMap::new()),
         update_status: Arc::new(tokio::sync::RwLock::new(api::UpdateStatus {
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
@@ -523,12 +524,20 @@ async fn main() {
     // Fix background refresh — refresh NOW then every 60 min
 {
     let ti = ti_ref.clone();
+    let ch_storage = ch_storage_arc.clone();
     tokio::spawn(async move {
         loop {
-            ti.refresh().await;  // ← refresh first
+            ti.refresh().await;
+            let snapshot_entries = ti.snapshot_entries("runtime_refresh");
+            if !snapshot_entries.is_empty() {
+                match ch_storage.persist_threat_intel_entries(snapshot_entries).await {
+                    Ok(inserted) => tracing::info!("Threat intel runtime snapshot persisted to ClickHouse: {} entries", inserted),
+                    Err(err) => tracing::warn!("Threat intel runtime snapshot persist failed: {}", err),
+                }
+            }
             tokio::time::sleep(
                 tokio::time::Duration::from_secs(3600)
-            ).await;  // ← then wait
+            ).await;
         }
     });
 }
@@ -621,34 +630,47 @@ async fn main() {
 
     let rules_dir = std::env::var("RULES_DIR").unwrap_or_else(|_| "rules".to_string());
 
-    // ── Migrate rules to ClickHouse ──────────────────────────────────────────
+    // ── Migrate rules to ClickHouse — leader only, once per startup ───────
     {
         let ch = state.ch_storage.clone();
         let rules_dir = rules_dir.clone();
-        
+        let election = election.clone();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         tokio::spawn(async move {
-            if let Ok(entries) = std::fs::read_dir(&rules_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if ext != "yml" && ext != "yaml" { continue; }
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Ok(doc) = serde_yaml::from_str::<std::collections::HashMap<String, serde_yaml::Value>>(&content) {
-                            let id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let name = doc.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            if !id.is_empty() {
-                                let exists = ch.get_sigma_rule_by_id(&id, "default").await.map(|r| r.is_some()).unwrap_or(false);
-                                if !exists {
-                                    if let Err(e) = ch.save_sigma_rule(&id, &name, &content, "default").await {
-                                        tracing::warn!("Failed to migrate rule {}: {}", id, e);
-                                    } else {
-                                        tracing::info!("Migrated rule {} to ClickHouse", id);
+            loop {
+                if !election.is_leader() {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+                if ran.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+
+                if let Ok(entries) = std::fs::read_dir(&rules_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        if ext != "yml" && ext != "yaml" { continue; }
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            if let Ok(doc) = serde_yaml::from_str::<std::collections::HashMap<String, serde_yaml::Value>>(&content) {
+                                let id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let name = doc.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                if !id.is_empty() {
+                                    let exists = ch.get_sigma_rule_by_id(&id, "default").await.map(|r| r.is_some()).unwrap_or(false);
+                                    if !exists {
+                                        if let Err(e) = ch.save_sigma_rule(&id, &name, &content, "default").await {
+                                            tracing::warn!("Failed to migrate rule {}: {}", id, e);
+                                        } else {
+                                            tracing::info!("Migrated rule {} to ClickHouse", id);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                break;
             }
         });
     }
@@ -787,6 +809,7 @@ async fn main() {
         .route("/api/threat-map",        get(api::get_threat_map))
         .route("/api/threat-intel-map",  get(api::get_threat_intel_map))
         .route("/api/threat-intel",                    get(api::get_threat_intel))
+        .route("/api/threat-intel/feeds",              get(api::get_threat_intel_feed_summary))
         .route("/api/threat-intel/add",               post(api::add_manual_ioc))
         .route("/api/threat-intel/watchlist",         get(api::get_watchlist_iocs))
         .route("/api/threat-intel/watchlist/:value",  axum::routing::delete(api::delete_watchlist_ioc))

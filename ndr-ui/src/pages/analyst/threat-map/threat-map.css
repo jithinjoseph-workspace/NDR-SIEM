@@ -61,6 +61,36 @@
   flex-shrink: 0;
 }
 
+.tm-mode-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 4px;
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.tm-source-tab {
+  border: 0;
+  background: transparent;
+  color: rgba(148, 163, 184, 0.9);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.tm-source-tab-active {
+  background: rgba(244, 63, 94, 0.16);
+  color: #fda4af;
+  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.2);
+}
+
 .tm-live-pill {
   display: inline-flex;
   align-items: center;

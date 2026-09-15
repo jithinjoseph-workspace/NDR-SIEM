@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
   Download, Plus, RefreshCw, X,
+  Activity, Server, Database, ShieldCheck, Clock, Layers, Zap, HardDrive, CheckCircle2, AlertTriangle
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 
@@ -17,10 +18,20 @@ import { Api } from '../../../services/api/api';
   styleUrl: './engines.css',
 })
 export class Engines implements OnInit, OnDestroy {
-  DownloadIcon = Download;
-  PlusIcon     = Plus;
-  RefreshIcon  = RefreshCw;
-  XIcon        = X;
+  DownloadIcon     = Download;
+  PlusIcon         = Plus;
+  RefreshIcon      = RefreshCw;
+  XIcon            = X;
+  ActivityIcon     = Activity;
+  ServerIcon       = Server;
+  DatabaseIcon     = Database;
+  ShieldCheckIcon  = ShieldCheck;
+  ClockIcon        = Clock;
+  LayersIcon       = Layers;
+  ZapIcon          = Zap;
+  HardDriveIcon    = HardDrive;
+  CheckCircleIcon  = CheckCircle2;
+  AlertTriangleIcon = AlertTriangle;
 
   engines: any[]    = [];
   loadingEngines    = false;
@@ -36,19 +47,84 @@ export class Engines implements OnInit, OnDestroy {
   syncMessage   = '';
   syncError     = false;
 
+  Math = Math;
+
   msg     = '';
   msgType = '';
 
+  // Real telemetry
+  eventsPerSec = 0;
+  events1h = 0;
+  cpuUsage = 0;
+  memoryUsedGb = 0;
+  currentTime = '';
+  currentDate = '';
+  private clockTimer: any = null;
+  private telemetryTimer: any = null;
+
   constructor(private api: Api, private cdr: ChangeDetectorRef) {}
 
+  get activeEngines(): number {
+    return this.engines.filter(e =>
+      e.status?.toLowerCase().includes('up') ||
+      e.status?.toLowerCase().includes('run') ||
+      e.status?.toLowerCase().includes('health')
+    ).length;
+  }
+
+  get clusterAvailability(): number {
+    if (!this.engines.length) return 100;
+    return Math.round((this.activeEngines / this.engines.length) * 100);
+  }
+
+  get totalPartitions(): number {
+    return this.kafkaData?.partition_count || this.kafkaData?.partitions?.length || 0;
+  }
+
+  get inSyncPartitions(): number {
+    return (this.kafkaData?.partitions || []).filter((p: any) => p.in_sync).length;
+  }
+
+  get totalLag(): number {
+    return this.kafkaData?.total_lag ?? 0;
+  }
+
+  private updateClock() {
+    const now = new Date();
+    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
+    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    this.cdr.detectChanges();
+  }
+
   ngOnInit() {
+    this.updateClock();
+    this.clockTimer = setInterval(() => this.updateClock(), 1000);
+
     this.loadEngines();
     this.loadKafkaStatus();
-    this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 10000);
+    this.loadPlatformTelemetry();
+
+    this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 8000);
+    this.telemetryTimer = setInterval(() => this.loadPlatformTelemetry(), 4000);
+  }
+
+  loadPlatformTelemetry() {
+    this.api.getPlatformTelemetry().subscribe({
+      next: (data: any) => {
+        this.eventsPerSec = Number(data.events_per_sec) || 0;
+        this.events1h = Number(data.events_1h) || 0;
+        this.cpuUsage = Math.round(Number(data.cpu_usage_percent) || 0);
+        this.memoryUsedGb = Number(data.memory_used_gb) || 0;
+        this.cdr.detectChanges();
+      },
+      error: () => {}
+    });
   }
 
   ngOnDestroy() {
+    if (this.clockTimer) clearInterval(this.clockTimer);
     if (this.kafkaInterval) clearInterval(this.kafkaInterval);
+    if (this.telemetryTimer) clearInterval(this.telemetryTimer);
   }
 
   loadEngines() {
