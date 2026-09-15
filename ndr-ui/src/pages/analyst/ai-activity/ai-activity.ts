@@ -37,7 +37,7 @@ export class AiActivity {
   ActivityIcon      = Activity;
 
   activeTab: 'analyses' | 'suppressions' | 'predictions' = 'analyses';
-  expandedAnalyses  = new Set<string>();
+  selectedAnalysisId = signal<string | null>(null);
   expandedPrediction = signal<string | null>(null);
   historicalPredictions = signal<any[]>([]);
 
@@ -75,12 +75,15 @@ export class AiActivity {
   loading      = computed(() => this.data() === null);
   predictions  = computed(() => this.predData() ?? []);
 
+  selectedAnalysis = computed(() => this.analyses().find((a: any) => a.id === this.selectedAnalysisId()));
+  selectedPrediction = computed(() => this.predictions().find((p: any) => p.attack_type === this.expandedPrediction()));
+
   toggleAnalysis(id: string) {
-    if (this.expandedAnalyses.has(id)) this.expandedAnalyses.delete(id);
-    else this.expandedAnalyses.add(id);
+    if (this.selectedAnalysisId() === id) this.selectedAnalysisId.set(null);
+    else this.selectedAnalysisId.set(id);
   }
 
-  isExpanded(id: string) { return this.expandedAnalyses.has(id); }
+  isExpanded(id: string) { return this.selectedAnalysisId() === id; }
 
   togglePrediction(type: string) {
     if (this.expandedPrediction() === type) {
