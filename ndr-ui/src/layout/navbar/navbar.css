@@ -5,8 +5,6 @@
   justify-content: space-between;
   gap: 24px;
   background: rgba(15, 23, 42, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding: 0 24px;
   transition: background 300ms ease;
@@ -76,7 +74,6 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.95);
-  backdrop-filter: blur(12px);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
   animation: dropdownFadeIn 0.15s ease;
 }

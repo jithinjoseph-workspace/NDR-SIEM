@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { provideCharts, withDefaultRegisterables } from 'ng2-charts';
 import { authGuard } from '../services/auth/auth-guard';
 import { homeGuard } from './home.guard';
 
@@ -93,7 +94,8 @@ export const routes: Routes = [
       .then(m => m.TenantAdminLayout),
     children: [
       { path: '',               redirectTo: 'users', pathMatch: 'full' },
-      { path: 'users',          loadComponent: () => import('../pages/tenant-admin/users/users').then(m => m.UsersSection) },
+      { path: 'users',          loadComponent: () => import('../pages/tenant-admin/users/users').then(m => m.UsersSection),
+                                 providers: [provideCharts(withDefaultRegisterables())] },
       { path: 'trusted-domains',loadComponent: () => import('../pages/tenant-admin/trusted-domains/trusted-domains').then(m => m.TrustedDomains) },
       { path: 'sessions',       loadComponent: () => import('../pages/tenant-admin/sessions/sessions').then(m => m.Sessions) },
       { path: 'profile',        loadComponent: () => import('../pages/tenant-admin/profile/profile').then(m => m.Profile) },

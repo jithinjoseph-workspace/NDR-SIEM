@@ -22,117 +22,272 @@
     <nav class="sa-nav">
 
       <!-- Standalone: Overview -->
-      <a routerLink="/admin/overview" routerLinkActive="active" class="sa-nav-link">
-        <lucide-icon [name]="OverviewIcon" class="w-4 h-4"></lucide-icon>
-        <span>Overview</span>
+      <a routerLink="/admin/overview" routerLinkActive="active" class="sa-nav-link sa-nav-standalone">
+        <span class="sa-standalone-glow"></span>
+        <lucide-icon [name]="OverviewIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+        <span class="sa-link-text">Overview</span>
+        <span class="sa-standalone-badge">MAIN</span>
       </a>
 
       <!-- Standalone: Support -->
-      <a routerLink="/admin/support" routerLinkActive="active" class="sa-nav-link">
-        <lucide-icon [name]="SupportIcon" class="w-4 h-4"></lucide-icon>
-        <span>Support</span>
+      <a routerLink="/admin/support" routerLinkActive="active" class="sa-nav-link sa-nav-standalone">
+        <span class="sa-standalone-glow"></span>
+        <lucide-icon [name]="SupportIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+        <span class="sa-link-text">Support</span>
+        <span class="sa-standalone-badge">HELP</span>
       </a>
 
       <!-- Group: Access Control (blue) -->
-      <div class="sa-group">
-        <button class="sa-group-header sa-group--blue" (click)="toggleGroup('access')">
-          <span class="sa-group-dot"></span>
+      <div class="sa-group sa-group--blue" [class.is-open]="groups['access']">
+        <button class="sa-group-header" (click)="toggleGroup('access')">
+          <div class="sa-group-core">
+            <span class="sa-group-dot"></span>
+            <span class="sa-group-core-ring"></span>
+          </div>
           <span class="sa-group-label">Access Control</span>
+          <span class="sa-group-hud-tag">2 NODES</span>
           <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['access']"></lucide-icon>
         </button>
         <div class="sa-group-body" [class.open]="groups['access']">
-          <a routerLink="/admin/tenants" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="TenantsIcon" class="w-4 h-4"></lucide-icon>
-            <span>Tenants</span>
-          </a>
-          <a routerLink="/admin/users" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
-            <span>Users</span>
-          </a>
+          <div class="sa-node-tree">
+            <div class="sa-node-trunk">
+              <span class="sa-node-energy-pulse"></span>
+            </div>
+            <div class="sa-node-items">
+              <div class="sa-node-branch" style="--node-idx: 0;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/tenants" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">01</span>
+                  <lucide-icon [name]="TenantsIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Tenants</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+              <div class="sa-node-branch" style="--node-idx: 1;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/users" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">02</span>
+                  <lucide-icon [name]="UsersIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Users</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Group: Infrastructure (violet) — NDR-only -->
-      <div class="sa-group" *ngIf="hasNdr">
-        <button class="sa-group-header sa-group--violet" (click)="toggleGroup('infrastructure')">
-          <span class="sa-group-dot"></span>
+      <div class="sa-group sa-group--violet" *ngIf="hasNdr" [class.is-open]="groups['infrastructure']">
+        <button class="sa-group-header" (click)="toggleGroup('infrastructure')">
+          <div class="sa-group-core">
+            <span class="sa-group-dot"></span>
+            <span class="sa-group-core-ring"></span>
+          </div>
           <span class="sa-group-label">Infrastructure</span>
+          <span class="sa-group-hud-tag">2 NODES</span>
           <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['infrastructure']"></lucide-icon>
         </button>
         <div class="sa-group-body" [class.open]="groups['infrastructure']">
-          <a routerLink="/admin/engines" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="EnginesIcon" class="w-4 h-4"></lucide-icon>
-            <span>Engines</span>
-          </a>
-          <a routerLink="/admin/sensors" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="SensorsIcon" class="w-4 h-4"></lucide-icon>
-            <span>Sensor Keys</span>
-          </a>
+          <div class="sa-node-tree">
+            <div class="sa-node-trunk">
+              <span class="sa-node-energy-pulse"></span>
+            </div>
+            <div class="sa-node-items">
+              <div class="sa-node-branch" style="--node-idx: 0;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/engines" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">01</span>
+                  <lucide-icon [name]="EnginesIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Engines</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+              <div class="sa-node-branch" style="--node-idx: 1;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/sensors" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">02</span>
+                  <lucide-icon [name]="SensorsIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Sensor Keys</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Group: Monitoring (emerald) -->
-      <div class="sa-group">
-        <button class="sa-group-header sa-group--emerald" (click)="toggleGroup('monitoring')">
-          <span class="sa-group-dot"></span>
+      <div class="sa-group sa-group--emerald" [class.is-open]="groups['monitoring']">
+        <button class="sa-group-header" (click)="toggleGroup('monitoring')">
+          <div class="sa-group-core">
+            <span class="sa-group-dot"></span>
+            <span class="sa-group-core-ring"></span>
+          </div>
           <span class="sa-group-label">Monitoring</span>
+          <span class="sa-group-hud-tag">3 NODES</span>
           <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['monitoring']"></lucide-icon>
         </button>
         <div class="sa-group-body" [class.open]="groups['monitoring']">
-          <a routerLink="/admin/rules" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="RulesIcon" class="w-4 h-4"></lucide-icon>
-            <span>Rules</span>
-          </a>
-          <a routerLink="/admin/telemetry" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="TelemetryIcon" class="w-4 h-4"></lucide-icon>
-            <span>Telemetry</span>
-          </a>
-          <a routerLink="/admin/announcements" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="AnnouncementsIcon" class="w-4 h-4"></lucide-icon>
-            <span>Announcements</span>
-          </a>
+          <div class="sa-node-tree">
+            <div class="sa-node-trunk">
+              <span class="sa-node-energy-pulse"></span>
+            </div>
+            <div class="sa-node-items">
+              <div class="sa-node-branch" style="--node-idx: 0;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/rules" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">01</span>
+                  <lucide-icon [name]="RulesIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Rules</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+              <div class="sa-node-branch" style="--node-idx: 1;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/telemetry" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">02</span>
+                  <lucide-icon [name]="TelemetryIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Telemetry</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+              <div class="sa-node-branch" style="--node-idx: 2;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/announcements" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">03</span>
+                  <lucide-icon [name]="AnnouncementsIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Announcements</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Group: SIEM (cyan) — only when SIEM engine is installed -->
-      <div class="sa-group" *ngIf="hasSiem">
-        <button class="sa-group-header sa-group--cyan" (click)="toggleGroup('siem')">
-          <span class="sa-group-dot"></span>
+      <div class="sa-group sa-group--cyan" *ngIf="hasSiem" [class.is-open]="groups['siem']">
+        <button class="sa-group-header" (click)="toggleGroup('siem')">
+          <div class="sa-group-core">
+            <span class="sa-group-dot"></span>
+            <span class="sa-group-core-ring"></span>
+          </div>
           <span class="sa-group-label">SIEM</span>
+          <span class="sa-group-hud-tag">1 NODE</span>
           <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['siem']"></lucide-icon>
         </button>
         <div class="sa-group-body" [class.open]="groups['siem']">
-          <a routerLink="/admin/siem-sources" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="RadioIcon" class="w-4 h-4"></lucide-icon>
-            <span>Log Sources</span>
-          </a>
+          <div class="sa-node-tree">
+            <div class="sa-node-trunk">
+              <span class="sa-node-energy-pulse"></span>
+            </div>
+            <div class="sa-node-items">
+              <div class="sa-node-branch" style="--node-idx: 0;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/siem-sources" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">01</span>
+                  <lucide-icon [name]="RadioIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Log Sources</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Group: Configuration (amber) -->
-      <div class="sa-group">
-        <button class="sa-group-header sa-group--amber" (click)="toggleGroup('config')">
-          <span class="sa-group-dot"></span>
+      <div class="sa-group sa-group--amber" [class.is-open]="groups['config']">
+        <button class="sa-group-header" (click)="toggleGroup('config')">
+          <div class="sa-group-core">
+            <span class="sa-group-dot"></span>
+            <span class="sa-group-core-ring"></span>
+          </div>
           <span class="sa-group-label">Configuration</span>
+          <span class="sa-group-hud-tag">4 NODES</span>
           <lucide-icon [name]="ChevronIcon" class="sa-chevron" [class.open]="groups['config']"></lucide-icon>
         </button>
         <div class="sa-group-body" [class.open]="groups['config']">
-          <a routerLink="/admin/ai-providers" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="AiIcon" class="w-4 h-4"></lucide-icon>
-            <span>AI Providers</span>
-          </a>
-          <a routerLink="/admin/trusted-cloud" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="CloudIcon" class="w-4 h-4"></lucide-icon>
-            <span>Trusted Cloud</span>
-          </a>
-          <a routerLink="/admin/trusted-domains" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="DomainsIcon" class="w-4 h-4"></lucide-icon>
-            <span>Trusted Domains</span>
-          </a>
-          <a routerLink="/admin/smtp-config" routerLinkActive="active" class="sa-nav-link sa-nav-child">
-            <lucide-icon [name]="SmtpIcon" class="w-4 h-4"></lucide-icon>
-            <span>SMTP Config</span>
-          </a>
+          <div class="sa-node-tree">
+            <div class="sa-node-trunk">
+              <span class="sa-node-energy-pulse"></span>
+            </div>
+            <div class="sa-node-items">
+              <div class="sa-node-branch" style="--node-idx: 0;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/ai-providers" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">01</span>
+                  <lucide-icon [name]="AiIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">AI Providers</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+              <div class="sa-node-branch" style="--node-idx: 1;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/trusted-cloud" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">02</span>
+                  <lucide-icon [name]="CloudIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Trusted Cloud</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+              <div class="sa-node-branch" style="--node-idx: 2;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/trusted-domains" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">03</span>
+                  <lucide-icon [name]="DomainsIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">Trusted Domains</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+              <div class="sa-node-branch" style="--node-idx: 3;">
+                <div class="sa-node-connector">
+                  <span class="sa-node-joint"></span>
+                  <span class="sa-node-wire"></span>
+                </div>
+                <a routerLink="/admin/smtp-config" routerLinkActive="active" class="sa-nav-link sa-nav-child">
+                  <span class="sa-node-chip">04</span>
+                  <lucide-icon [name]="SmtpIcon" class="w-4 h-4 sa-link-icon"></lucide-icon>
+                  <span class="sa-link-text">SMTP Config</span>
+                  <span class="sa-node-status-dot"></span>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

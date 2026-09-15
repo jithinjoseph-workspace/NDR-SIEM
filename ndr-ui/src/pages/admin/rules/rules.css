@@ -505,7 +505,6 @@
   font-family: 'Courier New', monospace;
   letter-spacing: 0.02em;
   border: 1px solid transparent;
-  backdrop-filter: blur(4px);
   white-space: nowrap;
   transition: opacity 0.15s;
 }

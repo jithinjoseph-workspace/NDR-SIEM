@@ -467,6 +467,14 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     return this.kafkaData?.partition_count || this.kafkaData?.partitions?.length || 0;
   }
 
+  // trackBy fns — several getters above (tenantFleetMatrix, topPublicIps,
+  // fleetNodes, filteredThreatIntelItems) build fresh object literals on
+  // every call, so *ngFor's default identity check fails every CD cycle and
+  // tears down/rebuilds the whole row set. Track by a stable field instead.
+  trackByIp   = (_: number, item: { ip: string }) => item.ip;
+  trackById   = (_: number, item: { id: string }) => item.id;
+  trackByPartition = (_: number, p: number) => p;
+
   get roleCounts(): Record<string, number> {
     const counts: Record<string, number> = { 'Platform Admin': 0, 'Tenant Admin': 0, 'Analyst': 0, 'Viewer': 0 };
     for (const u of this.users) {
@@ -616,8 +624,8 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
       }
     });
 
-    // 5b. Real Threat Intel Feed Overview
-    this.api.getThreatIntel().subscribe({
+    // 5b. Real Threat Intel Feed Overview (platform-wide, all tenants)
+    this.api.getThreatIntelAllTenants().subscribe({
       next: (data: any) => {
         this.totalThreatIps = Number(data?.total_malicious_ips) || 0;
         this.cdr.detectChanges();
@@ -667,8 +675,10 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  // Platform-wide across all tenants (Super Admin Overview), not just the
+  // default tenant's own hits — see api.getSeverityAllTenants().
   loadSeverityData() {
-    this.api.getSeverity().subscribe({
+    this.api.getSeverityAllTenants().subscribe({
       next: (data: any) => {
         if (data) {
           this.severityData = {
@@ -684,8 +694,9 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  // Platform-wide across all tenants — see api.getStatsAllTenants().
   loadStatsData() {
-    this.api.getStats().subscribe({
+    this.api.getStatsAllTenants().subscribe({
       next: (stats: any) => {
         if (stats) {
           this.eventsTotal = Number(stats.events_total) || 0;
@@ -704,8 +715,9 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  // Platform-wide across all tenants — see api.getTopIpsAllTenants().
   loadTopIpsData() {
-    this.api.getTopIps().subscribe({
+    this.api.getTopIpsAllTenants().subscribe({
       next: (data: any) => {
         if (data) {
           this.topIpsData = {
@@ -719,8 +731,9 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  // Platform-wide across all tenants — see api.getProtocolsAllTenants().
   loadProtocolsData() {
-    this.api.getProtocols().subscribe({
+    this.api.getProtocolsAllTenants().subscribe({
       next: (data: any) => {
         if (data && data.protocols) {
           this.protocolsData = data.protocols;
@@ -1006,8 +1019,9 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     return this.enginePartitionGroups.reduce((sum, g) => sum + g.totalLag, 0);
   }
 
+  // Platform-wide across all tenants — see api.getThreatMapAllTenants().
   private loadFallbackTrafficMap() {
-    this.api.getThreatMap().subscribe({
+    this.api.getThreatMapAllTenants().subscribe({
       next: (data: any) => {
         this.threatCountries = data?.countries || [];
         this.updateRelayHubsFromRealData();
@@ -1386,6 +1400,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     } else if (this.cachedWorldData) {
       this.initWorldMap();
     }
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
   }
 
   ngOnDestroy() {
@@ -1395,9 +1410,24 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     this.stopOverviewTelemetryPolling();
     if (this.resizeObserver) this.resizeObserver.disconnect();
     if (this.mapResizeObserver) this.mapResizeObserver.disconnect();
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.destroyCommandMesh();
     this.destroyGlobalGlobe();
   }
+
+  // Backgrounded tabs shouldn't keep the globe/WebGL mesh burning CPU —
+  // cancel their rAF loops on hide, rebuild them on return.
+  private handleVisibilityChange = () => {
+    if (document.hidden) {
+      this.destroyCommandMesh();
+      this.destroyGlobalGlobe();
+      return;
+    }
+    this.initCommandMesh();
+    if (this.fabricMode === 'globe' && this.globalGlobe?.nativeElement) {
+      this.initGlobalGlobe();
+    }
+  };
 
   // ── Switchers & Actions ─────────────────────────────────────────
 
@@ -2729,7 +2759,11 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
       this.globeAnimationFrame = requestAnimationFrame(frame);
     };
 
-    this.globeAnimationFrame = requestAnimationFrame(frame);
+    // Pure canvas redraw loop — keep it out of Angular's zone so 60fps
+    // rendering doesn't trigger a full-app change-detection pass every frame.
+    this.zone.runOutsideAngular(() => {
+      this.globeAnimationFrame = requestAnimationFrame(frame);
+    });
   }
 
   private destroyGlobalGlobe() {

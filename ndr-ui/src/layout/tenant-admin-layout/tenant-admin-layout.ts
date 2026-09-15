@@ -80,7 +80,9 @@ export class TenantAdminLayout implements OnInit {
       return;
     }
 
-    this.hasSiem = this.auth.hasFeature('siem');
+    // SIEM nav section temporarily hidden — not needed right now.
+    // Restore `this.auth.hasFeature('siem')` here to bring it back.
+    this.hasSiem = false;
     // Idempotent — no-ops if the navbar (or a prior mount of this layout)
     // already started it. Shared for the whole session, not torn down in
     // ngOnDestroy below, since the navbar depends on it too.

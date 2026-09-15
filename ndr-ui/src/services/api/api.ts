@@ -155,6 +155,31 @@ export class Api {
     return this.http.get(`${this.baseUrl}/severity`);
   }
 
+  // Platform-wide totals across every tenant — super admin only.
+  getSeverityAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/severity-all-tenants`);
+  }
+
+  getStatsAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/stats-all-tenants`);
+  }
+
+  getTopIpsAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/top-ips-all-tenants`);
+  }
+
+  getProtocolsAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/protocols-all-tenants`);
+  }
+
+  getThreatIntelAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/threat-intel-all-tenants`);
+  }
+
+  getThreatMapAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/threat-map-all-tenants`);
+  }
+
   getEntityScores(): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/entity-scores`);
   }
