@@ -44,7 +44,7 @@
   <section class="rules-metrics">
     <article class="metric-card mc-total">
       <div class="metric-icon">
-        <lucide-icon [name]="GavelIcon" class="w-5 h-5"></lucide-icon>
+        <lucide-icon [name]="ShieldCheckIcon" class="w-7 h-7"></lucide-icon>
       </div>
       <div class="metric-body">
         <span class="metric-label">Total Rules</span>
@@ -53,7 +53,7 @@
     </article>
     <article class="metric-card mc-active">
       <div class="metric-icon">
-        <lucide-icon [name]="PowerIcon" class="w-5 h-5"></lucide-icon>
+        <lucide-icon [name]="ActivityIcon" class="w-7 h-7"></lucide-icon>
       </div>
       <div class="metric-body">
         <span class="metric-label">Active</span>
@@ -62,7 +62,7 @@
     </article>
     <article class="metric-card mc-hits">
       <div class="metric-icon">
-        <lucide-icon [name]="GavelIcon" class="w-5 h-5"></lucide-icon>
+        <lucide-icon [name]="TargetIcon" class="w-7 h-7"></lucide-icon>
       </div>
       <div class="metric-body">
         <span class="metric-label">Total Hits</span>
@@ -372,9 +372,7 @@
         *ngFor="let rule of displayRules"
         [class]="'rule-card sev-' + rule.severity.toLowerCase()"
       >
-        <div class="rule-card-gavel">
-          <lucide-icon [name]="GavelIcon" class="w-5 h-5"></lucide-icon>
-        </div>
+
         <div class="rule-card-body">
           <div class="rule-name">{{ sanitizeRuleName(rule.name) }}</div>
           <div class="rule-meta">

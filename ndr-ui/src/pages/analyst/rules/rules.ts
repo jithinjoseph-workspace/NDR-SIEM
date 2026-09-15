@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
-import { LucideAngularModule, Gavel, Plus, Edit, Trash2, Power, RefreshCcw, X, Info, Download } from 'lucide-angular';
+import { LucideAngularModule, Gavel, Plus, Edit, Trash2, Power, RefreshCcw, X, Info, Download, ShieldCheck, Activity, Target } from 'lucide-angular';
 
 @Component({
   selector: 'app-rules',
@@ -181,6 +181,9 @@ export class Rules implements OnInit {
   XIcon = X;
   InfoIcon = Info;
   DownloadIcon = Download;
+  ShieldCheckIcon = ShieldCheck;
+  ActivityIcon = Activity;
+  TargetIcon = Target;
 
   syncing = false;
   categoryFilter: string = '';
@@ -453,12 +456,18 @@ export class Rules implements OnInit {
     this.editingId = '';
     this.resetForm();
     this.showForm = true;
+    setTimeout(() => {
+      document.querySelector('.rules-header')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
   }
 
   openEditForm(rule: any) {
     this.isEditing = true;
     this.editingId = rule.id;
     this.showForm = true;
+    setTimeout(() => {
+      document.querySelector('.rules-header')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
 
     // Load full rule details from API
     this.api.getRuleById(rule.id).subscribe({

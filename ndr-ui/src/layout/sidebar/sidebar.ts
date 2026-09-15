@@ -77,7 +77,7 @@ export class Sidebar implements OnInit, OnDestroy {
     const threatItems: NavItem[] = [];
     if (hasNdr && has('alerts')) threatItems.push({ label: 'Alerts',       route: '/analyst/alerts',     icon: Bell,    permission: 'alerts' });
     if (hasNdr && has('intel'))  threatItems.push({ label: 'Threat Intel', route: '/analyst/intel',       icon: Search,  permission: 'intel'  });
-    if (hasNdr && has('intel'))  threatItems.push({ label: 'Attack Map',   route: '/analyst/threat-map',  icon: MapIcon, permission: 'intel'  });
+    if (hasNdr)  threatItems.push({ label: 'Attack Map',   route: '/analyst/threat-map',  icon: MapIcon });
 
     const networkItems: NavItem[] = [];
     if (hasNdr && has('logs'))        networkItems.push({ label: 'Network',     route: '/analyst/logs',        icon: FileText, permission: 'logs'        });
