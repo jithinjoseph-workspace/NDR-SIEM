@@ -13,7 +13,7 @@
 
   <!-- Nav -->
   <nav class="nav-list">
-    <ng-container *ngFor="let group of navGroups">
+    <ng-container *ngFor="let group of navGroups; trackBy: trackGroup">
 
       <!-- Collapsible section header -->
       <button class="nav-section"
@@ -25,7 +25,7 @@
 
       <!-- Items — shown/hidden via ngIf so initial render is always correct -->
       <div class="nav-group-body" *ngIf="!group.collapsed">
-        <a *ngFor="let item of group.items; let i = index"
+        <a *ngFor="let item of group.items; let i = index; trackBy: trackItem"
            [routerLink]="item.route"
            [queryParams]="item.queryParams || null"
            [class.active]="isActive(item)"

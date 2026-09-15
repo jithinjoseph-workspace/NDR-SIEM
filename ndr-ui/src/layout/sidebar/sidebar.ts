@@ -41,9 +41,14 @@ export class Sidebar implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.buildNavigation();
-    this.navigationSub = this.router.events
-      .pipe(filter(e => e instanceof NavigationEnd))
-      .subscribe(() => this.buildNavigation());
+  }
+
+  trackGroup(index: number, group: NavGroup) {
+    return group.section;
+  }
+
+  trackItem(index: number, item: NavItem) {
+    return item.route;
   }
 
   ngOnDestroy() { this.navigationSub?.unsubscribe(); }

@@ -200,31 +200,31 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 38px;
-  padding: 0 14px;
+  min-height: 42px;
+  padding: 0 16px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 700;
   font-family: var(--font-mono);
   letter-spacing: 0.04em;
   cursor: pointer;
-  color: #94a3b8;
-  background: rgba(8, 12, 20, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: #ffffff;
+  background: #000000;
+  border: 1px solid rgba(34, 197, 94, 0.4);
   transition: color 150ms ease, border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
 }
 
 .export-trigger:hover {
-  color: #e2e8f0;
-  border-color: rgba(148, 163, 184, 0.3);
-  background: rgba(30, 41, 59, 0.9);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  color: #ffffff;
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+  box-shadow: 0 2px 12px rgba(34, 197, 94, 0.3);
 }
 
 .export-menu:hover .export-trigger {
-  color: #e2e8f0;
-  border-color: rgba(148, 163, 184, 0.3);
-  background: rgba(30, 41, 59, 0.9);
+  color: #ffffff;
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
 }
 
 .export-trigger-icon {
@@ -299,17 +299,14 @@
 .export-dropdown {
   position: absolute;
   right: 0;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   z-index: 1000;
-  width: 224px;
-  padding: 6px;
+  width: 250px;
+  padding: 10px;
   border-radius: 10px;
-  background: #0d1525;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  box-shadow:
-    0 4px 6px rgba(0,0,0,0.2),
-    0 20px 60px rgba(0,0,0,0.5),
-    inset 0 1px 0 rgba(255,255,255,0.04);
+  background: #000000;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(34, 197, 94, 0.15) inset;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-6px) scale(0.97);
@@ -335,13 +332,13 @@
 }
 
 .export-dropdown-header {
-  padding: 6px 10px 4px;
-  font-size: 14px;
+  padding: 8px 12px 6px;
+  font-size: 0.85rem;
   font-weight: 700;
   font-family: var(--font-mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(148, 163, 184, 0.4);
+  color: #69f6b8;
 }
 
 .export-divider {
@@ -353,32 +350,35 @@
 .export-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 7px;
+  padding: 12px 14px;
+  border-radius: 8px;
   text-align: left;
   cursor: pointer;
   transition: background 120ms ease;
+  background: transparent;
+  border: 1px solid transparent;
 }
 
 .export-item:hover {
-  background: rgba(148, 163, 184, 0.07);
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.25);
 }
 
 .export-item:hover .export-item-name {
-  color: #f1f5f9;
+  color: #ffffff;
 }
 
 .export-item-icon {
   flex-shrink: 0;
-  width: 34px;
-  height: 30px;
-  border-radius: 5px;
+  width: 38px;
+  height: 34px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: 0.75rem;
   font-weight: 800;
   font-family: var(--font-mono);
   letter-spacing: 0.05em;
@@ -417,16 +417,16 @@
 }
 
 .export-item-name {
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 600;
-  color: #cbd5e1;
+  color: #ffffff;
   line-height: 1;
   transition: color 120ms ease;
 }
 
 .export-item-desc {
-  font-size: 14px;
-  color: rgba(148, 163, 184, 0.5);
+  font-size: 0.85rem;
+  color: #cbd5e1;
   line-height: 1;
 }
 
