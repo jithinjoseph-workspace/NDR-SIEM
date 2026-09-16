@@ -58,16 +58,8 @@
     <div class="top-dashboard" *ngIf="totalAssets > 0">
       <div class="donut-container">
         <div class="donut-label">ASSET TYPE DISTRIBUTION</div>
-        <div class="donut-chart-wrapper">
-          <svg viewBox="0 0 120 120" class="donut-svg">
-            <circle cx="60" cy="60" r="50" class="donut-bg"></circle>
-          </svg>
-          <div class="donut-css" [style.background]="'conic-gradient(#3b82f6 0% ' + stats.workstations.percent + '%, #f43f5e ' + stats.workstations.percent + '% ' + (stats.workstations.percent + stats.iot.percent) + '%, #10b981 ' + (stats.workstations.percent + stats.iot.percent) + '% ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '%, #8b5cf6 ' + (stats.workstations.percent + stats.iot.percent + stats.servers.percent) + '% 100%)'">
-          </div>
-          <div class="donut-inner">
-            <span class="total-number">{{ totalAssets }}</span>
-            <span class="total-label">Assets</span>
-          </div>
+        <div class="donut-chart-wrapper sunburst-wrapper" #sunburstContainer>
+          <!-- ECharts sunburst will render here -->
         </div>
       </div>
 
@@ -120,7 +112,7 @@
       </div>
     </div>
 
-    <div class="subnet-stats-sidebar" *ngIf="subnets.length > 0">
+    <div class="subnet-stats-sidebar" [style.display]="subnets.length > 0 ? 'block' : 'none'">
       <div class="subnet-card" *ngFor="let s of subnets" (click)="setSubnetFilter(s.cidr)" [class.active]="filterSubnet === s.cidr">
         <div class="subnet-cidr">{{ s.cidr }}</div>
         <div class="subnet-iface">{{ s.interface }}{{ s.sensor_id ? ' · ' + s.sensor_id : '' }}</div>
@@ -134,6 +126,20 @@
       </div>
     </div>
     
+  </div>
+
+  <div class="bottom-dashboards-row" *ngIf="!loading && (totalAssets > 0 || subnets.length > 0)">
+    <!-- Threat Landscape Scatter Plot -->
+    <div class="scatter-dashboard" *ngIf="totalAssets > 0">
+      <div class="scatter-title">THREAT LANDSCAPE</div>
+      <div #scatterContainer class="echarts-scatter-container"></div>
+    </div>
+
+    <!-- Subnet Utilization Treemap -->
+    <div class="treemap-dashboard" *ngIf="subnets.length > 0">
+      <div class="treemap-title">SUBNET UTILIZATION MAP</div>
+      <div #treemapContainer class="echarts-treemap-container"></div>
+    </div>
   </div>
 
   <div class="asset-workspace" [class.has-selection]="selectedAsset">

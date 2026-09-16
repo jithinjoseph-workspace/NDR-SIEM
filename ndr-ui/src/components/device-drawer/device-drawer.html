@@ -72,6 +72,11 @@
           (click)="setDrawerTab('alerts')">
           Alerts
         </button>
+        <button
+          [class.active]="drawerTab === 'topology'"
+          (click)="setDrawerTab('topology')">
+          Topology
+        </button>
       </div>
 
       <!-- ── Overview Tab ──────────────────────── -->
@@ -281,6 +286,15 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- ── Topology Tab ────────────────────────── -->
+      <div class="drawer-content topology-tab" *ngIf="drawerTab === 'topology'">
+        <div class="topology-header">
+          <div class="topology-title">Local Topology</div>
+          <p class="topology-subtitle">3D Force-directed graph of direct neighbors.</p>
+        </div>
+        <div #topologyContainer class="topology-container"></div>
       </div>
 
     </aside>

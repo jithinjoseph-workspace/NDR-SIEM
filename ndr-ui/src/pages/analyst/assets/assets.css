@@ -1202,3 +1202,91 @@ code {
 .grid-row:hover .crit-high   { box-shadow: 0 0 16px rgba(255,71,87,0.8); }
 .grid-row:hover .crit-medium { box-shadow: 0 0 16px rgba(248,195,106,0.7); }
 .grid-row:hover .crit-low    { box-shadow: 0 0 16px rgba(105,246,184,0.7); }
+
+/* ══════════════════════════════════════════════════
+   ECHARTS CONTAINERS
+══════════════════════════════════════════════════ */
+
+.sunburst-wrapper {
+  width: 100%;
+  height: 250px;
+  align-self: center;
+  margin-top: 10px;
+  z-index: 10;
+}
+
+.bottom-dashboards-row {
+  display: flex;
+  gap: 22px;
+  margin-bottom: 22px;
+  width: 100%;
+}
+
+.bottom-dashboards-row > div {
+  margin-bottom: 0 !important;
+}
+
+.echarts-treemap-container {
+  width: 100%;
+  height: 280px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.treemap-dashboard {
+  flex: 2;
+  background: linear-gradient(135deg, rgba(10, 30, 45, 0.6), rgba(15, 60, 80, 0.6));
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(0, 255, 157, 0.4);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 0 30px rgba(0, 255, 157, 0.05), inset 0 0 20px rgba(0, 255, 157, 0.1);
+}
+
+.treemap-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 900;
+  color: #00ff9d;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 15px;
+  display: inline-block;
+  padding: 6px 12px;
+  background: rgba(0, 255, 157, 0.1);
+  border: 1px solid rgba(0, 255, 157, 0.3);
+  border-radius: 6px;
+  box-shadow: 0 0 15px rgba(0, 255, 157, 0.2);
+}
+
+.scatter-dashboard {
+  flex: 3;
+  background: linear-gradient(135deg, rgba(10, 37, 89, 0.5), rgba(20, 68, 153, 0.5));
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(61, 158, 255, 0.5);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 0 40px rgba(255, 255, 255, 0.1), inset 0 0 20px rgba(255, 255, 255, 0.05);
+}
+
+.scatter-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  display: inline-block;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+}
+
+.echarts-scatter-container {
+  width: 100%;
+  height: 340px;
+}

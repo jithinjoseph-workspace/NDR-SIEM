@@ -1,4 +1,4 @@
-import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, AfterViewInit, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../../services/api/api';
@@ -24,7 +24,7 @@ import {
 import { DeviceDrawer } from '../../../components/device-drawer/device-drawer';
 import { AuthService } from '../../../services/auth/auth';
 
-
+declare var echarts: any;
 @Component({
   selector: 'app-assets',
   standalone: true,
@@ -32,7 +32,7 @@ import { AuthService } from '../../../services/auth/auth';
   templateUrl: './assets.html',
   styleUrl: './assets.css',
 })
-export class Assets implements OnInit {
+export class Assets implements OnInit, AfterViewInit {
   ServerIcon = Server;
   MonitorIcon = Monitor;
   SmartphoneIcon = Smartphone;
@@ -61,6 +61,14 @@ export class Assets implements OnInit {
 
   subnets: any[] = [];
   isSubnetDropdownOpen = false;
+
+  @ViewChild('treemapContainer') treemapContainer?: ElementRef;
+  @ViewChild('sunburstContainer') sunburstContainer?: ElementRef;
+  @ViewChild('scatterContainer') scatterContainer?: ElementRef;
+
+  treemapChart: any;
+  sunburstChart: any;
+  scatterChart: any;
 
   selectedAsset: any = null;
 
@@ -111,9 +119,258 @@ export class Assets implements OnInit {
     this.loadSubnets();
   }
 
+  ngAfterViewInit() {
+    // Small delay to ensure DOM is ready and visible
+    setTimeout(() => {
+      this.initCharts();
+    }, 100);
+  }
+
+  initCharts() {
+    if (typeof echarts === 'undefined') return;
+    
+    if (this.treemapContainer && !this.treemapChart) {
+      this.treemapChart = echarts.init(this.treemapContainer.nativeElement, 'dark');
+      this.updateTreemap();
+    }
+    
+    if (this.sunburstContainer && !this.sunburstChart) {
+      this.sunburstChart = echarts.init(this.sunburstContainer.nativeElement, 'dark');
+      this.updateSunburst();
+    }
+    
+    if (this.scatterContainer && !this.scatterChart) {
+      this.scatterChart = echarts.init(this.scatterContainer.nativeElement, 'dark');
+      this.updateScatter3D();
+    }
+  }
+
+  updateTreemap() {
+    if (!this.treemapChart || this.subnets.length === 0) return;
+    
+    const treemapData = this.subnets.map(s => {
+      const usedPct = s.total_ips ? (s.used_ips / s.total_ips) * 100 : 0;
+      const borderColor = usedPct > 70 ? '#ff0055' : usedPct > 30 ? '#ffaa00' : '#00ff9d';
+      return {
+        name: s.cidr,
+        value: s.total_ips,
+        usedPct: usedPct,
+        itemStyle: {
+          color: 'rgba(10, 25, 47, 0.6)',
+          borderColor: borderColor,
+          borderWidth: 2,
+          gapWidth: 4,
+          shadowBlur: 10,
+          shadowColor: borderColor
+        }
+      };
+    });
+
+    this.treemapChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: {
+        backgroundColor: 'rgba(10, 25, 47, 0.9)',
+        borderColor: '#00f3ff',
+        textStyle: { color: '#fff' },
+        formatter: (info: any) => `<strong>${info.name}</strong><br/>Size: ${info.value} IPs<br/>Used: ${info.data.usedPct.toFixed(1)}%`
+      },
+      series: [{
+        type: 'treemap',
+        data: treemapData,
+        roam: false,
+        nodeClick: false,
+        breadcrumb: { show: false },
+        label: {
+          show: true,
+          formatter: (info: any) => `{name|${info.name}}\n{val|${info.value} IPs}`,
+          rich: {
+            name: { color: '#ffffff', fontSize: 13, fontWeight: 'bold', padding: [0, 0, 5, 0], textShadowBlur: 4, textShadowColor: '#000' },
+            val: { color: '#00ff9d', fontSize: 11, fontFamily: 'monospace' }
+          }
+        },
+        itemStyle: {
+          borderColor: '#0a192f',
+          borderWidth: 2,
+          gapWidth: 2
+        }
+      }]
+    });
+  }
+
+  updateSunburst() {
+    if (!this.sunburstChart || this.assets.length === 0) return;
+    
+    // Group by Type
+    const typeCount: any = {};
+    let total = 0;
+    this.assets.forEach(a => {
+      const t = (a.device_type || 'Unknown').toUpperCase();
+      typeCount[t] = (typeCount[t] || 0) + 1;
+      total++;
+    });
+
+    const pieData = Object.keys(typeCount).map(type => ({
+      name: type,
+      value: typeCount[type]
+    }));
+
+    const colorPalette = ['#00d27a', '#00a2ff', '#ff7c00', '#e800ff', '#00ff9d'];
+
+    this.sunburstChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: { 
+        trigger: 'item', 
+        backgroundColor: 'rgba(10, 25, 47, 0.95)', 
+        borderColor: '#00a2ff', 
+        textStyle: { color: '#fff' } 
+      },
+      color: colorPalette,
+      legend: {
+        orient: 'vertical',
+        right: '5%',
+        top: 'center',
+        textStyle: { color: '#ffffff', fontFamily: 'monospace', fontSize: 12 },
+        icon: 'circle'
+      },
+      series: [
+        {
+          type: 'pie',
+          radius: [0, '55%'],
+          center: ['40%', '50%'],
+          silent: true,
+          itemStyle: {
+            color: 'rgba(10, 25, 47, 0.8)',
+            shadowBlur: 20,
+            shadowColor: 'rgba(0, 0, 0, 0.5)'
+          },
+          label: {
+            show: true,
+            position: 'center',
+            formatter: `{a|${total}}\n{b|ASSETS}`,
+            rich: {
+              a: {
+                fontSize: 32,
+                fontWeight: 'bold',
+                color: '#ffffff',
+                lineHeight: 40,
+                textShadowColor: 'rgba(255, 255, 255, 0.4)',
+                textShadowBlur: 10
+              },
+              b: {
+                fontSize: 11,
+                color: '#8f9fb3',
+                letterSpacing: 2,
+                fontWeight: '500'
+              }
+            }
+          },
+          data: [{ value: 1 }]
+        },
+        {
+          type: 'pie',
+          radius: ['60%', '85%'],
+          center: ['40%', '50%'],
+          avoidLabelOverlap: false,
+          itemStyle: {
+            borderRadius: 15,
+            borderColor: '#0a192f',
+            borderWidth: 6
+          },
+          label: { show: false },
+          data: pieData
+        }
+      ]
+    }, true);
+  }
+
+  updateScatter3D() {
+    if (!this.scatterChart || this.assets.length === 0) return;
+    
+    // X: Conns, Y: Alerts, Z: Risk
+    let maxConns = 0;
+    let maxAlerts = 0;
+    const data = this.assets.map(a => {
+      const risk = parseInt(a.risk, 10) || 0;
+      const conns = parseInt(a.conns_24h || '0', 10);
+      const alerts = parseInt(a.alerts_24h || '0', 10);
+      if (conns > maxConns) maxConns = conns;
+      if (alerts > maxAlerts) maxAlerts = alerts;
+      return [
+        conns, // X
+        alerts, // Y
+        risk, // Z
+        a.ip,
+        a.device_type
+      ];
+    });
+
+    this.scatterChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: {
+        backgroundColor: 'rgba(10, 25, 47, 0.9)',
+        borderColor: '#3d9eff',
+        textStyle: { color: '#fff' },
+        formatter: (p: any) => `<strong>IP:</strong> ${p.data[3]}<br/><strong>Conns:</strong> ${p.data[0]}<br/><strong>Alerts:</strong> ${p.data[1]}<br/><strong>Risk:</strong> ${p.data[2]}`
+      },
+      grid: { top: 30, right: 60, bottom: 40, left: 60 },
+      xAxis: { 
+        name: 'Conns', 
+        type: 'value', 
+        min: 0,
+        max: maxConns === 0 ? 10 : undefined,
+        splitLine: { lineStyle: { color: 'rgba(0, 243, 255, 0.1)', type: 'dashed' } },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: '#a0aec0', fontFamily: 'monospace' }
+      },
+      yAxis: { 
+        name: 'Alerts', 
+        type: 'value',
+        min: 0,
+        max: maxAlerts === 0 ? 10 : undefined,
+        splitLine: { lineStyle: { color: 'rgba(0, 243, 255, 0.1)', type: 'dashed' } },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: '#a0aec0', fontFamily: 'monospace' }
+      },
+      visualMap: {
+        show: true,
+        dimension: 2,
+        min: 0,
+        max: 100,
+        inRange: {
+          color: ['#3d9eff', '#fde047', '#ff0055'],
+          symbolSize: [12, 40]
+        },
+        textStyle: { color: '#a0aec0', fontFamily: 'monospace' },
+        right: 0,
+        top: 'center',
+        calculable: true
+      },
+      series: [{
+        type: 'effectScatter',
+        rippleEffect: { brushType: 'stroke', scale: 3 },
+        itemStyle: {
+          shadowBlur: 20,
+          shadowColor: 'rgba(255, 255, 255, 0.2)',
+          opacity: 0.9
+        },
+        data: data
+      }]
+    });
+  }
+
   loadSubnets() {
     this.api.getIpamSubnets().subscribe({
-      next: (data: any) => { this.subnets = Array.isArray(data) ? data : []; },
+      next: (data: any) => { 
+        this.subnets = Array.isArray(data) ? data : []; 
+        setTimeout(() => {
+          if (!this.treemapChart && this.treemapContainer && typeof echarts !== 'undefined') {
+            this.treemapChart = echarts.init(this.treemapContainer.nativeElement, 'dark');
+          }
+          this.updateTreemap();
+        }, 100);
+      },
       error: () => { this.subnets = []; }
     });
   }
@@ -154,6 +411,11 @@ export class Assets implements OnInit {
         this.filterAssets();
         this.loading = false;
         this.cdr.detectChanges();
+        setTimeout(() => {
+          this.initCharts();
+          this.updateSunburst();
+          this.updateScatter3D();
+        }, 100);
       },
       error: (err) => {
         console.error("HTTP error:", err);

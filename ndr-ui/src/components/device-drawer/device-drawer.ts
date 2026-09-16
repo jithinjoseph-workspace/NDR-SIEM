@@ -1,4 +1,6 @@
-import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ChangeDetectorRef } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
+
+declare var ForceGraph3D: any;
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
@@ -65,6 +67,9 @@ export class DeviceDrawer implements OnChanges {
 
   constructor(private api: Api, private cdr: ChangeDetectorRef, private arkime: ArkimeService) {}
 
+  @ViewChild('topologyContainer') topologyContainer?: ElementRef;
+  topologyGraph: any;
+
   ngOnChanges(changes: SimpleChanges) {
     if (changes['node'] && this.node) {
       this.setDrawerTab(this.drawerTab);
@@ -73,6 +78,30 @@ export class DeviceDrawer implements OnChanges {
         const ip = this.node.active_ip || this.node.id || this.node.ip;
         if (ip) this.loadNodeConnections(ip);
       }
+    }
+  }
+
+  initTopology() {
+    if (this.drawerTab !== 'topology' || !this.topologyContainer || !this.node) return;
+    if (typeof ForceGraph3D === 'undefined') return;
+
+    if (!this.topologyGraph) {
+      this.topologyGraph = ForceGraph3D()(this.topologyContainer.nativeElement)
+        .backgroundColor('#000000')
+        .width(this.topologyContainer.nativeElement.clientWidth)
+        .height(this.topologyContainer.nativeElement.clientHeight || 300)
+        .nodeLabel('id')
+        .nodeAutoColorBy('group');
+    }
+
+    // Fetch localized data
+    const ip = this.node.active_ip || this.node.id || this.node.ip;
+    if (ip) {
+      this.api.getNetworkMapNode(ip).subscribe(data => {
+        if (data && data.nodes) {
+          this.topologyGraph.graphData(data);
+        }
+      });
     }
   }
 
@@ -129,6 +158,8 @@ export class DeviceDrawer implements OnChanges {
       this.loadNodeAlerts(this.node.active_ip || this.node.id || this.node.ip);
     } else if (tab === 'pcaps') {
       this.loadPcapSessions(this.node.active_ip || this.node.id || this.node.ip);
+    } else if (tab === 'topology') {
+      setTimeout(() => this.initTopology(), 100);
     }
   }
 
