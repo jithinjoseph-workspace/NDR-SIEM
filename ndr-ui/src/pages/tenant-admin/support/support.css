@@ -51,7 +51,6 @@
   height: 6px;
   border-radius: 50%;
   background: #4F8CFF;
-  box-shadow: 0 0 8px rgba(79,140,255,0.6);
   animation: pulse-dot 2.4s ease-in-out infinite;
 }
 
@@ -86,23 +85,24 @@
   align-items: center;
   gap: 8px;
   padding: 0 18px;
-  min-height: 40px;
-  border: 1px solid rgba(79,140,255,0.28);
-  border-radius: 8px;
-  background: rgba(79,140,255,0.10);
-  color: #7FB1FF;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: #171b37;
+  color: #8a94b2;
   font: inherit;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+  transition: all 160ms ease;
   flex-shrink: 0;
 }
 
 .refresh-btn:hover:not(:disabled) {
-  background: rgba(79,140,255,0.18);
-  border-color: rgba(79,140,255,0.50);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
   transform: translateY(-1px);
 }
 
@@ -118,31 +118,25 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
-  margin-bottom: 14px;
-  border: 1px solid rgba(79,140,255,0.18);
-  border-radius: 12px;
-  background: linear-gradient(160deg, #0D1422 0%, #090D18 100%);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 0 32px rgba(59,130,246,0.08), 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+  margin-bottom: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 20px;
+  background: #171b37;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
   position: relative;
 }
 
-/* Blue top-edge matching the modal */
+/* Top-edge glow removed */
 .stats-strip::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent 5%, rgba(79,140,255,0.60) 30%, rgba(167,139,250,0.40) 60%, transparent 95%);
-  pointer-events: none;
-  z-index: 1;
+  display: none;
 }
 
 .stat-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px 20px;
-  border-right: 1px solid rgba(79,140,255,0.10);
+  padding: 16px 24px;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
   transition: background 160ms ease;
 }
 .stat-card:last-child { border-right: none; }
@@ -215,9 +209,9 @@
 }
 
 .alert-success {
-  border: 1px solid rgba(105, 246, 184, 0.2);
+  border: 1px solid rgba(16, 185, 129, 0.3);
   background: rgba(11, 19, 35, 0.72);
-  color: #69f6b8;
+  color: #10b981;
 }
 
 .alert-error {
@@ -230,27 +224,18 @@
    PANELS
 ───────────────────────────────────────────────────────── */
 .panel {
-  background: linear-gradient(160deg, #0D1422 0%, #090D18 60%, #080C16 100%);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(79,140,255,0.18);
-  border-radius: 12px;
-  box-shadow:
-    0 0 0 1px rgba(255,255,255,0.04) inset,
-    0 0 40px rgba(59,130,246,0.08),
-    0 16px 48px rgba(0,0,0,0.65);
+  background: #171b37;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
   padding: 24px;
   position: relative;
   overflow: hidden;
 }
 
-/* Blue top-edge glow on every panel */
+/* Top-edge glow on every panel removed */
 .panel::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent 5%, rgba(79,140,255,0.60) 30%, rgba(167,139,250,0.40) 60%, transparent 95%);
-  pointer-events: none;
+  display: none;
 }
 
 .request-panel {
@@ -293,14 +278,12 @@
   border: 1px solid rgba(79,140,255,0.28);
   background: rgba(79,140,255,0.12);
   color: #7FB1FF;
-  box-shadow: 0 0 12px rgba(79,140,255,0.15);
 }
 
 .secondary-icon {
   border: 1px solid rgba(167,139,250,0.28);
   background: rgba(167,139,250,0.10);
   color: #A78BFA;
-  box-shadow: 0 0 12px rgba(167,139,250,0.12);
 }
 
 .panel-head h3 {
@@ -392,7 +375,6 @@ select:focus,
 textarea:focus {
   border-color: rgba(105, 246, 184, 0.4);
   background: rgba(105, 246, 184, 0.02);
-  box-shadow: 0 0 12px rgba(105, 246, 184, 0.12);
 }
 
 .form-actions {
@@ -428,17 +410,16 @@ textarea:focus {
   opacity: 0.48;
 }
 
-/* Primary — matches project's #69f6b8 solid button */
+/* Primary button */
 .btn-primary {
-  background: #69f6b8;
-  color: #06111e;
-  border-radius: 8px;
+  background: #6366f1;
+  color: #ffffff;
+  border-radius: 10px;
   font-weight: 700;
-  box-shadow: 0 4px 14px rgba(105, 246, 184, 0.3);
 }
 
 .btn-primary:hover:not(:disabled) {
-  box-shadow: 0 4px 20px rgba(105, 246, 184, 0.45);
+  background: #4f46e5;
 }
 
 /* Ghost — matches project's secondary outlined button */

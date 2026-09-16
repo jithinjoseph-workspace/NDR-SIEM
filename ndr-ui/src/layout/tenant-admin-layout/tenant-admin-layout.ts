@@ -8,6 +8,7 @@ import {
   LucideAngularModule,
   Users, Globe, Activity, User, Settings, HelpCircle,
   Building2, ArrowUpCircle, RefreshCw, Loader, ShieldCheck, X, Radio,
+  ChevronDown, Cpu, Sliders,
 } from 'lucide-angular';
 import { Api } from '../../services/api/api';
 import { AuthService } from '../../services/auth/auth';
@@ -23,7 +24,7 @@ import { Subscription } from 'rxjs';
   imports: [CommonModule, RouterModule, LucideAngularModule],
   templateUrl: './tenant-admin-layout.html',
   styleUrls: [
-    '../sidebar/sidebar.css',
+    './tenant-admin-layout.css',
     '../../pages/tenant-admin/tenant-admin.css',
   ],
 })
@@ -36,6 +37,19 @@ export class TenantAdminLayout implements OnInit {
   HelpCircleIcon    = HelpCircle;
   BuildingIcon      = Building2;
   RadioIcon         = Radio;
+  ChevronIcon       = ChevronDown;
+  CpuIcon           = Cpu;
+  SlidersIcon       = Sliders;
+
+  groups: Record<string, boolean> = {
+    identity: true,
+    defense:  true,
+    ops:      true,
+  };
+
+  toggleGroup(name: string) {
+    this.groups[name] = !this.groups[name];
+  }
 
   hasSiem = false;
   ArrowUpCircleIcon = ArrowUpCircle;

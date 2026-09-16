@@ -7,12 +7,12 @@
 <!-- ── SECTION TABS ── -->
 <div class="section-tab-bar">
   <button class="section-tab" [class.active]="activeSectionTab() === 'users'"
-          (click)="activeSectionTab.set('users')">
+          (click)="switchTab('users')">
     <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
-    User Directory
+    User Directory & Analytics
   </button>
   <button class="section-tab" [class.active]="activeSectionTab() === 'sensors'"
-          (click)="activeSectionTab.set('sensors')">
+          (click)="switchTab('sensors')">
     <lucide-icon [name]="CpuIcon" class="w-4 h-4"></lucide-icon>
     Sensor Assignment
     <span class="section-tab-badge" *ngIf="sensorAssignments().length > 0">{{ sensorAssignments().length }}</span>
@@ -22,72 +22,395 @@
 <!-- ── EXECUTIVE DASHBOARD ── -->
 <section class="executive-dashboard" *ngIf="activeSectionTab() === 'users'">
 
-  <div class="kpi-grid">
-    <article class="kpi-widget prop-card glow-cyan">
-      <span class="prop-label">TOTAL ACCOUNTS</span>
-      <strong class="counter">{{ users().length }}</strong>
-      <div class="prop-pill pill-cyan">MANAGED</div>
-    </article>
-    <article class="kpi-widget prop-card glow-green">
-      <span class="prop-label">ACTIVE ACCOUNTS</span>
-      <strong class="counter">{{ activeUsers() }}</strong>
-      <div class="prop-pill pill-green">OPERATIONAL</div>
-    </article>
-    <article class="kpi-widget prop-card glow-purple">
-      <span class="prop-label">ANALYSTS &amp; SENIOR ANALYSTS</span>
-      <strong class="counter">{{ analystUsers() }}</strong>
-      <div class="prop-pill pill-purple">ANALYSTS</div>
-    </article>
-    <article class="kpi-widget prop-card glow-yellow">
-      <span class="prop-label">VIEWER ACCOUNTS</span>
-      <strong class="counter">{{ viewerUsers() }}</strong>
-      <div class="prop-pill pill-yellow">RESTRICTED</div>
-    </article>
-  </div>
+  <!-- ── CYBER DEFENSE & TELEMETRY COMMAND DECK (Replaces plain cards) ── -->
+  <div class="cyber-deck-grid">
 
-  <div *ngIf="!loading() && users().length > 0" class="charts-grid">
-    <div class="chart-card">
-      <div class="chart-header">
-        <div class="chart-header-left"><h4>Role Distribution</h4><p>Breakdown by analyst tier</p></div>
-        <div class="chart-icon-wrap"><lucide-icon [name]="ChartIcon" class="w-4 h-4"></lucide-icon></div>
-      </div>
-      <div class="chart-container">
-        <canvas baseChart [data]="roleChartData()" [options]="donutChartOptions" [type]="'doughnut'"></canvas>
-        <div class="donut-center"><strong>{{ users().length }}</strong><span>Total</span></div>
-      </div>
-      <div class="chart-legend">
-        <div class="legend-item">
-          <span class="legend-dot" style="background:#0ea5e9; box-shadow:0 0 10px #0ea5e9"></span>
-          <div class="legend-text-wrap"><span class="legend-val">{{ analystUsers() }}</span><span class="legend-label">Analyst</span></div>
+    <!-- MODULE 1: Zero-Trust Posture & Compliance Dial -->
+    <div class="deck-card deck-card-posture">
+      <div class="deck-header">
+        <div class="deck-title-wrap">
+          <div class="deck-mini-icon text-emerald"><lucide-icon [name]="ShieldIcon" class="w-3.5 h-3.5"></lucide-icon></div>
+          <div>
+            <span class="deck-eyebrow">SECURITY INDEX</span>
+            <h4 class="deck-title">Zero-Trust Posture</h4>
+          </div>
         </div>
-        <div class="legend-item">
-          <span class="legend-dot" style="background:#8b5cf6; box-shadow:0 0 10px #8b5cf6"></span>
-          <div class="legend-text-wrap"><span class="legend-val">0</span><span class="legend-label">Senior Analyst</span></div>
+        <span class="status-live-chip chip-emerald">
+          <span class="mini-status-dot dot-emerald"></span>
+          OPTIMAL
+        </span>
+      </div>
+
+      <div class="deck-body-split">
+        <!-- Circular Radial Gauge SVG -->
+        <div class="radial-gauge-box">
+          <svg class="radial-svg" viewBox="0 0 88 88">
+            <circle class="gauge-track" cx="44" cy="44" r="36"></circle>
+            <circle class="gauge-bar bar-emerald" cx="44" cy="44" r="36"
+                    [style.stroke-dashoffset]="226 - (226 * accountHealthPct() / 100)"></circle>
+          </svg>
+          <div class="gauge-center-text">
+            <strong>{{ accountHealthPct() }}%</strong>
+            <span>ACTIVE</span>
+          </div>
         </div>
-        <div class="legend-item">
-          <span class="legend-dot" style="background:#10b981; box-shadow:0 0 10px #10b981"></span>
-          <div class="legend-text-wrap"><span class="legend-val">{{ viewerUsers() }}</span><span class="legend-label">Viewer</span></div>
+
+        <div class="deck-meta-list">
+          <div class="meta-line">
+            <span class="meta-label">Identity Clearances</span>
+            <strong class="meta-val">{{ users().length }} ACCOUNTS</strong>
+          </div>
+          <div class="meta-line">
+            <span class="meta-label">Active Accounts</span>
+            <strong class="meta-val text-emerald">{{ activeUsers() }}</strong>
+          </div>
+          <div class="meta-line">
+            <span class="meta-label">Suspended Accounts</span>
+            <strong class="meta-val text-muted">{{ suspendedUsers() }}</strong>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="chart-card">
-      <div class="chart-header">
-        <div class="chart-header-left"><h4>Account Status</h4><p>Active vs. disabled ratio</p></div>
-        <div class="chart-icon-wrap"><lucide-icon [name]="ShieldIconAlt" class="w-4 h-4"></lucide-icon></div>
-      </div>
-      <div class="chart-container">
-        <canvas baseChart [data]="statusChartData()" [options]="donutChartOptions" [type]="'doughnut'"></canvas>
-        <div class="donut-center"><strong>{{ activeUsers() }}</strong><span>Active</span></div>
-      </div>
-      <div class="chart-legend">
-        <div class="legend-item">
-          <span class="legend-dot" style="background:#10B981; box-shadow:0 0 10px #10b981"></span>
-          <div class="legend-text-wrap"><span class="legend-val">{{ activeUsers() }}</span><span class="legend-label">ACTIVE</span></div>
+    <!-- MODULE 2: Ingestion Pipeline & Network Velocity -->
+    <div class="deck-card deck-card-ingest">
+      <div class="deck-header">
+        <div class="deck-title-wrap">
+          <div class="deck-mini-icon text-cyan"><lucide-icon [name]="ZapIcon" class="w-3.5 h-3.5"></lucide-icon></div>
+          <div>
+            <span class="deck-eyebrow">TELEMETRY STREAM</span>
+            <h4 class="deck-title">Ingestion Velocity</h4>
+          </div>
         </div>
-        <div class="legend-item">
-          <span class="legend-dot" style="background:#EF4444; box-shadow:0 0 10px #ef4444"></span>
-          <div class="legend-text-wrap"><span class="legend-val">{{ users().length - activeUsers() }} / {{ users().length }}</span><span class="legend-label">DISABLED</span></div>
+        <span class="live-rate-pill pill-cyan">
+          <span class="live-dot-ping dot-cyan"></span>
+          {{ ingestEvents1h() }} events/1h
+        </span>
+      </div>
+
+      <div class="deck-footer-stats">
+        <div class="stat-cell">
+          <span class="sc-label">EVENTS (1H)</span>
+          <strong class="sc-val text-cyan">{{ ingestEvents1h() }}</strong>
+        </div>
+        <div class="stat-cell">
+          <span class="sc-label">HITS (1H)</span>
+          <strong class="sc-val text-emerald">{{ ingestHits1h() }}</strong>
+        </div>
+        <div class="stat-cell">
+          <span class="sc-label">TOTAL EVENTS</span>
+          <strong class="sc-val">{{ ingestEventsTotal() }}</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODULE 3: Sensor Fleet Mesh Status -->
+    <div class="deck-card deck-card-mesh">
+      <div class="deck-header">
+        <div class="deck-title-wrap">
+          <div class="deck-mini-icon text-violet"><lucide-icon [name]="CpuIcon" class="w-3.5 h-3.5"></lucide-icon></div>
+          <div>
+            <span class="deck-eyebrow">EDGE APPLIANCES</span>
+            <h4 class="deck-title">Sensor Fleet Mesh</h4>
+          </div>
+        </div>
+        <button type="button" class="deck-action-link" (click)="switchTab('sensors')">
+          Manage Sensors &rarr;
+        </button>
+      </div>
+
+      <!-- Fleet Nodes Preview Grid — real sensor keys for this tenant -->
+      <div class="sensor-nodes-grid" *ngIf="sensorKeys().length > 0">
+        <div class="node-badge-item" *ngFor="let s of sensorKeys().slice(0, 4); trackBy: trackByIndex">
+          <span class="node-dot" [class.node-dot-emerald]="s.active" [class.node-dot-amber]="!s.active"></span>
+          <span class="node-id">{{ s.name || s.key_prefix }}</span>
+          <span class="node-rate" [class.text-emerald]="s.active" [class.text-muted]="!s.active">{{ s.active ? 'ONLINE' : 'OFFLINE' }}</span>
+        </div>
+      </div>
+      <div class="deck-ticker-line" *ngIf="sensorKeys().length === 0">
+        <span class="ticker-text">No sensors registered for this tenant yet.</span>
+      </div>
+
+      <div class="deck-ticker-line" *ngIf="sensorKeys().length > 0">
+        <span class="ticker-dot dot-violet"></span>
+        <span class="ticker-text">{{ onlineSensorCount() }}/{{ totalSensorCount() }} sensors online</span>
+      </div>
+    </div>
+
+    <!-- MODULE 4: Identity & Credential Clearance Pool -->
+    <div class="deck-card deck-card-identity">
+      <div class="deck-header">
+        <div class="deck-title-wrap">
+          <div class="deck-mini-icon text-amber"><lucide-icon [name]="LockIcon" class="w-3.5 h-3.5"></lucide-icon></div>
+          <div>
+            <span class="deck-eyebrow">CLEARANCE POOL</span>
+            <h4 class="deck-title">Identity &amp; Seats</h4>
+          </div>
+        </div>
+        <button type="button" class="btn-quick-new-user" (click)="openCreateForm()">
+          <lucide-icon [name]="UserPlusIcon" class="w-3 h-3"></lucide-icon>
+          Add User
+        </button>
+      </div>
+
+      <div class="seat-util-row">
+        <div class="seat-count-display">
+          <strong class="seat-main-num text-amber">{{ activeUsers() }}</strong>
+          <span class="seat-max-num">/ {{ users().length }} ACCOUNTS</span>
+        </div>
+      </div>
+
+      <!-- Segmented bar: one segment per real account (no fake seat cap) -->
+      <div class="segmented-seat-bar">
+        <span class="seat-segment" *ngFor="let s of seatBarSlots(); let idx = index"
+              [class.filled-cyan]="idx < analystUsers()"
+              [class.filled-violet]="idx >= analystUsers() && idx < activeUsers()"
+              [class.empty]="idx >= activeUsers()"></span>
+      </div>
+
+      <div class="deck-role-pills">
+        <span class="role-stat-chip chip-cyan">{{ analystUsers() }} Analysts</span>
+        <span class="role-stat-chip chip-violet">{{ viewerUsers() }} Viewers</span>
+        <span class="role-stat-chip chip-muted">{{ suspendedUsers() }} Suspended</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── 3D CYBER TOPOLOGY & REAL-TIME AUDIT STREAM ROW ── -->
+  <div class="cockpit-3d-row">
+    <!-- 3D WebGL Nodal Cluster Viewport -->
+    <div class="crm-3d-card">
+      <div class="card-glass-header">
+        <div class="header-left">
+          <div class="header-icon-box">
+            <lucide-icon [name]="ZapIcon" class="w-4 h-4"></lucide-icon>
+          </div>
+          <div>
+            <h4>Cyber Perimeter Topology</h4>
+            <p>Interactive 3D WebGL Nodal Mesh Matrix</p>
+          </div>
+        </div>
+        <div class="header-actions-box">
+          <!-- 3D View Mode Switcher -->
+          <div class="three-mode-switcher">
+            <button type="button" class="mode-chip-btn" [class.active]="threeVisualMode() === 'full'" (click)="setThreeMode('full')">Full</button>
+            <button type="button" class="mode-chip-btn" [class.active]="threeVisualMode() === 'wireframe'" (click)="setThreeMode('wireframe')">Mesh</button>
+            <button type="button" class="mode-chip-btn" [class.active]="threeVisualMode() === 'particles'" (click)="setThreeMode('particles')">Points</button>
+            <button type="button" class="mode-chip-btn" [class.active]="threeVisualMode() === 'core'" (click)="setThreeMode('core')">Core</button>
+          </div>
+
+          <!-- Warp Shockwave Button -->
+          <button type="button" class="btn-warp-pulse" (click)="triggerPulseWave()" title="Trigger Holographic Shockwave">
+            <lucide-icon [name]="SparklesIcon" class="w-3.5 h-3.5"></lucide-icon>
+            Warp Pulse
+          </button>
+
+          <span class="live-beacon-pill">
+            <span class="beacon-dot"></span>
+            LIVE 60 FPS
+          </span>
+          <button type="button" class="btn-reset-3d" (click)="resetThreeCamera()" title="Reset 3D view">
+            <lucide-icon [name]="RotateCcwIcon" class="w-3.5 h-3.5"></lucide-icon>
+            Reset
+          </button>
+        </div>
+      </div>
+
+      <div class="three-canvas-wrap" (click)="triggerPulseWave()">
+        <div #threeCanvasContainer class="three-viewport"></div>
+        <!-- 3D HUD OVERLAY -->
+        <div class="three-hud-overlay">
+          <div class="hud-item hud-top-left">
+            <span class="hud-label">TENANT</span>
+            <div class="hud-val-row">
+              <strong class="hud-val text-cyan">{{ tenantName || tenantId }}</strong>
+              <div class="hud-equalizer-bars">
+                <span class="eq-bar eq-cyan"></span><span class="eq-bar eq-emerald"></span><span class="eq-bar eq-amber"></span><span class="eq-bar eq-violet"></span><span class="eq-bar eq-coral"></span>
+              </div>
+            </div>
+          </div>
+          <div class="hud-item hud-top-right">
+            <span class="hud-label">SENSORS ONLINE</span>
+            <strong class="hud-val">{{ onlineSensorCount() }}/{{ totalSensorCount() }}</strong>
+          </div>
+          <div class="hud-item hud-bottom-left">
+            <span class="hud-label">TOPOLOGY NODES</span>
+            <strong class="hud-val">{{ users().length + sensorKeys().length }} ACTIVE MESH ENDPOINTS</strong>
+          </div>
+          <div class="hud-item hud-bottom-right">
+            <span class="hud-tip">DRAG TO ORBIT · CLICK FOR WARP PULSE</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Telemetry & Access Event Feed -->
+    <div class="crm-feed-card">
+      <div class="card-glass-header">
+        <div class="header-left">
+          <div class="header-icon-box feed-icon">
+            <lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon>
+          </div>
+          <div>
+            <h4>Live Access Stream</h4>
+            <p>Real-time tenant audit verification</p>
+          </div>
+        </div>
+        <div class="feed-header-actions">
+          <div class="feed-pulse-indicator">
+            <span class="ping-ring"></span>
+            <span class="ping-dot"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feed Category Filter Bar -->
+      <div class="feed-filter-bar">
+        <button type="button" class="feed-filter-chip" [class.active]="feedFilter() === 'all'" (click)="setFeedFilter('all')">ALL</button>
+        <button type="button" class="feed-filter-chip filter-violet" [class.active]="feedFilter() === 'auth'" (click)="setFeedFilter('auth')">AUTH</button>
+        <button type="button" class="feed-filter-chip filter-cyan" [class.active]="feedFilter() === 'sensor'" (click)="setFeedFilter('sensor')">SENSORS</button>
+        <button type="button" class="feed-filter-chip filter-emerald" [class.active]="feedFilter() === 'policy'" (click)="setFeedFilter('policy')">POLICY</button>
+      </div>
+
+      <div class="live-feed-list" *ngIf="filteredAuditEvents().length > 0">
+        <div class="feed-event-item" *ngFor="let item of filteredAuditEvents(); trackBy: trackByIndex">
+          <div class="event-avatar" [ngClass]="item.type">
+            <lucide-icon *ngIf="item.type === 'auth'" [name]="ShieldIcon" class="w-3.5 h-3.5"></lucide-icon>
+            <lucide-icon *ngIf="item.type === 'sensor'" [name]="CpuIcon" class="w-3.5 h-3.5"></lucide-icon>
+            <lucide-icon *ngIf="item.type === 'policy'" [name]="LockIcon" class="w-3.5 h-3.5"></lucide-icon>
+          </div>
+          <div class="event-details">
+            <div class="event-title">{{ item.title }}</div>
+            <div class="event-sub">{{ item.subtitle }}</div>
+          </div>
+          <div [class]="'event-badge ' + item.badgeClass">{{ item.badge }}</div>
+        </div>
+      </div>
+      <div class="live-feed-list" *ngIf="filteredAuditEvents().length === 0">
+        <p class="feed-empty-hint">No activity yet this session — actions like creating a user or assigning a sensor will appear here.</p>
+      </div>
+
+      <div class="feed-footer">
+        <span class="feed-stat">ACCOUNTS: <strong>{{ users().length }}</strong></span>
+        <span class="feed-stat">SENSORS ONLINE: <strong class="text-emerald">{{ onlineSensorCount() }}/{{ totalSensorCount() }}</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ADVANCED 4-CHART TELEMETRY GRID ── -->
+  <div *ngIf="!loading() && users().length > 0" class="charts-grid-v2">
+    <!-- Chart 1: Account Growth Line Chart (real created_at buckets) -->
+    <div class="chart-card-v2">
+      <div class="chart-v2-header">
+        <div class="chart-v2-left">
+          <div class="chart-icon-box text-cyan"><lucide-icon [name]="ActivityIcon" class="w-4 h-4"></lucide-icon></div>
+          <div>
+            <h4>Account Growth</h4>
+            <p>Accounts created over the selected period</p>
+          </div>
+        </div>
+        <div class="chart-header-actions-row">
+          <!-- Timeframe Selector -->
+          <div class="chart-timeframe-selector">
+            <button type="button" class="tf-btn" [class.active]="authTimeframe() === '6h'" (click)="setAuthTimeframe('6h')">6H</button>
+            <button type="button" class="tf-btn" [class.active]="authTimeframe() === '12h'" (click)="setAuthTimeframe('12h')">12H</button>
+            <button type="button" class="tf-btn" [class.active]="authTimeframe() === '24h'" (click)="setAuthTimeframe('24h')">24H</button>
+            <button type="button" class="tf-btn" [class.active]="authTimeframe() === '7d'" (click)="setAuthTimeframe('7d')">7D</button>
+          </div>
+          <div class="chart-legend-inline">
+            <span class="legend-chip chip-cyan">Accounts Created</span>
+          </div>
+        </div>
+      </div>
+      <div class="chart-container-v2 line-chart-wrap">
+        <canvas baseChart [data]="authTimelineChartData()" [options]="lineChartOptions" [type]="'line'"></canvas>
+      </div>
+    </div>
+
+    <!-- Chart 2: Clearance Capabilities Bar Chart -->
+    <div class="chart-card-v2">
+      <div class="chart-v2-header">
+        <div class="chart-v2-left">
+          <div class="chart-icon-box"><lucide-icon [name]="ShieldIcon" class="w-4 h-4"></lucide-icon></div>
+          <div>
+            <h4>Role Clearance &amp; Capability Matrix</h4>
+            <p>Granted access privileges distributed across tiers</p>
+          </div>
+        </div>
+        <div class="chart-legend-inline">
+          <span class="legend-chip chip-cyan">Analyst</span>
+          <span class="legend-chip chip-violet">Senior Analyst</span>
+        </div>
+      </div>
+      <div class="chart-container-v2 bar-chart-wrap">
+        <canvas baseChart [data]="clearanceBarChartData()" [options]="barChartOptions" [type]="'bar'"></canvas>
+      </div>
+    </div>
+
+    <!-- Chart 3: Doughnut Roles Distribution -->
+    <div class="chart-card-v2 donut-split">
+      <div class="chart-v2-header">
+        <div class="chart-v2-left">
+          <div class="chart-icon-box"><lucide-icon [name]="ChartIcon" class="w-4 h-4"></lucide-icon></div>
+          <div>
+            <h4>Role Distribution</h4>
+            <p>Breakdown by analyst tier</p>
+          </div>
+        </div>
+      </div>
+      <div class="donut-content-row">
+        <div class="chart-container-donut">
+          <canvas baseChart [data]="roleChartData()" [options]="donutChartOptions" [type]="'doughnut'"></canvas>
+          <div class="donut-center"><strong>{{ users().length }}</strong><span>Total</span></div>
+        </div>
+        <div class="chart-legend-vertical">
+          <div class="legend-row">
+            <span class="dot-ring cyan"></span>
+            <span class="leg-label">Analyst</span>
+            <strong class="leg-val">{{ pureAnalystUsers() }}</strong>
+          </div>
+          <div class="legend-row">
+            <span class="dot-ring violet"></span>
+            <span class="leg-label">Senior Analyst</span>
+            <strong class="leg-val">{{ seniorAnalystUsers() }}</strong>
+          </div>
+          <div class="legend-row">
+            <span class="dot-ring indigo"></span>
+            <span class="leg-label">Viewer</span>
+            <strong class="leg-val">{{ viewerUsers() }}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart 4: Doughnut Status Ratio -->
+    <div class="chart-card-v2 donut-split">
+      <div class="chart-v2-header">
+        <div class="chart-v2-left">
+          <div class="chart-icon-box"><lucide-icon [name]="ShieldIconAlt" class="w-4 h-4"></lucide-icon></div>
+          <div>
+            <h4>Account Operational Status</h4>
+            <p>Active vs. disabled tenant ratio</p>
+          </div>
+        </div>
+      </div>
+      <div class="donut-content-row">
+        <div class="chart-container-donut">
+          <canvas baseChart [data]="statusChartData()" [options]="donutChartOptions" [type]="'doughnut'"></canvas>
+          <div class="donut-center"><strong>{{ activeUsers() }}</strong><span>Active</span></div>
+        </div>
+        <div class="chart-legend-vertical">
+          <div class="legend-row">
+            <span class="dot-ring emerald"></span>
+            <span class="leg-label">Active / Live</span>
+            <strong class="leg-val">{{ activeUsers() }}</strong>
+          </div>
+          <div class="legend-row">
+            <span class="dot-ring muted"></span>
+            <span class="leg-label">Disabled</span>
+            <strong class="leg-val">{{ users().length - activeUsers() }}</strong>
+          </div>
         </div>
       </div>
     </div>
@@ -427,7 +750,7 @@
               <span class="field-label">Status</span>
               <div class="status-toggle">
                 <button type="button" class="status-btn" [class.active-status]="userForm.active === true" (click)="userForm.active = true">
-                  <span class="status-dot green"></span> Active
+                  <span class="status-dot pink"></span> Active
                 </button>
                 <button type="button" class="status-btn" [class.active-status]="userForm.active === false" (click)="userForm.active = false">
                   <span class="status-dot red"></span> Disabled

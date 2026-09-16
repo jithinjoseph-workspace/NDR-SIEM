@@ -1,30 +1,400 @@
-.device-signout-btn {
-  margin-left: auto;
+/* ═══════════════════════════════════════════════════════════════════
+   REFERENCE CRM-DASHBOARD STYLE — ACTIVE SESSIONS
+   ═══════════════════════════════════════════════════════════════════ */
+
+:host {
+  display: block;
+  width: 100%;
+}
+
+/* ── KPI Grid Matching Reference Dashboard ───────────────────────── */
+.kpi-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.prop-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 24px 26px;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  min-height: 130px;
+  box-sizing: border-box;
+}
+
+.prop-card:hover {
+  transform: translateY(-4px);
+}
+
+/* Card 1: Solid Dark Midnight Navy with Violet Accent */
+.prop-card:nth-child(1) {
+  background: #171b37;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.prop-card:nth-child(1) .prop-label {
+  color: #8a94b2;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.prop-card:nth-child(1) .counter {
+  color: #ffffff;
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 1;
+  margin: 10px 0;
+}
+
+.prop-card:nth-child(1) .prop-pill {
+  background: rgba(168, 85, 247, 0.14);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  color: #c084fc;
   font-size: 11px;
   font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  background: transparent;
-  color: #f87171;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, border-color 0.15s;
 }
-.session-device-row:hover .device-signout-btn { opacity: 1; }
-.device-signout-btn:hover { border-color: rgba(239, 68, 68, 0.7); background: rgba(239, 68, 68, 0.08); }
-.device-signout-btn:disabled { opacity: 0 !important; cursor: not-allowed; }
 
-.device-confirm { margin-left: 32px; }
+/* Card 2: Deep Midnight Navy Card with Hot Pink Highlights */
+.prop-card:nth-child(2) {
+  background: #171b37;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
+.prop-card:nth-child(2) .prop-label {
+  color: #8a94b2;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.prop-card:nth-child(2) .counter {
+  color: #ffffff;
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 1;
+  margin: 10px 0;
+}
+
+.prop-card:nth-child(2) .prop-pill {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #10b981;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* Card 3: Deep Dark Card */
+.prop-card:nth-child(3) {
+  background: #171b37;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.prop-card:nth-child(3) .prop-label {
+  color: #8a94b2;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.prop-card:nth-child(3) .counter {
+  color: #ffffff;
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1;
+  margin: 8px 0;
+}
+
+.prop-card:nth-child(3) .prop-pill {
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.prop-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  width: fit-content;
+}
+
+/* ── Live Sessions Grid ──────────────────────────────────────────── */
+.enterprise-grid {
+  background: #171b37;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  margin-bottom: 32px;
+}
+
+.grid-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 22px 28px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.grid-toolbar-left h3 {
+  margin: 0 0 3px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.grid-toolbar-left p {
+  margin: 0;
+  font-size: 12.5px;
+  color: #8a94b2;
+}
+
+.secondary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #101426;
+  color: #8a94b2;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+
+.secondary-action:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sessions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px 24px;
+}
+
+/* ── User Session Group Card ────────────────────────────────────── */
+.session-user-group {
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  transition: all 0.2s ease;
+}
+
+.session-user-group:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+.session-user-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.session-user-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.session-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: #4f46e5;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.session-user-identity strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  display: block;
+}
+
+.session-role {
+  font-size: 11px;
+  color: #8a94b2;
+  text-transform: capitalize;
+}
+
+.session-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: rgba(56, 189, 248, 0.15);
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.session-device-count {
+  font-size: 12px;
+  color: #8a94b2;
+}
+
+.force-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  color: #ef4444;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+
+.force-logout-btn:hover:not(:disabled) {
+  background: #ef4444;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.force-logout-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Device Rows ─────────────────────────────────────────────────── */
+.session-device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.02);
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.session-device-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.session-device-icon {
+  color: #38bdf8;
+  flex-shrink: 0;
+}
+
+.session-device-name {
+  color: #e2e8f0;
+  font-weight: 500;
+  flex: 1;
+}
+
+.session-device-ip {
+  font-family: var(--font-mono, monospace);
+  color: #38bdf8;
+  font-size: 12px;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.session-device-time {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
 
 .session-tab-count {
   margin-left: 6px;
   font-size: 10px;
   font-weight: 700;
-  color: #69f6b8;
-  background: rgba(105, 246, 184, 0.1);
-  border: 1px solid rgba(105, 246, 184, 0.2);
-  border-radius: 10px;
-  padding: 1px 7px;
-  white-space: nowrap;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 9999px;
+  padding: 1px 8px;
+}
+
+.device-signout-btn {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: transparent;
+  color: #ef4444;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s;
+}
+
+.session-device-row:hover .device-signout-btn {
+  opacity: 1;
+}
+
+.device-signout-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.device-signout-btn:disabled {
+  opacity: 0 !important;
+}
+
+/* Confirmation Dialog */
+.force-logout-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+  font-size: 12.5px;
+  color: #fca5a5;
+}
+
+.force-logout-confirm lucide-icon {
+  color: #ef4444;
+  flex-shrink: 0;
+}
+
+.force-logout-confirm strong {
+  color: #ffffff;
+}
+
+.force-logout-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }

@@ -1,6 +1,6 @@
 import {
-  Component, Input, OnInit, OnDestroy, ChangeDetectionStrategy,
-  signal, computed, ViewEncapsulation,
+  Component, Input, OnInit, OnDestroy, AfterViewInit, ChangeDetectionStrategy,
+  signal, computed, ViewEncapsulation, ElementRef, ViewChild
 } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -11,12 +11,13 @@ import {
   LayoutDashboard, Bell, FileText, Radio, Network, Globe, Gem, Settings,
   UserCircle, ChevronRight, Server, FolderSearch, Bot, Cpu, Plus,
   AlertCircle, XCircle, ChevronDown, Check, RotateCcw,
-  Database, ShieldAlert, ScrollText,
+  Database, ShieldAlert, ScrollText, Zap, Layers, Sparkles, TrendingUp
 } from 'lucide-angular';
 import { Api, SensorKey, SensorAssignment } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
 import { Subscription } from 'rxjs';
 import { BaseChartDirective } from 'ng2-charts';
+import * as THREE from 'three';
 
 interface TenantUser {
   id: string;
@@ -46,7 +47,7 @@ interface PermissionOption {
   templateUrl: './users.html',
   styleUrl: './users.css',
 })
-export class UsersSection implements OnInit, OnDestroy {
+export class UsersSection implements OnInit, OnDestroy, AfterViewInit {
   @Input() tenantId = '';
   @Input() tenantName = 'Organization';
   @Input() set tenantFeatures(v: string[]) { if (v?.length) this._tenantFeatures.set(v); }
@@ -93,22 +94,66 @@ export class UsersSection implements OnInit, OnDestroy {
   XCircleIcon      = XCircle;
   ChevronDownIcon  = ChevronDown;
   CheckIcon        = Check;
+  ZapIcon          = Zap;
+  RotateCcwIcon    = RotateCcw;
+  LayersIcon       = Layers;
+  SparklesIcon     = Sparkles;
+  TrendingUpIcon   = TrendingUp;
 
-  // ── Signals ──────────────────────────────────────────────────────────────
+  // ── Three.js Viewport Reference ───────────────────────────────────────────
+  @ViewChild('threeCanvasContainer', { static: false }) threeCanvasRef?: ElementRef<HTMLDivElement>;
+  private threeRenderer?: THREE.WebGLRenderer;
+  private threeScene?: THREE.Scene;
+  private threeCamera?: THREE.PerspectiveCamera;
+  private threeAnimId?: number;
+  private threeResizeObs?: ResizeObserver;
+  private threeMeshGroup?: THREE.Group;
+  private icoMesh?: THREE.Mesh;
+  private coreMesh?: THREE.Mesh;
+  private ring1?: THREE.Mesh;
+  private ring2?: THREE.Mesh;
+  private points?: THREE.Points;
+  private pulseRing?: THREE.Mesh;
+  private pulseScale = 0;
+  private pulseOpacity = 0;
+  private isPointerDown = false;
+  private prevPointerX = 0;
+  private prevPointerY = 0;
 
-  readonly sensorKeys          = signal<SensorKey[]>([]);
-  readonly sensorAssignments   = signal<SensorAssignment[]>([]);
-  readonly sensorAssignLoading = signal(false);
-  readonly sensorAssignSaving  = signal(false);
-  readonly pendingSensorSel    = signal<Record<string, string[]>>({});
-  readonly sensorDropdownOpen  = signal<Record<string, boolean>>({});
-  readonly activeSectionTab    = signal<'users' | 'sensors'>('users');
-  readonly selectedUserIds     = signal(new Set<string>());
-  readonly roleChartData       = signal<any>({ labels: [], datasets: [] });
-  readonly statusChartData     = signal<any>({ labels: [], datasets: [] });
-  readonly searchTerm          = signal('');
-  readonly sortField           = signal<keyof TenantUser | 'status'>('username');
-  readonly sortAscending       = signal(true);
+  // ── High-Tech Cockpit & 3D Signals ─────────────────────────────────────────
+  readonly threeVisualMode        = signal<'full' | 'wireframe' | 'particles' | 'core'>('full');
+  readonly threeSpeed             = signal<number>(1);
+  readonly authTimeframe          = signal<'6h' | '12h' | '24h' | '7d'>('24h');
+  readonly feedFilter             = signal<'all' | 'auth' | 'sensor' | 'policy'>('all');
+
+  // Real events only — pushed by pushLiveEvent() whenever an actual action
+  // succeeds on this page (user created/updated/deleted, sensor assigned).
+  // No seeded/simulated entries: an empty feed means nothing has happened
+  // yet in this session, not that we don't have data to show.
+  readonly liveAuditEvents = signal<any[]>([]);
+
+  readonly filteredAuditEvents = computed(() => {
+    const f = this.feedFilter();
+    if (f === 'all') return this.liveAuditEvents();
+    return this.liveAuditEvents().filter(e => e.type === f);
+  });
+
+  // ── Core Signals ──────────────────────────────────────────────────────────
+  readonly sensorKeys             = signal<SensorKey[]>([]);
+  readonly sensorAssignments      = signal<SensorAssignment[]>([]);
+  readonly sensorAssignLoading    = signal(false);
+  readonly sensorAssignSaving     = signal(false);
+  readonly pendingSensorSel       = signal<Record<string, string[]>>({});
+  readonly sensorDropdownOpen     = signal<Record<string, boolean>>({});
+  readonly activeSectionTab       = signal<'users' | 'sensors'>('users');
+  readonly selectedUserIds        = signal(new Set<string>());
+  readonly roleChartData          = signal<any>({ labels: [], datasets: [] });
+  readonly statusChartData        = signal<any>({ labels: [], datasets: [] });
+  readonly authTimelineChartData  = signal<any>({ labels: [], datasets: [] });
+  readonly clearanceBarChartData  = signal<any>({ labels: [], datasets: [] });
+  readonly searchTerm             = signal('');
+  readonly sortField              = signal<keyof TenantUser | 'status'>('username');
+  readonly sortAscending          = signal(true);
   readonly users               = signal<TenantUser[]>([]);
   readonly loading             = signal(false);
   readonly saving              = signal(false);
@@ -120,12 +165,31 @@ export class UsersSection implements OnInit, OnDestroy {
   readonly usernameTouched     = signal(false);
   readonly passwordTouched     = signal(false);
 
+  // Real ingestion telemetry for this tenant — see loadIngestStats().
+  readonly ingestEventsTotal   = signal(0);
+  readonly ingestEvents1h      = signal(0);
+  readonly ingestHits1h        = signal(0);
+
   // ── Computed ──────────────────────────────────────────────────────────────
 
-  readonly activeUsers     = computed(() => this.users().filter(u => u.active !== false).length);
-  readonly analystUsers    = computed(() => this.users().filter(u => u.role === 'analyst' || u.role === 'senior_analyst').length);
-  readonly viewerUsers     = computed(() => this.users().filter(u => u.role === 'viewer').length);
-  readonly assignableUsers = computed(() => this.users());
+  readonly activeUsers        = computed(() => this.users().filter(u => u.active !== false).length);
+  readonly analystUsers       = computed(() => this.users().filter(u => u.role === 'analyst' || u.role === 'senior_analyst').length);
+  // 'analyst' role only — matches the donut chart's own "Analyst" segment,
+  // which is computed separately in updateCharts() and does NOT include
+  // senior_analyst (unlike analystUsers() above, kept for the seat bar).
+  readonly pureAnalystUsers   = computed(() => this.users().filter(u => u.role === 'analyst').length);
+  readonly seniorAnalystUsers = computed(() => this.users().filter(u => u.role === 'senior_analyst').length);
+  readonly viewerUsers        = computed(() => this.users().filter(u => u.role === 'viewer').length);
+  readonly assignableUsers    = computed(() => this.users());
+  readonly accountHealthPct   = computed(() => {
+    const total = this.users().length;
+    return total > 0 ? Math.round((this.activeUsers() / total) * 100) : 100;
+  });
+  readonly suspendedUsers     = computed(() => this.users().length - this.activeUsers());
+  readonly onlineSensorCount  = computed(() => this.sensorKeys().filter(s => s.active).length);
+  readonly totalSensorCount   = computed(() => this.sensorKeys().length);
+  // One segment per real account — no fabricated seat cap.
+  readonly seatBarSlots       = computed(() => Array.from({ length: Math.max(this.users().length, 1) }, (_, i) => i));
 
   readonly filteredAndSortedUsers = computed(() => {
     let result = this.users();
@@ -166,16 +230,65 @@ export class UsersSection implements OnInit, OnDestroy {
   readonly donutChartOptions: any = {
     responsive: true,
     maintainAspectRatio: false,
-    cutout: '78%',
+    cutout: '76%',
     plugins: {
       legend: { display: false },
       tooltip: {
-        backgroundColor: '#0C1220', titleColor: '#EFF6FF', bodyColor: '#94A3B8',
-        borderColor: 'rgba(255,255,255,0.10)', borderWidth: 1, padding: 14,
-        cornerRadius: 10, displayColors: true, boxWidth: 8, boxHeight: 8,
+        backgroundColor: '#101426', titleColor: '#ffffff', bodyColor: '#8a94b2',
+        borderColor: 'rgba(255,255,255,0.08)', borderWidth: 1, padding: 12,
+        cornerRadius: 8, displayColors: true, boxWidth: 8, boxHeight: 8,
       }
     },
-    elements: { arc: { borderWidth: 4, borderColor: '#0B1120', borderRadius: 4, hoverOffset: 6 } }
+    elements: { arc: { borderWidth: 4, borderColor: '#171b37', borderRadius: 4, hoverOffset: 6 } }
+  };
+
+  readonly lineChartOptions: any = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#101426', titleColor: '#ffffff', bodyColor: '#8a94b2',
+        borderColor: 'rgba(255,255,255,0.08)', borderWidth: 1, padding: 12, cornerRadius: 8
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(255, 255, 255, 0.04)', drawBorder: false },
+        ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 } }
+      },
+      y: {
+        grid: { color: 'rgba(255, 255, 255, 0.04)', drawBorder: false },
+        ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 }, precision: 0 }
+      }
+    },
+    elements: {
+      line: { tension: 0.38, borderWidth: 3 },
+      point: { radius: 3, hoverRadius: 6 }
+    }
+  };
+
+  readonly barChartOptions: any = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#101426', titleColor: '#ffffff', bodyColor: '#8a94b2',
+        borderColor: 'rgba(255,255,255,0.08)', borderWidth: 1, padding: 12, cornerRadius: 8
+      }
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { color: '#64748b', font: { family: 'Inter', size: 10.5 } }
+      },
+      y: {
+        grid: { color: 'rgba(255, 255, 255, 0.04)', drawBorder: false },
+        ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 }, precision: 0 }
+      }
+    }
   };
 
   readonly permissionOptions: PermissionOption[] = [
@@ -268,12 +381,295 @@ export class UsersSection implements OnInit, OnDestroy {
     }
     this.loadUsers();
     this.loadSensorData();
+    this.loadIngestStats();
+  }
+
+  loadIngestStats() {
+    this.api.getStats().subscribe({
+      next: (stats: any) => {
+        this.ingestEventsTotal.set(Number(stats?.events_total) || 0);
+        this.ingestEvents1h.set(Number(stats?.events_1h) || 0);
+        this.ingestHits1h.set(Number(stats?.hits_1h) || 0);
+      },
+      error: () => {},
+    });
+  }
+
+  ngAfterViewInit() {
+    setTimeout(() => this.initThreeCyberTopology(), 80);
   }
 
   ngOnDestroy() {
     this.clearUsernameCheck();
     this.removeDocClickListener();
     if (this.messageTimer) clearTimeout(this.messageTimer);
+    if (this.threeAnimId) cancelAnimationFrame(this.threeAnimId);
+    if (this.threeResizeObs) this.threeResizeObs.disconnect();
+    if (this.threeRenderer) {
+      this.threeRenderer.dispose();
+      this.threeRenderer.forceContextLoss();
+    }
+  }
+
+  resetThreeCamera() {
+    if (this.threeMeshGroup) {
+      this.threeMeshGroup.rotation.set(0.25, 0, 0);
+    }
+  }
+
+  setThreeMode(mode: 'full' | 'wireframe' | 'particles' | 'core') {
+    this.threeVisualMode.set(mode);
+    if (!this.icoMesh || !this.points || !this.coreMesh || !this.ring1 || !this.ring2) return;
+    if (mode === 'full') {
+      this.icoMesh.visible = true;
+      this.points.visible = true;
+      this.coreMesh.visible = true;
+      this.ring1.visible = true;
+      this.ring2.visible = true;
+    } else if (mode === 'wireframe') {
+      this.icoMesh.visible = true;
+      this.points.visible = false;
+      this.coreMesh.visible = true;
+      this.ring1.visible = true;
+      this.ring2.visible = true;
+    } else if (mode === 'particles') {
+      this.icoMesh.visible = false;
+      this.points.visible = true;
+      this.coreMesh.visible = true;
+      this.ring1.visible = false;
+      this.ring2.visible = false;
+    } else if (mode === 'core') {
+      this.icoMesh.visible = false;
+      this.points.visible = false;
+      this.coreMesh.visible = true;
+      this.ring1.visible = true;
+      this.ring2.visible = true;
+    }
+  }
+
+  setThreeSpeed(spd: number) {
+    this.threeSpeed.set(spd);
+  }
+
+  triggerPulseWave() {
+    this.pulseScale = 0.5;
+    this.pulseOpacity = 0.95;
+  }
+
+  setFeedFilter(filter: 'all' | 'auth' | 'sensor' | 'policy') {
+    this.feedFilter.set(filter);
+  }
+
+  /** Records a real thing that just happened — never fabricated. */
+  private pushLiveEvent(type: 'auth' | 'sensor' | 'policy', title: string, subtitle: string, badge: string, badgeClass: string) {
+    const newEvent = { id: Date.now(), type, title, subtitle, badge, badgeClass, time: 'Just now' };
+    this.liveAuditEvents.update(list => [newEvent, ...list.slice(0, 9)]);
+    this.triggerPulseWave();
+  }
+
+  setAuthTimeframe(tf: '6h' | '12h' | '24h' | '7d') {
+    this.authTimeframe.set(tf);
+    this.updateCharts();
+  }
+
+  switchTab(tab: 'users' | 'sensors') {
+    this.activeSectionTab.set(tab);
+    if (tab === 'users') {
+      setTimeout(() => this.initThreeCyberTopology(), 60);
+    }
+  }
+
+  private initThreeCyberTopology() {
+    const host = this.threeCanvasRef?.nativeElement;
+    if (!host) return;
+    if (this.threeRenderer) {
+      this.resizeThree();
+      return;
+    }
+
+    try {
+      const scene = new THREE.Scene();
+      this.threeScene = scene;
+
+      const rect = host.getBoundingClientRect();
+      const w = Math.max(rect.width, 320);
+      const h = Math.max(rect.height, 240);
+
+      const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+      camera.position.set(0, 0, 8.5);
+      this.threeCamera = camera;
+
+      const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      renderer.setSize(w, h, false);
+      renderer.setClearColor(0x000000, 0);
+      renderer.domElement.style.width = '100%';
+      renderer.domElement.style.height = '100%';
+      renderer.domElement.style.display = 'block';
+      host.appendChild(renderer.domElement);
+      this.threeRenderer = renderer;
+
+      const group = new THREE.Group();
+      this.threeMeshGroup = group;
+      group.rotation.set(0.25, 0, 0);
+      scene.add(group);
+
+      // 1. Outer wireframe nodal icosahedron (Electric Cyan)
+      const icoGeo = new THREE.IcosahedronGeometry(2.3, 1);
+      const icoMat = new THREE.MeshBasicMaterial({
+        color: 0x00f2fe,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.4
+      });
+      const icoMesh = new THREE.Mesh(icoGeo, icoMat);
+      group.add(icoMesh);
+      this.icoMesh = icoMesh;
+
+      // 2. Inner glowing core node (Cyber Emerald reactor core)
+      const coreGeo = new THREE.SphereGeometry(0.85, 16, 16);
+      const coreMat = new THREE.MeshBasicMaterial({
+        color: 0x10b981,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.55
+      });
+      const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+      group.add(coreMesh);
+      this.coreMesh = coreMesh;
+
+      // 3. Orbiting perimeter rings (Royal Violet & Sky Cyan)
+      const ring1Geo = new THREE.TorusGeometry(3.1, 0.025, 16, 80);
+      const ring1Mat = new THREE.MeshBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.5 });
+      const ring1 = new THREE.Mesh(ring1Geo, ring1Mat);
+      ring1.rotation.x = Math.PI / 2.3;
+      group.add(ring1);
+      this.ring1 = ring1;
+
+      const ring2Geo = new THREE.TorusGeometry(3.4, 0.02, 16, 80);
+      const ring2Mat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.4 });
+      const ring2 = new THREE.Mesh(ring2Geo, ring2Mat);
+      ring2.rotation.y = Math.PI / 3;
+      ring2.rotation.x = Math.PI / 5;
+      group.add(ring2);
+      this.ring2 = ring2;
+
+      // 4. Expanding shockwave ring (Electric Cyan pulse wave)
+      const pRingGeo = new THREE.RingGeometry(0.8, 0.95, 36);
+      const pRingMat = new THREE.MeshBasicMaterial({ color: 0x00f2fe, transparent: true, opacity: 0, side: THREE.DoubleSide });
+      const pRing = new THREE.Mesh(pRingGeo, pRingMat);
+      group.add(pRing);
+      this.pulseRing = pRing;
+
+      // 5. Orbital particle constellation (multi-spectral connected nodes: Cyan, Violet, Amber)
+      const nodeCount = 140;
+      const positions = new Float32Array(nodeCount * 3);
+      const colors = new Float32Array(nodeCount * 3);
+      const cCyan = new THREE.Color(0x00f2fe);
+      const cViolet = new THREE.Color(0xa855f7);
+      const cAmber = new THREE.Color(0xfbbf24);
+
+      for (let i = 0; i < nodeCount; i++) {
+        const radius = 1.4 + Math.random() * 2.0;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos((Math.random() * 2) - 1);
+        positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+        positions[i * 3 + 2] = radius * Math.cos(phi);
+
+        const rand = Math.random();
+        const col = rand < 0.45 ? cCyan : (rand < 0.8 ? cViolet : cAmber);
+        colors[i * 3] = col.r;
+        colors[i * 3 + 1] = col.g;
+        colors[i * 3 + 2] = col.b;
+      }
+
+      const pGeo = new THREE.BufferGeometry();
+      pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      pGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      const pMat = new THREE.PointsMaterial({
+        size: 0.075,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending
+      });
+      const points = new THREE.Points(pGeo, pMat);
+      group.add(points);
+      this.points = points;
+
+      // Interactive mouse orbit
+      const onPointerDown = (e: MouseEvent | TouchEvent) => {
+        this.isPointerDown = true;
+        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+        this.prevPointerX = clientX;
+        this.prevPointerY = clientY;
+      };
+      const onPointerMove = (e: MouseEvent | TouchEvent) => {
+        if (!this.isPointerDown || !this.threeMeshGroup) return;
+        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+        const dx = clientX - this.prevPointerX;
+        const dy = clientY - this.prevPointerY;
+        this.threeMeshGroup.rotation.y += dx * 0.008;
+        this.threeMeshGroup.rotation.x += dy * 0.008;
+        this.prevPointerX = clientX;
+        this.prevPointerY = clientY;
+      };
+      const onPointerUp = () => { this.isPointerDown = false; };
+
+      host.addEventListener('mousedown', onPointerDown as any);
+      window.addEventListener('mousemove', onPointerMove as any);
+      window.addEventListener('mouseup', onPointerUp);
+      host.addEventListener('touchstart', onPointerDown as any, { passive: true });
+      window.addEventListener('touchmove', onPointerMove as any, { passive: true });
+      window.addEventListener('touchend', onPointerUp);
+      host.addEventListener('click', () => this.triggerPulseWave());
+
+      // Resize observer
+      const resize = () => { this.resizeThree(); };
+      this.threeResizeObs = new ResizeObserver(resize);
+      this.threeResizeObs.observe(host);
+
+      // Animation loop
+      let clock = 0;
+      const animate = () => {
+        this.threeAnimId = requestAnimationFrame(animate);
+        const spd = this.threeSpeed();
+        clock += 0.015 * spd;
+        if (!this.isPointerDown && this.threeMeshGroup) {
+          this.threeMeshGroup.rotation.y += 0.005 * spd;
+          this.threeMeshGroup.rotation.x += 0.0015 * spd;
+        }
+        ring1.rotation.z += 0.004 * spd;
+        ring2.rotation.z -= 0.006 * spd;
+        const scale = 1 + Math.sin(clock * 2) * 0.04;
+        coreMesh.scale.set(scale, scale, scale);
+
+        if (this.pulseOpacity > 0 && this.pulseRing) {
+          this.pulseScale += 0.08 * spd;
+          this.pulseOpacity -= 0.015 * spd;
+          this.pulseRing.scale.set(this.pulseScale, this.pulseScale, this.pulseScale);
+          (this.pulseRing.material as THREE.MeshBasicMaterial).opacity = Math.max(0, this.pulseOpacity);
+        }
+
+        renderer.render(scene, camera);
+      };
+      animate();
+    } catch (e) {
+      console.warn('Three.js Cyber Topology initialization warning:', e);
+    }
+  }
+
+  private resizeThree() {
+    const host = this.threeCanvasRef?.nativeElement;
+    if (!host || !this.threeCamera || !this.threeRenderer) return;
+    const rect = host.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    this.threeCamera.aspect = rect.width / rect.height;
+    this.threeCamera.updateProjectionMatrix();
+    this.threeRenderer.setSize(rect.width, rect.height, false);
   }
 
   // ── Getters ───────────────────────────────────────────────────────────────
@@ -462,6 +858,10 @@ export class UsersSection implements OnInit, OnDestroy {
                 : `${total - errors} assigned, ${errors} failed.`,
               errors === 0 ? 'success' : 'error'
             );
+            if (errors === 0) {
+              const username = this.users().find(u => u.id === userId)?.username || userId;
+              this.pushLiveEvent('sensor', 'Sensor Access Granted', `${username} · ${total} sensor(s)`, 'SYNCED', 'badge-sync');
+            }
           }
         },
         error: () => {
@@ -485,6 +885,8 @@ export class UsersSection implements OnInit, OnDestroy {
         );
         this.sensorAssignSaving.set(false);
         this.showMessage('Sensor removed. Analyst must log out and back in.', 'success');
+        const username = this.users().find(u => u.id === userId)?.username || userId;
+        this.pushLiveEvent('sensor', 'Sensor Access Revoked', username, 'REMOVED', 'badge-stable');
       },
       error: () => {
         this.sensorAssignSaving.set(false);
@@ -624,8 +1026,11 @@ export class UsersSection implements OnInit, OnDestroy {
       next: (data: any) => {
         this.saving.set(false);
         if (data.status === 'ok') {
+          const username = this.userForm.username.trim();
+          const role = this.userForm.role;
           this.closeForm();
           this.showMessage('User created for this tenant', 'success');
+          this.pushLiveEvent('auth', 'Account Created', `${username} · ${this.getRoleLabel(role)}`, 'CREATED', 'badge-valid');
           this.loadUsers();
         } else {
           this.showMessage(data.message || 'Failed to create user', 'error');
@@ -637,10 +1042,18 @@ export class UsersSection implements OnInit, OnDestroy {
 
   private afterSaveComplete(userId: string, permissions: string[], active: boolean) {
     this.saving.set(false);
+    const username = this.users().find(u => u.id === userId)?.username || userId;
     this.users.update(list => list.map(u => u.id === userId ? { ...u, permissions, active } : u));
     this.updateCharts();
     this.closeForm();
     this.showMessage(active ? 'User updated successfully' : 'User disabled successfully', 'success');
+    this.pushLiveEvent(
+      'policy',
+      active ? 'Account Access Updated' : 'Account Disabled',
+      username,
+      active ? 'UPDATED' : 'DISABLED',
+      active ? 'badge-priv' : 'badge-stable'
+    );
   }
 
   deleteUser(user: TenantUser) {
@@ -649,6 +1062,7 @@ export class UsersSection implements OnInit, OnDestroy {
       next: () => {
         this.users.update(list => list.filter(u => u.id !== user.id));
         this.showMessage('User deleted', 'success');
+        this.pushLiveEvent('auth', 'Account Deleted', user.username, 'REMOVED', 'badge-stable');
       },
       error: () => this.showMessage('Failed to delete user', 'error'),
     });
@@ -775,16 +1189,112 @@ export class UsersSection implements OnInit, OnDestroy {
     const analyst  = list.filter(u => u.role === 'analyst').length;
     const senior   = list.filter(u => u.role === 'senior_analyst').length;
     const viewer   = list.filter(u => u.role === 'viewer').length;
+
     this.roleChartData.set({
       labels: ['Analyst', 'Senior Analyst', 'Viewer'],
-      datasets: [{ data: [analyst, senior, viewer], backgroundColor: ['#0EA5E9', '#8B5CF6', '#10B981'], hoverBackgroundColor: ['#38BDF8', '#A78BFA', '#34D399'], borderWidth: 4, borderColor: '#0B1120', hoverOffset: 6 }]
+      datasets: [{
+        data: [analyst, senior, viewer],
+        backgroundColor: ['#00f2fe', '#a855f7', '#6366f1'],
+        hoverBackgroundColor: ['#38bdf8', '#c084fc', '#818cf8'],
+        borderWidth: 4,
+        borderColor: '#171b37',
+        hoverOffset: 6
+      }]
     });
+
     const active   = this.activeUsers();
     const disabled = list.length - active;
     this.statusChartData.set({
       labels: ['Active', 'Disabled'],
-      datasets: [{ data: [active, disabled], backgroundColor: ['#10B981', '#475569'], hoverBackgroundColor: ['#34D399', '#64748B'], borderWidth: 4, borderColor: '#0B1120', hoverOffset: 6 }]
+      datasets: [{
+        data: [active, disabled],
+        backgroundColor: ['#10b981', '#1e2640'],
+        hoverBackgroundColor: ['#34d399', '#2e3859'],
+        borderWidth: 4,
+        borderColor: '#171b37',
+        hoverOffset: 6
+      }]
     });
+
+    // Real account-growth timeline — buckets actual created_at timestamps.
+    // No fabricated "auth velocity"/"policy clearance" event history exists,
+    // so this shows what we can genuinely measure: when accounts were made.
+    const tf = this.authTimeframe();
+    const bucketPlan: Record<string, { count: number; stepMs: number; unit: 'h' | 'd' }> = {
+      '6h':  { count: 6,  stepMs: 3_600_000,      unit: 'h' },
+      '12h': { count: 6,  stepMs: 2 * 3_600_000,  unit: 'h' },
+      '24h': { count: 12, stepMs: 2 * 3_600_000,  unit: 'h' },
+      '7d':  { count: 7,  stepMs: 24 * 3_600_000, unit: 'd' },
+    };
+    const plan = bucketPlan[tf] || bucketPlan['24h'];
+    const counts = this.bucketByCreatedAt(list, plan.count, plan.stepMs);
+    const unitMs = plan.unit === 'd' ? 86_400_000 : 3_600_000;
+    const labels = Array.from({ length: plan.count }, (_, i) => {
+      const stepsAgo = (plan.count - 1 - i) * (plan.stepMs / unitMs);
+      return stepsAgo === 0 ? (plan.unit === 'd' ? 'Today' : 'Now') : `-${stepsAgo}${plan.unit}`;
+    });
+
+    this.authTimelineChartData.set({
+      labels,
+      datasets: [
+        {
+          label: 'Accounts Created',
+          data: counts,
+          borderColor: '#00f2fe',
+          backgroundColor: 'transparent',
+          fill: false,
+          pointBackgroundColor: '#00f2fe',
+          pointBorderColor: '#171b37',
+          pointBorderWidth: 2
+        }
+      ]
+    });
+
+    // Real per-category access counts — from each user's actual permissions[],
+    // grouped by the same licensed categories used in the permission editor.
+    const categories = this.permissionCategories();
+    const hasAnyOf = (u: TenantUser, keys: Set<string>) => {
+      const perms = Array.isArray(u.permissions) ? u.permissions : [];
+      return perms.some(p => keys.has(p));
+    };
+    this.clearanceBarChartData.set({
+      labels: categories.map(c => c.title),
+      datasets: [
+        {
+          label: 'Analyst Tier',
+          data: categories.map(c => {
+            const keys = new Set(c.options.map(o => o.key));
+            return list.filter(u => u.role === 'analyst' && hasAnyOf(u, keys)).length;
+          }),
+          backgroundColor: '#06b6d4',
+          borderRadius: 6
+        },
+        {
+          label: 'Senior Analyst Tier',
+          data: categories.map(c => {
+            const keys = new Set(c.options.map(o => o.key));
+            return list.filter(u => u.role === 'senior_analyst' && hasAnyOf(u, keys)).length;
+          }),
+          backgroundColor: '#8b5cf6',
+          borderRadius: 6
+        }
+      ]
+    });
+  }
+
+  /** Counts real user.created_at timestamps into `numBuckets` trailing windows of `stepMs`, most-recent bucket last. */
+  private bucketByCreatedAt(list: TenantUser[], numBuckets: number, stepMs: number): number[] {
+    const now = Date.now();
+    const start = now - numBuckets * stepMs;
+    const counts = new Array(numBuckets).fill(0);
+    for (const u of list) {
+      if (!u.created_at) continue;
+      const t = new Date(u.created_at).getTime();
+      if (Number.isNaN(t) || t < start || t > now) continue;
+      const idx = Math.min(numBuckets - 1, Math.max(0, Math.floor((t - start) / stepMs)));
+      counts[idx]++;
+    }
+    return counts;
   }
 
   // ── License-aware permission helpers ──────────────────────────────────────
