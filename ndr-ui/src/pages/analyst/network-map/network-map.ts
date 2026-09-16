@@ -28,7 +28,10 @@ import {
   Tv,
   HelpCircle,
   Users,
-  ArrowLeft
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-angular';
 import { AuthService } from '../../../services/auth/auth';
 
@@ -72,6 +75,7 @@ export class NetworkMap implements OnInit, OnDestroy {
   selectedNode: any = null;
   lastUpdated: string = '--';
 
+  showInsights: boolean = false;
 
   nodesData: any[] = [];
   edgesData: any[] = [];
@@ -94,6 +98,16 @@ export class NetworkMap implements OnInit, OnDestroy {
   ThreatIcon = TriangleAlert;
   XIcon = X;
   ArrowLeftIcon = ArrowLeft;
+  ChevronDownIcon = ChevronDown;
+  ChevronRightIcon = ChevronRight;
+  ChevronLeftIcon = ChevronLeft;
+
+  isDsbCollapsed: boolean = false;
+
+  toggleDsb() {
+    this.isDsbCollapsed = !this.isDsbCollapsed;
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 250);
+  }
 
   /** Sensor IDs this user is scoped to (from JWT). */
   sensorIds: string[] = [];
@@ -205,6 +219,10 @@ export class NetworkMap implements OnInit, OnDestroy {
     this.applyFocus();
   }
 
+  toggleInsights() {
+    this.showInsights = !this.showInsights;
+  }
+
   focusMode: boolean = false;
   activeFilter: string = 'all';
   selectedPathNode: any = null;
@@ -270,6 +288,17 @@ export class NetworkMap implements OnInit, OnDestroy {
   get externalCount(): number { return this.nodesData.filter((n: any) => !n.is_internal && !n.threat).length; }
   get threatCount():   number { return this.nodesData.filter((n: any) => n.threat).length; }
   get trafficCount():  number { return this.nodesData.filter((n: any) => (n.connections || 0) > 5).length; }
+
+  get topTalkers(): any[] {
+    return [...this.nodesData]
+      .filter((n: any) => (n.connections || 0) > 0)
+      .sort((a: any, b: any) => (b.connections || 0) - (a.connections || 0))
+      .slice(0, 5);
+  }
+
+  get threatNodes(): any[] {
+    return this.nodesData.filter((n: any) => n.threat);
+  }
 
   setFilter(filter: string) {
     this.activeFilter = filter;
