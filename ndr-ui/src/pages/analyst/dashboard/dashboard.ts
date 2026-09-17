@@ -16,12 +16,11 @@ import { Router } from '@angular/router';
 import * as d3 from 'd3';
 import { SiemDashboard } from '../../siem/dashboard/siem-dashboard';
 import { ThreatMap } from '../threat-map/threat-map';
-import { NetworkMap } from '../network-map/network-map';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, SiemDashboard, ThreatMap, NetworkMap],
+  imports: [CommonModule, LucideAngularModule, SiemDashboard, ThreatMap],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })
