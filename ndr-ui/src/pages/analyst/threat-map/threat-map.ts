@@ -45,8 +45,23 @@ export class ThreatMap implements OnInit, OnDestroy {
   private resizeTimer?: ReturnType<typeof setTimeout>;
   private initSeq = 0;
   private cachedWorld: any = null;
-  mapMode: 'flat' | 'globe' = 'flat';
+  mapMode: 'flat' | 'globe' = 'globe';
   sourceMode: 'traffic' | 'intel' = 'traffic';
+
+  continents = [
+    { id: 'world', name: 'World', rot: [0, -20, 0], tx: 0, ty: 0 },
+    { id: 'na', name: 'N. America', rot: [100, -40, 0], tx: 0.33, ty: 0.25 },
+    { id: 'sa', name: 'S. America', rot: [60, 20, 0], tx: 0.25, ty: -0.25 },
+    { id: 'eu', name: 'Europe', rot: [-15, -50, 0], tx: 0.08, ty: 0.33 },
+    { id: 'africa', name: 'Africa', rot: [-20, 10, 0], tx: 0.08, ty: 0 },
+    { id: 'asia', name: 'Asia', rot: [-90, -30, 0], tx: -0.25, ty: 0.16 },
+    { id: 'oceania', name: 'Oceania', rot: [-140, 25, 0], tx: -0.33, ty: -0.25 },
+    { id: 'antarctica', name: 'Antarctica', rot: [0, 80, 0], tx: 0, ty: -0.4 }
+  ];
+  selectedContinent = 'world';
+  targetRot: [number, number, number] | null = null;
+  targetTrans: [number, number] | null = null;
+  isAutoPan = false;
 
   constructor(private http: HttpClient, private ngZone: NgZone, private cdr: ChangeDetectorRef) {}
 
@@ -55,11 +70,22 @@ export class ThreatMap implements OnInit, OnDestroy {
   switchMode(mode: 'flat' | 'globe') {
     if (this.mapMode === mode) return;
     this.mapMode = mode;
+    this.selectedContinent = 'world';
     if (this.rafId) cancelAnimationFrame(this.rafId);
     if (this.cachedWorld) {
       this.ngZone.runOutsideAngular(() => this.drawMap(this.cachedWorld));
     }
     this.cdr.detectChanges();
+  }
+
+  focusContinent(id: string) {
+    this.selectedContinent = id;
+    const target = this.continents.find(c => c.id === id);
+    if (target) {
+      this.targetRot = [...target.rot] as [number, number, number];
+      this.targetTrans = [target.tx, target.ty];
+      this.isAutoPan = true;
+    }
   }
 
   switchSourceMode(mode: 'traffic' | 'intel') {
@@ -250,28 +276,36 @@ export class ThreatMap implements OnInit, OnDestroy {
     mkGlow('f-arc', 3); mkGlow('f-dot', 5); mkGlow('f-green', 7);
 
     const oceanGrad = defs.append('radialGradient').attr('id', 'f-ocean').attr('cx', '50%').attr('cy', '50%').attr('r', '55%');
-    oceanGrad.append('stop').attr('offset', '0%').attr('stop-color', '#091828');
-    oceanGrad.append('stop').attr('offset', '100%').attr('stop-color', '#040c18');
+    oceanGrad.append('stop').attr('offset', '0%').attr('stop-color', '#38bdf8'); // sky-400
+    oceanGrad.append('stop').attr('offset', '100%').attr('stop-color', '#0284c7'); // sky-600
 
     const scaleFactor = this.previewMode ? Math.min(W, H * 1.8) / 6.2 : W / 6.2;
     const proj  = d3.geoNaturalEarth1().scale(scaleFactor).translate([W / 2, H / 2]);
     const pathFn = d3.geoPath().projection(proj);
 
-    svg.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'url(#f-ocean)');
-    svg.append('path').datum(d3.geoGraticule().step([20, 20])()).attr('d', pathFn as any)
+    const mapG = svg.append('g');
+
+    mapG.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'url(#f-ocean)');
+    mapG.append('path').datum(d3.geoGraticule().step([20, 20])()).attr('d', pathFn as any)
       .attr('fill', 'none').attr('stroke', 'rgba(34,197,94,0.05)').attr('stroke-width', 0.4);
     const land    = (topojson as any).feature(world, world.objects.countries);
     const borders = (topojson as any).mesh(world, world.objects.countries, (a: any, b: any) => a !== b);
-    svg.selectAll('.land').data((land as any).features).enter().append('path')
-      .attr('class', 'land').attr('d', pathFn as any).attr('fill', '#0d2135').attr('stroke', 'rgba(34,197,94,0.18)').attr('stroke-width', 0.5);
-    svg.append('path').datum(borders).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', 'rgba(100,180,140,0.1)').attr('stroke-width', 0.3);
-    svg.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', 'rgba(34,197,94,0.12)').attr('stroke-width', 1);
+    mapG.selectAll('.land').data((land as any).features).enter().append('path')
+      .attr('class', 'land').attr('d', pathFn as any)
+      .attr('fill', (d: any) => {
+        const id = String(d.id);
+        const name = d.properties?.name?.toLowerCase();
+        return (id === '010' || id === '10' || id === 'ATA' || name === 'antarctica') ? '#f8fafc' : '#4ade80';
+      })
+      .attr('stroke', '#16a34a').attr('stroke-width', 0.4);
+    mapG.append('path').datum(borders).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', '#15803d').attr('stroke-width', 0.4);
+    mapG.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', 'rgba(34,197,94,0.12)').attr('stroke-width', 1);
 
     const TARGET: [number, number] = [80.0, 12.0];
     const txy = proj(TARGET)!;
 
-    const arcG = svg.append('g'); const dotG = svg.append('g'); const partG = svg.append('g');
-    const hoverG = svg.append('g'); const tG = svg.append('g');
+    const arcG = mapG.append('g'); const dotG = mapG.append('g'); const partG = mapG.append('g');
+    const hoverG = mapG.append('g'); const tG = mapG.append('g');
 
     const tooltip = this.makeTooltip(el);
 
@@ -320,7 +354,37 @@ export class ThreatMap implements OnInit, OnDestroy {
     const tr2 = tG.append('circle').attr('cx', txy[0]).attr('cy', txy[1]).attr('r', 8).attr('fill', 'none').attr('stroke', '#22c55e').attr('stroke-width', 1).attr('opacity', 0);
     this.pulseRing(tr1, 0, 30); this.pulseRing(tr2, 700, 46);
 
+    // ── Zoom & Pan (Flat Map) ─────────────────────────────────────────
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.5, 8])
+      .on('start', () => {
+        this.isAutoPan = false;
+        this.ngZone.run(() => this.selectedContinent = 'world');
+        svg.style('cursor', 'grabbing');
+      })
+      .on('zoom', (event: any) => {
+        mapG.attr('transform', event.transform);
+        
+        // Scale elements
+        const k = event.transform.k;
+        mapG.selectAll('circle').filter((d: any) => !d).attr('transform', `scale(${1/k})`);
+      })
+      .on('end', () => { svg.style('cursor', 'grab'); });
+
+    svg.call(zoom as any);
+
     const frame = () => {
+      if (this.isAutoPan && this.targetTrans) {
+        const tx = this.targetTrans[0] * W;
+        const ty = this.targetTrans[1] * H;
+        
+        // If we want smooth pan with zoom, we transition the SVG using zoom:
+        svg.transition().duration(600).ease(d3.easeCubicOut)
+          .call(zoom.transform as any, d3.zoomIdentity.translate(W/2 - tx, H/2 - ty).scale(1.8));
+          
+        this.isAutoPan = false;
+      }
+
       flatParticles.forEach(p => {
         p.t = (p.t + p.speed) % 1;
         try {
@@ -382,9 +446,9 @@ export class ThreatMap implements OnInit, OnDestroy {
 
     // Reusable ocean radial gradient (canvas)
     const oceanGrad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, R * 1.05);
-    oceanGrad.addColorStop(0,   '#091828');
-    oceanGrad.addColorStop(0.7, '#051020');
-    oceanGrad.addColorStop(1,   '#040c18');
+    oceanGrad.addColorStop(0,   '#38bdf8');
+    oceanGrad.addColorStop(0.7, '#0ea5e9');
+    oceanGrad.addColorStop(1,   '#0284c7');
 
     const TARGET: [number, number] = [80.0, 12.0]; // India — receiving network
 
@@ -471,6 +535,7 @@ export class ThreatMap implements OnInit, OnDestroy {
     // ── Drag-to-rotate ─────────────────────────────────────────
     let dragStart: [number, number] | null = null;
     let rotStart: [number, number, number] = [...rot] as [number, number, number];
+    let isDragging = false;
     canvas.style.cursor = 'grab';
 
     d3.select(canvas).call(
@@ -478,19 +543,39 @@ export class ThreatMap implements OnInit, OnDestroy {
         .on('start', (event: any) => {
           dragStart = [event.x, event.y];
           rotStart  = [...rot] as [number, number, number];
+          isDragging = true;
+          this.isAutoPan = false;
+          this.ngZone.run(() => this.selectedContinent = 'world');
           canvas.style.cursor = 'grabbing';
         })
         .on('drag', (event: any) => {
           if (!dragStart) return;
-          rot[0] = rotStart[0] + (event.x - dragStart[0]) * 0.35;
-          rot[1] = Math.max(-80, Math.min(80, rotStart[1] - (event.y - dragStart[1]) * 0.35));
+          const sens = 0.35;
+          rot[0] = rotStart[0] + (event.x - dragStart[0]) * sens;
+          rot[1] = Math.max(-80, Math.min(80, rotStart[1] - (event.y - dragStart[1]) * sens));
           proj.rotate(rot);
         })
-        .on('end', () => { dragStart = null; canvas.style.cursor = 'grab'; })
+        .on('end', () => { dragStart = null; isDragging = false; canvas.style.cursor = 'grab'; })
     );
 
-    // ── Animation loop (no auto-rotate — user drags) ───────────
+    // ── Animation loop (auto-rotate + user drag) ───────────
     const frame = () => {
+      if (this.isAutoPan && this.targetRot) {
+        let diff0 = this.targetRot[0] - rot[0];
+        while (diff0 > 180) diff0 -= 360;
+        while (diff0 < -180) diff0 += 360;
+        rot[0] += diff0 * 0.08;
+        let diff1 = this.targetRot[1] - rot[1];
+        rot[1] += diff1 * 0.08;
+        proj.rotate(rot);
+        
+        if (Math.abs(diff0) < 0.5 && Math.abs(diff1) < 0.5) {
+          this.isAutoPan = false;
+        }
+      } else if (!isDragging && this.selectedContinent === 'world') {
+        rot[0] = (rot[0] + 0.15) % 360;
+        proj.rotate(rot);
+      }
       // Canvas: atmosphere → ocean → graticule → land → borders → sphere rim
       ctx.clearRect(0, 0, W, H);
 
@@ -503,12 +588,17 @@ export class ThreatMap implements OnInit, OnDestroy {
       ctx.beginPath(); pCtx(grat);
       ctx.strokeStyle = 'rgba(34,197,94,0.05)'; ctx.lineWidth = 0.4; ctx.stroke();
 
-      ctx.beginPath(); pCtx(land as any);
-      ctx.fillStyle = '#0d2135'; ctx.fill();
-      ctx.strokeStyle = 'rgba(34,197,94,0.16)'; ctx.lineWidth = 0.5; ctx.stroke();
+      (land as any).features.forEach((d: any) => {
+        ctx.beginPath(); pCtx(d);
+        const id = String(d.id);
+        const name = d.properties?.name?.toLowerCase();
+        ctx.fillStyle = (id === '010' || id === '10' || id === 'ATA' || name === 'antarctica') ? '#f8fafc' : '#4ade80';
+        ctx.fill();
+        ctx.strokeStyle = '#16a34a'; ctx.lineWidth = 0.4; ctx.stroke();
+      });
 
       ctx.beginPath(); pCtx(borders as any);
-      ctx.strokeStyle = 'rgba(100,200,140,0.08)'; ctx.lineWidth = 0.3; ctx.stroke();
+      ctx.strokeStyle = '#15803d'; ctx.lineWidth = 0.4; ctx.stroke();
 
       ctx.beginPath(); pCtx({ type: 'Sphere' } as any);
       ctx.strokeStyle = 'rgba(34,197,94,0.28)'; ctx.lineWidth = 1.5; ctx.stroke();

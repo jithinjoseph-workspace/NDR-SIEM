@@ -110,12 +110,6 @@ export class Sidebar implements OnInit, OnDestroy {
     // SIEM section — Sources managed in tenant-admin; nothing analyst-visible here
     const siemItems: NavItem[] = [];
 
-    // XDR unified alerts — visible to any tenant with NDR or SIEM
-    const xdrItems: NavItem[] = [];
-    if (has('alerts')) {
-      xdrItems.push({ label: 'Unified Alerts', route: '/xdr/alerts', icon: Bell, permission: 'alerts' });
-    }
-
     this.navGroups = [
       ...(overviewItems.length  ? [{ section: 'OVERVIEW',  collapsed: false, items: overviewItems  }] : []),
       ...(threatItems.length    ? [{ section: 'THREATS',   collapsed: false, items: threatItems    }] : []),
@@ -125,7 +119,6 @@ export class Sidebar implements OnInit, OnDestroy {
       ...(responseItems.length  ? [{ section: 'RESPONSE',  collapsed: false, items: responseItems  }] : []),
       ...(intelItems.length     ? [{ section: 'INTEL',     collapsed: false, items: intelItems     }] : []),
       ...(siemItems.length      ? [{ section: 'SIEM',      collapsed: false, items: siemItems      }] : []),
-      ...(xdrItems.length       ? [{ section: 'XDR',       collapsed: false, items: xdrItems       }] : []),
     ];
 
     // Restore any previously collapsed groups so navigation doesn't reset them

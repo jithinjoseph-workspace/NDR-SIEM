@@ -272,23 +272,12 @@
   <div class="maps-grid">
     <article
       class="map-card threat-map-card clickable-card"
+      style="border: none; background: transparent; box-shadow: none;"
       role="button" tabindex="0"
       (click)="openThreatMap()"
       (keydown.enter)="openThreatMap()"
       (keydown.space)="openThreatMap()">
-      <div class="map-card-header">
-        <div class="map-card-title-group">
-          <div class="map-icon-wrapper">
-            <lucide-icon [name]="MapIcon" class="w-5 h-5"></lucide-icon>
-          </div>
-          <div>
-            <h3>Global Attack Map</h3>
-            <p>Real-time threat visualization</p>
-          </div>
-        </div>
-        <lucide-icon [name]="ArrowIcon" class="w-5 h-5 map-link-icon"></lucide-icon>
-      </div>
-      <div class="map-preview-container">
+      <div class="map-preview-container" style="padding: 0;">
         <app-threat-map [previewMode]="true"></app-threat-map>
       </div>
     </article>
