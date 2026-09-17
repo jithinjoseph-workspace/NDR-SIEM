@@ -188,7 +188,7 @@ async fn query_alert_counts(client: &reqwest::Client, url: &str, tenant_id: &str
            AND created_at >= now() - INTERVAL 24 HOUR \
          GROUP BY severity FORMAT JSONEachRow",
         db  = db,
-        tid = tenant_id.replace('\'', "''")
+        tid = tenant_id.replace('\\', "\\\\").replace('\'', "\\'")
     );
     let resp = client.get(url).query(&[("query", &sql)]).send().await;
     let mut counts = AlertCounts::default();
@@ -223,7 +223,7 @@ async fn query_recent_alerts(client: &reqwest::Client, url: &str, tenant_id: &st
          ORDER BY created_at DESC \
          LIMIT 10 FORMAT JSONEachRow",
         db  = db,
-        tid = tenant_id.replace('\'', "''")
+        tid = tenant_id.replace('\\', "\\\\").replace('\'', "\\'")
     );
     let resp = client.get(url).query(&[("query", &sql)]).send().await;
     match resp {

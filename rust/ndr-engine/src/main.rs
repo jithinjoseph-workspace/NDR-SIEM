@@ -29,6 +29,7 @@ use axum::extract::DefaultBodyLimit;
 use tower_http::cors::{Any, CorsLayer, AllowOrigin};
 use axum::http::HeaderValue;
 use tower_http::decompression::RequestDecompressionLayer;
+use tower_http::catch_panic::CatchPanicLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ACCEPT};
 
 
@@ -36,6 +37,24 @@ use enrichment::{AsnLookup, AssetIdentifier, EnrichmentPipeline, GeoIpLookup, Th
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
+
+/// Turns an unhandled handler panic into a logged, structured 500 instead of
+/// tower_http's default (a raw stderr dump with no tracing correlation).
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let detail = if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else {
+        "unknown panic payload".to_string()
+    };
+    tracing::error!("handler panicked: {}", detail);
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(r#"{"status":"error","message":"internal server error"}"#))
+        .unwrap()
+}
 
 #[cfg(feature = "soar")]
 fn soar_routes() -> Router<AppState> {
@@ -784,12 +803,15 @@ async fn main() {
     let app = Router::new()
         .route("/ws",              get(ws_handler))
         .route("/api/health",          get(api::health))
+        .route("/api/client-errors",   post(api::report_client_error))
+        .route("/api/admin/client-errors", get(api::list_client_errors))
         .route("/api/interfaces",  get(api::get_interfaces))
         .route("/api/interface",   get(api::get_interface).post(api::set_interface))
         .route("/api/start",       post(api::start_services))
         .route("/api/stop",        post(api::stop_services))
         .route("/api/agent-status",  get(api::get_agent_status))
         .route("/api/stats",         get(api::get_stats))
+        .route("/api/stats/timeline", get(api::get_stats_timeline))
         .route("/api/stats/unified", get(api::get_unified_stats))
         .route("/api/events",        get(api::get_recent_events))
         .route("/api/top-ips",       get(api::get_top_ips))
@@ -874,9 +896,11 @@ async fn main() {
         .route("/api/install-sensor.sh",          get(api::install_sensor_script))
 .route("/api/sensor/pcap-uploader.py",   get(api::serve_pcap_uploader))
         .route("/api/uninstall-sensor.sh", get(api::uninstall_sensor_script))
-        .route("/api/sensor-keys", 
+        .route("/api/sensor-keys",
             get(api::get_sensor_keys)
             .post(api::create_sensor_key_api))
+        .route("/api/sensor-keys/event-counts", get(api::get_sensor_event_counts))
+        .route("/api/sensor-keys/recent-ips", get(api::get_sensor_recent_ips))
         .route("/api/sensor-keys/:id",
             delete(api::revoke_sensor_key_api))
         .route("/api/sensor-keys/:id/reactivate",
@@ -946,7 +970,10 @@ async fn main() {
 
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB for PCAP uploads
         .layer(RequestDecompressionLayer::new())
-        .layer(cors);
+        .layer(cors)
+        // Outermost layer — a handler panic becomes a structured tracing::error!
+        // + 500 response instead of an unlogged stderr dump that kills the task.
+        .layer(CatchPanicLayer::custom(handle_panic));
 
     info!("🌐 API active");
     info!("❤  Health:    GET  http://0.0.0.0:3000/health");

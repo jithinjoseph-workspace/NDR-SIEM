@@ -71,11 +71,12 @@
   margin-bottom: 28px;
 }
 
-/* ── CYBER DEFENSE & TELEMETRY COMMAND DECK (Replaces plain KPI cards) ── */
+/* ── CYBER DEFENSE & TELEMETRY COMMAND DECK (3D Interactive Stage) ── */
 .cyber-deck-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 18px;
+  gap: 14px;
+  perspective: 1200px;
 }
 
 @media (max-width: 1350px) {
@@ -94,21 +95,88 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 20px 22px;
-  background: #171b37;
+  gap: 8px;
+  padding: 14px 16px;
+  background: linear-gradient(160deg, #1a1f3f 0%, #171b37 55%, #12162c 100%);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-  min-height: 180px;
+  border-radius: 14px;
+  /* Ambient depth + a soft inner bevel (bright top edge, dark bottom edge)
+     so the panel itself reads as a raised 3D slab, not a flat rectangle. */
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -14px 24px -18px rgba(0, 0, 0, 0.55);
+  min-height: 245px;
   box-sizing: border-box;
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease, box-shadow 0.25s ease;
+  transform-style: preserve-3d;
+  transform: perspective(1000px) rotateX(var(--rot-x, 0deg)) rotateY(var(--rot-y, 0deg)) scale3d(var(--hover-scale, 1), var(--hover-scale, 1), 1) translateZ(var(--hover-lift, 0px));
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease, box-shadow 0.25s ease;
+  will-change: transform;
+  overflow: hidden;
 }
 
 .deck-card:hover {
-  transform: translateY(-3px);
-  border-color: rgba(56, 189, 248, 0.38);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow:
+    0 22px 44px rgba(0, 0, 0, 0.55),
+    0 0 30px rgba(56, 189, 248, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    inset 0 -14px 24px -18px rgba(0, 0, 0, 0.55);
+}
+
+/* 3D Holographic Specular Sheen Follows Mouse Pointer */
+.deck-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  background: radial-gradient(circle 140px at var(--shine-x, 50%) var(--shine-y, 50%), rgba(56, 189, 248, 0.18) 0%, transparent 80%);
+  opacity: var(--shine-opacity, 0);
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 10;
+}
+
+/* Rim-light: a thin gradient ring that brightens on the side the pointer
+   leans toward, like light catching the edge of a tilted glass panel. */
+.deck-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  padding: 1px;
+  background: radial-gradient(circle 220px at var(--shine-x, 50%) var(--shine-y, 50%), rgba(148, 211, 255, 0.65) 0%, transparent 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: var(--shine-opacity, 0);
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 11;
+}
+
+/* 3D Depth Layering on Internal Elements — larger Z-separation reads as
+   a much more pronounced parallax stack while the card tilts. */
+.deck-header {
+  transform: translateZ(22px);
+}
+.deck-body-split,
+.ingest-telemetry-visual,
+.sensor-nodes-grid,
+.clearance-tier-grid {
+  transform: translateZ(34px);
+}
+.posture-vectors-strip,
+.ingest-sub-metrics,
+.mesh-kpi-strip,
+.identity-policy-strip {
+  transform: translateZ(26px);
+}
+.deck-footer-bar,
+.deck-footer-stats,
+.deck-ticker-line,
+.deck-role-pills {
+  transform: translateZ(18px);
 }
 
 .deck-header {
@@ -134,6 +202,16 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transform: translateZ(0);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease;
+}
+
+/* Floats up off the card surface on hover — a small independent layer
+   riding above the header's own translateZ(22px). */
+.deck-card:hover .deck-mini-icon {
+  transform: translateZ(16px) scale(1.06);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5), 0 0 14px rgba(56, 189, 248, 0.18);
 }
 
 .deck-mini-icon.text-magenta {
@@ -181,6 +259,18 @@
   letter-spacing: 0.04em;
 }
 
+.status-live-chip.chip-amber {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #f59e0b;
+}
+
+.status-live-chip.chip-red {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+}
+
 .mini-status-dot {
   width: 5px;
   height: 5px;
@@ -188,6 +278,9 @@
   background: #10b981;
   animation: beaconPulse 1.6s infinite;
 }
+
+.mini-status-dot.dot-amber { background: #f59e0b; }
+.mini-status-dot.dot-red   { background: #ef4444; }
 
 .deck-body-split {
   display: flex;
@@ -212,17 +305,21 @@
 .gauge-track {
   fill: none;
   stroke: #101426;
-  stroke-width: 7;
+  stroke-width: 4.5;
 }
 
 .gauge-bar {
   fill: none;
   stroke: #10b981;
-  stroke-width: 7;
+  stroke-width: 4.5;
   stroke-linecap: round;
   stroke-dasharray: 226;
   stroke-dashoffset: 7;
+  transition: stroke-dashoffset 0.6s ease, stroke 0.3s ease;
 }
+
+.gauge-bar.bar-amber { stroke: #f59e0b; }
+.gauge-bar.bar-red   { stroke: #ef4444; }
 
 .gauge-center-text {
   position: absolute;
@@ -243,7 +340,7 @@
 }
 
 .gauge-center-text span {
-  font-size: 7px;
+  font-size: 9px;
   font-weight: 700;
   color: #8a94b2;
   font-family: var(--font-mono, monospace);
@@ -285,26 +382,107 @@
   color: #64748b;
 }
 
+/* Zero-Trust Posture Telemetry Vectors */
+.posture-vectors-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 8px 10px;
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  margin: 6px 0 10px 0;
+}
+
+.vector-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vector-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+}
+
+.vector-label {
+  color: #64748b;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.vector-status {
+  font-weight: 800;
+}
+
+.vector-bar {
+  width: 100%;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.vector-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.vector-fill.fill-emerald {
+  background: #10b981;
+}
+
+.vector-fill.fill-cyan {
+  background: #00f2fe;
+}
+
 .deck-footer-bar {
-  padding-top: 10px;
+  margin-top: auto;
+  padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .compliance-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 100%;
 }
 
 .tag-chip {
-  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
   font-weight: 700;
   font-family: var(--font-mono, monospace);
-  padding: 2px 6px;
+  padding: 3px 6px;
   border-radius: 4px;
   background: #101426;
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.tag-chip.tag-pass {
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.pass-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #10b981;
+  animation: beaconPulse 1.6s infinite;
 }
 
 /* Module 2: Ingestion Velocity */
@@ -330,11 +508,83 @@
   animation: beaconPulse 1.5s infinite;
 }
 
-.sparkline-wrap {
-  width: 100%;
-  height: 55px;
+.ingest-telemetry-visual {
+  display: flex;
+  flex-direction: column;
   margin: 4px 0 10px 0;
+  width: 100%;
+}
+
+.telemetry-hud-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+  font-family: var(--font-mono, monospace);
+}
+
+.hud-tag-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hud-live-ping {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #00f2fe;
+  animation: beaconPulse 1.4s infinite;
+}
+
+.hud-live-text {
+  font-size: 9px;
+  font-weight: 700;
+  color: #38bdf8;
+  letter-spacing: 0.08em;
+}
+
+.hud-eps-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.hud-eps-val {
+  font-size: 11px;
+  font-weight: 800;
+  color: #00f2fe;
+  font-family: var(--font-mono, monospace);
+}
+
+.hud-eps-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.05em;
+}
+
+.hud-pipe-sep {
+  color: #334155;
+  font-size: 9px;
+}
+
+.hud-kbps-val {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #94a3b8;
+  font-family: var(--font-mono, monospace);
+}
+
+.sparkline-wrap {
+  position: relative;
+  width: 100%;
+  height: 50px;
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
   overflow: hidden;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 .sparkline-svg {
@@ -343,15 +593,86 @@
   display: block;
 }
 
-.spark-beacon-dot {
+.spark-scanline {
+  animation: scanlineSweep 3.6s linear infinite;
+}
+
+@keyframes scanlineSweep {
+  0% { transform: translateX(0); opacity: 0; }
+  6% { opacity: 0.9; }
+  92% { opacity: 0.9; }
+  100% { transform: translateX(320px); opacity: 0; }
+}
+
+.spark-beacon-ping {
+  animation: beaconPulse 1.4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.telemetry-time-axis {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 5px;
+  padding: 0 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.axis-now {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #38bdf8;
+  font-weight: 800;
+}
+
+.axis-ping-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #00f2fe;
   animation: beaconPulse 1.2s infinite;
 }
 
+.ingest-sub-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px 6px;
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  margin: 2px 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.ism-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ism-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.ism-val {
+  font-size: 9px;
+  font-weight: 700;
+}
+
 .deck-footer-stats {
+  margin-top: auto;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
@@ -362,7 +683,7 @@
 }
 
 .sc-label {
-  font-size: 8px;
+  font-size: 9.5px;
   font-weight: 700;
   color: #64748b;
   font-family: var(--font-mono, monospace);
@@ -394,23 +715,138 @@
   text-decoration: underline;
 }
 
+.mesh-telemetry-hud {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  margin: 4px 0 6px 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.mesh-hud-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mesh-ping-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #a855f7;
+  animation: beaconPulse 1.5s infinite;
+}
+
+.mesh-hud-status {
+  font-size: 10px;
+  font-weight: 700;
+  color: #c084fc;
+  letter-spacing: 0.06em;
+}
+
+.mesh-probe-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.mesh-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px 6px;
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  margin: 1px 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.mesh-kpi-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mesh-kpi-lbl {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.mesh-kpi-val {
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
 .sensor-nodes-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin: 8px 0;
+  gap: 5px;
+  margin: 3px 0;
 }
 
 .node-badge-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 9px;
+  padding: 4px 7px;
   background: #101426;
   border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
+  border-radius: 6px;
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: 9.5px;
+}
+
+.node-item-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.node-name-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.node-sub-proto {
+  font-size: 9px;
+  color: #64748b;
+  letter-spacing: 0.02em;
+}
+
+.node-item-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.node-mini-bar {
+  width: 32px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.node-mini-fill {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+}
+
+.node-mini-fill.fill-emerald {
+  background: #10b981;
 }
 
 .node-dot.active {
@@ -428,6 +864,10 @@
 .node-id {
   font-weight: 700;
   color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 65px;
 }
 
 .node-rate {
@@ -436,11 +876,18 @@
 }
 
 .deck-ticker-line {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.ticker-left-info {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .ticker-dot {
@@ -457,6 +904,14 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ticker-latency-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #10b981;
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 0.04em;
 }
 
 /* Module 4: Identity & Seats */
@@ -480,15 +935,22 @@
   transform: translateY(-1px);
 }
 
+.identity-pool-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 6px 0;
+}
+
 .seat-util-row {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin: 6px 0;
+  margin: 0;
 }
 
 .seat-main-num {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 800;
   color: #ffffff;
   font-family: var(--font-mono, monospace);
@@ -496,7 +958,7 @@
 }
 
 .seat-max-num {
-  font-size: 11px;
+  font-size: 10px;
   color: #64748b;
   font-family: var(--font-mono, monospace);
   margin-left: 4px;
@@ -505,26 +967,26 @@
 .seat-badge-pill {
   font-size: 9.5px;
   font-weight: 700;
-  color: #c084fc;
+  color: #38bdf8;
   font-family: var(--font-mono, monospace);
-  background: rgba(168, 85, 247, 0.12);
-  border: 1px solid rgba(168, 85, 247, 0.3);
-  padding: 2px 7px;
-  border-radius: 9999px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 .segmented-seat-bar {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   width: 100%;
-  height: 6px;
-  margin: 4px 0 10px 0;
+  height: 3px;
+  margin: 2px 0 0 0;
 }
 
 .seat-segment {
   flex: 1;
   height: 100%;
-  border-radius: 2px;
+  border-radius: 1.5px;
   background: #101426;
   border: 1px solid rgba(255, 255, 255, 0.05);
   transition: all 0.3s;
@@ -545,20 +1007,148 @@
   border-color: transparent;
 }
 
-.deck-role-pills {
+.seat-segment.empty {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: transparent;
+}
+
+/* Clearance Tiers Matrix (Module 4) */
+.clearance-tier-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  margin: 4px 0 6px 0;
+}
+
+.clearance-tier-cell {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  padding: 5px 6px;
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+}
+
+.tier-cell-hdr {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tier-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.tier-dot.dot-cyan { background: #00f2fe; }
+.tier-dot.dot-violet { background: #a855f7; }
+.tier-dot.dot-amber { background: #f59e0b; }
+
+.tier-name {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.tier-count {
+  font-size: 13px;
+  font-weight: 800;
+  margin: 1px 0;
+  line-height: 1;
+}
+
+.tier-sub {
+  font-size: 9px;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tier-progress-track {
+  width: 100%;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 1px;
+  margin-top: 3px;
+  overflow: hidden;
+}
+
+.tier-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+}
+
+.tier-progress-fill.fill-cyan { background: #00f2fe; }
+.tier-progress-fill.fill-violet { background: #a855f7; }
+.tier-progress-fill.fill-amber { background: #f59e0b; }
+
+.identity-policy-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 7px;
+  background: #101426;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  margin: 1px 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.ips-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ips-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.ips-dot.dot-emerald { background: #10b981; }
+
+.deck-role-pills {
+  margin-top: auto;
+  display: flex;
+  gap: 4px;
   padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .role-stat-chip {
-  font-size: 9.5px;
+  flex: 1;
+  text-align: center;
+  font-size: 10px;
   font-weight: 700;
   font-family: var(--font-mono, monospace);
-  padding: 2px 8px;
-  border-radius: 9999px;
+  padding: 2.5px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip-cyan {
+  background: rgba(0, 242, 254, 0.1);
+  border: 1px solid rgba(0, 242, 254, 0.25);
+  color: #00f2fe;
+}
+
+.chip-violet {
+  background: rgba(168, 85, 247, 0.1);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  color: #c084fc;
 }
 
 .chip-pink {
@@ -861,6 +1451,87 @@
   font-family: var(--font-mono, monospace);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* Hover tooltip: real identity + real IP for the node under the cursor */
+.node-hover-tooltip {
+  position: fixed;
+  z-index: 200;
+  min-width: 170px;
+  padding: 10px 12px;
+  background: #0d1226;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55), 0 0 16px rgba(56, 189, 248, 0.15);
+  pointer-events: none;
+  font-family: var(--font-mono, monospace);
+}
+
+.node-hover-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 11.5px;
+}
+
+.node-hover-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 9.5px;
+  color: #94a3b8;
+  padding: 1px 0;
+}
+
+.node-hover-ip {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+/* Symbol key for the topology mesh: shape = what it is, color = its role/status */
+.topology-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px 4px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #94a3b8;
+  font-family: var(--font-mono, monospace);
+}
+
+.topology-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.topology-legend-sep {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-line {
+  display: inline-block;
+  width: 14px;
+  height: 1.5px;
+  background: #38bdf8;
+  flex-shrink: 0;
 }
 
 .text-magenta {

@@ -6,6 +6,7 @@ import { EvidenceService } from '../../../services/evidence/evidence';
 import { AuthService } from '../../../services/auth/auth';
 
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 const SEV_ORDER: Record<string, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 
 @Component({
@@ -194,7 +195,7 @@ export class EvidenceComponent implements OnInit {
           this.ariaVerdict.set(r.verdict);
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 

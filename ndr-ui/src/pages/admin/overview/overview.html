@@ -39,8 +39,8 @@
       <div class="ov-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 ov-clock-icon"></lucide-icon>
         <div class="ov-clock-text">
-          <span class="ov-clock-time">{{ currentTime }}</span>
-          <span class="ov-clock-date">{{ currentDate }}</span>
+          <span class="ov-clock-time">{{ clock.currentTime() }}</span>
+          <span class="ov-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>

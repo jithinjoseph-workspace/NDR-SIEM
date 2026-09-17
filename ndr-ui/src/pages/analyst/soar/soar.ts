@@ -16,6 +16,7 @@ import {
 import { AuthService } from '../../../services/auth/auth';
 
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
     selector: 'app-soar',
     standalone: true,
@@ -298,7 +299,7 @@ export class Soar implements OnInit {
                     this.openCase(c);
                 }
             },
-            error: () => {}
+            error: reportRxjsError
         });
     }
 
@@ -383,7 +384,7 @@ export class Soar implements OnInit {
                     this.openCase(c);
                 }
             },
-            error: () => {}
+            error: reportRxjsError
         });
     }
 
@@ -821,28 +822,28 @@ export class Soar implements OnInit {
     loadCases() {
         this.api.getSoarCases().subscribe({
             next: (res: any) => { if (res.status === 'success') this.cases.set(res.data); },
-            error: () => {}
+            error: reportRxjsError
         });
     }
 
     loadPlaybooks() {
         this.api.getNativePlaybooks().subscribe({
             next: (res: any) => { if (res.status === 'success') this.playbooks.set(res.data); },
-            error: () => {}
+            error: reportRxjsError
         });
     }
 
     loadIntegrations() {
         this.api.getIntegrations().subscribe({
             next: (res: any) => { this.integrations.set(res.integrations || []); },
-            error: () => {}
+            error: reportRxjsError
         });
     }
 
     loadRuns() {
         this.api.getSoarRuns().subscribe({
             next: (res: any) => { if (res.status === 'success') this.runs.set(res.data); },
-            error: () => {}
+            error: reportRxjsError
         });
     }
 
@@ -923,7 +924,7 @@ export class Soar implements OnInit {
         this.showIsolateModal.set(true);
         this.api.getAgentStatus().subscribe({
             next: (s: any) => { if (s?.gateway) this.isolateGateway = s.gateway; },
-            error: () => {},
+            error: reportRxjsError,
         });
     }
 
@@ -1115,7 +1116,7 @@ export class Soar implements OnInit {
                     this.loadCases();
                 }
             },
-            error: () => {},
+            error: reportRxjsError,
         });
     }
 
@@ -1166,7 +1167,7 @@ export class Soar implements OnInit {
                     next: (res: any) => {
                         this.liveEvidence.update(ev => ({ ...(ev || {}), ndr_events: res.events || [] }));
                     },
-                    error: () => {}
+                    error: reportRxjsError
                 });
             }
         }

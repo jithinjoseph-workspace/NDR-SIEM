@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
@@ -7,6 +7,7 @@ import {
   Mail, Server, ShieldCheck, Lock, Send, KeyRound, Clock, Activity, RefreshCw, Eye, EyeOff, Zap, ShieldAlert
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
+import { ClockService } from '../../../services/clock/clock';
 
 @Component({
   selector: 'app-smtp-config',
@@ -17,7 +18,7 @@ import { Api } from '../../../services/api/api';
   templateUrl: './smtp-config.html',
   styleUrl: './smtp-config.css',
 })
-export class SmtpConfig implements OnInit, OnDestroy {
+export class SmtpConfig implements OnInit {
   Math = Math;
 
   CheckIcon       = CircleCheck;
@@ -44,11 +45,7 @@ export class SmtpConfig implements OnInit, OnDestroy {
   smtpError    = '';
   showPassword = false;
 
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  constructor(private api: Api, private cdr: ChangeDetectorRef, public clock: ClockService) {}
 
   get isConfigured(): boolean {
     return !!(this.smtpConfig.user && this.smtpConfig.host);
@@ -64,21 +61,8 @@ export class SmtpConfig implements OnInit, OnDestroy {
     this.smtpConfig.port = p;
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
     this.loadSmtpConfig();
-  }
-
-  ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
   }
 
   loadSmtpConfig() {

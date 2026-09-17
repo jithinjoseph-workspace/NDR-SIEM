@@ -7,6 +7,7 @@ mod routes;
 use axum::{Router, routing::{delete, get, post, put}};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::catch_panic::CatchPanicLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub use db::AuthDb;
@@ -23,6 +24,24 @@ pub struct AppState {
     pub refresh_ttl: usize,
     /// Verified license claims from LICENSE_TOKEN — None means DB-based feature lookup.
     pub verified_license: Option<Arc<license::LicenseClaims>>,
+}
+
+/// Turns an unhandled handler panic into a logged, structured 500 instead of
+/// tower_http's default (a raw stderr dump with no tracing correlation).
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let detail = if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else {
+        "unknown panic payload".to_string()
+    };
+    tracing::error!("handler panicked: {}", detail);
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(r#"{"status":"error","message":"internal server error"}"#))
+        .unwrap()
 }
 
 #[tokio::main]
@@ -125,7 +144,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/forgot/send-otp",              post(routes::forgot::send_otp))
         .route("/api/auth/forgot/reset-password",        post(routes::forgot::reset_password))
         .with_state(state)
-        .layer(cors);
+        .layer(cors)
+        // Outermost layer — a handler panic (e.g. bcrypt/JWT edge case) becomes
+        // a structured tracing::error! + 500 instead of an unlogged stderr dump
+        // that silently kills the request with no trace of why.
+        .layer(CatchPanicLayer::custom(handle_panic));
 
     let addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -40,8 +40,8 @@
       <div class="tc-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 text-cyan-400"></lucide-icon>
         <div class="tc-clock-text">
-          <span class="tc-clock-time">{{ currentTime }}</span>
-          <span class="tc-clock-date">{{ currentDate }}</span>
+          <span class="tc-clock-time">{{ clock.currentTime() }}</span>
+          <span class="tc-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>

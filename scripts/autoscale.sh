@@ -4,6 +4,14 @@ LOG_FILE="/tmp/ndr-autoscale.log"
 MAX_ENGINES=5
 MIN_ENGINES=1
 
+if [ -f "$INSTALL_DIR/.env" ]; then
+    CLICKHOUSE_PASSWORD=$(grep "^CLICKHOUSE_PASSWORD=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+fi
+if [ -z "$CLICKHOUSE_PASSWORD" ]; then
+    echo "ERROR: CLICKHOUSE_PASSWORD not found in $INSTALL_DIR/.env — refusing to run with a default password." >&2
+    exit 1
+fi
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a $LOG_FILE; }
 
 get_events_per_sec() {
@@ -79,7 +87,7 @@ scale_up() {
         -e NDR_AGENT_URL=http://${HOST_IP}:3001 \
         -e CLICKHOUSE_URL=http://${HOST_IP}:8123 \
         -e CLICKHOUSE_USER=ndr \
-        -e CLICKHOUSE_PASSWORD=ndr123 \
+        -e CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD \
         -e INSTANCE_ID=$new \
         --privileged \
         sf_ndr-stack-ndr-engine-1 2>/dev/null

@@ -16,6 +16,7 @@ import { Router } from '@angular/router';
 import * as d3 from 'd3';
 import { SiemDashboard } from '../../siem/dashboard/siem-dashboard';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -288,7 +289,7 @@ export class Dashboard implements OnInit, OnDestroy {
         this.medium.set(data.medium || 0);
         this.low.set(data.low || 0);
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     this.api.getTopIps().subscribe({
@@ -296,12 +297,12 @@ export class Dashboard implements OnInit, OnDestroy {
         this.topSrcIps.set(data.top_src_ips || []);
         this.topDstIps.set(data.top_dst_ips || []);
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     this.api.getProtocols().subscribe({
       next: data => { this.protocols.set(data.protocols || []); },
-      error: () => {}
+      error: reportRxjsError
     });
 
     // Fetch active threat predictions for the alert banner every 60s
@@ -315,7 +316,7 @@ export class Dashboard implements OnInit, OnDestroy {
             this.activePredictions.set(data.predictions);
           }
         },
-        error: () => {}
+        error: reportRxjsError
       })
     );
   }
@@ -334,7 +335,7 @@ export class Dashboard implements OnInit, OnDestroy {
           this.historicalPredictions.set(history);
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 

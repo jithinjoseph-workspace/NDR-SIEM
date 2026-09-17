@@ -9,7 +9,9 @@ import {
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-tenants',
   standalone: true,
@@ -77,14 +79,11 @@ export class Tenants implements OnInit, OnDestroy {
   msg     = '';
   msgType = '';
 
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
   constructor(
     private api: Api,
     private auth: AuthService,
     private cdr: ChangeDetectorRef,
+    public clock: ClockService,
   ) {}
 
   Math = Math;
@@ -116,24 +115,13 @@ export class Tenants implements OnInit, OnDestroy {
     return Math.round((this.activeTenantsCount / this.tenants.length) * 100);
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
-
     this.currentUser = this.auth.getUser();
     this.loadTenants();
     this.loadUsers();
   }
 
   ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
     if (this.autoCloseTimer) clearTimeout(this.autoCloseTimer);
   }
 
@@ -159,7 +147,7 @@ export class Tenants implements OnInit, OnDestroy {
         this.users = data.users || [];
         this.cdr.detectChanges();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
   }
 
@@ -485,7 +473,7 @@ export class Tenants implements OnInit, OnDestroy {
             this.cdr.detectChanges();
           }
         },
-        error: () => {},
+        error: reportRxjsError,
       });
     }, delays[attempt] ?? delays[delays.length - 1]);
   }
@@ -541,7 +529,7 @@ export class Tenants implements OnInit, OnDestroy {
     // Load public key + existing licenses in parallel
     this.api.getLicensePublicKey().subscribe({
       next: (r: any) => { this.licensePublicKey = r.public_key ?? ''; this.cdr.detectChanges(); },
-      error: () => {},
+      error: reportRxjsError,
     });
     this.api.getLicenses(tenant.id).subscribe({
       next: (r: any) => {
@@ -574,13 +562,13 @@ export class Tenants implements OnInit, OnDestroy {
         // Reload license list
         this.api.getLicenses(this.licenseTenant?.id).subscribe({
           next: (r: any) => { this.issuedLicenses = r.licenses ?? []; this.cdr.detectChanges(); },
-          error: () => {},
+          error: reportRxjsError,
         });
         // Reload public key if it didn't load when modal opened
         if (!this.licensePublicKey) {
           this.api.getLicensePublicKey().subscribe({
             next: (r: any) => { this.licensePublicKey = r.public_key ?? ''; this.cdr.detectChanges(); },
-            error: () => {},
+            error: reportRxjsError,
           });
         }
         this.cdr.detectChanges();

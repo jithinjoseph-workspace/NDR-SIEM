@@ -439,7 +439,10 @@ pub async fn auth_middleware(
     
     // Public routes - no auth needed. (/api/auth/* itself is not registered
     // here at all — nginx proxies it straight to auth-service.)
-    let public = ["/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh"];
+    // /api/client-errors is public on purpose — an error on the login page
+    // or with an expired/invalid token is exactly what needs reporting,
+    // and gating it behind auth would silently drop those reports.
+    let public = ["/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh", "/api/client-errors"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -2099,6 +2102,21 @@ pub async fn get_stats(State(state): State<AppState>, headers: axum::http::Heade
     }
 }
 
+// GET /api/stats/timeline — real per-minute event counts for the caller's
+// own tenant (last 60 minutes), for an ingestion sparkline that isn't
+// randomized/simulated.
+pub async fn get_stats_timeline(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_events_per_minute_by_tenant(&tenant_id, 60).await {
+        Ok(points) => Json(json!({ "status": "ok", "points": points })),
+        Err(e) => {
+            tracing::warn!("Stats timeline query error: {}", e);
+            Json(json!({ "status": "error", "message": e.to_string(), "points": [] }))
+        }
+    }
+}
+
 // GET /api/admin/stats-all-tenants — platform-wide event/hit totals (super admin only)
 pub async fn get_stats_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     if let Err(response) = require_super_admin(&headers) {
@@ -3532,12 +3550,47 @@ pub async fn assign_sensor_to_user(
     if claims.role != "tenant_admin" && claims.role != "super_admin" {
         return Json(json!({ "status": "error", "message": "Forbidden: admin required" }));
     }
+    // Verify the target user and sensor are real and actually belong to
+    // the same tenant before writing the assignment — previously this
+    // trusted user_id/sensor_id from the request body outright, so a
+    // tenant_admin could reference an id from another tenant with no check.
+    if let Err(resp) = verify_same_tenant_assignment(&state, &claims, &payload.user_id, &payload.sensor_id).await {
+        return resp;
+    }
     match state.ch_storage
         .assign_sensor_to_user(&payload.user_id, &payload.sensor_id, &claims.tenant_id).await
     {
         Ok(_) => Json(json!({ "status": "ok", "user_id": payload.user_id, "sensor_id": payload.sensor_id })),
         Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
     }
+}
+
+/// Shared ownership check for assign/remove: the user and sensor must both
+/// exist, must belong to the same real tenant as each other, and — unless
+/// the caller is super_admin — that tenant must be the caller's own.
+async fn verify_same_tenant_assignment(
+    state: &AppState,
+    claims: &AuthClaims,
+    user_id: &str,
+    sensor_key_prefix: &str,
+) -> Result<(), Json<Value>> {
+    let user_tenant = match state.ch_storage.get_user_tenant(user_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Err(Json(json!({ "status": "error", "message": "User not found" }))),
+        Err(e) => return Err(Json(json!({ "status": "error", "message": e.to_string() }))),
+    };
+    let sensor_tenant = match state.ch_storage.get_sensor_key_tenant(sensor_key_prefix).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Err(Json(json!({ "status": "error", "message": "Sensor not found" }))),
+        Err(e) => return Err(Json(json!({ "status": "error", "message": e.to_string() }))),
+    };
+    if user_tenant != sensor_tenant {
+        return Err(Json(json!({ "status": "error", "message": "User and sensor must belong to the same tenant" })));
+    }
+    if claims.role != "super_admin" && user_tenant != claims.tenant_id {
+        return Err(Json(json!({ "status": "error", "message": "Forbidden: cannot manage sensors outside your tenant" })));
+    }
+    Ok(())
 }
 
 /// DELETE /api/sensors/assign  — remove a sensor assignment
@@ -3552,6 +3605,9 @@ pub async fn remove_sensor_from_user(
     };
     if claims.role != "tenant_admin" && claims.role != "super_admin" {
         return Json(json!({ "status": "error", "message": "Forbidden: admin required" }));
+    }
+    if let Err(resp) = verify_same_tenant_assignment(&state, &claims, &payload.user_id, &payload.sensor_id).await {
+        return resp;
     }
     match state.ch_storage
         .remove_sensor_assignment(&payload.user_id, &payload.sensor_id, &claims.tenant_id).await
@@ -4920,6 +4976,57 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
     }
 }
 
+#[derive(serde::Deserialize)]
+pub struct ClientErrorPayload {
+    pub message: String,
+    #[serde(default)]
+    pub stack: String,
+    #[serde(default)]
+    pub url: String,
+}
+
+// POST /api/client-errors — real frontend error capture. Intentionally
+// works without a valid session (an error on the login page or an expired
+// token is exactly the kind of thing that needs to be reported), and never
+// fails the caller's request even if storage itself is unreachable — this
+// exists so errors are seen somewhere, not to become a second thing that
+// can break. Payload sizes are capped so a runaway loop can't fill the table.
+pub async fn report_client_error(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ClientErrorPayload>,
+) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let username  = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_default();
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_default();
+    let user_agent = headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+
+    let truncate = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+    let message = truncate(&payload.message, 2000);
+    let stack   = truncate(&payload.stack, 8000);
+    let url     = truncate(&payload.url, 500);
+
+    if let Err(e) = state.ch_storage.insert_client_error(&message, &stack, &url, &username, &tenant_id, &user_agent).await {
+        tracing::warn!("Failed to persist client error report: {}", e);
+    }
+    Json(json!({ "status": "ok" }))
+}
+
+// GET /api/admin/client-errors — read path for the errors report_client_error
+// captures. Deliberately at a different path than the public POST endpoint
+// above (that path is exempt from auth in the auth_middleware public list,
+// so reusing it here would leak every user's error reports/stack traces to
+// anyone unauthenticated). Super-admin only.
+pub async fn list_client_errors(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    match state.ch_storage.list_client_errors(200).await {
+        Ok(errors) => Json(json!({ "errors": errors })),
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
 // GET /api/admin/severity-all-tenants — platform-wide severity totals for
 // the Super Admin Overview (sums every tenant's own hits, not just the
 // caller's own tenant). Super-admin only.
@@ -5954,6 +6061,40 @@ pub async fn get_sensor_keys(
             "status": "error",
             "message": e.to_string()
         })),
+    }
+}
+
+// GET /api/sensor-keys/event-counts — real per-sensor event counts (last
+// hour) for the caller's own tenant, keyed by sensor_id (== key_prefix).
+// Replaces any placeholder "throughput" number with an actual measurement.
+pub async fn get_sensor_event_counts(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    match state.ch_storage.get_sensor_event_counts_by_tenant(&claims.tenant_id, 1).await {
+        Ok(counts) => Json(json!({ "status": "ok", "counts": counts })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string(), "counts": {} })),
+    }
+}
+
+// GET /api/sensor-keys/recent-ips — real IP most recently seen from each
+// sensor's own traffic, for the caller's own tenant. No IP is stored on
+// sensor_keys itself, so this is derived from actual ingested events.
+pub async fn get_sensor_recent_ips(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    match state.ch_storage.get_sensor_recent_ips_by_tenant(&claims.tenant_id).await {
+        Ok(ips) => Json(json!({ "status": "ok", "ips": ips })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string(), "ips": {} })),
     }
 }
 

@@ -48,8 +48,8 @@
       <div class="eng-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 text-cyan-400"></lucide-icon>
         <div class="eng-clock-text">
-          <span class="eng-clock-time">{{ currentTime }}</span>
-          <span class="eng-clock-date">{{ currentDate }}</span>
+          <span class="eng-clock-time">{{ clock.currentTime() }}</span>
+          <span class="eng-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>

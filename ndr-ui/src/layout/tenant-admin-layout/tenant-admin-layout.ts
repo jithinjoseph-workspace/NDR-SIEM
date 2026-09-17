@@ -16,6 +16,7 @@ import { TenantStatusService } from '../../services/tenant-status/tenant-status'
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
+import { reportRxjsError } from '../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-tenant-admin-layout',
   standalone: true,
@@ -111,7 +112,7 @@ export class TenantAdminLayout implements OnInit {
         this.latestVersion.set(data.latest_version  || '');
         this.updateAvailable.set(!!data.update_available);
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 

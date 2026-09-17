@@ -66,6 +66,22 @@ pub fn parse_device_from_ua(ua: &str) -> String {
     format!("{} / {}", browser, os)
 }
 
+// config/clickhouse/init.sql ships 'admin'/'tenant-admin' accounts with a
+// fixed, publicly-known password baked into every fresh install. There's no
+// forced-reset UI flow yet — the only "Forgot password" screen the frontend
+// has requires a pre-configured recovery email these seed accounts don't
+// have, so hard-blocking login here would just lock operators out with no
+// way back in. Instead this is surfaced to the caller so the frontend can
+// nag/redirect; the real fix is either wiring a forced-change screen to the
+// existing POST /api/auth/reset-password (self-service, old_password-based,
+// no JWT required) endpoint, or having the installer rotate this password.
+const SEED_ADMIN_HASH:  &str = "$2b$12$qB5uFqakHidExby4EbdH6.tFvW34sj7CAQFZdUCzk5YSi/kV3S09.";
+const SEED_TENANT_HASH: &str = "$2b$12$wi15kWc0KGLG6FEtIysJHuqRfT7PDvOoW2IC3oT3hfoQmtmygZ5h6";
+
+pub fn is_seed_password_hash(hash: &str) -> bool {
+    hash == SEED_ADMIN_HASH || hash == SEED_TENANT_HASH
+}
+
 /// Default page permissions per role (mirrors ndr-engine behaviour).
 pub fn default_permissions(role: &str) -> Vec<String> {
     match role {
@@ -218,6 +234,11 @@ pub async fn handle(
         }
     }
 
+    let must_reset_password = is_seed_password_hash(&user.password_hash);
+    if must_reset_password {
+        tracing::warn!("Login by '{}' still uses the default seed password — flagging for reset", username);
+    }
+
     // ── Clear failed attempts on success ──────────────────────────────────
     {
         let mut conn = state.valkey.clone();
@@ -227,7 +248,7 @@ pub async fn handle(
     }
 
     issue_full_token(&state, &headers, &user.id, &user.username, &user.role, &user.tenant_id,
-                     &user.permissions, &user.gmail, &user.secret_code).await
+                     &user.permissions, &user.gmail, &user.secret_code, must_reset_password).await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -269,6 +290,7 @@ pub async fn issue_full_token(
     stored_perms: &str,
     gmail:       &str,
     secret_code: &str,
+    must_reset_password: bool,
 ) -> axum::response::Response {
     // Role-based permissions
     let permissions: Vec<String> = if role == "super_admin" || role == "tenant_admin" {
@@ -428,7 +450,8 @@ pub async fn issue_full_token(
                 "secret_code": secret_code,
                 "sensor_ids":  sensor_ids,
                 "expires_at":  expires_at,
-                "token":       token
+                "token":       token,
+                "must_reset_password": must_reset_password
             }
         })),
     ).into_response();

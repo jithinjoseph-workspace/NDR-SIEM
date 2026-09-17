@@ -22,7 +22,9 @@ import * as topojson from 'topojson-client';
 import * as THREE from 'three';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 export interface UserAuditLog {
   id: string;
   time: string;
@@ -217,11 +219,6 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
   selectedRelay: RelayHub | null = null;
   isRefreshing = false;
 
-  // Real-time clock
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
   // Telemetry stream history
   overviewTelemetryHistory: { time: Date; cpu: number; mem: number; label?: string }[] = [];
   private overviewTelemetryPollTimer: any = null;
@@ -255,6 +252,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     private http: HttpClient,
     private cdr: ChangeDetectorRef,
     private zone: NgZone,
+    public clock: ClockService,
   ) {}
 
   // ── 100% Real Computed Metrics ─────────────────────────────────
@@ -536,17 +534,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     return items;
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
-
     this.loadWorldData();
     this.loadAllRealPlatformData();
     this.initSocLogs();
@@ -571,7 +559,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderUserRolesDonut();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 2. Real Tenants
@@ -581,7 +569,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderFocusedPostureGauge();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 3. Real Engine Nodes
@@ -591,7 +579,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderFocusedPostureGauge();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 4. Real Sensor Keys
@@ -601,7 +589,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderFocusedPostureGauge();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 5. Real Global Threat Intelligence Map with All Country Attribution
@@ -630,7 +618,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.totalThreatIps = Number(data?.total_malicious_ips) || 0;
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     // 6. Real ClickHouse Event Stats
@@ -656,7 +644,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.renderFocusedPostureGauge();
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     // 12. Real Kafka Cluster Status
@@ -671,7 +659,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
@@ -690,7 +678,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
@@ -711,7 +699,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
@@ -727,7 +715,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
@@ -740,7 +728,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
@@ -1404,7 +1392,6 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
     if (this.socLogTimer) clearInterval(this.socLogTimer);
     if (this.userAuditTimer) clearInterval(this.userAuditTimer);
     this.stopOverviewTelemetryPolling();
@@ -1517,7 +1504,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.renderFocusedPostureGauge();
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 

@@ -9,6 +9,7 @@ import { LucideAngularModule, Bot, ShieldOff, FileText, ChevronDown, ChevronUp, 
 import { AuthService } from '../../../services/auth/auth';
 
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-ai-activity',
   standalone: true,
@@ -95,7 +96,7 @@ export class AiActivity {
             this.historicalPredictions.set(history);
           }
         },
-        error: () => {}
+        error: reportRxjsError
       });
     }
   }

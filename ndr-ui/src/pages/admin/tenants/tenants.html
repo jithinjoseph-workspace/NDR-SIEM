@@ -37,8 +37,8 @@
       <div class="tnt-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 text-cyan-400"></lucide-icon>
         <div class="tnt-clock-text">
-          <span class="tnt-clock-time">{{ currentTime }}</span>
-          <span class="tnt-clock-date">{{ currentDate }}</span>
+          <span class="tnt-clock-time">{{ clock.currentTime() }}</span>
+          <span class="tnt-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>

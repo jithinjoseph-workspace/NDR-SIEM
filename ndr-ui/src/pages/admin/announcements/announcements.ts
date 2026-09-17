@@ -7,6 +7,7 @@ import {
 } from 'lucide-angular';
 import { Announcement, Api } from '../../../services/api/api';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 type AnnouncementType     = 'info' | 'maintenance' | 'update' | 'critical';
 type AnnouncementAudience = 'all' | 'tenant_admins' | 'tenant';
 
@@ -99,7 +100,7 @@ export class Announcements implements OnInit {
     this.loadAnnouncements();
     this.api.getTenants().subscribe({
       next: (data: any) => { this.tenants = data.tenants || []; this.cdr.detectChanges(); },
-      error: () => {},
+      error: reportRxjsError,
     });
   }
 

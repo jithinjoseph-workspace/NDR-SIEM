@@ -61,9 +61,10 @@ pub async fn handle(
     // Consume the one-time MFA session token
     let _: redis::RedisResult<()> = conn.del(&pending_key).await;
 
+    let must_reset_password = super::login::is_seed_password_hash(&user.password_hash);
     issue_full_token(
         &state, &headers,
         &user.id, &user.username, &user.role, &user.tenant_id,
-        &user.permissions, &user.gmail, &user.secret_code,
+        &user.permissions, &user.gmail, &user.secret_code, must_reset_password,
     ).await
 }

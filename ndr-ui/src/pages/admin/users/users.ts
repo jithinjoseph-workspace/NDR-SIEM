@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
@@ -9,7 +9,9 @@ import {
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-users',
   standalone: true,
@@ -19,7 +21,7 @@ import { AuthService } from '../../../services/auth/auth';
   templateUrl: './users.html',
   styleUrl: './users.css',
 })
-export class Users implements OnInit, OnDestroy {
+export class Users implements OnInit {
   Math = Math;
 
   ChevronDownIcon    = ChevronDown;
@@ -57,10 +59,6 @@ export class Users implements OnInit, OnDestroy {
   pendingDeleteUser: any = null;
   editingUser: any       = null;
 
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
   newUser = { username: '', password: '', role: 'tenant_admin', tenant_id: '', gmail: '' };
   userForm = { role: 'tenant_admin', tenant_id: '', active: true, password: '', permissions: '' };
 
@@ -86,29 +84,13 @@ export class Users implements OnInit, OnDestroy {
     private api: Api,
     private auth: AuthService,
     private cdr: ChangeDetectorRef,
+    public clock: ClockService,
   ) {}
 
   ngOnInit() {
     this.currentUser = this.auth.getUser();
-    this.updateTime();
-    this.clockTimer = setInterval(() => {
-      this.updateTime();
-      this.cdr.detectChanges();
-    }, 1000);
     this.loadUsers();
     this.loadTenants();
-  }
-
-  ngOnDestroy() {
-    if (this.clockTimer) {
-      clearInterval(this.clockTimer);
-    }
-  }
-
-  private updateTime() {
-    const now = new Date();
-    this.currentTime = now.toTimeString().split(' ')[0] + ' UTC';
-    this.currentDate = now.toISOString().split('T')[0];
   }
 
   loadUsers() {
@@ -122,7 +104,7 @@ export class Users implements OnInit, OnDestroy {
   loadTenants() {
     this.api.getTenants().subscribe({
       next: (data: any) => { this.tenants = data.tenants || []; this.cdr.detectChanges(); },
-      error: () => {},
+      error: reportRxjsError,
     });
   }
 
@@ -522,7 +504,7 @@ export class Users implements OnInit, OnDestroy {
             this.reloadUsersWithRetry(userId, expectedActive, attempt + 1);
           } else { this.users = fresh; this.cdr.detectChanges(); }
         },
-        error: () => {},
+        error: reportRxjsError,
       });
     }, delays[attempt] ?? delays[delays.length - 1]);
   }

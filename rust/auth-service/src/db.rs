@@ -403,6 +403,30 @@ impl AuthDb {
         Ok(out)
     }
 
+    /// Same shape as get_all_tenants but scoped to a single tenant — used so a
+    /// tenant_admin can never enumerate other tenants' names/ids/features.
+    pub async fn get_tenant_by_id(&self, tenant_id: &str) -> Result<Vec<serde_json::Value>> {
+        #[derive(Deserialize, clickhouse::Row)]
+        struct Row {
+            id: String, name: String, active: u8, ai_enabled: u8,
+            features: String, created_at: String,
+        }
+        let q = "SELECT id, name, active, ai_enabled, \
+                        coalesce(features,'ndr') AS features, \
+                        toString(created_at) AS created_at \
+                 FROM tenants FINAL WHERE id = ? ORDER BY created_at DESC";
+        let mut cur = self.client.query(q).bind(tenant_id).fetch::<Row>()?;
+        let mut out = Vec::new();
+        while let Some(r) = cur.next().await? {
+            out.push(serde_json::json!({
+                "id": r.id, "name": r.name, "active": r.active,
+                "ai_enabled": r.ai_enabled, "features": r.features,
+                "created_at": r.created_at,
+            }));
+        }
+        Ok(out)
+    }
+
     pub async fn create_tenant(&self, id: &str, name: &str) -> Result<()> {
         // 1) global registry row
         // features is stored comma-separated (e.g. "ndr,ai"), matching the

@@ -97,34 +97,38 @@ pub async fn handler(
     Ok(Json(LogSearchResponse { logs, total, took_ms }))
 }
 
+fn escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 /// Build WHERE clause from search params — all inputs are sanitised (no raw interpolation of user strings)
 fn build_where(q: &LogQuery) -> String {
     let mut conditions: Vec<String> = vec![];
 
     if let Some(ref keyword) = q.q {
-        let safe = keyword.replace('\'', "''").replace('\\', "\\\\");
+        let safe = escape(keyword);
         conditions.push(format!(
             "(raw_log ILIKE '%{safe}%' OR parsed_json ILIKE '%{safe}%')"
         ));
     }
     if let Some(ref s) = q.source {
-        let safe = s.replace('\'', "");
+        let safe = escape(s);
         conditions.push(format!("source_type = '{safe}'"));
     }
     if let Some(ref s) = q.severity {
-        let safe = s.replace('\'', "");
+        let safe = escape(s);
         conditions.push(format!("severity = '{safe}'"));
     }
     if let Some(ref c) = q.event_class {
-        let safe = c.replace('\'', "");
+        let safe = escape(c);
         conditions.push(format!("event_class = '{safe}'"));
     }
     if let Some(ref from) = q.from {
-        let safe = from.replace('\'', "");
+        let safe = escape(from);
         conditions.push(format!("timestamp >= '{safe}'"));
     }
     if let Some(ref to) = q.to {
-        let safe = to.replace('\'', "");
+        let safe = escape(to);
         conditions.push(format!("timestamp <= '{safe}'"));
     }
 
@@ -136,5 +140,5 @@ fn build_where(q: &LogQuery) -> String {
 }
 
 fn tenant_db(tenant_id: &str) -> String {
-    if tenant_id == "default" { "ndr".into() } else { format!("ndr_{}", tenant_id) }
+    if tenant_id == "default" { "ndr".into() } else { format!("ndr_{}", tenant_id.replace('-', "_")) }
 }

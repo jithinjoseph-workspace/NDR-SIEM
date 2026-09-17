@@ -88,9 +88,9 @@ pub async fn create(
 
     let db        = tenant_db(&claims.tenant_id);
     let source_id = Uuid::new_v4().to_string();
-    let name      = req.name.trim().replace('\'', "''");
-    let stype     = req.source_type.replace('\'', "");
-    let config    = req.config_json.unwrap_or_else(|| "{}".to_string()).replace('\'', "''");
+    let name      = escape(req.name.trim());
+    let stype     = escape(&req.source_type);
+    let config    = escape(&req.config_json.unwrap_or_else(|| "{}".to_string()));
 
     // Generate ingest key — returned once, hash stored
     let raw_key  = format!("siem_{}", Uuid::new_v4().to_string().replace('-', ""));
@@ -108,7 +108,7 @@ pub async fn create(
         "INSERT INTO {db}.siem_sources \
          (source_id, tenant_id, name, source_type, config_json, status, created_at) \
          VALUES ('{source_id}','{tenant}','{name}','{stype}','{config}','active',now())",
-        tenant = claims.tenant_id
+        tenant = escape(&claims.tenant_id)
     );
     let resp = client.post(&state.clickhouse_url).body(sql).send().await
         .map_err(|e| { error!("CH source create error: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
@@ -122,7 +122,7 @@ pub async fn create(
     let key_sql = format!(
         "INSERT INTO ndr.siem_ingest_keys (key_hash, tenant_id, source_id, name, active) \
          VALUES ('{key_hash}','{tenant}','{source_id}','{name}',1)",
-        tenant = claims.tenant_id,
+        tenant = escape(&claims.tenant_id),
     );
     if let Err(e) = client.post(&state.clickhouse_url).body(key_sql).send().await {
         error!("CH ingest key insert error: {e}");
@@ -141,7 +141,7 @@ pub async fn delete(
         return StatusCode::FORBIDDEN;
     }
     let db  = tenant_db(&claims.tenant_id);
-    let sid = source_id.replace('\'', "");
+    let sid = escape(&source_id);
 
     let client = reqwest::Client::new();
 
@@ -166,7 +166,7 @@ pub async fn delete(
         "INSERT INTO ndr.siem_ingest_keys (key_hash, tenant_id, source_id, name, active, created_at) \
          SELECT key_hash, tenant_id, source_id, name, 0, now() \
          FROM ndr.siem_ingest_keys FINAL WHERE source_id = '{sid}' AND tenant_id = '{tenant}'",
-        tenant = claims.tenant_id,
+        tenant = escape(&claims.tenant_id),
     );
     if let Err(e) = client.post(&state.clickhouse_url).body(key_deactivate).send().await {
         error!("CH ingest key deactivate error: {e}");
@@ -175,6 +175,10 @@ pub async fn delete(
     StatusCode::NO_CONTENT
 }
 
+fn escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 fn tenant_db(tenant_id: &str) -> String {
-    if tenant_id == "default" { "ndr".into() } else { format!("ndr_{}", tenant_id) }
+    if tenant_id == "default" { "ndr".into() } else { format!("ndr_{}", tenant_id.replace('-', "_")) }
 }

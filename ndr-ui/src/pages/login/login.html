@@ -223,6 +223,42 @@
       </div>
     </div>
 
+    <!-- ── Forced Password Reset Modal ──────────────────────────────────── -->
+    <!-- No close button on purpose: the account still has the default
+         installer password, so a real password is required before proceeding. -->
+    <div *ngIf="showForceReset" class="forgot-modal-backdrop">
+      <div class="forgot-modal">
+        <div *ngIf="forceResetError" class="login-error" style="margin-top:16px;">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span>{{ forceResetError }}</span>
+        </div>
+
+        <div class="forgot-step-content">
+          <h3>Set a New Password</h3>
+          <p>This account is still using the default installer password. Choose a new one to continue — at least 8 characters, with an uppercase letter, a number, and a special character.</p>
+          <div class="login-field">
+            <label class="login-label">New Password</label>
+            <input class="login-input" type="password" [(ngModel)]="forceResetNewPassword"
+              placeholder="New password" name="forceResetNewPassword" />
+          </div>
+          <div class="login-field">
+            <label class="login-label">Confirm Password</label>
+            <input class="login-input" type="password" [(ngModel)]="forceResetConfirmPassword"
+              placeholder="Confirm password" name="forceResetConfirmPassword" (keydown.enter)="submitForceReset()" />
+          </div>
+          <button class="login-btn" (click)="submitForceReset()" [disabled]="forceResetLoading">
+            <span *ngIf="!forceResetLoading">Set Password &amp; Continue</span>
+            <span *ngIf="forceResetLoading">Updating...</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Footer -->
     <p class="login-footer">
       NDR Stack v1.0 &mdash; Powered by Agent-Z &amp; Agent-S

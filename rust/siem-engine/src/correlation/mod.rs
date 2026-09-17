@@ -277,5 +277,5 @@ async fn load_rule_overrides(ch: &Client, engine: &RuleEngine) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn escape(s: &str) -> String {
-    s.replace('\'', "''")
+    s.replace('\\', "\\\\").replace('\'', "\\'")
 }

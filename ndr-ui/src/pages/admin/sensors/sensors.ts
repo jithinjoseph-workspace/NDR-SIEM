@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
@@ -6,7 +6,9 @@ import {
   Copy, KeyRound, RefreshCw, X, Radio, ShieldCheck, Wifi, CheckCircle2, AlertTriangle, Clock, Layers, Zap, Building2, Search, Trash2, Server, Lock, Activity, Terminal
 } from 'lucide-angular';
 import { Api, SensorKey } from '../../../services/api/api';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-sensors',
   standalone: true,
@@ -16,7 +18,7 @@ import { Api, SensorKey } from '../../../services/api/api';
   templateUrl: './sensors.html',
   styleUrl: './sensors.css',
 })
-export class Sensors implements OnInit, OnDestroy {
+export class Sensors implements OnInit {
   Math = Math;
 
   CopyIcon          = Copy;
@@ -53,11 +55,7 @@ export class Sensors implements OnInit, OnDestroy {
   msg     = '';
   msgType = '';
 
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  constructor(private api: Api, private cdr: ChangeDetectorRef, public clock: ClockService) {}
 
   get activeSensorsCount(): number {
     return this.sensorKeys.filter(s => s.active).length;
@@ -96,21 +94,11 @@ export class Sensors implements OnInit, OnDestroy {
     );
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
-
     this.loadSensorKeys();
     this.api.getTenants().subscribe({
       next: (data: any) => { this.tenants = data.tenants || []; this.cdr.detectChanges(); },
-      error: () => {},
+      error: reportRxjsError,
     });
     this.api.getInterfaces().subscribe({
       next: (ifaces: any) => {
@@ -121,12 +109,8 @@ export class Sensors implements OnInit, OnDestroy {
         }
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
-  }
-
-  ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
   }
 
   loadSensorKeys() {

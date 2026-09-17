@@ -17,9 +17,9 @@
     <div class="hero-actions">
       <div class="system-time-pill" title="Synchronized Platform Time">
         <lucide-icon [name]="ClockIcon" class="w-3.5 h-3.5 text-cyan-400"></lucide-icon>
-        <span>{{ currentTime || 'SYNCING' }}</span>
+        <span>{{ clock.currentTime() || 'SYNCING' }}</span>
         <span class="date-sep">·</span>
-        <span class="date-text">{{ currentDate }}</span>
+        <span class="date-text">{{ clock.currentDate() }}</span>
       </div>
 
       <button class="cyber-btn cyber-btn-ghost" type="button" (click)="loadUsers(); loadTenants()" title="Reload user directory">

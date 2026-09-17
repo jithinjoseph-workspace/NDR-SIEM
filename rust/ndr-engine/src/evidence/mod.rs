@@ -1,15 +1,10 @@
+use anyhow::Context;
 use sha2::{Sha256, Digest};
 use zip::{ZipWriter, write::FileOptions};
 use serde_json::{json, Value};
 use std::io::Write;
 
-fn tenant_db(tenant_id: &str) -> String {
-    if tenant_id == "default" {
-        "ndr".to_string()
-    } else {
-        format!("ndr_{}", tenant_id.replace('-', "_"))
-    }
-}
+use crate::storage::clickhouse::tenant_db_pub as tenant_db;
 
 fn sha256_of(data: &[u8]) -> String {
     let mut h = Sha256::new();
@@ -910,8 +905,12 @@ async fn build_evidence_bundle_inner(
         .unwrap_or_else(|_| "http://localhost:8123".to_string());
     let ch_user = std::env::var("CLICKHOUSE_USER")
         .unwrap_or_else(|_| "ndr".to_string());
+    // No fallback here on purpose: a missing env var used to silently
+    // degrade to a hardcoded, well-known password ("ndr123") instead of
+    // failing loudly, which would have quietly used a weak credential in
+    // any deployment where this var wasn't wired up correctly.
     let ch_pass = std::env::var("CLICKHOUSE_PASSWORD")
-        .unwrap_or_else(|_| "ndr123".to_string());
+        .context("CLICKHOUSE_PASSWORD must be set")?;
 
     let db = tenant_db(tenant_id);
 
