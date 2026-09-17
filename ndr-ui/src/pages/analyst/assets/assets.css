@@ -389,7 +389,6 @@
   position: relative;
   display: flex;
   gap: 24px;
-  /* Removed unified background and padding to allow individual cards */
 }
 
 /* ── Donut Chart ──────────────────────────────── */
@@ -660,60 +659,193 @@
 .bottom-dashboards-row {
   display: flex;
   gap: 24px;
+  margin-bottom: 24px;
+  width: 100%;
 }
 
-.scatter-dashboard, .treemap-dashboard {
-  flex: 1;
-  background: #080c14;
-  border: 1px solid rgba(61, 158, 255, 0.15);
-  border-radius: 16px;
+.threat-landscape-card {
+  flex: 1.2;
+  background: #050a14;
+  border: 1px solid rgba(0, 229, 255, 0.1);
+  border-radius: 12px;
   padding: 24px;
   display: flex;
   flex-direction: column;
 }
 
-.treemap-dashboard {
-  border-color: rgba(0, 255, 157, 0.15);
+.subnet-utilization-card {
+  flex: 1;
+  background: #050a14;
+  border: 1px solid rgba(0, 229, 255, 0.1);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
 }
 
-.scatter-title, .treemap-title {
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.icon-wrap {
+  width: 44px; height: 44px;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+.icon-wrap.blue { background: rgba(0, 157, 255, 0.15); color: #009dff; border: 1px solid rgba(0, 157, 255, 0.3); }
+.icon-wrap.green { background: rgba(0, 255, 136, 0.15); color: #00ff88; border: 1px solid rgba(0, 255, 136, 0.3); }
+
+.title-group h3 {
+  margin: 0 0 4px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+}
+.title-group p {
+  margin: 0;
+  color: #6b7a90;
+  font-size: 13px;
+}
+
+.header-right .time-dropdown {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+}
+.header-right .time-dropdown:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.legend-area {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+  justify-content: flex-end;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+.legend-item .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+.dot.high { background: #f43f5e; box-shadow: 0 0 8px #f43f5e; }
+.dot.medium { background: #ffa600; box-shadow: 0 0 8px #ffa600; }
+.dot.low { background: #009dff; box-shadow: 0 0 8px #009dff; }
+.dot.info { background: #005aff; box-shadow: 0 0 8px #005aff; }
+
+.echarts-landscape-container {
+  height: 250px;
+  width: 100%;
+}
+
+.subnet-utilization-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  flex: 1;
+}
+
+.subnet-grid-card {
+  background: linear-gradient(145deg, #021a11, #042618);
+  border: 1px solid #005a32;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sg-cidr {
+  color: #fff;
   font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+
+.sg-role {
+  color: #00ff88;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  color: #3d9eff;
-  text-transform: uppercase;
-  margin-bottom: 16px;
-  border: 1px solid rgba(61, 158, 255, 0.3);
-  padding: 4px 10px;
-  border-radius: 4px;
-  align-self: flex-start;
+  letter-spacing: 0.05em;
+  margin-bottom: auto;
 }
 
-.treemap-title {
-  color: #00ff9d;
-  border-color: rgba(0, 255, 157, 0.3);
+.sg-stats {
+  margin-top: 24px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
 }
 
-.echarts-scatter-container, .echarts-treemap-container {
-  flex: 1;
-  min-height: 300px;
-  width: 100%;
+.sg-count {
+  font-size: 32px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1;
+}
+
+.sg-label {
+  font-size: 13px;
+  color: #6b7a90;
+  margin-bottom: 4px;
+  margin-right: auto;
+}
+
+.sg-bar-container {
+  width: 60px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.sg-bar {
+  height: 100%;
+  background: #00ff88;
+  border-radius: 2px;
+  box-shadow: 0 0 5px #00ff88;
+}
+
+.sg-pct {
+  font-size: 12px;
+  color: #00ff88;
+  font-weight: 700;
+  margin-bottom: 1px;
 }
 
 /* ══════════════════════════════════════════════════
    DATA GRID — TACTICAL ASSET TABLE
 ══════════════════════════════════════════════════ */
 .data-grid {
-  flex: 1;
-  min-height: 500px;
+  height: auto;
   background: #030303;
   backdrop-filter: blur(22px);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 14px;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
   overflow-x: auto;
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.05) inset,

@@ -19,7 +19,8 @@ import {
   ShieldCheck,
   ShieldOff,
   AlertTriangle,
-  ArrowRight
+  ArrowRight,
+  Network
 } from 'lucide-angular';
 
 import { DeviceDrawer } from '../../../components/device-drawer/device-drawer';
@@ -50,6 +51,7 @@ export class Assets implements OnInit, AfterViewInit {
   EditIcon = Edit;
   ChevronDownIcon = ChevronDown;
   ArrowRightIcon = ArrowRight;
+  NetworkIcon = Network;
 
   assets: any[] = [];
   filteredAssets: any[] = [];
@@ -61,16 +63,36 @@ export class Assets implements OnInit, AfterViewInit {
   editingIp: string | null = null;
   editNameValue = '';
 
+  timeFilter = '24h';
+  isTimeDropdownOpen = false;
+  subnetSort = 'top';
+  isSubnetSortDropdownOpen = false;
+
+  setTimeFilter(val: string) {
+    this.timeFilter = val;
+    this.isTimeDropdownOpen = false;
+    this.fetchAndRenderThreatLandscape();
+  }
+
+  setSubnetSort(val: string) {
+    this.subnetSort = val;
+    this.isSubnetSortDropdownOpen = false;
+    if (val === 'top') {
+      this.enrichedSubnets.sort((a, b) => b.assetCount - a.assetCount);
+    } else {
+      this.enrichedSubnets.sort((a, b) => a.assetCount - b.assetCount);
+    }
+  }
+
   subnets: any[] = [];
   isSubnetDropdownOpen = false;
 
-  @ViewChild('treemapContainer') treemapContainer?: ElementRef;
   @ViewChild('sunburstContainer') sunburstContainer?: ElementRef;
-  @ViewChild('scatterContainer') scatterContainer?: ElementRef;
+  @ViewChild('threatLandscapeContainer') threatLandscapeContainer?: ElementRef;
 
-  treemapChart: any;
   sunburstChart: any;
-  scatterChart: any;
+  threatLandscapeChart: any;
+  enrichedSubnets: any[] = [];
 
   selectedAsset: any = null;
 
@@ -131,76 +153,49 @@ export class Assets implements OnInit, AfterViewInit {
   initCharts() {
     if (typeof echarts === 'undefined') return;
     
-    if (this.treemapContainer && !this.treemapChart) {
-      this.treemapChart = echarts.init(this.treemapContainer.nativeElement, 'dark');
-      this.updateTreemap();
-    }
-    
     if (this.sunburstContainer && !this.sunburstChart) {
       this.sunburstChart = echarts.init(this.sunburstContainer.nativeElement, 'dark');
       this.updateSunburst();
     }
     
-    if (this.scatterContainer && !this.scatterChart) {
-      this.scatterChart = echarts.init(this.scatterContainer.nativeElement, 'dark');
-      this.updateScatter3D();
+    if (this.threatLandscapeContainer && !this.threatLandscapeChart) {
+      this.threatLandscapeChart = echarts.init(this.threatLandscapeContainer.nativeElement, 'dark');
+      this.fetchAndRenderThreatLandscape();
     }
   }
 
-  updateTreemap() {
-    if (!this.treemapChart || this.subnets.length === 0) return;
+  enrichSubnets() {
+    if (!this.subnets || this.subnets.length === 0) return;
+    if (!this.assets || this.assets.length === 0) {
+       this.enrichedSubnets = [...this.subnets];
+       return;
+    }
     
-    const treemapData = this.subnets.map(s => {
-      const usedPct = s.total_ips ? (s.used_ips / s.total_ips) * 100 : 0;
-      const borderColor = usedPct > 70 ? '#ff0055' : usedPct > 30 ? '#ffaa00' : '#00ff9d';
-      return {
-        name: s.cidr,
-        value: s.total_ips,
-        usedPct: usedPct,
-        itemStyle: {
-          color: 'rgba(10, 25, 47, 0.6)',
-          borderColor: borderColor,
-          borderWidth: 2,
-          gapWidth: 4,
-          shadowBlur: 10,
-          shadowColor: borderColor
+    this.enrichedSubnets = this.subnets.map(s => {
+      let count = 0;
+      let roles: {[role: string]: number} = {};
+      
+      this.assets.forEach(a => {
+        if (a.ip && this.isIpInCidr(a.ip, s.cidr)) {
+          count++;
+          const role = (a.role || a.device_type || 'UNKNOWN').toUpperCase();
+          roles[role] = (roles[role] || 0) + 1;
         }
-      };
+      });
+      
+      let dominant = 'UNKNOWN';
+      let max = 0;
+      for (const [r, c] of Object.entries(roles)) {
+        if (c > max) { max = c; dominant = r; }
+      }
+      
+      const pct = count ? Math.min(100, count * 5) : 0;
+      
+      return { ...s, assetCount: count, dominantRole: dominant, assetPercent: pct };
     });
-
-    this.treemapChart.setOption({
-      backgroundColor: 'transparent',
-      tooltip: {
-        backgroundColor: 'rgba(10, 25, 47, 0.9)',
-        borderColor: '#00f3ff',
-        textStyle: { color: '#fff' },
-        formatter: (info: any) => `<strong>${info.name}</strong><br/>Size: ${info.value} IPs<br/>Used: ${info.data.usedPct.toFixed(1)}%`
-      },
-      series: [{
-        type: 'treemap',
-        data: treemapData,
-        left: 0,
-        right: 0,
-        top: 0,
-        bottom: 0,
-        roam: false,
-        nodeClick: false,
-        breadcrumb: { show: false },
-        label: {
-          show: true,
-          formatter: (info: any) => `{name|${info.name}}\n{val|${info.value} IPs}`,
-          rich: {
-            name: { color: '#ffffff', fontSize: 13, fontWeight: 'bold', padding: [0, 0, 5, 0], textShadowBlur: 4, textShadowColor: '#000' },
-            val: { color: '#00ff9d', fontSize: 11, fontFamily: 'monospace' }
-          }
-        },
-        itemStyle: {
-          borderColor: '#0a192f',
-          borderWidth: 2,
-          gapWidth: 2
-        }
-      }]
-    });
+    
+    // Sort by assetCount desc
+    this.enrichedSubnets.sort((a, b) => b.assetCount - a.assetCount);
   }
 
   updateSunburst() {
@@ -299,92 +294,162 @@ export class Assets implements OnInit, AfterViewInit {
     }, true);
   }
 
-  updateScatter3D() {
-    if (!this.scatterChart || this.assets.length === 0) return;
-    
-    // X: Conns, Y: Alerts, Z: Risk
-    let maxConns = 0;
-    let maxAlerts = 0;
-    const data = this.assets.map(a => {
-      const risk = parseInt(a.risk, 10) || 0;
-      const conns = parseInt(a.conns_24h || '0', 10);
-      const alerts = parseInt(a.alerts_24h || '0', 10);
-      if (conns > maxConns) maxConns = conns;
-      if (alerts > maxAlerts) maxAlerts = alerts;
-      return [
-        conns, // X
-        alerts, // Y
-        risk, // Z
-        a.ip,
-        a.device_type
-      ];
-    });
+  private parseAlertDate(value: any): number {
+    if (value === null || value === undefined || value === '') return 0;
+    if (typeof value === 'number') {
+      return value > 9999999999 ? value : value * 1000;
+    }
+    const raw = String(value).trim();
+    if (/^\d+$/.test(raw)) return this.parseAlertDate(Number(raw));
+    const n = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    const z = /Z$|[+-]\d{2}:?\d{2}$/.test(n) ? n : `${n}Z`;
+    const d = new Date(z);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  }
 
-    this.scatterChart.setOption({
-      backgroundColor: 'transparent',
-      tooltip: {
-        backgroundColor: 'rgba(10, 25, 47, 0.9)',
-        borderColor: '#3d9eff',
-        textStyle: { color: '#fff' },
-        formatter: (p: any) => `<strong>IP:</strong> ${p.data[3]}<br/><strong>Conns:</strong> ${p.data[0]}<br/><strong>Alerts:</strong> ${p.data[1]}<br/><strong>Risk:</strong> ${p.data[2]}`
+  fetchAndRenderThreatLandscape() {
+    if (!this.threatLandscapeChart) return;
+    this.api.getAlerts().subscribe({
+      next: (hits: any[]) => {
+        const nowMs = Date.now();
+        let bucketMs = 3600 * 1000; // 24h default
+        let numBuckets = 24;
+        let formatLabel = (d: Date) => `${d.getHours().toString().padStart(2, '0')}:00`;
+
+        if (this.timeFilter === '7d') {
+          bucketMs = 24 * 3600 * 1000;
+          numBuckets = 7;
+          formatLabel = (d: Date) => `${d.getMonth()+1}/${d.getDate()}`;
+        } else if (this.timeFilter === '30d') {
+          bucketMs = 24 * 3600 * 1000;
+          numBuckets = 30;
+          formatLabel = (d: Date) => `${d.getMonth()+1}/${d.getDate()}`;
+        }
+        
+        const dataHigh = new Array(numBuckets).fill(0);
+        const dataMedium = new Array(numBuckets).fill(0);
+        const dataLow = new Array(numBuckets).fill(0);
+        const dataInfo = new Array(numBuckets).fill(0);
+        const labels: string[] = [];
+        
+        for (let i = numBuckets - 1; i >= 0; i--) {
+          const d = new Date(nowMs - (i * bucketMs));
+          labels.push(formatLabel(d));
+        }
+
+        hits.forEach(hit => {
+          const ts = this.parseAlertDate(hit.timestamp || hit.ts);
+          if (ts === 0) return;
+          const diffMs = nowMs - ts;
+          const index = (numBuckets - 1) - Math.floor(diffMs / bucketMs);
+          
+          if (index >= 0 && index < numBuckets) {
+            const sev = (hit.severity || '').toUpperCase();
+            if (sev === 'CRITICAL' || sev === 'HIGH') dataHigh[index]++;
+            else if (sev === 'MEDIUM') dataMedium[index]++;
+            else if (sev === 'LOW') dataLow[index]++;
+            else dataInfo[index]++;
+          }
+        });
+
+        this.threatLandscapeChart.setOption({
+          backgroundColor: 'transparent',
+          tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(9, 18, 29, 0.9)',
+            borderColor: 'rgba(255, 255, 255, 0.1)',
+            textStyle: { color: '#ffffff' },
+            axisPointer: { type: 'line', lineStyle: { color: 'rgba(255, 255, 255, 0.2)', type: 'dashed' } },
+            formatter: (params: any[]) => {
+              let res = `<div style="margin-bottom: 8px; font-size: 12px; color: #6b7a90">${params[0].axisValue}</div>`;
+              params.forEach(p => {
+                res += `<div style="display: flex; justify-content: space-between; gap: 20px; font-size: 13px;">
+                          <div style="display: flex; align-items: center; gap: 6px;">
+                            ${p.marker} <span>${p.seriesName}</span>
+                          </div>
+                          <strong>${p.value}</strong>
+                        </div>`;
+              });
+              return res;
+            }
+          },
+          grid: { top: 20, right: 20, bottom: 30, left: 40 },
+          xAxis: {
+            type: 'category',
+            boundaryGap: false,
+            data: labels,
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: { color: '#6b7a90', fontSize: 11, margin: 12 }
+          },
+          yAxis: {
+            type: 'value',
+            splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)', type: 'dashed' } },
+            axisLabel: { color: '#6b7a90', fontSize: 11 }
+          },
+          color: ['#005aff', '#009dff', '#ffa600', '#f43f5e'],
+          series: [
+            {
+              name: 'Info', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(0, 90, 255, 0.3)' },
+                  { offset: 1, color: 'rgba(0, 90, 255, 0.01)' }
+                ])
+              },
+              data: dataInfo
+            },
+            {
+              name: 'Low', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(0, 157, 255, 0.3)' },
+                  { offset: 1, color: 'rgba(0, 157, 255, 0.01)' }
+                ])
+              },
+              data: dataLow
+            },
+            {
+              name: 'Medium', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(255, 166, 0, 0.3)' },
+                  { offset: 1, color: 'rgba(255, 166, 0, 0.01)' }
+                ])
+              },
+              data: dataMedium
+            },
+            {
+              name: 'High', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(244, 63, 94, 0.3)' },
+                  { offset: 1, color: 'rgba(244, 63, 94, 0.01)' }
+                ])
+              },
+              data: dataHigh
+            }
+          ]
+        });
       },
-      grid: { top: 30, right: 60, bottom: 40, left: 60 },
-      xAxis: { 
-        name: 'Conns', 
-        type: 'value', 
-        min: 0,
-        max: maxConns === 0 ? 10 : undefined,
-        splitLine: { lineStyle: { color: 'rgba(0, 243, 255, 0.1)', type: 'dashed' } },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { color: '#a0aec0', fontFamily: 'monospace' }
-      },
-      yAxis: { 
-        name: 'Alerts', 
-        type: 'value',
-        min: 0,
-        max: maxAlerts === 0 ? 10 : undefined,
-        splitLine: { lineStyle: { color: 'rgba(0, 243, 255, 0.1)', type: 'dashed' } },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { color: '#a0aec0', fontFamily: 'monospace' }
-      },
-      visualMap: {
-        show: true,
-        dimension: 2,
-        min: 0,
-        max: 100,
-        inRange: {
-          color: ['#3d9eff', '#fde047', '#ff0055'],
-          symbolSize: [12, 40]
-        },
-        textStyle: { color: '#a0aec0', fontFamily: 'monospace' },
-        right: 0,
-        top: 'center',
-        calculable: true
-      },
-      series: [{
-        type: 'effectScatter',
-        rippleEffect: { brushType: 'stroke', scale: 3 },
-        itemStyle: {
-          shadowBlur: 20,
-          shadowColor: 'rgba(255, 255, 255, 0.2)',
-          opacity: 0.9
-        },
-        data: data
-      }]
+      error: () => {}
     });
   }
 
   loadSubnets() {
     this.api.getIpamSubnets().subscribe({
-      next: (data: any) => { 
+      next: (data: any[]) => { 
         this.subnets = Array.isArray(data) ? data : []; 
+        this.enrichSubnets();
         setTimeout(() => {
-          if (!this.treemapChart && this.treemapContainer && typeof echarts !== 'undefined') {
-            this.treemapChart = echarts.init(this.treemapContainer.nativeElement, 'dark');
+          if (!this.threatLandscapeChart && this.threatLandscapeContainer && typeof echarts !== 'undefined') {
+            this.threatLandscapeChart = echarts.init(this.threatLandscapeContainer.nativeElement, 'dark');
+            this.fetchAndRenderThreatLandscape();
           }
-          this.updateTreemap();
         }, 100);
       },
       error: () => { this.subnets = []; }
@@ -425,12 +490,12 @@ export class Assets implements OnInit, AfterViewInit {
         }
         this.calculateStats();
         this.filterAssets();
+        this.enrichSubnets();
         this.loading = false;
         this.cdr.detectChanges();
         setTimeout(() => {
           this.initCharts();
           this.updateSunburst();
-          this.updateScatter3D();
         }, 100);
       },
       error: (err) => {

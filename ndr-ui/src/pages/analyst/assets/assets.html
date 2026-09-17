@@ -168,16 +168,83 @@
   </div>
 
   <div class="bottom-dashboards-row" *ngIf="!loading && (totalAssets > 0 || subnets.length > 0)">
-    <!-- Threat Landscape Scatter Plot -->
-    <div class="scatter-dashboard" *ngIf="totalAssets > 0">
-      <div class="scatter-title">THREAT LANDSCAPE</div>
-      <div #scatterContainer class="echarts-scatter-container"></div>
+    <!-- Threat Landscape -->
+    <div class="threat-landscape-card" *ngIf="totalAssets > 0">
+      <div class="card-header">
+        <div class="header-left">
+          <div class="icon-wrap blue">
+            <lucide-icon [name]="ShieldCheckIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div class="title-group">
+            <h3>Threat Landscape</h3>
+            <p>Asset related alerts and activity over time</p>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="custom-dropdown-wrapper">
+            <div class="dropdown-backdrop" *ngIf="isTimeDropdownOpen" (click)="isTimeDropdownOpen = false"></div>
+            <div class="styled-dropdown time-dropdown" (click)="isTimeDropdownOpen = !isTimeDropdownOpen" [class.open]="isTimeDropdownOpen">
+              <span>{{ timeFilter === '24h' ? 'Last 24 hours' : timeFilter === '7d' ? 'Last 7 days' : 'Last 30 days' }}</span>
+              <lucide-icon [name]="ChevronDownIcon" class="w-4 h-4" [class.rotate]="isTimeDropdownOpen"></lucide-icon>
+            </div>
+            <div class="dropdown-menu" *ngIf="isTimeDropdownOpen">
+              <div class="dropdown-item" (click)="setTimeFilter('24h')" [class.active]="timeFilter === '24h'">Last 24 hours</div>
+              <div class="dropdown-item" (click)="setTimeFilter('7d')" [class.active]="timeFilter === '7d'">Last 7 days</div>
+              <div class="dropdown-item" (click)="setTimeFilter('30d')" [class.active]="timeFilter === '30d'">Last 30 days</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="legend-area">
+        <div class="legend-item"><span class="dot high"></span>High</div>
+        <div class="legend-item"><span class="dot medium"></span>Medium</div>
+        <div class="legend-item"><span class="dot low"></span>Low</div>
+        <div class="legend-item"><span class="dot info"></span>Info</div>
+      </div>
+      <div #threatLandscapeContainer class="echarts-landscape-container"></div>
     </div>
 
-    <!-- Subnet Utilization Treemap -->
-    <div class="treemap-dashboard" *ngIf="subnets.length > 0">
-      <div class="treemap-title">SUBNET UTILIZATION MAP</div>
-      <div #treemapContainer class="echarts-treemap-container"></div>
+    <!-- Subnet Utilization Map -->
+    <div class="subnet-utilization-card" *ngIf="subnets.length > 0">
+      <div class="card-header">
+        <div class="header-left">
+          <div class="icon-wrap green">
+            <lucide-icon [name]="NetworkIcon" class="w-5 h-5"></lucide-icon>
+          </div>
+          <div class="title-group">
+            <h3>Subnet Utilization Map</h3>
+            <p>Asset distribution across subnets</p>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="custom-dropdown-wrapper">
+            <div class="dropdown-backdrop" *ngIf="isSubnetSortDropdownOpen" (click)="isSubnetSortDropdownOpen = false"></div>
+            <div class="styled-dropdown time-dropdown" (click)="isSubnetSortDropdownOpen = !isSubnetSortDropdownOpen" [class.open]="isSubnetSortDropdownOpen">
+              <span>{{ subnetSort === 'top' ? 'Top Subnets' : 'Least Used' }}</span>
+              <lucide-icon [name]="ChevronDownIcon" class="w-4 h-4" [class.rotate]="isSubnetSortDropdownOpen"></lucide-icon>
+            </div>
+            <div class="dropdown-menu" *ngIf="isSubnetSortDropdownOpen">
+              <div class="dropdown-item" (click)="setSubnetSort('top')" [class.active]="subnetSort === 'top'">Top Subnets</div>
+              <div class="dropdown-item" (click)="setSubnetSort('least')" [class.active]="subnetSort === 'least'">Least Used</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="subnet-utilization-grid">
+        <div class="subnet-grid-card" *ngFor="let s of enrichedSubnets | slice:0:4">
+          <div class="sg-cidr">{{ s.cidr }}</div>
+          <div class="sg-role">{{ (s.dominantRole || 'UNKNOWN') | uppercase }}</div>
+          <div class="sg-stats">
+            <div class="sg-count">{{ s.assetCount }}</div>
+            <div class="sg-label">Assets</div>
+            <div class="sg-bar-container">
+              <div class="sg-bar" [style.width.%]="s.assetPercent || 0"></div>
+            </div>
+            <div class="sg-pct">{{ s.assetPercent || 0 }}%</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

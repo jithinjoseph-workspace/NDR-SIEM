@@ -26,7 +26,16 @@ import {
   Download,
   ExternalLink,
   Edit2,
-  Check
+  Check,
+  Target,
+  LayoutGrid,
+  Waypoints,
+  Bell,
+  ChevronRight,
+  Shield,
+  ArrowUpRight,
+  BarChart2,
+  ChevronDown
 } from 'lucide-angular';
 
 @Component({
@@ -61,6 +70,16 @@ export class DeviceDrawer implements OnChanges {
   ExternalLinkIcon = ExternalLink;
   EditIcon = Edit2;
   CheckIcon = Check;
+  TargetIcon = Target;
+  LayoutGridIcon = LayoutGrid;
+  WaypointsIcon = Waypoints;
+  BellIcon = Bell;
+  ChevronRightIcon = ChevronRight;
+  ShieldIcon = Shield;
+  ArrowUpRightIcon = ArrowUpRight;
+  BarChart2Icon = BarChart2;
+  ChevronDownIcon = ChevronDown;
+  UsersIcon = Users;
 
   isEditingName = false;
   editNameValue = '';

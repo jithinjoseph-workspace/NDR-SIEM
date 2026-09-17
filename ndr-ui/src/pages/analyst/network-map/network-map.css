@@ -115,23 +115,23 @@
   gap: 12px;
   padding: 8px 14px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid #005a32;
+  background: #002b18;
 }
 
 .metric-pill--blue {
-  border: 1px solid rgba(61, 158, 255, 0.4);
-  background: rgba(61, 158, 255, 0.05);
+  border: 1px solid #003380;
+  background: #001f4d;
 }
 
 .metric-pill--red {
-  border: 1px solid rgba(244, 63, 94, 0.4);
-  background: rgba(244, 63, 94, 0.05);
+  border: 1px solid #7f0019;
+  background: #3f000d;
 }
 
 .metric-pill--amber {
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  background: rgba(245, 158, 11, 0.05);
+  border: 1px solid #7a4200;
+  background: #4a2800;
 }
 
 .metric-icon {
@@ -1127,11 +1127,13 @@
   gap: 16px;
   padding: 16px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: #000000;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(0, 229, 255, 0.15);
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(0, 229, 255, 0.05);
   overflow: hidden;
-  height: 100%;
+  height: max-content;
+  max-height: 100%;
 }
 
 .device-selector-bar.is-collapsed {
@@ -1239,21 +1241,29 @@
 .dsb-chip {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 8px 13px 7px;
+  gap: 6px;
+  padding: 12px 14px;
   min-width: 112px;
-  border-radius: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: #09090b;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: #09121d;
   flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
 
-
+.dsb-chip:hover {
+  border-color: rgba(0, 229, 255, 0.3);
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.1) inset;
+  background: #0d1b2a;
+}
 
 .dsb-chip--active {
-  background: #ffffff !important;
-  border-color: #ffffff !important;
-  box-shadow: 0 0 16px rgba(255,255,255,0.2) !important;
+  background: #00e5ff !important;
+  border-color: #00e5ff !important;
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important;
   transform: translateY(-1px);
 }
 
@@ -1304,11 +1314,11 @@
 .dsb-chip--active .dsb-chip__dot { opacity: 1; }
 
 .dsb-chip__ip {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 700;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 800;
   color: #f8fafc;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
   line-height: 1.1;
 }
 
@@ -1323,10 +1333,10 @@
   background: rgba(255,255,255,0.04);
   padding: 1px 5px;
   border-radius: 4px;
-  transition: color 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 
-.dsb-chip--active .dsb-chip__type { color: #000000; }
+.dsb-chip--active .dsb-chip__type { color: #000000; background: rgba(0,0,0,0.1); }
 
 .dsb-chip__count {
   font-family: var(--font-mono);

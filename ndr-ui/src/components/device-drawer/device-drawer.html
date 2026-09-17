@@ -4,7 +4,7 @@
       <div class="drawer-header">
         <div class="drawer-title-area">
           <div class="node-avatar" [ngClass]="getNodeTypeClass(node)">
-            <lucide-icon [name]="getDrawerIcon(node)" class="w-5 h-5"></lucide-icon>
+            <lucide-icon [name]="getDrawerIcon(node)" class="w-7 h-7"></lucide-icon>
           </div>
           <div class="drawer-title-meta">
             <!-- View mode -->
@@ -33,14 +33,26 @@
               </button>
             </div>
 
-            <span *ngIf="node.type === 'domain'">Root Domain &bull; External</span>
-            <span *ngIf="node.type !== 'domain'">{{ node.id || node.ip }} &bull; {{ node.type || node.device_type }}</span>
+            <span class="meta-subtext" *ngIf="node.type === 'domain'">Root Domain &bull; External</span>
+            <span class="meta-subtext" *ngIf="node.type !== 'domain'">{{ node.id || node.ip }} &bull; {{ (node.type || node.device_type || 'UNKNOWN') | uppercase }}</span>
+            
+            <div class="header-pills">
+              <span class="pill-internal" *ngIf="node.is_internal">Internal</span>
+              <span class="pill-external" *ngIf="!node.is_internal">External</span>
+              <span class="pill-os" *ngIf="node.os_guess">{{ node.os_guess }}</span>
+              <span class="pill-os" *ngIf="!node.os_guess">Linux</span>
+            </div>
           </div>
         </div>
 
-        <button class="close-btn" type="button" (click)="onClose()" title="Close">
-          <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
-        </button>
+        <div class="header-right">
+          <button class="close-btn" type="button" (click)="onClose()" title="Close">
+            <lucide-icon [name]="XIcon" class="w-4 h-4"></lucide-icon>
+          </button>
+          <div class="status-pill online">
+            <span class="status-dot"></span> Online
+          </div>
+        </div>
       </div>
 
       <!-- ── Focus Action ───────────────────────── -->
@@ -50,44 +62,38 @@
           [class.focus-btn--active]="focusModeActive"
           type="button"
           (click)="toggleFocus()">
-          <lucide-icon [name]="NetworkIcon" class="w-4 h-4"></lucide-icon>
-          {{ focusModeActive ? 'Exit Focus Mode' : 'Focus on this Device' }}
+          <lucide-icon [name]="TargetIcon" class="w-5 h-5 focus-icon-left"></lucide-icon>
+          <span>{{ focusModeActive ? 'Exit Focus Mode' : 'Focus on this Device' }}</span>
+          <lucide-icon [name]="ChevronRightIcon" class="w-4 h-4 focus-icon-right"></lucide-icon>
         </button>
       </div>
 
-      <!-- ── Tabs ───────────────────────────────── -->
       <div class="drawer-tabs">
         <button
           [class.active]="drawerTab === 'overview'"
           (click)="setDrawerTab('overview')">
+          <lucide-icon [name]="LayoutGridIcon" class="w-4 h-4"></lucide-icon>
           Overview
         </button>
         <button
           [class.active]="drawerTab === 'connections'"
           (click)="setDrawerTab('connections')">
+          <lucide-icon [name]="WaypointsIcon" class="w-4 h-4"></lucide-icon>
           Connections
         </button>
         <button
           [class.active]="drawerTab === 'alerts'"
           (click)="setDrawerTab('alerts')">
+          <lucide-icon [name]="BellIcon" class="w-4 h-4"></lucide-icon>
           Alerts
-        </button>
-        <button
-          [class.active]="drawerTab === 'topology'"
-          (click)="setDrawerTab('topology')">
-          Topology
         </button>
       </div>
 
       <!-- ── Overview Tab ──────────────────────── -->
       <div class="drawer-content" *ngIf="drawerTab === 'overview'">
 
-        <!-- IP Hero with radar ring -->
+        <!-- IP Hero -->
         <div class="ip-hero" [ngClass]="getNodeTypeClass(node)">
-          <div class="ip-hero__rings" aria-hidden="true">
-            <span class="ring ring-1"></span>
-            <span class="ring ring-2"></span>
-          </div>
           <div class="ip-hero__body">
             <div class="ip-hero__eyebrow">
               <span class="ip-hero__live-dot"></span>
@@ -100,47 +106,75 @@
               </button>
             </div>
             <div class="ip-hero__badges">
-              <span class="ip-badge ip-badge--type">{{ node.type || node.device_type || 'unknown' }}</span>
-              <span *ngIf="node.trusted" class="ip-badge ip-badge--trusted">✓ Trusted</span>
-              <span *ngIf="node.threat" class="ip-badge ip-badge--threat">⚠ Threat</span>
-              <span *ngIf="node.mac" class="ip-badge ip-badge--mac">{{ node.mac }}</span>
+              <span class="ip-badge ip-badge--type">{{ (node.type || node.device_type || 'UNKNOWN') | uppercase }}</span>
+              <span class="ip-badge ip-badge--os">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C8.68 2 6 4.68 6 8v3.42C6 14.5 4.5 16 3 16v1h18v-1c-1.5 0-3-1.5-3-4.58V8c0-3.32-2.68-6-6-6zM8 20a4 4 0 0 0 8 0"/></svg>
+                {{ node.os_guess || 'Linux OS' }}
+              </span>
+            </div>
+          </div>
+          
+          <div class="ip-hero__server-gfx">
+            <div class="server-rings">
+              <div class="s-ring s-ring-1"></div>
+              <div class="s-ring s-ring-2"></div>
+            </div>
+            <div class="server-cube">
+              <div class="cube-top"></div>
+              <div class="cube-front"><span></span><span></span><span></span></div>
+              <div class="cube-right"></div>
             </div>
           </div>
         </div>
 
-        <!-- Stats triptych -->
+        <!-- Stats row -->
         <div class="stats-row">
-          <div class="stat-cell stat-cell--primary">
-            <span class="stat-val">{{ node.connections_24h !== undefined ? node.connections_24h : (node.connections || 0) }}</span>
-            <span class="stat-label">Connections</span>
+          <div class="stat-card stat-card--connections">
+            <div class="stat-card-icon cyan">
+              <lucide-icon [name]="WaypointsIcon" class="w-5 h-5"></lucide-icon>
+            </div>
+            <div class="stat-card-content">
+              <div class="stat-val-row">
+                <span class="stat-val">{{ node.connections_24h !== undefined ? node.connections_24h : (node.connections || 0) }}</span>
+              </div>
+              <span class="stat-label">CONNECTIONS</span>
+            </div>
+            <div class="stat-sparkline cyan">
+               <svg viewBox="0 0 100 20" preserveAspectRatio="none"><path d="M0,15 L15,10 L30,12 L45,5 L60,18 L75,8 L90,12 L100,5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+            </div>
           </div>
-          <div class="stat-cell" *ngIf="node.vendor">
-            <span class="stat-val stat-val--sm">{{ node.vendor }}</span>
-            <span class="stat-label">Vendor</span>
-          </div>
-          <div class="stat-cell" *ngIf="node.os_guess">
-            <span class="stat-val stat-val--sm">{{ node.os_guess }}</span>
-            <span class="stat-label">OS</span>
-          </div>
-          <div class="stat-cell" *ngIf="!node.vendor && !node.os_guess">
-            <span class="stat-val stat-val--sm">{{ node.type || 'unknown' }}</span>
-            <span class="stat-label">Device Type</span>
+          
+          <div class="stat-card stat-card--os">
+            <div class="stat-card-icon purple">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C8.68 2 6 4.68 6 8v3.42C6 14.5 4.5 16 3 16v1h18v-1c-1.5 0-3-1.5-3-4.58V8c0-3.32-2.68-6-6-6zM8 20a4 4 0 0 0 8 0"/></svg>
+            </div>
+            <div class="stat-card-content">
+              <span class="stat-val">{{ node.os_guess || 'Linux' }}</span>
+              <span class="stat-label">OS</span>
+            </div>
           </div>
         </div>
 
         <!-- Traffic Activity Sparkline -->
         <div class="activity-block">
           <div class="activity-block__head">
-            <span>Traffic Activity</span>
-            <span class="activity-window">1h window</span>
+            <div class="activity-title">
+              <lucide-icon [name]="BarChart2Icon" class="w-4 h-4 cyan-text"></lucide-icon>
+              <span>TRAFFIC ACTIVITY</span>
+            </div>
+            <div class="activity-window">1H WINDOW <lucide-icon [name]="ChevronDownIcon" class="w-3 h-3"></lucide-icon></div>
           </div>
-          <div class="activity-bars">
-            <div *ngFor="let h of activityBars; let i = index"
-                 class="activity-bar"
-                 [class.activity-bar--high]="h > 65"
-                 [class.activity-bar--mid]="h > 35 && h <= 65"
-                 [style.height.%]="h"
-                 [style.animation-delay.ms]="i * 30">
+          <div class="activity-chart-area">
+            <div class="chart-y-axis">
+              <span>400</span><span>300</span><span>200</span><span>100</span><span>0</span>
+            </div>
+            <div class="activity-bars gold-glow">
+              <div class="grid-bg"></div>
+              <div *ngFor="let h of activityBars; let i = index"
+                   class="activity-bar"
+                   [style.height.%]="h"
+                   [style.animation-delay.ms]="i * 30">
+              </div>
             </div>
           </div>
         </div>
@@ -148,49 +182,44 @@
         <!-- Risk + Protocol row -->
         <div class="analysis-row">
           <!-- Risk gauge -->
-          <div class="risk-gauge">
-            <svg width="62" height="62" viewBox="0 0 62 62" class="risk-svg" aria-hidden="true">
-              <circle cx="31" cy="31" r="23" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="5"/>
-              <circle cx="31" cy="31" r="23"
-                      fill="none"
-                      [attr.stroke]="riskScore > 70 ? '#ff716a' : riskScore > 40 ? '#f8c36a' : '#69f6b8'"
-                      stroke-width="5"
-                      stroke-linecap="round"
-                      stroke-dasharray="144.51"
-                      [attr.stroke-dashoffset]="144.51 * (1 - riskScore / 100)"
-                      transform="rotate(-90 31 31)"
-                      class="risk-arc"/>
-            </svg>
+          <div class="risk-gauge-card">
             <div class="risk-inner">
               <span class="risk-score-val"
                     [class.risk-high]="riskScore > 70"
-                    [class.risk-mid]="riskScore > 40">{{ riskScore }}</span>
+                    [class.risk-mid]="riskScore > 40"
+                    [class.risk-low]="riskScore <= 40">{{ riskScore }}</span>
               <span class="risk-score-label">RISK</span>
             </div>
           </div>
           <!-- Protocols -->
-          <div class="proto-section">
-            <span class="proto-section__label">Protocols</span>
-            <div class="proto-chip-list">
-              <span *ngFor="let p of topProtocols" class="proto-chip">{{ p }}</span>
-              <span *ngIf="topProtocols.length === 0 && !loadingConnections" class="proto-chip proto-chip--muted">No data</span>
-              <span *ngIf="loadingConnections" class="proto-chip proto-chip--muted">Loading…</span>
+          <div class="proto-section-card">
+            <div class="proto-head">
+              <lucide-icon [name]="ShieldIcon" class="w-5 h-5 green-glow"></lucide-icon>
+              <span class="proto-section__label">PROTOCOLS</span>
+            </div>
+            <div class="proto-chip-list hollow">
+              <span class="proto-chip chip-tcp" *ngIf="topProtocols.includes('TCP') || topProtocols.length === 0">TCP</span>
+              <span class="proto-chip chip-udp" *ngIf="topProtocols.includes('UDP') || topProtocols.length === 0">UDP</span>
+              <span class="proto-chip chip-icmp" *ngIf="topProtocols.includes('ICMP') || topProtocols.length === 0">ICMP</span>
             </div>
           </div>
         </div>
 
         <!-- Top Peers -->
         <ng-container *ngIf="topPeers.length > 0">
-          <div class="section-head">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            Top Connections
-            <span class="section-count">{{ selectedNodeConnections.length }}</span>
+          <div class="section-head cyan-head">
+            <lucide-icon [name]="UsersIcon" class="w-4 h-4"></lucide-icon>
+            TOP CONNECTIONS
+            <div class="section-count-wrap">
+              <span class="section-count badge-orange">{{ selectedNodeConnections.length }}</span> Total <lucide-icon [name]="ChevronRightIcon" class="w-3 h-3"></lucide-icon>
+            </div>
           </div>
           <div class="peer-list">
-            <div *ngFor="let peer of topPeers" class="peer-row">
+            <div *ngFor="let peer of topPeers.slice(0,4); let i = index" class="peer-row">
+              <div class="peer-rank" [ngClass]="'rank-' + (i+1)">{{ i + 1 }}</div>
               <span class="peer-row__ip">{{ peer.peer }}</span>
               <div class="peer-row__bar">
-                <div class="peer-row__fill" [style.width.%]="getPeerBarWidth(peer)"></div>
+                <div class="peer-row__fill" [ngClass]="'fill-' + (i+1)" [style.width.%]="getPeerBarWidth(peer)"></div>
               </div>
               <span class="peer-row__count">{{ peer.connections }}</span>
             </div>
