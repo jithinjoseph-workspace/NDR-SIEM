@@ -18,7 +18,8 @@ import {
   ChevronDown,
   ShieldCheck,
   ShieldOff,
-  AlertTriangle
+  AlertTriangle,
+  ArrowRight
 } from 'lucide-angular';
 
 import { DeviceDrawer } from '../../../components/device-drawer/device-drawer';
@@ -48,6 +49,7 @@ export class Assets implements OnInit, AfterViewInit {
   AlertTriangleIcon = AlertTriangle;
   EditIcon = Edit;
   ChevronDownIcon = ChevronDown;
+  ArrowRightIcon = ArrowRight;
 
   assets: any[] = [];
   filteredAssets: any[] = [];
@@ -177,6 +179,10 @@ export class Assets implements OnInit, AfterViewInit {
       series: [{
         type: 'treemap',
         data: treemapData,
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
         roam: false,
         nodeClick: false,
         breadcrumb: { show: false },
@@ -200,21 +206,27 @@ export class Assets implements OnInit, AfterViewInit {
   updateSunburst() {
     if (!this.sunburstChart || this.assets.length === 0) return;
     
-    // Group by Type
-    const typeCount: any = {};
-    let total = 0;
-    this.assets.forEach(a => {
-      const t = (a.device_type || 'Unknown').toUpperCase();
-      typeCount[t] = (typeCount[t] || 0) + 1;
-      total++;
-    });
+    const typeCount = {
+      'Workstations': this.stats.workstations.count,
+      'Servers': this.stats.servers.count,
+      'IoT Devices': this.stats.iot.count,
+      'Networking': this.stats.networking.count
+    };
+    const total = this.totalAssets;
 
-    const pieData = Object.keys(typeCount).map(type => ({
-      name: type,
-      value: typeCount[type]
-    }));
+    const pieData = [
+      { name: 'Workstations', value: typeCount['Workstations'] },
+      { name: 'Servers', value: typeCount['Servers'] },
+      { name: 'IoT Devices', value: typeCount['IoT Devices'] },
+      { name: 'Networking', value: typeCount['Networking'] }
+    ];
 
-    const colorPalette = ['#00d27a', '#00a2ff', '#ff7c00', '#e800ff', '#00ff9d'];
+    const colorPalette = [
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#5eb5ff'}, {offset: 1, color: '#005ee6'}]),
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#69f6b8'}, {offset: 1, color: '#008f52'}]),
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#ff8b84'}, {offset: 1, color: '#d60000'}]),
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#c084fc'}, {offset: 1, color: '#6a0dad'}])
+    ];
 
     this.sunburstChart.setOption({
       backgroundColor: 'transparent',
@@ -227,56 +239,60 @@ export class Assets implements OnInit, AfterViewInit {
       color: colorPalette,
       legend: {
         orient: 'vertical',
-        right: '5%',
+        left: '42%',
         top: 'center',
-        textStyle: { color: '#ffffff', fontFamily: 'monospace', fontSize: 12 },
-        icon: 'circle'
+        itemGap: 18,
+        icon: 'circle',
+        itemWidth: 12,
+        textStyle: {
+          rich: {
+            name: { color: '#cbd5e1', fontSize: 15, width: 110 },
+            val: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', width: 28, align: 'right' },
+            pct: { color: '#64748b', fontSize: 15, width: 50, align: 'right' }
+          }
+        },
+        formatter: (name: string) => {
+          const data = pieData.find(d => d.name === name);
+          const val = data ? data.value : 0;
+          const pct = total ? Math.round((val / total) * 100) : 0;
+          return `{name|${name}} {val|${val}} {pct|(${pct}%)}`;
+        }
       },
       series: [
         {
           type: 'pie',
-          radius: [0, '55%'],
-          center: ['40%', '50%'],
-          silent: true,
+          radius: ['50%', '75%'],
+          center: ['22%', '50%'],
+          avoidLabelOverlap: false,
           itemStyle: {
-            color: 'rgba(10, 25, 47, 0.8)',
-            shadowBlur: 20,
-            shadowColor: 'rgba(0, 0, 0, 0.5)'
+            borderRadius: 10,
+            borderColor: '#0a0f1a',
+            borderWidth: 4,
+            shadowBlur: 15,
+            shadowColor: 'rgba(0, 0, 0, 0.4)'
           },
           label: {
             show: true,
             position: 'center',
-            formatter: `{a|${total}}\n{b|ASSETS}`,
+            formatter: `{a|${total}}\n{b|Assets}`,
             rich: {
               a: {
-                fontSize: 32,
-                fontWeight: 'bold',
+                fontSize: 36,
+                fontWeight: 900,
                 color: '#ffffff',
                 lineHeight: 40,
-                textShadowColor: 'rgba(255, 255, 255, 0.4)',
-                textShadowBlur: 10
+                textShadowColor: 'rgba(61, 158, 255, 0.5)',
+                textShadowBlur: 15
               },
               b: {
                 fontSize: 11,
-                color: '#8f9fb3',
-                letterSpacing: 2,
-                fontWeight: '500'
+                color: '#64748b',
+                fontWeight: 600,
+                letterSpacing: 2
               }
             }
           },
-          data: [{ value: 1 }]
-        },
-        {
-          type: 'pie',
-          radius: ['60%', '85%'],
-          center: ['40%', '50%'],
-          avoidLabelOverlap: false,
-          itemStyle: {
-            borderRadius: 15,
-            borderColor: '#0a192f',
-            borderWidth: 6
-          },
-          label: { show: false },
+          labelLine: { show: false },
           data: pieData
         }
       ]

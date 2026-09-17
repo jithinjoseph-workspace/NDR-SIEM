@@ -57,56 +57,95 @@
     
     <div class="top-dashboard" *ngIf="totalAssets > 0">
       <div class="donut-container">
-        <div class="donut-label">ASSET TYPE DISTRIBUTION</div>
+        <div class="donut-header">
+          <div class="donut-title">Asset Type Distribution</div>
+          <div class="donut-subtitle">Total Assets</div>
+        </div>
         <div class="donut-chart-wrapper sunburst-wrapper" #sunburstContainer>
-          <!-- ECharts sunburst will render here -->
+          <!-- ECharts pie will render here -->
         </div>
       </div>
 
       <div class="stats-container">
         <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-icon-wrapper blue">
-              <lucide-icon [name]="MonitorIcon" class="w-5 h-5"></lucide-icon>
+          <div class="stat-card blue-card">
+            <div class="stat-top">
+              <div class="stat-icon-wrapper blue">
+                <lucide-icon [name]="MonitorIcon" class="w-5 h-5"></lucide-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-title">Workstations</div>
+                <div class="stat-count">{{ stats.workstations.count }} assets</div>
+              </div>
+              <div class="stat-percent">{{ stats.workstations.percent }}%</div>
             </div>
-            <div class="stat-info">
-              <div class="stat-title">Workstations</div>
-              <div class="stat-count">{{ stats.workstations.count }} assets</div>
+            <div class="stat-bottom">
+              <div class="sparkline-wrapper">
+                <svg viewBox="0 0 100 30" preserveAspectRatio="none">
+                  <path class="sparkline-path blue" d="M0,25 C20,20 40,30 60,15 80,0 100,10 100,10" />
+                </svg>
+              </div>
             </div>
-            <div class="stat-percent">{{ stats.workstations.percent }}%</div>
           </div>
 
-          <div class="stat-card">
-            <div class="stat-icon-wrapper orange">
-              <lucide-icon [name]="LightbulbIcon" class="w-5 h-5"></lucide-icon>
+          <div class="stat-card red-card">
+            <div class="stat-top">
+              <div class="stat-icon-wrapper red">
+                <lucide-icon [name]="ShieldCheckIcon" class="w-5 h-5"></lucide-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-title">IoT Devices</div>
+                <div class="stat-count">{{ stats.iot.count }} assets</div>
+              </div>
+              <div class="stat-percent">{{ stats.iot.percent }}%</div>
             </div>
-            <div class="stat-info">
-              <div class="stat-title">IoT Devices</div>
-              <div class="stat-count">{{ stats.iot.count }} assets</div>
+            <div class="stat-bottom">
+              <div class="sparkline-wrapper">
+                <svg viewBox="0 0 100 30" preserveAspectRatio="none">
+                  <path class="sparkline-path red" d="M0,28 C25,28 50,25 75,18 90,15 100,12 100,12" />
+                </svg>
+              </div>
             </div>
-            <div class="stat-percent">{{ stats.iot.percent }}%</div>
           </div>
 
-          <div class="stat-card">
-            <div class="stat-icon-wrapper green">
-              <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+          <div class="stat-card green-card">
+            <div class="stat-top">
+              <div class="stat-icon-wrapper green">
+                <lucide-icon [name]="ServerIcon" class="w-5 h-5"></lucide-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-title">Servers</div>
+                <div class="stat-count">{{ stats.servers.count }} assets</div>
+              </div>
+              <div class="stat-percent">{{ stats.servers.percent }}%</div>
             </div>
-            <div class="stat-info">
-              <div class="stat-title">Servers</div>
-              <div class="stat-count">{{ stats.servers.count }} assets</div>
+            <div class="stat-bottom">
+              <div class="sparkline-wrapper">
+                <svg viewBox="0 0 100 30" preserveAspectRatio="none">
+                  <path class="sparkline-path green" d="M0,25 C30,22 45,28 65,15 85,5 100,10 100,10" />
+                </svg>
+              </div>
             </div>
-            <div class="stat-percent">{{ stats.servers.percent }}%</div>
           </div>
 
-          <div class="stat-card">
-            <div class="stat-icon-wrapper purple">
-              <lucide-icon [name]="RouterIcon" class="w-5 h-5"></lucide-icon>
+          <div class="stat-card purple-card">
+            <div class="stat-top">
+              <div class="stat-icon-wrapper purple">
+                <lucide-icon [name]="RouterIcon" class="w-5 h-5"></lucide-icon>
+              </div>
+              <div class="stat-info">
+                <div class="stat-title">Networking</div>
+                <div class="stat-count">{{ stats.networking.count }} assets</div>
+              </div>
+              <div class="stat-percent">{{ stats.networking.percent }}%</div>
             </div>
-            <div class="stat-info">
-              <div class="stat-title">Networking</div>
-              <div class="stat-count">{{ stats.networking.count }} assets</div>
+            <div class="stat-bottom">
+              <div class="sparkline-wrapper">
+                <svg viewBox="0 0 100 30" preserveAspectRatio="none">
+                  <path class="sparkline-path purple" d="M0,28 C40,28 60,32 75,15 85,5 100,20 100,20" />
+                </svg>
+              </div>
             </div>
-            <div class="stat-percent">{{ stats.networking.percent }}%</div>
           </div>
         </div>
       </div>
