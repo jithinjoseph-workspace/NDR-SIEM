@@ -277,8 +277,8 @@ export class ThreatMap implements OnInit, OnDestroy {
     mkGlow('f-arc', 3); mkGlow('f-dot', 5); mkGlow('f-green', 7);
 
     const oceanGrad = defs.append('radialGradient').attr('id', 'f-ocean').attr('cx', '50%').attr('cy', '50%').attr('r', '55%');
-    oceanGrad.append('stop').attr('offset', '0%').attr('stop-color', '#38bdf8'); // sky-400
-    oceanGrad.append('stop').attr('offset', '100%').attr('stop-color', '#0284c7'); // sky-600
+    oceanGrad.append('stop').attr('offset', '0%').attr('stop-color', '#021436');
+    oceanGrad.append('stop').attr('offset', '100%').attr('stop-color', '#000511');
 
     const scaleFactor = this.previewMode ? Math.min(W, H * 1.8) / 6.2 : W / 6.2;
     const proj  = d3.geoNaturalEarth1().scale(scaleFactor).translate([W / 2, H / 2]);
@@ -288,19 +288,15 @@ export class ThreatMap implements OnInit, OnDestroy {
 
     mapG.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'url(#f-ocean)');
     mapG.append('path').datum(d3.geoGraticule().step([20, 20])()).attr('d', pathFn as any)
-      .attr('fill', 'none').attr('stroke', 'rgba(34,197,94,0.05)').attr('stroke-width', 0.4);
+      .attr('fill', 'none').attr('stroke', 'rgba(14,165,233,0.15)').attr('stroke-width', 0.5);
     const land    = (topojson as any).feature(world, world.objects.countries);
     const borders = (topojson as any).mesh(world, world.objects.countries, (a: any, b: any) => a !== b);
     mapG.selectAll('.land').data((land as any).features).enter().append('path')
       .attr('class', 'land').attr('d', pathFn as any)
-      .attr('fill', (d: any) => {
-        const id = String(d.id);
-        const name = d.properties?.name?.toLowerCase();
-        return (id === '010' || id === '10' || id === 'ATA' || name === 'antarctica') ? '#f8fafc' : '#4ade80';
-      })
-      .attr('stroke', '#16a34a').attr('stroke-width', 0.4);
-    mapG.append('path').datum(borders).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', '#15803d').attr('stroke-width', 0.4);
-    mapG.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', 'rgba(34,197,94,0.12)').attr('stroke-width', 1);
+      .attr('fill', '#011026')
+      .attr('stroke', '#0ea5e9').attr('stroke-width', 0.6);
+    mapG.append('path').datum(borders).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', '#0ea5e9').attr('stroke-width', 0.6);
+    mapG.append('path').datum({ type: 'Sphere' } as any).attr('d', pathFn as any).attr('fill', 'none').attr('stroke', 'rgba(14,165,233,0.6)').attr('stroke-width', 2);
 
     const TARGET: [number, number] = [80.0, 12.0];
     const txy = proj(TARGET)!;
@@ -447,9 +443,9 @@ export class ThreatMap implements OnInit, OnDestroy {
 
     // Reusable ocean radial gradient (canvas)
     const oceanGrad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, R * 1.05);
-    oceanGrad.addColorStop(0,   '#38bdf8');
-    oceanGrad.addColorStop(0.7, '#0ea5e9');
-    oceanGrad.addColorStop(1,   '#0284c7');
+    oceanGrad.addColorStop(0,   '#021436');
+    oceanGrad.addColorStop(0.7, '#010c24');
+    oceanGrad.addColorStop(1,   '#000511');
 
     const TARGET: [number, number] = [80.0, 12.0]; // India — receiving network
 
@@ -509,8 +505,8 @@ export class ThreatMap implements OnInit, OnDestroy {
 
     // ── Atmosphere glow canvas gradient ───────────────────────
     const atmoGrad = ctx.createRadialGradient(W / 2, H / 2, R * 0.88, W / 2, H / 2, R * 1.22);
-    atmoGrad.addColorStop(0, 'rgba(34,197,94,0.12)');
-    atmoGrad.addColorStop(1, 'rgba(34,197,94,0)');
+    atmoGrad.addColorStop(0, 'rgba(14,165,233,0.3)');
+    atmoGrad.addColorStop(1, 'rgba(14,165,233,0)');
 
     // ── Tooltip ────────────────────────────────────────────────
     const tooltip = this.makeTooltip(el);
@@ -587,22 +583,20 @@ export class ThreatMap implements OnInit, OnDestroy {
       ctx.fillStyle = oceanGrad; ctx.fill();
 
       ctx.beginPath(); pCtx(grat);
-      ctx.strokeStyle = 'rgba(34,197,94,0.05)'; ctx.lineWidth = 0.4; ctx.stroke();
+      ctx.strokeStyle = 'rgba(14,165,233,0.15)'; ctx.lineWidth = 0.5; ctx.stroke();
 
       (land as any).features.forEach((d: any) => {
         ctx.beginPath(); pCtx(d);
-        const id = String(d.id);
-        const name = d.properties?.name?.toLowerCase();
-        ctx.fillStyle = (id === '010' || id === '10' || id === 'ATA' || name === 'antarctica') ? '#f8fafc' : '#4ade80';
+        ctx.fillStyle = '#011026';
         ctx.fill();
-        ctx.strokeStyle = '#16a34a'; ctx.lineWidth = 0.4; ctx.stroke();
+        ctx.strokeStyle = '#0ea5e9'; ctx.lineWidth = 0.6; ctx.stroke();
       });
 
       ctx.beginPath(); pCtx(borders as any);
-      ctx.strokeStyle = '#15803d'; ctx.lineWidth = 0.4; ctx.stroke();
+      ctx.strokeStyle = '#0ea5e9'; ctx.lineWidth = 0.6; ctx.stroke();
 
       ctx.beginPath(); pCtx({ type: 'Sphere' } as any);
-      ctx.strokeStyle = 'rgba(34,197,94,0.28)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.strokeStyle = 'rgba(14,165,233,0.6)'; ctx.lineWidth = 2.0; ctx.stroke();
 
       // SVG: redraw arc paths (projection changed)
       arcs.forEach(a => {
