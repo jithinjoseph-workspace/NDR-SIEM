@@ -15,6 +15,10 @@ import { reportRxjsError } from '../../../services/error-reporter/error-reporter
   styleUrl: './rules.css'
 })
 export class Rules extends RulesBase implements OnInit {
+  ShieldCheckIcon = ShieldCheck;
+  ActivityIcon = Activity;
+  TargetIcon = Target;
+
   rules: any[] = [];
 
   categoryFilter: string = '';
