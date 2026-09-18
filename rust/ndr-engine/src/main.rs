@@ -955,6 +955,7 @@ async fn main() {
 .route("/api/admin/version",              get(api::get_version_status))
 .route("/api/admin/apply-update",         post(api::apply_update))
 .route("/api/admin/active-sessions",      get(api::get_active_sessions))
+.route("/api/geo-lookup",                 post(api::geo_lookup))
 .route("/api/admin/sessions/:username",        delete(api::force_logout_user))
 .route("/api/admin/sessions/:username/device", delete(api::force_logout_device))
 .route("/api/monitor/kafka", get(monitor::kafka::kafka_status))
