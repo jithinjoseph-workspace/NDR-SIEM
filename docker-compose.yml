@@ -152,6 +152,13 @@ services:
     networks:
       - ndr-internal
       - default
+    volumes:
+      # create_tenant() (rust/auth-service/src/db.rs) reads this to build each
+      # new tenant's dedicated ndr_<tenant_id> database schema. The Dockerfile
+      # only ships the compiled binary and init.sql lives outside the build
+      # context (repo root, not ./rust), so it has to come in as a runtime
+      # mount, same as clickhouse-init below does for the global schema.
+      - ${INSTALL_DIR}/config/clickhouse/init.sql:/app/config/clickhouse/init.sql:ro
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - CLICKHOUSE_URL=http://clickhouse1:8123

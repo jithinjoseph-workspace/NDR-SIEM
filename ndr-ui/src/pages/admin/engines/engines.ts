@@ -7,7 +7,9 @@ import {
   Activity, Server, Database, ShieldCheck, Clock, Layers, Zap, HardDrive, CheckCircle2, AlertTriangle
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-engines',
   standalone: true,
@@ -57,12 +59,9 @@ export class Engines implements OnInit, OnDestroy {
   events1h = 0;
   cpuUsage = 0;
   memoryUsedGb = 0;
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
   private telemetryTimer: any = null;
 
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  constructor(private api: Api, private cdr: ChangeDetectorRef, public clock: ClockService) {}
 
   get activeEngines(): number {
     return this.engines.filter(e =>
@@ -89,23 +88,13 @@ export class Engines implements OnInit, OnDestroy {
     return this.kafkaData?.total_lag ?? 0;
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
-
     this.loadEngines();
     this.loadKafkaStatus();
     this.loadPlatformTelemetry();
 
-    this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 8000);
-    this.telemetryTimer = setInterval(() => this.loadPlatformTelemetry(), 4000);
+    this.kafkaInterval = setInterval(() => this.loadKafkaStatus(), 10000);
+    this.telemetryTimer = setInterval(() => this.loadPlatformTelemetry(), 10000);
   }
 
   loadPlatformTelemetry() {
@@ -117,12 +106,11 @@ export class Engines implements OnInit, OnDestroy {
         this.memoryUsedGb = Number(data.memory_used_gb) || 0;
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
   ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
     if (this.kafkaInterval) clearInterval(this.kafkaInterval);
     if (this.telemetryTimer) clearInterval(this.telemetryTimer);
   }

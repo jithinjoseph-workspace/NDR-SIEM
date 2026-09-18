@@ -26,8 +26,9 @@ scripts/*.save
 .env
 *.env
 
-# TLS private key — must never be committed
+# TLS cert/key — generated locally by install/start scripts, must never be committed
 config/nginx/ssl/*.key
+config/nginx/ssl/*.crt
 
 # Python cache
 __pycache__/

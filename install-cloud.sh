@@ -345,6 +345,16 @@ else
     NDR_AGENT_SECRET=$(openssl rand -hex 32)
 fi
 
+# Random per-install ClickHouse password — was previously hardcoded to
+# "ndr123" for every cloud install, which meant every deployment shared
+# the same database credential. Preserved across re-runs of this script
+# so an existing install doesn't get locked out on upgrade.
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^CLICKHOUSE_PASSWORD=." "$INSTALL_DIR/.env"; then
+    CLICKHOUSE_PASSWORD=$(grep "^CLICKHOUSE_PASSWORD=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+else
+    CLICKHOUSE_PASSWORD=$(openssl rand -hex 16 2>/dev/null || echo "$(date +%s%N | sha256sum | head -c 32)")
+fi
+
 # ── RSA license key pair (generated once; private key stays on this server) ──
 if [ -f "$INSTALL_DIR/.env" ] && grep -q "^LICENSE_PRIVATE_KEY=." "$INSTALL_DIR/.env"; then
     LICENSE_PRIVATE_KEY=$(grep "^LICENSE_PRIVATE_KEY=" "$INSTALL_DIR/.env" | cut -d= -f2-)
@@ -383,7 +393,7 @@ TENANT_ID=default
 CLICKHOUSE_URL=http://clickhouse1:8123
 CLICKHOUSE_URL_SECONDARY=http://clickhouse2:8123
 CLICKHOUSE_USER=ndr
-CLICKHOUSE_PASSWORD=ndr123
+CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=$JWT_SECRET
 NDR_AGENT_SECRET=$NDR_AGENT_SECRET

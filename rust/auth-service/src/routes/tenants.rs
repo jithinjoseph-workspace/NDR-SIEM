@@ -76,7 +76,15 @@ pub async fn list(
             Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
     }
 
-    match state.db.get_all_tenants().await {
+    // A tenant_admin only ever sees their own tenant — otherwise this endpoint
+    // leaks every other tenant's id/name/features to them (enumeration).
+    let result = if claims.role == "super_admin" {
+        state.db.get_all_tenants().await
+    } else {
+        state.db.get_tenant_by_id(&claims.tenant_id).await
+    };
+
+    match result {
         Ok(tenants) => (StatusCode::OK, Json(json!({ "status": "ok", "tenants": tenants }))).into_response(),
         Err(e) => {
             tracing::error!("get_all_tenants error: {}", e);

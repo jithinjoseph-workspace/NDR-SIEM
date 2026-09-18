@@ -242,5 +242,5 @@ pub async fn mark_sla_breached(ch: &Client, alert_id: &str, tenant_id: &str) -> 
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn escape(s: &str) -> String {
-    s.replace('\'', "''")
+    s.replace('\\', "\\\\").replace('\'', "\\'")
 }

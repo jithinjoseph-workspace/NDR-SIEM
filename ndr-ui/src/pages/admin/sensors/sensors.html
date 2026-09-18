@@ -31,8 +31,8 @@
       <div class="sns-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 text-amber-400"></lucide-icon>
         <div class="sns-clock-text">
-          <span class="sns-clock-time">{{ currentTime }}</span>
-          <span class="sns-clock-date">{{ currentDate }}</span>
+          <span class="sns-clock-time">{{ clock.currentTime() }}</span>
+          <span class="sns-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>

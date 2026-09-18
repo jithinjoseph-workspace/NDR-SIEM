@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener, inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, HostListener, inject, effect } from '@angular/core';
 import { Subscription } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -9,6 +9,7 @@ import { Websocket } from '../../services/websocket/websocket';
 import { Notifications, ThreatNotification } from '../../services/notifications/notifications';
 import { Announcement, Api } from '../../services/api/api';
 import { TourService } from '../../services/tour/tour.service';
+import { TenantStatusService } from '../../services/tenant-status/tenant-status';
 import { SensorScopeBanner } from '../../components/sensor-scope-banner/sensor-scope-banner';
 
 @Component({
@@ -108,7 +109,18 @@ export class Navbar implements OnInit, OnDestroy {
     private api: Api,
     private cdr: ChangeDetectorRef,
     private el: ElementRef,
-  ) {}
+    private tenantStatusService: TenantStatusService,
+  ) {
+    // Mirror the shared tenant-status poll instead of running our own —
+    // see refreshSystemStatus() below.
+    effect(() => {
+      const user = this.auth.getUser();
+      if (user?.tenant_id && user.tenant_id !== 'default') {
+        this.systemStatus = this.tenantStatusService.status();
+        this.cdr.detectChanges();
+      }
+    });
+  }
 
   startTutorial() {
     this.tour.startTour();
@@ -343,7 +355,10 @@ export class Navbar implements OnInit, OnDestroy {
   private refreshSystemStatus() {
     const user = this.auth.getUser();
     if (user?.tenant_id && user.tenant_id !== 'default') {
-      this.refreshTenantSystemStatus();
+      // Shared poll (also used by tenant-admin-layout) — idempotent, only
+      // actually starts the interval once. The effect() in the constructor
+      // mirrors its result into systemStatus.
+      this.tenantStatusService.startPolling();
       return;
     }
 
@@ -387,58 +402,6 @@ export class Navbar implements OnInit, OnDestroy {
     this.cdr.detectChanges();
   }
 
-  private refreshTenantSystemStatus() {
-    this.api.getSensorKeys().subscribe({
-      next: sensors => {
-        const user = this.auth.getUser();
-        const mySensorIds = user?.sensor_ids || [];
-
-        // Backend already scopes sensors to the tenant.
-        // If user is a restricted analyst, filter down to their assigned sensors.
-        const isRestrictedAnalyst = user?.role !== 'tenant_admin' && user?.role !== 'admin' && mySensorIds.length > 0;
-        
-        const mySensors = isRestrictedAnalyst 
-          ? sensors.filter(sensor => mySensorIds.includes(sensor.key_prefix))
-          : sensors;
-
-        let healthyPipeline = false;
-        
-        if (mySensors.length === 0) {
-          // If the tenant has absolutely zero sensors registered, assume operational (don't show degraded for a blank account)
-          healthyPipeline = true;
-        } else {
-          // Pipeline is healthy if AT LEAST ONE sensor is active and has valid agents (ignoring strict heartbeat for demo environments)
-          healthyPipeline = mySensors.some(sensor =>
-            sensor.active !== false &&
-            (this.isRunning(sensor['agent-z']) ||
-             this.isRunning(sensor['agent-s']) ||
-             this.isRunning(sensor.vector))
-          );
-        }
-
-        this.api.getDashboardStats().subscribe({
-          next: data => {
-            const services = data?.services || {};
-            const platformHealthy =
-              this.isRunning(services.kafka) &&
-              this.isRunning(services.clickhouse) &&
-              this.isRunning(services.engine || 'running');
-
-            this.systemStatus = healthyPipeline && platformHealthy ? 'OPERATIONAL' : 'DEGRADED';
-            this.cdr.detectChanges();
-          },
-          error: () => {
-            this.systemStatus = 'DEGRADED';
-            this.cdr.detectChanges();
-          },
-        });
-      },
-      error: () => {
-        this.systemStatus = 'DEGRADED';
-        this.cdr.detectChanges();
-      },
-    });
-  }
 
   private applySystemStatus(data: any) {
     const zeekRunning = this.isRunning(data?.['agent-z']);

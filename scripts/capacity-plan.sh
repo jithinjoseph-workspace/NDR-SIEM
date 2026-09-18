@@ -4,6 +4,10 @@
 
 INSTALL_DIR=$(cd "$(dirname "$0")/.." && pwd)
 source $INSTALL_DIR/.env 2>/dev/null || true
+if [ -z "$CLICKHOUSE_PASSWORD" ]; then
+    echo "ERROR: CLICKHOUSE_PASSWORD not found in $INSTALL_DIR/.env — refusing to run with a default password." >&2
+    exit 1
+fi
 IFACE_FILE="$INSTALL_DIR/.runtime/ndr_interface"
 
 RED='\033[0;31m'
@@ -284,7 +288,7 @@ deploy_processing_layer() {
         -e NDR_AGENT_URL=http://${HOST_IP}:3001 \
         -e CLICKHOUSE_URL=http://${HOST_IP}:8123 \
         -e CLICKHOUSE_USER=ndr \
-        -e CLICKHOUSE_PASSWORD=ndr123 \
+        -e CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD \
         -e INSTANCE_ROLE=api_and_worker \
         -e INSTANCE_ID=1 \
         --privileged \
@@ -315,6 +319,11 @@ install_worker_autoscaler() {
 # ONLY scales processing workers — never touches capture or API
 
 INSTALL_DIR="$INSTALL_DIR"
+source "\$INSTALL_DIR/.env" 2>/dev/null || true
+if [ -z "\$CLICKHOUSE_PASSWORD" ]; then
+    echo "ERROR: CLICKHOUSE_PASSWORD not found in \$INSTALL_DIR/.env — refusing to run with a default password." >&2
+    exit 1
+fi
 MIN_WORKERS=$workers
 MAX_WORKERS=$max_workers
 LOG_FILE="/tmp/ndr-worker-autoscale.log"
@@ -350,7 +359,7 @@ scale_worker_up() {
         -e NDR_AGENT_URL=http://${HOST_IP}:3001 \
         -e CLICKHOUSE_URL=http://${HOST_IP}:8123 \
         -e CLICKHOUSE_USER=ndr \
-        -e CLICKHOUSE_PASSWORD=ndr123 \
+        -e CLICKHOUSE_PASSWORD=\$CLICKHOUSE_PASSWORD \
         -e INSTANCE_ROLE=worker_only \
         -e INSTANCE_ID=\$new \
         --privileged \

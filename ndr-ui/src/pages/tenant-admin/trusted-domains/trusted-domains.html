@@ -157,7 +157,7 @@
             <span class="td-domain-name">{{ d.domain }}</span>
             <span class="td-cat-badge">{{ d.category }}</span>
             <span class="td-domain-note" *ngIf="d.note">{{ d.note }}</span>
-            <button class="td-remove-btn" (click)="deleteTenantTrustedDomain(d.domain, d.tenant_id)" title="Remove">×</button>
+            <button class="td-remove-btn" (click)="deleteTrustedDomain(d.domain, d.tenant_id)" title="Remove">×</button>
           </div>
         </div>
 

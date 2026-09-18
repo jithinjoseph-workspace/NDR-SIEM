@@ -809,8 +809,8 @@ pub async fn set_tenant_features(&self, tenant_id: &str, features: &[String]) ->
             "INSERT INTO ndr.tenants (id, name, active, ai_enabled, features, updated_at, created_at) \
              SELECT id, name, active, ai_enabled, '{}', now(), created_at \
              FROM ndr.tenants FINAL WHERE id = '{}'",
-            features_str.replace('\'', "''"),
-            tenant_id.replace('\'', "''")
+            sql_escape(&features_str),
+            sql_escape(tenant_id)
         ))
         .execute()
         .await?;
@@ -1363,6 +1363,7 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.soar_cases ADD COLUMN IF NOT EXISTS case_number String DEFAULT ''",
                 "ALTER TABLE ndr.soar_cases ADD COLUMN IF NOT EXISTS priority String DEFAULT 'P2'",
                 "CREATE TABLE IF NOT EXISTS ndr.retro_scans (id String, rule_id String DEFAULT '', rule_name String DEFAULT '', rule_content String DEFAULT '', hours_back UInt32 DEFAULT 24, status String DEFAULT 'pending', started_at UInt32 DEFAULT 0, completed_at UInt32 DEFAULT 0, match_count UInt64 DEFAULT 0, matches String DEFAULT '[]', tenant_id String DEFAULT 'default', updated_at UInt32 DEFAULT 0) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (tenant_id, id)",
+                "CREATE TABLE IF NOT EXISTS ndr.client_errors (id String DEFAULT generateUUIDv4(), message String, stack String DEFAULT '', url String DEFAULT '', username String DEFAULT '', tenant_id String DEFAULT '', user_agent String DEFAULT '', occurred_at DateTime DEFAULT now()) ENGINE = MergeTree() ORDER BY occurred_at TTL occurred_at + INTERVAL 30 DAY",
             ] {
                 if let Err(e) = self.client
                     .query(alter)
@@ -1637,6 +1638,73 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     // ── Sensor assignment functions ───────────────────────────────────────────
+
+    /// Real tenant owner of a user account, or None if it doesn't exist.
+    /// Used to verify a tenant_admin isn't assigning sensor access to (or
+    /// removing it from) a user outside their own tenant.
+    pub async fn get_user_tenant(&self, user_id: &str) -> anyhow::Result<Option<String>> {
+        let rows = self.client
+            .query("SELECT tenant_id FROM ndr.users FINAL WHERE id = ? LIMIT 1")
+            .bind(user_id)
+            .fetch_all::<String>()
+            .await?;
+        Ok(rows.into_iter().next())
+    }
+
+    /// Real tenant owner of a sensor key (looked up by key_prefix, which is
+    /// what SensorAssignment.sensor_id actually stores), or None if it
+    /// doesn't exist. Same purpose as get_user_tenant() above.
+    pub async fn get_sensor_key_tenant(&self, key_prefix: &str) -> anyhow::Result<Option<String>> {
+        let rows = self.client
+            .query("SELECT tenant_id FROM ndr.sensor_keys FINAL WHERE key_prefix = ? LIMIT 1")
+            .bind(key_prefix)
+            .fetch_all::<String>()
+            .await?;
+        Ok(rows.into_iter().next())
+    }
+
+    /// Persists a real frontend error report so it's queryable later
+    /// instead of vanishing in a browser console nobody is watching.
+    pub async fn insert_client_error(
+        &self, message: &str, stack: &str, url: &str, username: &str, tenant_id: &str, user_agent: &str,
+    ) -> anyhow::Result<()> {
+        self.client
+            .query("INSERT INTO ndr.client_errors (message, stack, url, username, tenant_id, user_agent) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(message)
+            .bind(stack)
+            .bind(url)
+            .bind(username)
+            .bind(tenant_id)
+            .bind(user_agent)
+            .execute().await?;
+        Ok(())
+    }
+
+    /// Most recent captured frontend errors — read path for insert_client_error,
+    /// so reports land somewhere a human can actually see them instead of just
+    /// aging out silently after the table's 30-day TTL.
+    pub async fn list_client_errors(&self, limit: u32) -> anyhow::Result<Vec<serde_json::Value>> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct Row {
+            id: String, message: String, stack: String, url: String,
+            username: String, tenant_id: String, user_agent: String,
+            occurred_at: String,
+        }
+        let rows = self.client
+            .query(
+                "SELECT id, message, stack, url, username, tenant_id, user_agent, \
+                 toString(occurred_at) AS occurred_at \
+                 FROM ndr.client_errors ORDER BY occurred_at DESC LIMIT ?"
+            )
+            .bind(limit.min(500))
+            .fetch_all::<Row>()
+            .await?;
+        Ok(rows.into_iter().map(|r| json!({
+            "id": r.id, "message": r.message, "stack": r.stack, "url": r.url,
+            "username": r.username, "tenant_id": r.tenant_id,
+            "user_agent": r.user_agent, "occurred_at": r.occurred_at,
+        })).collect())
+    }
 
     pub async fn assign_sensor_to_user(&self, user_id: &str, sensor_id: &str, tenant_id: &str) -> anyhow::Result<()> {
         self.client
@@ -1939,8 +2007,8 @@ pub async fn save_integration(
         "INSERT INTO {}.soar_integrations \
          (id, name, type, config, enabled, tenant_id) \
          VALUES ('{}','{}','{}','{}',1,'{}')",
-        db, id, name, int_type,
-        config.replace("'", "\\'"), tenant_id
+        db, sql_escape(id), sql_escape(name), sql_escape(int_type),
+        sql_escape(config), sql_escape(tenant_id)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -1956,7 +2024,7 @@ pub async fn toggle_integration(
          SELECT id, name, type, config, {}, tenant_id \
          FROM {}.soar_integrations \
          WHERE id = '{}'",
-        db, if enabled { 1 } else { 0 }, db, id
+        db, if enabled { 1 } else { 0 }, db, sql_escape(id)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -1969,7 +2037,7 @@ pub async fn delete_integration(
     let query = format!(
         "ALTER TABLE {}.soar_integrations \
          DELETE WHERE id = '{}'",
-        db, id
+        db, sql_escape(id)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -1994,13 +2062,13 @@ pub async fn update_integration(
          WHERE id = '{}' \
          LIMIT 1",
         db,
-        id,
-        name.replace('\'', "\\'"),
-        int_type.replace('\'', "\\'"),
-        config.replace('\'', "\\'"),
-        tenant_id,
+        sql_escape(id),
+        sql_escape(name),
+        sql_escape(int_type),
+        sql_escape(config),
+        sql_escape(tenant_id),
         db,
-        id
+        sql_escape(id)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -2016,7 +2084,7 @@ pub async fn save_soar_config_by_tenant(
     let query = format!(
         "INSERT INTO {}.soar_config (key, value, tenant_id) \
          VALUES ('{}', '{}', '{}')",
-        db, key, value, tenant_id
+        db, sql_escape(key), sql_escape(value), sql_escape(tenant_id)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -2110,7 +2178,7 @@ pub async fn update_playbook_enabled(
                 action_type, {}, tenant_id \
          FROM {}.soar_playbooks \
          WHERE id = '{}'",
-        db, if enabled { 1 } else { 0 }, db, id
+        db, if enabled { 1 } else { 0 }, db, sql_escape(id)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -2133,8 +2201,8 @@ pub async fn create_playbook(
          (id, name, description, trigger, \
           action_type, config, enabled, tenant_id) \
          VALUES ('{}','{}','{}','{}','{}','{}',1,'{}')",
-        db, id, name, description,
-        trigger, action_type, config, tenant_id
+        db, sql_escape(id), sql_escape(name), sql_escape(description),
+        sql_escape(trigger), sql_escape(action_type), sql_escape(config), sql_escape(tenant_id)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -2451,7 +2519,7 @@ pub async fn save_setting_by_tenant(
     let query = format!(
         "INSERT INTO {}.settings (key, value) \
          VALUES ('{}', '{}')",
-        db, key, value.replace('\'', "\\'")
+        db, sql_escape(key), sql_escape(value)
     );
     self.client.query(&query).execute().await?;
     Ok(())
@@ -2651,6 +2719,91 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         }))
     }
 
+    /// Platform-wide event/hit totals — sums get_stats_by_tenant() across
+    /// every active tenant's own database (see get_severity_all_tenants for
+    /// why this loops instead of a single cross-database query).
+    pub async fn get_stats_all_tenants(&self) -> anyhow::Result<serde_json::Value> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let (mut events_total, mut hits_total, mut events_1h, mut hits_1h) = (0u64, 0u64, 0u64, 0u64);
+        let (mut agent_z, mut agent_s) = (0u64, 0u64);
+        for tid in &tenant_ids {
+            if let Ok(s) = self.get_stats_by_tenant(tid, &[]).await {
+                events_total += s["events_total"].as_u64().unwrap_or(0);
+                hits_total   += s["hits_total"].as_u64().unwrap_or(0);
+                events_1h    += s["events_1h"].as_u64().unwrap_or(0);
+                hits_1h      += s["hits_1h"].as_u64().unwrap_or(0);
+                agent_z      += s["agent_z_events"].as_u64().unwrap_or(0);
+                agent_s      += s["agent_s_events"].as_u64().unwrap_or(0);
+            }
+        }
+        Ok(serde_json::json!({
+            "events_total": events_total, "hits_total": hits_total,
+            "events_1h": events_1h,       "hits_1h": hits_1h,
+            "agent_z_events": agent_z,    "agent_s_events": agent_s,
+        }))
+    }
+
+    /// Real per-sensor event counts for the last `hours` — used to show each
+    /// sensor's actual ingestion rate (keyed by sensor_id, which is the
+    /// sensor key's key_prefix) instead of a placeholder online/offline flag.
+    pub async fn get_sensor_event_counts_by_tenant(
+        &self, tenant_id: &str, hours: u32,
+    ) -> anyhow::Result<std::collections::HashMap<String, u64>> {
+        let db_name = tenant_db(tenant_id);
+        let rows = self.client.query(&format!(
+            "SELECT sensor_id, count() as cnt FROM {db}.ndr_events \
+             WHERE sensor_id != '' AND timestamp >= now() - INTERVAL {hours} HOUR \
+             GROUP BY sensor_id",
+            db = db_name, hours = hours))
+            .fetch_all::<(String, u64)>().await.unwrap_or_default();
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Real IP most recently seen from each sensor's own captured traffic.
+    /// There is no stored IP column on sensor_keys, so this is the honest
+    /// substitute: the latest src_ip that sensor actually reported.
+    pub async fn get_sensor_recent_ips_by_tenant(
+        &self, tenant_id: &str,
+    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        let db_name = tenant_db(tenant_id);
+        let rows = self.client.query(&format!(
+            "SELECT sensor_id, argMax(src_ip, timestamp) as ip FROM {db}.ndr_events \
+             WHERE sensor_id != '' AND src_ip != '' \
+             GROUP BY sensor_id",
+            db = db_name))
+            .fetch_all::<(String, String)>().await.unwrap_or_default();
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Real per-minute event counts for the last `minutes` — a genuine
+    /// history for an ingestion sparkline, not a simulated/randomized one.
+    /// Always returns exactly `minutes` values, oldest first, zero-filled
+    /// for minutes with no events.
+    pub async fn get_events_per_minute_by_tenant(
+        &self, tenant_id: &str, minutes: u32,
+    ) -> anyhow::Result<Vec<u64>> {
+        let db_name = tenant_db(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct MinuteRow { minute: u32, cnt: u64 }
+        let rows = self.client.query(&format!(
+            "SELECT toUnixTimestamp(toStartOfMinute(timestamp)) as minute, count() as cnt \
+             FROM {db}.ndr_events \
+             WHERE timestamp >= now() - INTERVAL {minutes} MINUTE \
+             GROUP BY minute ORDER BY minute",
+            db = db_name, minutes = minutes))
+            .fetch_all::<MinuteRow>().await.unwrap_or_default();
+
+        let now = chrono::Utc::now().timestamp() as u32;
+        let start = now - now % 60 - (minutes - 1) * 60;
+        let mut buckets = vec![0u64; minutes as usize];
+        for row in rows {
+            if row.minute < start { continue; }
+            let idx = ((row.minute - start) / 60) as usize;
+            if idx < buckets.len() { buckets[idx] = row.cnt; }
+        }
+        Ok(buckets)
+    }
+
     pub async fn get_recent_events_by_tenant(
         &self, limit: u64, tenant_id: &str, sensor_ids: &[String]
     ) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -2762,6 +2915,119 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             db = db_name, sf = sf, limit = limit))
             .fetch_all::<(String, u64)>().await.unwrap_or_default();
         Ok(rows)
+    }
+
+    // ── Platform-wide (all-tenant) aggregates for the Super Admin Overview ──
+    // Each pulls a generous per-tenant slice, sums/merges by key across every
+    // tenant's own database, then truncates to the requested limit — so a
+    // count that's only a top offender in one tenant isn't lost before merge.
+
+    pub async fn get_top_protocols_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_top_protocols_by_tenant(50, tid, &[]).await.unwrap_or_default() {
+                let proto = row["proto"].as_str().unwrap_or("").to_string();
+                let cnt   = row["count"].as_u64().unwrap_or(0);
+                if proto.is_empty() { continue; }
+                *totals.entry(proto).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged.into_iter().map(|(proto, count)| serde_json::json!({ "proto": proto, "count": count })).collect())
+    }
+
+    pub async fn get_top_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_top_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+                let ip  = row["ip"].as_str().unwrap_or("").to_string();
+                let cnt = row["count"].as_u64().unwrap_or(0);
+                if ip.is_empty() { continue; }
+                *totals.entry(ip).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged.into_iter().map(|(ip, count)| serde_json::json!({ "ip": ip, "count": count })).collect())
+    }
+
+    pub async fn get_top_dst_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_top_dst_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+                let ip  = row["ip"].as_str().unwrap_or("").to_string();
+                let cnt = row["count"].as_u64().unwrap_or(0);
+                if ip.is_empty() { continue; }
+                *totals.entry(ip).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged.into_iter().map(|(ip, count)| serde_json::json!({ "ip": ip, "count": count })).collect())
+    }
+
+    pub async fn get_top_external_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<(String, u64)>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for (ip, cnt) in self.get_top_external_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+                *totals.entry(ip).or_insert(0) += cnt;
+            }
+        }
+        let mut merged: Vec<(String, u64)> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.cmp(&a.1));
+        merged.truncate(limit as usize);
+        Ok(merged)
+    }
+
+    pub async fn get_country_attack_tags_all_tenants(&self) -> anyhow::Result<std::collections::HashMap<String, Vec<(String, u64)>>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let mut totals: std::collections::HashMap<String, std::collections::HashMap<String, u64>> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            if let Ok(per_country) = self.get_country_attack_tags(tid, &[]).await {
+                for (code, tags) in per_country {
+                    let entry = totals.entry(code).or_default();
+                    for (tag, cnt) in tags {
+                        *entry.entry(tag).or_insert(0) += cnt;
+                    }
+                }
+            }
+        }
+        Ok(totals.into_iter().map(|(code, tags)| {
+            let mut v: Vec<(String, u64)> = tags.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            (code, v)
+        }).collect())
+    }
+
+    pub async fn get_threat_intel_hits_all_tenants(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        // Keyed by (src_ip, dst_ip): sum hits, keep the latest last_seen.
+        let mut totals: std::collections::HashMap<(String, String), (u64, String)> = std::collections::HashMap::new();
+        for tid in &tenant_ids {
+            for row in self.get_threat_intel_hits_by_tenant(tid, &[]).await.unwrap_or_default() {
+                let src = row["src_ip"].as_str().unwrap_or("").to_string();
+                let dst = row["dst_ip"].as_str().unwrap_or("").to_string();
+                let hits = row["hits"].as_u64().unwrap_or(0);
+                let last_seen = row["last_seen"].as_str().unwrap_or("").to_string();
+                let entry = totals.entry((src, dst)).or_insert((0, String::new()));
+                entry.0 += hits;
+                if last_seen > entry.1 { entry.1 = last_seen; }
+            }
+        }
+        let mut merged: Vec<((String, String), (u64, String))> = totals.into_iter().collect();
+        merged.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        merged.truncate(50);
+        Ok(merged.into_iter().map(|((src_ip, dst_ip), (hits, last_seen))| serde_json::json!({
+            "src_ip": src_ip, "dst_ip": dst_ip, "hits": hits, "last_seen": last_seen,
+        })).collect())
     }
 
     pub async fn get_public_threat_intel_ip_counts(&self) -> anyhow::Result<Vec<(String, u64)>> {
@@ -3208,6 +3474,45 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         }))
     }
 
+    /// Platform-wide severity totals for the Super Admin Overview — sums
+    /// countIf(severity=...) across every active tenant's own ndr_hits
+    /// table (each tenant has a dedicated ndr_<tenant_id> database; the
+    /// default tenant uses the base `ndr` database). A tenant whose DB/table
+    /// isn't provisioned yet (e.g. a partially-created tenant) just
+    /// contributes 0 rather than failing the whole aggregate.
+    pub async fn get_severity_all_tenants(&self) -> anyhow::Result<serde_json::Value> {
+        let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let (mut critical, mut high, mut medium, mut low) = (0u64, 0u64, 0u64, 0u64);
+        let mut tenants_reporting = 0u32;
+
+        for tid in &tenant_ids {
+            let db = tenant_db(tid);
+            let query = format!(
+                "SELECT \
+                 countIf(lower(severity)='critical') as critical, \
+                 countIf(lower(severity)='high') as high, \
+                 countIf(lower(severity)='medium') as medium, \
+                 countIf(lower(severity)='low') as low \
+                 FROM {db}.ndr_hits",
+                db = db
+            );
+            if let Ok(row) = self.client.query(&query).fetch_one::<(u64, u64, u64, u64)>().await {
+                critical += row.0;
+                high += row.1;
+                medium += row.2;
+                low += row.3;
+                tenants_reporting += 1;
+            }
+        }
+
+        Ok(serde_json::json!({
+            "critical": critical, "high": high,
+            "medium": medium,     "low": low,
+            "tenants_total": tenant_ids.len(),
+            "tenants_reporting": tenants_reporting,
+        }))
+    }
+
     pub async fn insert_passive_dns(&self, ip: &str, domain: &str) -> anyhow::Result<()> {
         if ip.is_empty() || domain.is_empty() { return Ok(()); }
         let query = format!(
@@ -3589,7 +3894,7 @@ pub async fn create_sensor_key(
         "INSERT INTO ndr.sensor_keys \
          (id, key_hash, key_prefix, tenant_id, name) \
          VALUES ('{}','{}','{}','{}','{}')",
-        id, key_hash, key_prefix, tenant_id, name
+        sql_escape(&id), sql_escape(key_hash), sql_escape(key_prefix), sql_escape(tenant_id), sql_escape(name)
     );
     self.client.query(&query).execute().await?;
     Ok(id)
@@ -3615,7 +3920,7 @@ pub async fn validate_sensor_key(
              FROM ndr.sensor_keys FINAL \
              WHERE key_prefix = '{}' \
              AND active = 1 \
-             LIMIT 1", prefix
+             LIMIT 1", sql_escape(prefix)
         ))
         .fetch_all::<(String, String, u8)>()
         .await?;
@@ -3635,7 +3940,7 @@ pub async fn get_sensor_keys(
     let filter = if tenant_id == "all" {
         "1=1".to_string()
     } else {
-        format!("tenant_id='{}'", tenant_id)
+        format!("tenant_id='{}'", sql_escape(tenant_id))
     };
     
     let result = self.client
@@ -4064,7 +4369,7 @@ pub async fn revoke_sensor_key(
         .query(&format!(
             "ALTER TABLE ndr.sensor_keys \
              UPDATE active = 0 \
-             WHERE id = '{}'", id
+             WHERE id = '{}'", sql_escape(id)
         ))
         .execute().await?;
     Ok(())
@@ -4084,7 +4389,7 @@ pub async fn get_sensor_key_prefix_by_id(
         .query(&format!(
             "SELECT key_prefix FROM ndr.sensor_keys FINAL \
              WHERE id = '{}' LIMIT 1",
-            id.replace('\'', "\\'")
+            sql_escape(id)
         ))
         .fetch_all::<Row>()
         .await?;
@@ -4100,7 +4405,7 @@ pub async fn reactivate_sensor_key(
         .query(&format!(
             "ALTER TABLE ndr.sensor_keys \
              UPDATE active = 1 \
-             WHERE id = '{}'", id
+             WHERE id = '{}'", sql_escape(id)
         ))
         .execute().await?;
     Ok(())
@@ -5007,7 +5312,7 @@ pub async fn get_evidence_log(
          FROM {}.evidence_log
          WHERE community_id = '{}'
          ORDER BY performed_at DESC",
-        db, community_id
+        db, sql_escape(community_id)
     )).fetch_all::<EvidenceLogRow>().await?;
     Ok(rows.iter().map(|r| serde_json::json!({
         "id": r.id, "community_id": r.community_id, "bundle_id": r.bundle_id,
@@ -5045,7 +5350,7 @@ pub async fn save_evidence_bundle(
         .query(&format!(
             "SELECT count() as n FROM {}.evidence_bundles FINAL \
              WHERE community_id = '{}'",
-            db, community_id
+            db, sql_escape(community_id)
         ))
         .fetch_all::<Count>()
         .await
@@ -5061,9 +5366,9 @@ pub async fn save_evidence_bundle(
           severity,alert_id)
          VALUES ('{}','{}','{}','{}',{},
           {},now() + INTERVAL {} DAY,'{}','{}','{}','{}')",
-        db, id, community_id, file_path, sha256,
+        db, sql_escape(id), sql_escape(community_id), sql_escape(file_path), sql_escape(sha256),
         size_bytes, auto_captured, expires_days,
-        src_ip, dst_ip, severity, alert_id
+        sql_escape(src_ip), sql_escape(dst_ip), sql_escape(severity), sql_escape(alert_id)
     )).execute().await?;
     Ok(())
 }
@@ -5100,7 +5405,7 @@ pub async fn get_evidence_bundle(
          src_ip, dst_ip, severity
          FROM {}.evidence_bundles FINAL
          WHERE id = '{}' LIMIT 1",
-        db, bundle_id
+        db, sql_escape(bundle_id)
     )).fetch_all::<EvidenceBundleRow>().await?;
     Ok(rows.first().map(|r| serde_json::json!({
         "id": r.id, "community_id": r.community_id, "file_path": r.file_path,
@@ -5190,7 +5495,7 @@ pub async fn set_legal_hold(
          UPDATE legal_hold={}, hold_reason='{}',
          hold_set_by='{}'
          WHERE id='{}'",
-        db, hold, reason, set_by, bundle_id
+        db, hold, sql_escape(reason), sql_escape(set_by), sql_escape(bundle_id)
     )).execute().await?;
     Ok(())
 }
@@ -5209,7 +5514,7 @@ pub async fn add_evidence_annotation(
         "INSERT INTO {}.evidence_annotations
          (bundle_id,community_id,author,note,tag)
          VALUES ('{}','{}','{}','{}','{}')",
-        db, bundle_id, community_id, author, note, tag
+        db, sql_escape(bundle_id), sql_escape(community_id), sql_escape(author), sql_escape(note), sql_escape(tag)
     )).execute().await?;
     Ok(())
 }
@@ -5226,7 +5531,7 @@ pub async fn get_annotations(
          FROM {}.evidence_annotations
          WHERE bundle_id='{}'
          ORDER BY created_at DESC",
-        db, bundle_id
+        db, sql_escape(bundle_id)
     )).fetch_all::<(String,String,String,String,String)>().await?;
     Ok(rows.iter().map(|r| serde_json::json!({
         "id": r.0, "author": r.1, "note": r.2,
@@ -5372,7 +5677,7 @@ pub async fn get_bundles_for_cid(
          FROM {}.evidence_bundles FINAL
          WHERE community_id = '{}'
          ORDER BY captured_at DESC LIMIT 30",
-        db, community_id
+        db, sql_escape(community_id)
     )).fetch_all::<(String,String,String,String,String,String)>().await.unwrap_or_default();
     Ok(rows.iter().map(|r| serde_json::json!({
         "id": r.0, "severity": r.1, "src_ip": r.2,
@@ -5390,7 +5695,7 @@ pub async fn delete_ai_annotations_for_cid(
     self.client.query(&format!(
         "ALTER TABLE {}.evidence_annotations DELETE
          WHERE community_id = '{}' AND tag = 'ai_analysis'",
-        db, community_id
+        db, sql_escape(community_id)
     )).execute().await?;
     Ok(())
 }
@@ -5411,8 +5716,8 @@ pub async fn upsert_shared_ioc(
          (ioc_value,ioc_type,confidence,
           tenant_hash,tags,description)
          VALUES ('{}','{}',{},'{}','{}','{}')",
-        ioc_value, ioc_type, confidence,
-        tenant_hash, tags, description
+        sql_escape(ioc_value), sql_escape(ioc_type), confidence,
+        sql_escape(tenant_hash), sql_escape(tags), sql_escape(description)
     )).execute().await?;
     Ok(())
 }
@@ -5428,7 +5733,7 @@ pub async fn check_shared_ioc(
          tags, description
          FROM ndr.shared_iocs FINAL
          WHERE ioc_value='{}' LIMIT 1",
-        ioc_value
+        sql_escape(ioc_value)
     )).fetch_all::<(String,String,u8,String,
         String,String,String)>().await?;
     Ok(rows.first().map(|r| serde_json::json!({
@@ -5467,7 +5772,7 @@ pub async fn get_hit_by_community_id(
          FROM {}.ndr_hits FINAL
          WHERE community_id = '{}'
          ORDER BY timestamp DESC LIMIT 1",
-        db, community_id
+        db, sql_escape(community_id)
     )).fetch_all::<HitRow>().await?;
 
     let Some(hit) = hits.first() else { return Ok(None); };
@@ -5478,7 +5783,7 @@ pub async fn get_hit_by_community_id(
          FROM {}.ndr_events
          WHERE community_id = '{}' AND src_port > 0
          ORDER BY timestamp DESC LIMIT 1",
-        db, community_id
+        db, sql_escape(community_id)
     )).fetch_all::<EventRow>().await.unwrap_or_default();
     let (src_port, dst_port, proto) = events.first()
         .map(|e| (e.src_port, e.dst_port, e.proto.clone()))
@@ -5516,8 +5821,8 @@ pub async fn get_related_hits_by_ip(
              AND parseDateTimeBestEffort('{}') + INTERVAL {} MINUTE
          ORDER BY timestamp ASC
          LIMIT 20",
-        db, src_ip, around_time, window_minutes,
-        around_time, window_minutes
+        db, sql_escape(src_ip), sql_escape(around_time), window_minutes,
+        sql_escape(around_time), window_minutes
     )).fetch_all::<(String,String,String,String,String,String)>()
     .await?;
     Ok(rows.iter().map(|r| serde_json::json!({
@@ -5567,7 +5872,7 @@ pub async fn get_pcap_file_path_by_community_id(
          WHERE community_id = '{}'
          AND file_path != ''
          ORDER BY start_time DESC LIMIT 1",
-        db, community_id
+        db, sql_escape(community_id)
     )).fetch_all::<PcapPathRow>().await?;
     Ok(rows.first().map(|r| r.file_path.clone()).filter(|s| !s.is_empty()))
 }
@@ -5703,7 +6008,7 @@ pub async fn count_hits_by_severity_aria(
          FROM {db}.ndr_hits
          WHERE severity = '{sev}'
          AND timestamp >= now() - INTERVAL 24 HOUR{sf}",
-        db = db, sev = severity, sf = sf
+        db = db, sev = sql_escape(severity), sf = sf
     )).fetch_all::<CountRow>().await?;
     Ok(rows.first().map(|r| r.cnt).unwrap_or(0))
 }
@@ -5934,11 +6239,11 @@ pub async fn write_ioc_hit(
          (timestamp, community_id, src_ip, dst_ip, matched_ip, ioc_type, feed_source) \
          VALUES (now(), '{}', '{}', '{}', '{}', 'ip', '{}')",
         db,
-        community_id.replace('\'', "\\'"),
-        src_ip.replace('\'', "\\'"),
-        dst_ip.replace('\'', "\\'"),
-        matched_ip.replace('\'', "\\'"),
-        feed_source.replace('\'', "\\'"),
+        sql_escape(community_id),
+        sql_escape(src_ip),
+        sql_escape(dst_ip),
+        sql_escape(matched_ip),
+        sql_escape(feed_source),
     )).execute().await?;
     Ok(())
 }
@@ -5967,7 +6272,7 @@ pub async fn get_ioc_hits(
          WHERE community_id = '{}' \
          ORDER BY timestamp ASC",
         db,
-        community_id.replace('\'', "\\'"),
+        sql_escape(community_id),
     ))
     .fetch_all::<IocHitRow>().await.unwrap_or_default();
 
@@ -7218,7 +7523,7 @@ pub async fn get_ioc_hits(
                  started_at, completed_at, match_count, matches \
                  FROM ndr.retro_scans FINAL \
                  WHERE tenant_id = '{}' ORDER BY started_at DESC LIMIT 200",
-                tenant_id.replace('\'', "")
+                sql_escape(tenant_id)
             ))
             .fetch_all::<RetroScanReadRow>()
             .await?)
@@ -7235,8 +7540,8 @@ pub async fn get_ioc_hits(
                  started_at, completed_at, match_count, matches \
                  FROM ndr.retro_scans FINAL \
                  WHERE tenant_id = '{}' AND id = '{}' LIMIT 1",
-                tenant_id.replace('\'', ""),
-                id.replace('\'', "")
+                sql_escape(tenant_id),
+                sql_escape(id)
             ))
             .fetch_all::<RetroScanReadRow>()
             .await?;

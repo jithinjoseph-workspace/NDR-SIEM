@@ -15,9 +15,9 @@
     <div class="hero-actions">
       <div class="system-time-pill" title="Synchronized Platform Time">
         <lucide-icon [name]="ClockIcon" class="w-3.5 h-3.5 text-cyan-400"></lucide-icon>
-        <span>{{ currentTime || 'SYNCING' }}</span>
+        <span>{{ clock.currentTime() || 'SYNCING' }}</span>
         <span class="date-sep">·</span>
-        <span class="date-text">{{ currentDate }}</span>
+        <span class="date-text">{{ clock.currentDate() }}</span>
       </div>
 
       <div class="sync-status-pill" title="Polling cadence">
@@ -378,6 +378,47 @@
         <div class="diag-row">
           <span class="diag-label">Cluster Bus Health</span>
           <span class="diag-val text-emerald-400">Stream Pipeline Operational</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel 5: Frontend Client Error Reports -->
+    <div class="telemetry-card">
+      <div class="card-header">
+        <div class="header-title-box">
+          <div class="icon-chip amber"><lucide-icon [name]="AlertTriangleIcon" class="w-4 h-4"></lucide-icon></div>
+          <div>
+            <h3>Frontend Client Error Reports</h3>
+            <span class="card-subtitle">Unhandled UI errors captured from every user's browser, most recent first</span>
+          </div>
+        </div>
+        <span class="pill-badge" [class.emerald]="clientErrors.length === 0" [class.amber]="clientErrors.length > 0">
+          {{ clientErrors.length }} RECENT
+        </span>
+      </div>
+
+      <div class="diagnostic-rows" *ngIf="!loadingClientErrors && clientErrors.length === 0">
+        <div class="diag-row">
+          <span class="diag-label">Status</span>
+          <span class="diag-val text-emerald-400">No client errors reported recently</span>
+        </div>
+      </div>
+
+      <div class="diagnostic-rows" *ngIf="loadingClientErrors">
+        <div class="diag-row">
+          <span class="diag-label">Status</span>
+          <span class="diag-val">Loading...</span>
+        </div>
+      </div>
+
+      <div class="diagnostic-rows" *ngIf="!loadingClientErrors && clientErrors.length > 0">
+        <div class="diag-row" *ngFor="let err of clientErrors" style="align-items:flex-start; flex-direction:column; gap:4px;">
+          <span class="diag-label font-mono" style="white-space:normal; word-break:break-word;">
+            {{ err.occurred_at }} · {{ err.username || 'anonymous' }} · {{ err.tenant_id || 'no tenant' }} · {{ err.url }}
+          </span>
+          <span class="diag-val text-amber-400" style="white-space:normal; word-break:break-word; text-align:left;">
+            {{ err.message }}
+          </span>
         </div>
       </div>
     </div>

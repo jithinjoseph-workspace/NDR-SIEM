@@ -439,7 +439,10 @@ pub async fn auth_middleware(
     
     // Public routes - no auth needed. (/api/auth/* itself is not registered
     // here at all — nginx proxies it straight to auth-service.)
-    let public = ["/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh"];
+    // /api/client-errors is public on purpose — an error on the login page
+    // or with an expired/invalid token is exactly what needs reporting,
+    // and gating it behind auth would silently drop those reports.
+    let public = ["/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh", "/api/client-errors"];
     if public.iter().any(|p| path.starts_with(p)) {
         return next.run(request).await;
     }
@@ -2099,6 +2102,38 @@ pub async fn get_stats(State(state): State<AppState>, headers: axum::http::Heade
     }
 }
 
+// GET /api/stats/timeline — real per-minute event counts for the caller's
+// own tenant (last 60 minutes), for an ingestion sparkline that isn't
+// randomized/simulated.
+pub async fn get_stats_timeline(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let tenant_id = claims.map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    match state.ch_storage.get_events_per_minute_by_tenant(&tenant_id, 60).await {
+        Ok(points) => Json(json!({ "status": "ok", "points": points })),
+        Err(e) => {
+            tracing::warn!("Stats timeline query error: {}", e);
+            Json(json!({ "status": "error", "message": e.to_string(), "points": [] }))
+        }
+    }
+}
+
+// GET /api/admin/stats-all-tenants — platform-wide event/hit totals (super admin only)
+pub async fn get_stats_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    match state.ch_storage.get_stats_all_tenants().await {
+        Ok(stats) => Json(stats),
+        Err(e) => {
+            tracing::warn!("All-tenant stats query error: {}", e);
+            Json(json!({
+                "events_total": 0, "hits_total": 0, "events_1h": 0,
+                "hits_1h": 0, "agent_z_events": 0, "agent_s_events": 0,
+            }))
+        }
+    }
+}
+
 pub async fn get_unified_stats(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
@@ -2207,6 +2242,19 @@ pub async fn get_top_ips(State(state): State<AppState>, headers: axum::http::Hea
     }))
 }
 
+// GET /api/admin/top-ips-all-tenants — platform-wide, merged/summed by IP across every tenant (super admin only)
+pub async fn get_top_ips_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let src = state.ch_storage.get_top_src_ips_all_tenants(10).await.unwrap_or_default();
+    let dst = state.ch_storage.get_top_dst_ips_all_tenants(10).await.unwrap_or_default();
+    Json(json!({
+        "top_src_ips": src,
+        "top_dst_ips": dst,
+    }))
+}
+
 
 pub async fn get_protocols(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let tenant_id = extract_claims(&headers)
@@ -2214,6 +2262,15 @@ pub async fn get_protocols(State(state): State<AppState>, headers: axum::http::H
         .unwrap_or_else(|| "default".to_string());
     let sensor_ids = extract_claims(&headers).map(|c| c.sensor_ids).unwrap_or_default();
     let protos = state.ch_storage.get_top_protocols_by_tenant(5, &tenant_id, &sensor_ids).await.unwrap_or_default();
+    Json(json!({ "protocols": protos }))
+}
+
+// GET /api/admin/protocols-all-tenants — platform-wide protocol distribution (super admin only)
+pub async fn get_protocols_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let protos = state.ch_storage.get_top_protocols_all_tenants(5).await.unwrap_or_default();
     Json(json!({ "protocols": protos }))
 }
 
@@ -2538,6 +2595,66 @@ pub async fn get_threat_intel(State(state): State<AppState>, headers: axum::http
     }))
 }
 
+// GET /api/admin/threat-intel-all-tenants — platform-wide threat-intel hits
+// merged across every tenant's own ndr_hits (super admin only). Feed-level
+// summary/sources are already global, only "detected_in_network" and the
+// manual-IOC counts were tenant-scoped before.
+pub async fn get_threat_intel_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    let detected = state.ch_storage.get_threat_intel_hits_all_tenants().await.unwrap_or_default();
+    let summary = state.ch_storage.get_threat_intel_summary().await.unwrap_or_else(|_| json!({
+        "unique_ips": 0,
+        "unique_hashes": 0,
+        "unique_domains": 0,
+        "unique_public_ips": 0,
+        "last_refresh": "never",
+    }));
+    let feed_sources = state.ch_storage.get_threat_intel_feed_sources().await.unwrap_or_default();
+
+    let tenant_ids = state.ch_storage.get_all_tenants().await.unwrap_or_default();
+    let mut manual_by_type: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    for tid in &tenant_ids {
+        let manual_iocs = state.ch_storage.get_watchlist_iocs_by_tenant(tid).await.unwrap_or_default();
+        for item in &manual_iocs {
+            let ioc_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if ioc_type.is_empty() || value.is_empty() { continue; }
+            manual_by_type.entry(ioc_type).or_default().insert(value);
+        }
+    }
+
+    let manual_ip_total = manual_by_type.get("ip").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_hash_total = manual_by_type.get("hash").map(|s| s.len() as u64).unwrap_or(0);
+    let manual_domain_total = manual_by_type.get("domain").map(|s| s.len() as u64).unwrap_or(0);
+
+    let total_ips = summary["unique_ips"].as_u64().unwrap_or(0) + manual_ip_total;
+    let total_hashes = summary["unique_hashes"].as_u64().unwrap_or(0) + manual_hash_total;
+    let total_domains = summary["unique_domains"].as_u64().unwrap_or(0) + manual_domain_total;
+
+    let mut merged_sources = feed_sources;
+    for (ioc_type, values) in manual_by_type {
+        merged_sources.push(json!({
+            "source": "manual",
+            "ioc_type": ioc_type,
+            "rows": values.len(),
+            "unique_values": values.len(),
+        }));
+    }
+
+    Json(json!({
+        "total_malicious_ips":     total_ips,
+        "total_malicious_hashes":  total_hashes,
+        "total_malicious_domains": total_domains,
+        "detected_in_network":     detected,
+        "last_refresh":            summary["last_refresh"].as_str().unwrap_or("never"),
+        "refresh_interval":        "Every 60 minutes",
+        "feed_summary":            summary,
+        "sources":                merged_sources,
+    }))
+}
+
 pub async fn get_threat_intel_feed_summary(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let claims = extract_claims(&headers);
     let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
@@ -2619,6 +2736,56 @@ pub async fn get_threat_map(State(state): State<AppState>, headers: axum::http::
 
     let mut countries: Vec<Value> = country_map.into_iter().map(|(country, (code, lat, lon, count))| {
         // attack_tags is keyed by ISO country code (stored in ndr_hits.src_country)
+        let attacks: Vec<Value> = attack_tags.get(&code)
+            .map(|tags| tags.iter().map(|(t, c)| json!({ "tag": t, "count": c })).collect())
+            .unwrap_or_default();
+        json!({ "country": country, "code": code, "lat": lat, "lon": lon, "count": count, "attacks": attacks })
+    }).collect();
+    countries.sort_by(|a, b| b["count"].as_u64().unwrap_or(0).cmp(&a["count"].as_u64().unwrap_or(0)));
+    countries.truncate(15);
+
+    Json(json!({ "countries": countries }))
+}
+
+// GET /api/admin/threat-map-all-tenants — platform-wide attack map, merging
+// raw IP/country counts across every tenant before the geo-lookup + country
+// rollup (super admin only). Mirrors get_threat_map()'s aggregation logic.
+pub async fn get_threat_map_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+
+    let (ip_rows, attack_tags) = tokio::join!(
+        state.ch_storage.get_top_external_src_ips_all_tenants(50),
+        state.ch_storage.get_country_attack_tags_all_tenants()
+    );
+    let ip_rows    = ip_rows.unwrap_or_default();
+    let attack_tags = attack_tags.unwrap_or_default();
+
+    if ip_rows.is_empty() {
+        return Json(json!({ "countries": [] }));
+    }
+
+    let ips: Vec<String> = ip_rows.iter().take(100).map(|(ip, _)| ip.clone()).collect();
+    let geo_results = geo_lookup_batch(&state, &ips).await;
+
+    let count_map: std::collections::HashMap<String, u64> = ip_rows.into_iter().collect();
+
+    let mut country_map: std::collections::HashMap<String, (String, f64, f64, u64)> = std::collections::HashMap::new();
+    for geo in &geo_results {
+        if geo.get("status").and_then(|s| s.as_str()) != Some("success") { continue; }
+        let ip      = geo["query"].as_str().unwrap_or("").to_string();
+        let country = geo["country"].as_str().unwrap_or("Unknown").to_string();
+        let code    = geo["countryCode"].as_str().unwrap_or("XX").to_string();
+        let lat     = geo["lat"].as_f64().unwrap_or(0.0);
+        let lon     = geo["lon"].as_f64().unwrap_or(0.0);
+        let cnt     = count_map.get(&ip).copied().unwrap_or(1);
+        country_map.entry(country.clone())
+            .and_modify(|e| e.3 += cnt)
+            .or_insert((code, lat, lon, cnt));
+    }
+
+    let mut countries: Vec<Value> = country_map.into_iter().map(|(country, (code, lat, lon, count))| {
         let attacks: Vec<Value> = attack_tags.get(&code)
             .map(|tags| tags.iter().map(|(t, c)| json!({ "tag": t, "count": c })).collect())
             .unwrap_or_default();
@@ -3383,12 +3550,47 @@ pub async fn assign_sensor_to_user(
     if claims.role != "tenant_admin" && claims.role != "super_admin" {
         return Json(json!({ "status": "error", "message": "Forbidden: admin required" }));
     }
+    // Verify the target user and sensor are real and actually belong to
+    // the same tenant before writing the assignment — previously this
+    // trusted user_id/sensor_id from the request body outright, so a
+    // tenant_admin could reference an id from another tenant with no check.
+    if let Err(resp) = verify_same_tenant_assignment(&state, &claims, &payload.user_id, &payload.sensor_id).await {
+        return resp;
+    }
     match state.ch_storage
         .assign_sensor_to_user(&payload.user_id, &payload.sensor_id, &claims.tenant_id).await
     {
         Ok(_) => Json(json!({ "status": "ok", "user_id": payload.user_id, "sensor_id": payload.sensor_id })),
         Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
     }
+}
+
+/// Shared ownership check for assign/remove: the user and sensor must both
+/// exist, must belong to the same real tenant as each other, and — unless
+/// the caller is super_admin — that tenant must be the caller's own.
+async fn verify_same_tenant_assignment(
+    state: &AppState,
+    claims: &AuthClaims,
+    user_id: &str,
+    sensor_key_prefix: &str,
+) -> Result<(), Json<Value>> {
+    let user_tenant = match state.ch_storage.get_user_tenant(user_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Err(Json(json!({ "status": "error", "message": "User not found" }))),
+        Err(e) => return Err(Json(json!({ "status": "error", "message": e.to_string() }))),
+    };
+    let sensor_tenant = match state.ch_storage.get_sensor_key_tenant(sensor_key_prefix).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Err(Json(json!({ "status": "error", "message": "Sensor not found" }))),
+        Err(e) => return Err(Json(json!({ "status": "error", "message": e.to_string() }))),
+    };
+    if user_tenant != sensor_tenant {
+        return Err(Json(json!({ "status": "error", "message": "User and sensor must belong to the same tenant" })));
+    }
+    if claims.role != "super_admin" && user_tenant != claims.tenant_id {
+        return Err(Json(json!({ "status": "error", "message": "Forbidden: cannot manage sensors outside your tenant" })));
+    }
+    Ok(())
 }
 
 /// DELETE /api/sensors/assign  — remove a sensor assignment
@@ -3403,6 +3605,9 @@ pub async fn remove_sensor_from_user(
     };
     if claims.role != "tenant_admin" && claims.role != "super_admin" {
         return Json(json!({ "status": "error", "message": "Forbidden: admin required" }));
+    }
+    if let Err(resp) = verify_same_tenant_assignment(&state, &claims, &payload.user_id, &payload.sensor_id).await {
+        return resp;
     }
     match state.ch_storage
         .remove_sensor_assignment(&payload.user_id, &payload.sensor_id, &claims.tenant_id).await
@@ -4771,6 +4976,76 @@ pub async fn get_severity(State(state): State<AppState>, headers: axum::http::He
     }
 }
 
+#[derive(serde::Deserialize)]
+pub struct ClientErrorPayload {
+    pub message: String,
+    #[serde(default)]
+    pub stack: String,
+    #[serde(default)]
+    pub url: String,
+}
+
+// POST /api/client-errors — real frontend error capture. Intentionally
+// works without a valid session (an error on the login page or an expired
+// token is exactly the kind of thing that needs to be reported), and never
+// fails the caller's request even if storage itself is unreachable — this
+// exists so errors are seen somewhere, not to become a second thing that
+// can break. Payload sizes are capped so a runaway loop can't fill the table.
+pub async fn report_client_error(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ClientErrorPayload>,
+) -> Json<Value> {
+    let claims = extract_claims(&headers);
+    let username  = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_default();
+    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_default();
+    let user_agent = headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+
+    let truncate = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+    let message = truncate(&payload.message, 2000);
+    let stack   = truncate(&payload.stack, 8000);
+    let url     = truncate(&payload.url, 500);
+
+    if let Err(e) = state.ch_storage.insert_client_error(&message, &stack, &url, &username, &tenant_id, &user_agent).await {
+        tracing::warn!("Failed to persist client error report: {}", e);
+    }
+    Json(json!({ "status": "ok" }))
+}
+
+// GET /api/admin/client-errors — read path for the errors report_client_error
+// captures. Deliberately at a different path than the public POST endpoint
+// above (that path is exempt from auth in the auth_middleware public list,
+// so reusing it here would leak every user's error reports/stack traces to
+// anyone unauthenticated). Super-admin only.
+pub async fn list_client_errors(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    match state.ch_storage.list_client_errors(200).await {
+        Ok(errors) => Json(json!({ "errors": errors })),
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
+// GET /api/admin/severity-all-tenants — platform-wide severity totals for
+// the Super Admin Overview (sums every tenant's own hits, not just the
+// caller's own tenant). Super-admin only.
+pub async fn get_severity_all_tenants(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
+    if let Err(response) = require_super_admin(&headers) {
+        return response;
+    }
+    match state.ch_storage.get_severity_all_tenants().await {
+        Ok(data) => Json(data),
+        Err(e) => {
+            tracing::warn!("All-tenant severity query error: {}", e);
+            Json(json!({
+                "critical": 0, "high": 0, "medium": 0, "low": 0,
+                "tenants_total": 0, "tenants_reporting": 0
+            }))
+        }
+    }
+}
+
 // GET /api/announcements
 pub async fn get_announcements_api(
     State(state): State<AppState>,
@@ -5786,6 +6061,40 @@ pub async fn get_sensor_keys(
             "status": "error",
             "message": e.to_string()
         })),
+    }
+}
+
+// GET /api/sensor-keys/event-counts — real per-sensor event counts (last
+// hour) for the caller's own tenant, keyed by sensor_id (== key_prefix).
+// Replaces any placeholder "throughput" number with an actual measurement.
+pub async fn get_sensor_event_counts(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    match state.ch_storage.get_sensor_event_counts_by_tenant(&claims.tenant_id, 1).await {
+        Ok(counts) => Json(json!({ "status": "ok", "counts": counts })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string(), "counts": {} })),
+    }
+}
+
+// GET /api/sensor-keys/recent-ips — real IP most recently seen from each
+// sensor's own traffic, for the caller's own tenant. No IP is stored on
+// sensor_keys itself, so this is derived from actual ingested events.
+pub async fn get_sensor_recent_ips(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"status": "error", "message": "Unauthorized"})),
+    };
+    match state.ch_storage.get_sensor_recent_ips_by_tenant(&claims.tenant_id).await {
+        Ok(ips) => Json(json!({ "status": "ok", "ips": ips })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string(), "ips": {} })),
     }
 }
 

@@ -43,8 +43,8 @@
       <div class="aip-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 text-purple-400"></lucide-icon>
         <div class="aip-clock-text">
-          <span class="aip-clock-time">{{ currentTime }}</span>
-          <span class="aip-clock-date">{{ currentDate }}</span>
+          <span class="aip-clock-time">{{ clock.currentTime() }}</span>
+          <span class="aip-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>

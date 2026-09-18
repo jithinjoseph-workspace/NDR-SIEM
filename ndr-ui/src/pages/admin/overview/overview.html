@@ -39,8 +39,8 @@
       <div class="ov-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 ov-clock-icon"></lucide-icon>
         <div class="ov-clock-text">
-          <span class="ov-clock-time">{{ currentTime }}</span>
-          <span class="ov-clock-date">{{ currentDate }}</span>
+          <span class="ov-clock-time">{{ clock.currentTime() }}</span>
+          <span class="ov-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>
@@ -852,7 +852,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let item of filteredThreatIntelItems" 
+              <tr *ngFor="let item of filteredThreatIntelItems; trackBy: trackByIp"
                   (click)="focusThreatCountry(item)" 
                   class="threat-row" 
                   [class.threat-row--selected]="selectedRelay?.name?.toLowerCase() === item.country.toLowerCase() || selectedRelay?.city?.toLowerCase() === item.country.toLowerCase()">
@@ -964,7 +964,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let node of fleetNodes">
+              <tr *ngFor="let node of fleetNodes; trackBy: trackById">
                 <td>
                   <div class="node-cell">
                     <lucide-icon [name]="ServerIcon" class="w-4 h-4 text-cyan-400"></lucide-icon>
@@ -1133,7 +1133,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let t of tenantFleetMatrix" class="top-ip-row">
+              <tr *ngFor="let t of tenantFleetMatrix; trackBy: trackById" class="top-ip-row">
                 <td>
                   <div class="ip-cell">
                     <span class="node-dot" [class.dot--emerald]="t.active" [class.dot--slate]="!t.active"></span>
@@ -1196,7 +1196,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let item of threatIntelItems.slice(0, 15)" class="top-ip-row">
+              <tr *ngFor="let item of threatIntelItems.slice(0, 15); trackBy: trackByIp" class="top-ip-row">
                 <td>
                   <div class="ip-cell">
                     <span class="threat-dot"></span>
@@ -1245,7 +1245,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let item of topPublicIps.slice(0, 15)" class="top-ip-row">
+              <tr *ngFor="let item of topPublicIps.slice(0, 15); trackBy: trackByIp" class="top-ip-row">
                 <td>
                   <div class="ip-cell">
                     <span class="node-dot dot--cyan"></span>
@@ -1330,7 +1330,7 @@
 
           <!-- Terminal Shell Screen -->
           <div class="ov-terminal-screen">
-            <div class="term-line" *ngFor="let log of filteredSocLogs">
+            <div class="term-line" *ngFor="let log of filteredSocLogs; trackBy: trackById">
               <span class="term-time font-mono">[{{ log.time }}]</span>
               <span class="term-badge" [ngClass]="'term--' + log.level.toLowerCase()">{{ log.level }}</span>
               <span class="term-source font-mono">{{ log.source }}:</span>
@@ -1417,7 +1417,7 @@
 
           <!-- Terminal Shell Screen -->
           <div class="ov-terminal-screen ov-terminal-screen--user">
-            <div class="term-line" *ngFor="let log of filteredUserAuditLogs">
+            <div class="term-line" *ngFor="let log of filteredUserAuditLogs; trackBy: trackById">
               <span class="term-time font-mono">[{{ log.time }}]</span>
               <span class="term-badge" [ngClass]="'term--cat-' + log.category.toLowerCase()">{{ log.category }}</span>
               <span class="term-user font-mono">[{{ log.user }}]</span>

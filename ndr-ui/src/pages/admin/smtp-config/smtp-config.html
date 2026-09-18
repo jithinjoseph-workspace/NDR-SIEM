@@ -38,8 +38,8 @@
       <div class="smtp-clock-capsule">
         <lucide-icon [name]="ClockIcon" class="w-4 h-4 text-amber-400"></lucide-icon>
         <div class="smtp-clock-text">
-          <span class="smtp-clock-time">{{ currentTime }}</span>
-          <span class="smtp-clock-date">{{ currentDate }}</span>
+          <span class="smtp-clock-time">{{ clock.currentTime() }}</span>
+          <span class="smtp-clock-date">{{ clock.currentDate() }}</span>
         </div>
       </div>
     </div>

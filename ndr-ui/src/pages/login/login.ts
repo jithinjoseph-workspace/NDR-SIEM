@@ -26,6 +26,14 @@ export class Login {
   forgotLoading = false;
   forgotError = '';
 
+  // ── Forced password reset (default installer password still in use) ──────
+  showForceReset = false;
+  forceResetNewPassword = '';
+  forceResetConfirmPassword = '';
+  forceResetError = '';
+  forceResetLoading = false;
+  private pendingUser: any = null;
+
   forgotData = {
     username: '',
     secretCode: '',
@@ -166,19 +174,17 @@ export class Login {
       next: (res: any) => {
         this.loading = false;
         if (res.status === 'ok' && res.user) {
-          const role = res.user?.role;
-          if (role === 'admin' || role === 'super_admin') {
-            this.router.navigate(['/admin']).then(() => {
-              this.ws.connect();
-            });
-          } else if (role === 'tenant_admin') {
-            this.router.navigate(['/tenant-admin']).then(() => {
-              this.ws.connect();
-            });
+          if (res.user.must_reset_password) {
+            // Backend already issued a real session — the account just still
+            // has the default installer password. Don't navigate yet: force
+            // a real password before letting them into the app.
+            this.pendingUser = res.user;
+            this.showForceReset = true;
+            this.forceResetError = '';
+            this.forceResetNewPassword = '';
+            this.forceResetConfirmPassword = '';
           } else {
-            this.router.navigate([this.auth.getDefaultRoute()]).then(() => {
-              this.ws.connect();
-            });
+            this.completeLogin(res.user);
           }
         } else {
           // status: "error" returned with 200 OK (should not happen now, but fallback)
@@ -198,6 +204,58 @@ export class Login {
           this.error = err.error?.message ||
             'Login failed. Please try again.';
         }
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  private completeLogin(user: any) {
+    const role = user?.role;
+    if (role === 'admin' || role === 'super_admin') {
+      this.router.navigate(['/admin']).then(() => this.ws.connect());
+    } else if (role === 'tenant_admin') {
+      this.router.navigate(['/tenant-admin']).then(() => this.ws.connect());
+    } else {
+      this.router.navigate([this.auth.getDefaultRoute()]).then(() => this.ws.connect());
+    }
+  }
+
+  // ── Forced password reset ────────────────────────────────────────────────
+
+  submitForceReset() {
+    const newPassword = this.forceResetNewPassword;
+    if (!newPassword || newPassword !== this.forceResetConfirmPassword) {
+      this.forceResetError = 'Passwords do not match';
+      return;
+    }
+    if (newPassword === this.password) {
+      this.forceResetError = 'Choose a password different from the default one';
+      return;
+    }
+    this.forceResetLoading = true;
+    this.forceResetError = '';
+    this.api.selfResetPassword(
+      this.username,
+      this.pendingUser?.tenant_id || '',
+      this.password,
+      newPassword
+    ).subscribe({
+      next: (res: any) => {
+        this.forceResetLoading = false;
+        if (res.status === 'ok') {
+          this.showForceReset = false;
+          const user = this.pendingUser;
+          this.pendingUser = null;
+          this.password = newPassword;
+          this.completeLogin(user);
+        } else {
+          this.forceResetError = res.message || 'Failed to update password';
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err: any) => {
+        this.forceResetLoading = false;
+        this.forceResetError = err.error?.message || 'Failed to update password';
         this.cdr.detectChanges();
       }
     });

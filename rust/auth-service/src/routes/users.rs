@@ -265,8 +265,18 @@ pub async fn update(
             Json(json!({ "status": "error", "message": "Forbidden" }))).into_response();
     }
 
-    let role      = payload.role.as_deref().unwrap_or(&existing_role).to_string();
-    let tenant_id = payload.tenant_id.as_deref().unwrap_or(&existing_tenant).to_string();
+    let requested_role = payload.role.as_deref().unwrap_or(&existing_role);
+    if claims.role == "tenant_admin" && (requested_role == "super_admin" || requested_role == "tenant_admin") {
+        return (StatusCode::FORBIDDEN,
+            Json(json!({ "status": "error", "message": "Cannot assign that role" }))).into_response();
+    }
+    let role      = requested_role.to_string();
+    // tenant_admin can never move a user to a different tenant, regardless of payload.
+    let tenant_id = if claims.role == "tenant_admin" {
+        existing_tenant.clone()
+    } else {
+        payload.tenant_id.as_deref().unwrap_or(&existing_tenant).to_string()
+    };
     let active    = payload.active.unwrap_or(true);
     let permissions = permissions_from_payload(payload.permissions.as_ref(), &role);
 

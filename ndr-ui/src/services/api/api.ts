@@ -155,6 +155,31 @@ export class Api {
     return this.http.get(`${this.baseUrl}/severity`);
   }
 
+  // Platform-wide totals across every tenant — super admin only.
+  getSeverityAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/severity-all-tenants`);
+  }
+
+  getStatsAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/stats-all-tenants`);
+  }
+
+  getTopIpsAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/top-ips-all-tenants`);
+  }
+
+  getProtocolsAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/protocols-all-tenants`);
+  }
+
+  getThreatIntelAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/threat-intel-all-tenants`);
+  }
+
+  getThreatMapAllTenants(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/threat-map-all-tenants`);
+  }
+
   getEntityScores(): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/entity-scores`);
   }
@@ -491,6 +516,12 @@ export class Api {
     return this.http.post(`${this.baseUrl}/auth/forgot/reset-password`, { username, otp, new_password });
   }
 
+  /** Self-service password change — verifies old_password server-side, no session required.
+   *  Used to force a real password onto the default seed accounts on first login. */
+  selfResetPassword(username: string, tenant_id: string, old_password: string, new_password: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/auth/reset-password`, { username, tenant_id, old_password, new_password });
+  }
+
 
   deleteUser(id: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/auth/users/${id}`);
@@ -594,6 +625,10 @@ export class Api {
     return this.http.get(`${this.baseUrl}/admin/telemetry`);
   }
 
+  getClientErrors(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/admin/client-errors`);
+  }
+
 
   getKafkaStatus(): Observable<any> {
     return this.http.get(`${this.baseUrl}/monitor/kafka`);
@@ -622,6 +657,31 @@ export class Api {
         }
         return response.keys || [];
       }));
+  }
+
+  // Real per-sensor event counts (last 1h) for the caller's own tenant,
+  // keyed by sensor_id (== key_prefix). Used to show actual sensor
+  // throughput instead of a placeholder online/offline flag.
+  getSensorEventCounts(): Observable<Record<string, number>> {
+    return this.http
+      .get<{ status?: string; counts?: Record<string, number>; message?: string }>(`${this.baseUrl}/sensor-keys/event-counts`)
+      .pipe(map(response => response.counts || {}));
+  }
+
+  // Real per-minute event counts (last 60 minutes) for the caller's own
+  // tenant — a genuine history for an ingestion sparkline, not simulated.
+  getStatsTimeline(): Observable<number[]> {
+    return this.http
+      .get<{ status?: string; points?: number[]; message?: string }>(`${this.baseUrl}/stats/timeline`)
+      .pipe(map(response => response.points || []));
+  }
+
+  // Real IP most recently seen from each sensor's own traffic (no IP is
+  // stored on sensor_keys itself — this is derived from actual events).
+  getSensorRecentIps(): Observable<Record<string, string>> {
+    return this.http
+      .get<{ status?: string; ips?: Record<string, string>; message?: string }>(`${this.baseUrl}/sensor-keys/recent-ips`)
+      .pipe(map(response => response.ips || {}));
   }
 
   createSensorKey(tenantId: string, name: string): Observable<any> {

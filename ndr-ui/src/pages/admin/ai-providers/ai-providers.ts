@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
@@ -7,6 +7,7 @@ import {
   Sparkles, Bot, ShieldCheck, KeyRound, Cpu, Activity, Clock, RefreshCw, Layers, CheckCircle2, AlertTriangle, SlidersHorizontal
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
+import { ClockService } from '../../../services/clock/clock';
 
 interface AiProvider {
   name: string; provider_type: string; model: string; base_url: string;
@@ -23,7 +24,7 @@ interface AiProvider {
   templateUrl: './ai-providers.html',
   styleUrl: './ai-providers.css',
 })
-export class AiProviders implements OnInit, OnDestroy {
+export class AiProviders implements OnInit {
   Math = Math;
 
   EditIcon        = Edit;
@@ -59,10 +60,6 @@ export class AiProviders implements OnInit, OnDestroy {
   showProviderKey   = false;
   isEditingProvider = false;
 
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
   newProvider = {
     name: '', provider_type: 'custom', api_key: '', model: '',
     base_url: '', endpoint_path: '/v1/chat/completions',
@@ -80,7 +77,7 @@ export class AiProviders implements OnInit, OnDestroy {
     { value: 'threat', label: 'Threat analysis only' },
   ];
 
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  constructor(private api: Api, private cdr: ChangeDetectorRef, public clock: ClockService) {}
 
   get activeProvidersCount(): number {
     return this.providers.filter(p => p.enabled).length;
@@ -109,21 +106,8 @@ export class AiProviders implements OnInit, OnDestroy {
     return [...active].sort((a, b) => (a.priority || 99) - (b.priority || 99))[0];
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
     this.loadProviders();
-  }
-
-  ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
   }
 
   loadProviders() {

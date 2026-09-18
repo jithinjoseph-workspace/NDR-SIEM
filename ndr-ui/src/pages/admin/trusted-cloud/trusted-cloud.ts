@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
@@ -6,7 +6,9 @@ import {
   RefreshCw, ShieldCheck, Cloud, Sparkles, CheckCircle2, Trash2, Plus, Clock, Activity, Zap, Check, X, ShieldAlert
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-trusted-cloud',
   standalone: true,
@@ -16,7 +18,7 @@ import { Api } from '../../../services/api/api';
   templateUrl: './trusted-cloud.html',
   styleUrl: './trusted-cloud.css',
 })
-export class TrustedCloud implements OnInit, OnDestroy {
+export class TrustedCloud implements OnInit {
   Math = Math;
 
   RefreshIcon     = RefreshCw;
@@ -42,11 +44,7 @@ export class TrustedCloud implements OnInit, OnDestroy {
   trustedCloudSaved  = false;
   loadingTrustedCloud = false;
 
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  constructor(private api: Api, private cdr: ChangeDetectorRef, public clock: ClockService) {}
 
   get totalCloudRules(): number {
     return this.trustedCloud.keywords.length + this.trustedCloud.domains.length;
@@ -60,21 +58,8 @@ export class TrustedCloud implements OnInit, OnDestroy {
     return this.trustedCloud.suggestions.reduce((acc, s) => acc + (s.hits || 0), 0);
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
     this.loadTrustedCloud();
-  }
-
-  ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
   }
 
   loadTrustedCloud() {
@@ -122,14 +107,14 @@ export class TrustedCloud implements OnInit, OnDestroy {
         if (!this.trustedCloud.keywords.includes(org.split(' ')[0])) this.trustedCloud.keywords.push(org.split(' ')[0]);
         this.cdr.detectChanges();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
   }
 
   rejectSuggestion(org: string) {
     this.api.rejectTrustedCloudSuggestion(org).subscribe({
       next: () => { this.trustedCloud.suggestions = this.trustedCloud.suggestions.filter(s => s.org !== org); this.cdr.detectChanges(); },
-      error: () => {},
+      error: reportRxjsError,
     });
   }
 }

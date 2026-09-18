@@ -251,7 +251,7 @@ pub async fn save_parser(
     }
 }
 
-fn esc(s: &str) -> String { s.replace('\'', "''") }
+fn esc(s: &str) -> String { s.replace('\\', "\\\\").replace('\'', "\\'") }
 
 // ─── Apply saved parser → OCSF OcsfEvent ─────────────────────────────────────
 

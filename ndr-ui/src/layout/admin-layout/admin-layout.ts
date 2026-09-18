@@ -38,11 +38,11 @@ export class AdminLayout implements OnInit {
   RadioIcon         = Radio;
 
   groups: Record<string, boolean> = {
-    access:         true,
-    infrastructure: true,
-    monitoring:     true,
-    config:         true,
-    siem:           true,
+    access:         false,
+    infrastructure: false,
+    monitoring:     false,
+    config:         false,
+    siem:           false,
   };
 
   currentUser = signal<any>(null);
@@ -53,20 +53,10 @@ export class AdminLayout implements OnInit {
 
   ngOnInit() {
     this.hasNdr  = this.config.hasNdr();
-    this.hasSiem = this.config.hasSiem();
+    // SIEM nav section temporarily hidden — not needed right now.
+    // Restore `this.config.hasSiem()` here to bring it back.
+    this.hasSiem = false;
     this.currentUser.set(this.auth.getUser());
-    const url = this.router.url;
-    this.groups = {
-      access:         url.includes('/tenants') || url.includes('/users'),
-      infrastructure: url.includes('/engines') || url.includes('/sensors'),
-      monitoring:     url.includes('/rules') || url.includes('/telemetry') || url.includes('/announcements'),
-      config:         url.includes('/ai-providers') || url.includes('/trusted-cloud')
-                      || url.includes('/trusted-domains') || url.includes('/smtp-config'),
-      siem:           url.includes('/siem-sources'),
-    };
-    if (!Object.values(this.groups).some(v => v)) {
-      Object.keys(this.groups).forEach(k => this.groups[k] = true);
-    }
   }
 
   toggleGroup(key: string) {

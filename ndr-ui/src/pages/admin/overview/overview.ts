@@ -22,7 +22,9 @@ import * as topojson from 'topojson-client';
 import * as THREE from 'three';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 export interface UserAuditLog {
   id: string;
   time: string;
@@ -217,11 +219,6 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
   selectedRelay: RelayHub | null = null;
   isRefreshing = false;
 
-  // Real-time clock
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
   // Telemetry stream history
   overviewTelemetryHistory: { time: Date; cpu: number; mem: number; label?: string }[] = [];
   private overviewTelemetryPollTimer: any = null;
@@ -255,6 +252,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     private http: HttpClient,
     private cdr: ChangeDetectorRef,
     private zone: NgZone,
+    public clock: ClockService,
   ) {}
 
   // ── 100% Real Computed Metrics ─────────────────────────────────
@@ -467,6 +465,14 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     return this.kafkaData?.partition_count || this.kafkaData?.partitions?.length || 0;
   }
 
+  // trackBy fns — several getters above (tenantFleetMatrix, topPublicIps,
+  // fleetNodes, filteredThreatIntelItems) build fresh object literals on
+  // every call, so *ngFor's default identity check fails every CD cycle and
+  // tears down/rebuilds the whole row set. Track by a stable field instead.
+  trackByIp   = (_: number, item: { ip: string }) => item.ip;
+  trackById   = (_: number, item: { id: string }) => item.id;
+  trackByPartition = (_: number, p: number) => p;
+
   get roleCounts(): Record<string, number> {
     const counts: Record<string, number> = { 'Platform Admin': 0, 'Tenant Admin': 0, 'Analyst': 0, 'Viewer': 0 };
     for (const u of this.users) {
@@ -528,17 +534,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     return items;
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
-
     this.loadWorldData();
     this.loadAllRealPlatformData();
     this.initSocLogs();
@@ -563,7 +559,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderUserRolesDonut();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 2. Real Tenants
@@ -573,7 +569,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderFocusedPostureGauge();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 3. Real Engine Nodes
@@ -583,7 +579,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderFocusedPostureGauge();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 4. Real Sensor Keys
@@ -593,7 +589,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.cdr.detectChanges();
         this.renderFocusedPostureGauge();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // 5. Real Global Threat Intelligence Map with All Country Attribution
@@ -616,13 +612,13 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
       }
     });
 
-    // 5b. Real Threat Intel Feed Overview
-    this.api.getThreatIntel().subscribe({
+    // 5b. Real Threat Intel Feed Overview (platform-wide, all tenants)
+    this.api.getThreatIntelAllTenants().subscribe({
       next: (data: any) => {
         this.totalThreatIps = Number(data?.total_malicious_ips) || 0;
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     // 6. Real ClickHouse Event Stats
@@ -648,7 +644,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.renderFocusedPostureGauge();
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     // 12. Real Kafka Cluster Status
@@ -663,12 +659,14 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
+  // Platform-wide across all tenants (Super Admin Overview), not just the
+  // default tenant's own hits — see api.getSeverityAllTenants().
   loadSeverityData() {
-    this.api.getSeverity().subscribe({
+    this.api.getSeverityAllTenants().subscribe({
       next: (data: any) => {
         if (data) {
           this.severityData = {
@@ -680,12 +678,13 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
+  // Platform-wide across all tenants — see api.getStatsAllTenants().
   loadStatsData() {
-    this.api.getStats().subscribe({
+    this.api.getStatsAllTenants().subscribe({
       next: (stats: any) => {
         if (stats) {
           this.eventsTotal = Number(stats.events_total) || 0;
@@ -700,12 +699,13 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
+  // Platform-wide across all tenants — see api.getTopIpsAllTenants().
   loadTopIpsData() {
-    this.api.getTopIps().subscribe({
+    this.api.getTopIpsAllTenants().subscribe({
       next: (data: any) => {
         if (data) {
           this.topIpsData = {
@@ -715,19 +715,20 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
+  // Platform-wide across all tenants — see api.getProtocolsAllTenants().
   loadProtocolsData() {
-    this.api.getProtocols().subscribe({
+    this.api.getProtocolsAllTenants().subscribe({
       next: (data: any) => {
         if (data && data.protocols) {
           this.protocolsData = data.protocols;
           this.cdr.detectChanges();
         }
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
@@ -1006,8 +1007,9 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     return this.enginePartitionGroups.reduce((sum, g) => sum + g.totalLag, 0);
   }
 
+  // Platform-wide across all tenants — see api.getThreatMapAllTenants().
   private loadFallbackTrafficMap() {
-    this.api.getThreatMap().subscribe({
+    this.api.getThreatMapAllTenants().subscribe({
       next: (data: any) => {
         this.threatCountries = data?.countries || [];
         this.updateRelayHubsFromRealData();
@@ -1386,18 +1388,33 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
     } else if (this.cachedWorldData) {
       this.initWorldMap();
     }
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
   }
 
   ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
     if (this.socLogTimer) clearInterval(this.socLogTimer);
     if (this.userAuditTimer) clearInterval(this.userAuditTimer);
     this.stopOverviewTelemetryPolling();
     if (this.resizeObserver) this.resizeObserver.disconnect();
     if (this.mapResizeObserver) this.mapResizeObserver.disconnect();
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.destroyCommandMesh();
     this.destroyGlobalGlobe();
   }
+
+  // Backgrounded tabs shouldn't keep the globe/WebGL mesh burning CPU —
+  // cancel their rAF loops on hide, rebuild them on return.
+  private handleVisibilityChange = () => {
+    if (document.hidden) {
+      this.destroyCommandMesh();
+      this.destroyGlobalGlobe();
+      return;
+    }
+    this.initCommandMesh();
+    if (this.fabricMode === 'globe' && this.globalGlobe?.nativeElement) {
+      this.initGlobalGlobe();
+    }
+  };
 
   // ── Switchers & Actions ─────────────────────────────────────────
 
@@ -1487,7 +1504,7 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
         this.renderFocusedPostureGauge();
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 
@@ -2729,7 +2746,11 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
       this.globeAnimationFrame = requestAnimationFrame(frame);
     };
 
-    this.globeAnimationFrame = requestAnimationFrame(frame);
+    // Pure canvas redraw loop — keep it out of Angular's zone so 60fps
+    // rendering doesn't trigger a full-app change-detection pass every frame.
+    this.zone.runOutsideAngular(() => {
+      this.globeAnimationFrame = requestAnimationFrame(frame);
+    });
   }
 
   private destroyGlobalGlobe() {

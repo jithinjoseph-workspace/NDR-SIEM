@@ -6,7 +6,9 @@ import {
   Clock, Layers, Zap, Radio, CheckCircle2, AlertTriangle, Database, TrendingUp, Gauge, Terminal
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-telemetry',
   standalone: true,
@@ -41,35 +43,41 @@ export class Telemetry implements OnInit, OnDestroy {
   kafkaData: any = null;
   engines: any[] = [];
   sensorKeys: any[] = [];
+  clientErrors: any[] = [];
+  loadingClientErrors = false;
   isLoading = true;
   isRefreshing = false;
 
-  currentTime = '';
-  currentDate = '';
   lastUpdatedTime = '';
 
   private pollInterval: any = null;
-  private clockInterval: any = null;
 
-  constructor(private api: Api, private cdr: ChangeDetectorRef) {}
+  constructor(private api: Api, private cdr: ChangeDetectorRef, public clock: ClockService) {}
 
   ngOnInit() {
-    this.updateClock();
-    this.clockInterval = setInterval(() => this.updateClock(), 1000);
     this.loadAllTelemetry();
-    this.pollInterval = setInterval(() => this.pollLiveMetrics(), 4000);
+    this.loadClientErrors();
+    this.pollInterval = setInterval(() => this.pollLiveMetrics(), 10000);
+  }
+
+  loadClientErrors() {
+    this.loadingClientErrors = true;
+    this.api.getClientErrors().subscribe({
+      next: (res: any) => {
+        this.clientErrors = res?.errors || [];
+        this.loadingClientErrors = false;
+        this.cdr.detectChanges();
+      },
+      error: (e: any) => {
+        this.loadingClientErrors = false;
+        this.cdr.detectChanges();
+        reportRxjsError(e);
+      }
+    });
   }
 
   ngOnDestroy() {
     if (this.pollInterval) clearInterval(this.pollInterval);
-    if (this.clockInterval) clearInterval(this.clockInterval);
-  }
-
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toTimeString().split(' ')[0] + ' UTC';
-    this.currentDate = now.toISOString().split('T')[0];
-    this.cdr.detectChanges();
   }
 
   loadAllTelemetry() {
@@ -114,7 +122,7 @@ export class Telemetry implements OnInit, OnDestroy {
         this.kafkaData = res;
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     this.api.getEngines().subscribe({
@@ -122,7 +130,7 @@ export class Telemetry implements OnInit, OnDestroy {
         this.engines = res?.engines || (Array.isArray(res) ? res : []);
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
 
     this.api.getSensorKeys().subscribe({
@@ -130,7 +138,7 @@ export class Telemetry implements OnInit, OnDestroy {
         this.sensorKeys = Array.isArray(res) ? res : (res?.keys || []);
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 

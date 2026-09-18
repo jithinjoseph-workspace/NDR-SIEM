@@ -16,6 +16,7 @@ import {
 import { AuthService } from '../../../services/auth/auth';
 
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 // Detection tags that are meaningful for grouping — must match Rust tag strings exactly
 const DETECTION_TAGS = new Set([
   'dns-beaconing','port-scan','lateral-movement','credential-stuffing','slow-scan',
@@ -170,7 +171,7 @@ export class Alerts implements OnInit, OnDestroy {
         this.rebuild();
         this.cdr.detectChanges();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
 
     // Fetch active group suppressions first so WS filter is ready before hits arrive
@@ -817,7 +818,7 @@ export class Alerts implements OnInit, OnDestroy {
         this.isolatedIps = new Set(rows.map((r: any) => r.target_ip));
         this.cdr.detectChanges();
       },
-      error: () => {}
+      error: reportRxjsError
     });
   }
 

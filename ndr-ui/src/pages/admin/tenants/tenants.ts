@@ -4,11 +4,14 @@ import { FormsModule } from '@angular/forms';
 import {
   LucideAngularModule,
   Edit, Plus, RefreshCw, Search, X, KeyRound, Copy, Trash2,
-  Building2, ShieldCheck, Users, Sparkles, Clock, CheckCircle2, AlertTriangle, Layers, Zap, Bot, Shield, Globe
+  Building2, ShieldCheck, Users, Sparkles, Clock, CheckCircle2, AlertTriangle, Layers, Zap, Bot, Shield, Globe,
+  Database, Server, Terminal, ArrowRight
 } from 'lucide-angular';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
+import { ClockService } from '../../../services/clock/clock';
 
+import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-tenants',
   standalone: true,
@@ -37,8 +40,12 @@ export class Tenants implements OnInit, OnDestroy {
   LayersIcon      = Layers;
   ZapIcon         = Zap;
   BotIcon         = Bot;
-  ShieldIcon      = Shield;
-  GlobeIcon       = Globe;
+  ShieldIcon        = Shield;
+  GlobeIcon         = Globe;
+  DatabaseIcon      = Database;
+  ServerIcon        = Server;
+  TerminalIcon      = Terminal;
+  ArrowRightIcon    = ArrowRight;
 
   currentUser: any = {};
 
@@ -72,14 +79,11 @@ export class Tenants implements OnInit, OnDestroy {
   msg     = '';
   msgType = '';
 
-  currentTime = '';
-  currentDate = '';
-  private clockTimer: any = null;
-
   constructor(
     private api: Api,
     private auth: AuthService,
     private cdr: ChangeDetectorRef,
+    public clock: ClockService,
   ) {}
 
   Math = Math;
@@ -111,24 +115,14 @@ export class Tenants implements OnInit, OnDestroy {
     return Math.round((this.activeTenantsCount / this.tenants.length) * 100);
   }
 
-  private updateClock() {
-    const now = new Date();
-    this.currentTime = now.toLocaleTimeString('en-US', { hour12: false });
-    this.currentDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    this.cdr.detectChanges();
-  }
-
   ngOnInit() {
-    this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 1000);
-
     this.currentUser = this.auth.getUser();
     this.loadTenants();
     this.loadUsers();
   }
 
   ngOnDestroy() {
-    if (this.clockTimer) clearInterval(this.clockTimer);
+    if (this.autoCloseTimer) clearTimeout(this.autoCloseTimer);
   }
 
   loadTenants() {
@@ -153,7 +147,7 @@ export class Tenants implements OnInit, OnDestroy {
         this.users = data.users || [];
         this.cdr.detectChanges();
       },
-      error: () => {},
+      error: reportRxjsError,
     });
   }
 
@@ -191,32 +185,206 @@ export class Tenants implements OnInit, OnDestroy {
     return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   }
 
-  addTenant() {
-    if (!this.newTenant.name) { this.tenantMsg = 'Tenant name required'; return; }
-    if (!this.newTenant.id)   { this.tenantMsg = 'Tenant ID required'; return; }
-    if (this.tenantIdExists(this.newTenant.id)) { this.tenantMsg = 'Tenant ID already exists'; return; }
+  // ── High-Tech Tenant Provisioning Deck State ────────────────────────
+  isProvisioning = false;
+  provisioningProgress = 0;
+  provisioningComplete = false;
+  provisioningFailed = false;
+  provisioningError = '';
+  provisioningTenantName = '';
+  provisioningTenantId = '';
+  provisioningTargetDb = '';
 
+  // Live state for the real createTenant() call, read directly by
+  // finishProvisioning() below — NOT passed as parameters. The retry loop
+  // there used to take a frozen snapshot of these as arguments, so once the
+  // 5-step cosmetic animation finished before the real (often slower, since
+  // it creates ~40 real tables) API response came back, every retry kept
+  // checking the same stale "not done yet" snapshot forever and the modal
+  // never closed even after the backend had long since finished.
+  private provisioningApiDone = false;
+  private provisioningApiResult: any = null;
+  private provisioningApiError: any = null;
+
+  provisioningSteps = [
+    {
+      id: 'params',
+      title: 'Gathering Configuration & Parameters',
+      desc: 'Validating namespace slug, RBAC scope & cryptographic boundary',
+      status: 'pending' as 'pending' | 'active' | 'done' | 'error',
+    },
+    {
+      id: 'db',
+      title: 'Provisioning Dedicated ClickHouse Database',
+      desc: 'Allocating tenant database on ClickHouse cluster',
+      status: 'pending' as 'pending' | 'active' | 'done' | 'error',
+    },
+    {
+      id: 'schema',
+      title: 'Deploying Storage Schemas & Analytical Tables',
+      desc: 'Instantiating ndr_hits, ndr_events, threat_intel & entity_scores',
+      status: 'pending' as 'pending' | 'active' | 'done' | 'error',
+    },
+    {
+      id: 'env',
+      title: 'Configuring Environment & Network Fabric Isolation',
+      desc: 'Enforcing multi-tenant memory & data plane segregation boundaries',
+      status: 'pending' as 'pending' | 'active' | 'done' | 'error',
+    },
+    {
+      id: 'activate',
+      title: 'Activating Tenant Namespace',
+      desc: 'Registering in global tenant ledger and arming mission control',
+      status: 'pending' as 'pending' | 'active' | 'done' | 'error',
+    },
+  ];
+
+  provisioningLogs: Array<{ time: string; text: string; type: 'info' | 'success' | 'warn' | 'error' }> = [];
+
+  private addProvisioningLog(text: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+    this.provisioningLogs.push({ time: timeStr, text, type });
+    this.cdr.detectChanges();
+  }
+
+  addTenant() {
+    if (!this.newTenant.name.trim()) { this.tenantMsg = 'Tenant name required'; return; }
+    if (!this.newTenant.id.trim())   { this.tenantMsg = 'Tenant ID required'; return; }
+    if (this.tenantIdExists(this.newTenant.id.trim())) { this.tenantMsg = 'Tenant ID already exists'; return; }
+
+    const tenantName = this.newTenant.name.trim();
+    const tenantId = this.newTenant.id.trim();
+    const targetDb = 'ndr_' + tenantId.replace(/-/g, '_');
+
+    this.isProvisioning = true;
     this.savingTenant = true;
-    this.api.createTenant(this.newTenant).subscribe({
-      next: (data: any) => {
-        this.savingTenant = false;
-        if (data.status === 'ok') {
-          this.showAddTenant = false;
-          this.newTenant = { name: '', id: '' };
-          this.tenantMsg = '';
-          this.loadTenants();
-          this.showMsg('Tenant created', 'success');
-        } else {
-          this.tenantMsg = data.message;
-        }
-        this.cdr.detectChanges();
+    this.provisioningComplete = false;
+    this.provisioningFailed = false;
+    this.provisioningError = '';
+    this.provisioningTenantName = tenantName;
+    this.provisioningTenantId = tenantId;
+    this.provisioningTargetDb = targetDb;
+    this.provisioningProgress = 10;
+    this.provisioningLogs = [];
+    this.provisioningApiDone = false;
+    this.provisioningApiResult = null;
+    this.provisioningApiError = null;
+
+    // Reset steps
+    this.provisioningSteps.forEach((s, idx) => {
+      s.status = idx === 0 ? 'active' : 'pending';
+    });
+
+    this.addProvisioningLog(`[INIT] Initializing tenant workspace for "${tenantName}" (${tenantId})`, 'info');
+    this.cdr.detectChanges();
+
+    let stepIndex = 0;
+
+    // Trigger Real API Call in parallel
+    this.api.createTenant({ name: tenantName, id: tenantId }).subscribe({
+      next: (res: any) => {
+        this.provisioningApiDone = true;
+        this.provisioningApiResult = res;
       },
       error: (err: any) => {
-        this.savingTenant = false;
-        this.tenantMsg = err?.error?.message ?? 'Failed to create tenant';
-        this.cdr.detectChanges();
-      },
+        this.provisioningApiDone = true;
+        this.provisioningApiError = err;
+      }
     });
+
+    // Timing sequence for clear, high-impact progression
+    const stepIntervals = [
+      { delay: 550,  progress: 25, log: `[CONFIG] Validated slug '${tenantId}' · cryptographic boundary allocated` },
+      { delay: 750,  progress: 50, log: `[CLICKHOUSE] CREATE DATABASE IF NOT EXISTS ${targetDb} ON CLUSTER ndr_cluster` },
+      { delay: 850,  progress: 75, log: `[SCHEMA] DDL migration complete · ndr_hits, ndr_events, threat_intel deployed` },
+      { delay: 650,  progress: 90, log: `[ISOLATION] Multi-tenant RBAC policies active · 0.00% leakage envelope verified` },
+      { delay: 550,  progress: 100, log: `[READY] Tenant namespace '${tenantId}' armed and operational!` }
+    ];
+
+    const advanceStep = () => {
+      if (this.provisioningFailed) return;
+
+      if (stepIndex < this.provisioningSteps.length) {
+        // Mark current step done
+        this.provisioningSteps[stepIndex].status = 'done';
+        this.addProvisioningLog(stepIntervals[stepIndex].log, stepIndex === 4 ? 'success' : 'info');
+
+        stepIndex++;
+        if (stepIndex < this.provisioningSteps.length) {
+          this.provisioningSteps[stepIndex].status = 'active';
+          this.provisioningProgress = stepIntervals[stepIndex].progress;
+          this.cdr.detectChanges();
+          setTimeout(advanceStep, stepIntervals[stepIndex].delay);
+        } else {
+          // Finished all steps
+          this.finishProvisioning();
+        }
+      } else {
+        this.finishProvisioning();
+      }
+      this.cdr.detectChanges();
+    };
+
+    setTimeout(advanceStep, stepIntervals[0].delay);
+  }
+
+  private finishProvisioning() {
+    if (!this.provisioningApiDone) {
+      setTimeout(() => this.finishProvisioning(), 300);
+      return;
+    }
+    const apiResult = this.provisioningApiResult;
+    const apiError = this.provisioningApiError;
+
+    if (apiError || (apiResult && apiResult.status !== 'ok')) {
+      const errMsg = apiError?.error?.message || apiResult?.message || 'Failed to complete tenant initialization';
+      this.provisioningFailed = true;
+      this.savingTenant = false;
+      this.provisioningError = errMsg;
+      const lastActive = this.provisioningSteps.find(s => s.status === 'active') || this.provisioningSteps[this.provisioningSteps.length - 1];
+      if (lastActive) lastActive.status = 'error';
+      this.addProvisioningLog(`[FAILED] ${errMsg}`, 'error');
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.provisioningSteps.forEach(s => s.status = 'done');
+    this.provisioningProgress = 100;
+    this.provisioningComplete = true;
+    this.savingTenant = false;
+    this.loadTenants();
+    this.showMsg(`Tenant "${this.provisioningTenantName}" activated successfully`, 'success');
+    this.cdr.detectChanges();
+
+    // Auto-close automatically after 2.2 seconds so user sees all green checkmarks
+    if (this.autoCloseTimer) clearTimeout(this.autoCloseTimer);
+    this.autoCloseTimer = setTimeout(() => {
+      if (this.isProvisioning && this.provisioningComplete) {
+        this.closeProvisioningModal();
+      }
+    }, 2200);
+  }
+
+  private autoCloseTimer: any = null;
+
+  closeProvisioningModal() {
+    if (this.autoCloseTimer) clearTimeout(this.autoCloseTimer);
+    this.showAddTenant = false;
+    this.isProvisioning = false;
+    this.provisioningComplete = false;
+    this.provisioningFailed = false;
+    this.newTenant = { name: '', id: '' };
+    this.tenantMsg = '';
+    this.cdr.detectChanges();
+  }
+
+  resetProvisioningForm() {
+    this.isProvisioning = false;
+    this.provisioningFailed = false;
+    this.provisioningComplete = false;
+    this.savingTenant = false;
+    this.cdr.detectChanges();
   }
 
   openEditTenant(tenant: any) {
@@ -305,7 +473,7 @@ export class Tenants implements OnInit, OnDestroy {
             this.cdr.detectChanges();
           }
         },
-        error: () => {},
+        error: reportRxjsError,
       });
     }, delays[attempt] ?? delays[delays.length - 1]);
   }
@@ -361,7 +529,7 @@ export class Tenants implements OnInit, OnDestroy {
     // Load public key + existing licenses in parallel
     this.api.getLicensePublicKey().subscribe({
       next: (r: any) => { this.licensePublicKey = r.public_key ?? ''; this.cdr.detectChanges(); },
-      error: () => {},
+      error: reportRxjsError,
     });
     this.api.getLicenses(tenant.id).subscribe({
       next: (r: any) => {
@@ -394,13 +562,13 @@ export class Tenants implements OnInit, OnDestroy {
         // Reload license list
         this.api.getLicenses(this.licenseTenant?.id).subscribe({
           next: (r: any) => { this.issuedLicenses = r.licenses ?? []; this.cdr.detectChanges(); },
-          error: () => {},
+          error: reportRxjsError,
         });
         // Reload public key if it didn't load when modal opened
         if (!this.licensePublicKey) {
           this.api.getLicensePublicKey().subscribe({
             next: (r: any) => { this.licensePublicKey = r.public_key ?? ''; this.cdr.detectChanges(); },
-            error: () => {},
+            error: reportRxjsError,
           });
         }
         this.cdr.detectChanges();

@@ -3,7 +3,7 @@
 // License: Apache-2.0
 
 use axum::{
-    extract::{State, Path},
+    extract::{State, Path, Extension},
     Json,
 };
 use axum::http::StatusCode;
@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::AppState;
+use crate::api::middleware::Claims;
 use crate::correlation::engine::RuleEngine;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,9 +95,19 @@ pub struct UpdateRuleBody {
 
 pub async fn update_rule(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Path(rule_id): Path<String>,
     Json(body): Json<UpdateRuleBody>,
 ) -> (StatusCode, Json<Value>) {
+    // These correlation rules are shared across every tenant (tenant_id = '*'),
+    // so only a platform super_admin may toggle them — not a per-tenant role.
+    if claims.role != "super_admin" {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "only super_admin can modify correlation rules" }))
+        );
+    }
+
     // Validate rule_id is one of the known OOTB rules
     let known: Vec<String> = RuleEngine::rule_catalog()
         .into_iter()
@@ -143,5 +154,5 @@ pub async fn update_rule(
 }
 
 fn escape(s: &str) -> String {
-    s.replace('\'', "''")
+    s.replace('\\', "\\\\").replace('\'', "\\'")
 }

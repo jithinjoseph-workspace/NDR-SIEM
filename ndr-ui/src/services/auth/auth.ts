@@ -5,6 +5,7 @@ import { Observable, of, tap, Subscription } from 'rxjs';
 import { Websocket } from '../websocket/websocket';
 import { ConfigService } from '../config/config.service';
 
+import { reportRxjsError } from '../error-reporter/error-reporter';
 @Injectable({ providedIn: 'root' })
 export class AuthService implements OnDestroy {
   private baseUrl = '/api';
@@ -95,7 +96,7 @@ export class AuthService implements OnDestroy {
     // Tell the backend to expire the httpOnly cookie (fire-and-forget;
     // navigation happens regardless of whether the request succeeds).
     this.http.post(`${this.baseUrl}/auth/logout`, {}, { withCredentials: true })
-      .subscribe({ error: () => {} });
+      .subscribe({ error: reportRxjsError });
     this.router.navigate(['/login'], { replaceUrl: true });
   }
 
