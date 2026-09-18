@@ -209,6 +209,15 @@ export class Login {
     });
   }
 
+  /** Explicit, intentional skip — the account keeps the default password
+   *  and will be prompted again on the next login. */
+  closeForceReset() {
+    this.showForceReset = false;
+    const user = this.pendingUser;
+    this.pendingUser = null;
+    if (user) this.completeLogin(user);
+  }
+
   private completeLogin(user: any) {
     const role = user?.role;
     if (role === 'admin' || role === 'super_admin') {
