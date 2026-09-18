@@ -319,7 +319,7 @@ export class ThreatMap implements OnInit, OnDestroy {
       // Arc
       const arcLine = { type: 'LineString', coordinates: [[src.lon, src.lat], TARGET] };
       const arcEl = arcG.append('path').attr('d', pathFn(arcLine as any) || '')
-        .attr('fill', 'none').attr('stroke', src.color).attr('stroke-width', 1.5)
+        .attr('fill', 'none').attr('stroke', src.color).attr('stroke-width', 6)
         .attr('stroke-linecap', 'round').attr('opacity', 0.6).attr('filter', 'url(#f-arc)').node()!;
 
       // Source dot
@@ -464,7 +464,7 @@ export class ThreatMap implements OnInit, OnDestroy {
       color:  src.color,
       pathEl: arcG.append('path')
         .attr('fill', 'none').attr('stroke', src.color)
-        .attr('stroke-width', 1.4).attr('stroke-linecap', 'round')
+        .attr('stroke-width', 5.0).attr('stroke-linecap', 'round')
         .attr('opacity', 0.6).attr('filter', 'url(#g-arc)')
         .node()!,
     }));

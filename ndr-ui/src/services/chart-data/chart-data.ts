@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { Api } from '../api/api';
-import { Observable, BehaviorSubject, Subscription } from 'rxjs';
+import { Observable, BehaviorSubject, Subscription, forkJoin } from 'rxjs';
 import { filter, map, distinctUntilChanged } from 'rxjs/operators';
 
 // ── Public interfaces ─────────────────────────────────────────────────────────
@@ -8,6 +8,10 @@ import { filter, map, distinctUntilChanged } from 'rxjs/operators';
 export interface ChartSnapshot {
   labels: string[];
   data:   number[];
+  critical: number[];
+  high: number[];
+  medium: number[];
+  low: number[];
 }
 
 export interface StatsSnapshot {
@@ -33,10 +37,18 @@ export class ChartDataService implements OnDestroy {
   // ── Internal mutable state ─────────────────────────────────────────────────
   private labels: string[] = [];
   private data:   number[] = [];
+  private critical: number[] = [];
+  private high: number[] = [];
+  private medium: number[] = [];
+  private low: number[] = [];
   private started = false;
   private refreshInterval: any  = null;
   private statsSub: Subscription | null = null;
   private lastEventsTotal: number | null = null;
+  private lastCriticalTotal: number | null = null;
+  private lastHighTotal: number | null = null;
+  private lastMediumTotal: number | null = null;
+  private lastLowTotal: number | null = null;
 
   // ── State atoms ────────────────────────────────────────────────────────────
 
@@ -147,8 +159,11 @@ export class ChartDataService implements OnDestroy {
    */
   private fetchAndPush(): void {
     this.statsSub?.unsubscribe();
-    this.statsSub = this.api.getStats().subscribe({
-      next: raw => {
+    this.statsSub = forkJoin({
+      stats: this.api.getStats(),
+      severity: this.api.getSeverity()
+    }).subscribe({
+      next: ({ stats: raw, severity: sevRaw }) => {
         this._hasError$.next(false);
 
         // 1. Push full stats payload for the dashboard stat cards
@@ -175,7 +190,18 @@ export class ChartDataService implements OnDestroy {
           return;
         }
 
-        this.pushPoint(delta);
+        // 3. Severities absolute
+        const curCrit = sevRaw.critical || 0;
+        const curHigh = sevRaw.high || 0;
+        const curMed = sevRaw.medium || 0;
+        const curLow = sevRaw.low || 0;
+        
+        this.lastCriticalTotal = curCrit;
+        this.lastHighTotal = curHigh;
+        this.lastMediumTotal = curMed;
+        this.lastLowTotal = curLow;
+
+        this.pushPoint(delta, curCrit, curHigh, curMed, curLow);
       },
       error: () => {
         // Surface error UI only when there is no cached data to fall back on.
@@ -186,19 +212,35 @@ export class ChartDataService implements OnDestroy {
     });
   }
 
-  private pushPoint(value: number): void {
+  private pushPoint(value: number, crit: number, high: number, med: number, low: number): void {
     const now = new Date().toLocaleTimeString('en-US', {
       hour: '2-digit', minute: '2-digit'
     });
     if (this.labels.length >= MAX_POINTS) {
       this.labels.shift();
       this.data.shift();
+      this.critical.shift();
+      this.high.shift();
+      this.medium.shift();
+      this.low.shift();
     }
     this.labels.push(now);
     this.data.push(value);
+    this.critical.push(crit);
+    this.high.push(high);
+    this.medium.push(med);
+    this.low.push(low);
+    
     this.saveToCache();
     // Push to all chart subscribers immediately — no polling needed in components.
-    this._chart$.next({ labels: [...this.labels], data: [...this.data] });
+    this._chart$.next({ 
+      labels: [...this.labels], 
+      data: [...this.data],
+      critical: [...this.critical],
+      high: [...this.high],
+      medium: [...this.medium],
+      low: [...this.low]
+    });
   }
 
   private saveToCache(): void {
@@ -206,7 +248,15 @@ export class ChartDataService implements OnDestroy {
       localStorage.setItem(this.getStorageKey(), JSON.stringify({
         labels:    this.labels,
         data:      this.data,
+        critical:  this.critical,
+        high:      this.high,
+        medium:    this.medium,
+        low:       this.low,
         lastEventsTotal: this.lastEventsTotal,
+        lastCriticalTotal: this.lastCriticalTotal,
+        lastHighTotal: this.lastHighTotal,
+        lastMediumTotal: this.lastMediumTotal,
+        lastLowTotal: this.lastLowTotal,
         timestamp: Date.now()
       }));
     } catch (_) { /* storage full — silently ignore */ }
@@ -234,8 +284,25 @@ export class ChartDataService implements OnDestroy {
       ) {
         this.labels = [...stored.labels];
         this.data   = [...stored.data];
+        this.critical = Array.isArray(stored.critical) ? [...stored.critical] : new Array(stored.labels.length).fill(0);
+        this.high = Array.isArray(stored.high) ? [...stored.high] : new Array(stored.labels.length).fill(0);
+        this.medium = Array.isArray(stored.medium) ? [...stored.medium] : new Array(stored.labels.length).fill(0);
+        this.low = Array.isArray(stored.low) ? [...stored.low] : new Array(stored.labels.length).fill(0);
+        
         this.lastEventsTotal = typeof stored.lastEventsTotal === 'number' ? stored.lastEventsTotal : null;
-        return { labels: [...stored.labels], data: [...stored.data] };
+        this.lastCriticalTotal = typeof stored.lastCriticalTotal === 'number' ? stored.lastCriticalTotal : null;
+        this.lastHighTotal = typeof stored.lastHighTotal === 'number' ? stored.lastHighTotal : null;
+        this.lastMediumTotal = typeof stored.lastMediumTotal === 'number' ? stored.lastMediumTotal : null;
+        this.lastLowTotal = typeof stored.lastLowTotal === 'number' ? stored.lastLowTotal : null;
+        
+        return { 
+          labels: [...stored.labels], 
+          data: [...stored.data],
+          critical: [...this.critical],
+          high: [...this.high],
+          medium: [...this.medium],
+          low: [...this.low]
+        };
       }
       return null;
     } catch (_) {
