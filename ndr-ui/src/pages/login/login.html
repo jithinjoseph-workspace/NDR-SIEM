@@ -184,29 +184,29 @@
           </button>
         </div>
 
-        <!-- Step 3: OTP & New Password -->
-        <div *ngIf="forgotStep === 3" class="forgot-step-content">
-          <h3>Change Password</h3>
+        <!-- Step 3: Enter OTP & New Password -->
+        <form *ngIf="forgotStep === 3" class="forgot-step-content" (ngSubmit)="submitOtp()" autocomplete="off">
+          <h3>Check your Email</h3>
           <p>An OTP has been sent to your email. It expires in 10 minutes.</p>
           <div class="login-field">
             <label class="login-label">6-Digit OTP</label>
-            <input class="login-input" [(ngModel)]="forgotData.otp" placeholder="123456" maxlength="6" />
+            <input class="login-input" name="otp" [(ngModel)]="forgotData.otp" placeholder="123456" maxlength="6" autocomplete="one-time-code" />
           </div>
           <div class="login-field">
             <label class="login-label">New Password</label>
-            <input class="login-input" type="password" [(ngModel)]="forgotData.newPassword"
-              placeholder="New password" />
+            <input class="login-input" name="newPassword" type="password" [(ngModel)]="forgotData.newPassword"
+              placeholder="New password" autocomplete="new-password" />
           </div>
           <div class="login-field">
             <label class="login-label">Confirm Password</label>
-            <input class="login-input" type="password" [(ngModel)]="forgotData.confirmPassword"
-              placeholder="Confirm password" />
+            <input class="login-input" name="confirmPassword" type="password" [(ngModel)]="forgotData.confirmPassword"
+              placeholder="Confirm password" autocomplete="new-password" />
           </div>
-          <button class="login-btn" (click)="submitOtp()" [disabled]="forgotLoading">
+          <button type="submit" class="login-btn" [disabled]="forgotLoading">
             <span *ngIf="!forgotLoading">Reset Password</span>
             <span *ngIf="forgotLoading">Resetting...</span>
           </button>
-        </div>
+        </form>
 
         <!-- Step 4: Success -->
         <div *ngIf="forgotStep === 4" class="forgot-step-content success-step">
