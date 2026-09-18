@@ -1,4 +1,6 @@
-import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ChangeDetectorRef } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
+
+declare var ForceGraph3D: any;
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../services/api/api';
@@ -24,7 +26,16 @@ import {
   Download,
   ExternalLink,
   Edit2,
-  Check
+  Check,
+  Target,
+  LayoutGrid,
+  Waypoints,
+  Bell,
+  ChevronRight,
+  Shield,
+  ArrowUpRight,
+  BarChart2,
+  ChevronDown
 } from 'lucide-angular';
 
 @Component({
@@ -59,11 +70,24 @@ export class DeviceDrawer implements OnChanges {
   ExternalLinkIcon = ExternalLink;
   EditIcon = Edit2;
   CheckIcon = Check;
+  TargetIcon = Target;
+  LayoutGridIcon = LayoutGrid;
+  WaypointsIcon = Waypoints;
+  BellIcon = Bell;
+  ChevronRightIcon = ChevronRight;
+  ShieldIcon = Shield;
+  ArrowUpRightIcon = ArrowUpRight;
+  BarChart2Icon = BarChart2;
+  ChevronDownIcon = ChevronDown;
+  UsersIcon = Users;
 
   isEditingName = false;
   editNameValue = '';
 
   constructor(private api: Api, private cdr: ChangeDetectorRef, private arkime: ArkimeService) {}
+
+  @ViewChild('topologyContainer') topologyContainer?: ElementRef;
+  topologyGraph: any;
 
   ngOnChanges(changes: SimpleChanges) {
     if (changes['node'] && this.node) {
@@ -73,6 +97,30 @@ export class DeviceDrawer implements OnChanges {
         const ip = this.node.active_ip || this.node.id || this.node.ip;
         if (ip) this.loadNodeConnections(ip);
       }
+    }
+  }
+
+  initTopology() {
+    if (this.drawerTab !== 'topology' || !this.topologyContainer || !this.node) return;
+    if (typeof ForceGraph3D === 'undefined') return;
+
+    if (!this.topologyGraph) {
+      this.topologyGraph = ForceGraph3D()(this.topologyContainer.nativeElement)
+        .backgroundColor('#000000')
+        .width(this.topologyContainer.nativeElement.clientWidth)
+        .height(this.topologyContainer.nativeElement.clientHeight || 300)
+        .nodeLabel('id')
+        .nodeAutoColorBy('group');
+    }
+
+    // Fetch localized data
+    const ip = this.node.active_ip || this.node.id || this.node.ip;
+    if (ip) {
+      this.api.getNetworkMapNode(ip).subscribe(data => {
+        if (data && data.nodes) {
+          this.topologyGraph.graphData(data);
+        }
+      });
     }
   }
 
@@ -129,6 +177,8 @@ export class DeviceDrawer implements OnChanges {
       this.loadNodeAlerts(this.node.active_ip || this.node.id || this.node.ip);
     } else if (tab === 'pcaps') {
       this.loadPcapSessions(this.node.active_ip || this.node.id || this.node.ip);
+    } else if (tab === 'topology') {
+      setTimeout(() => this.initTopology(), 100);
     }
   }
 

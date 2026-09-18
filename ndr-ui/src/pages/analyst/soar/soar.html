@@ -1,70 +1,70 @@
-<div class="p-6 max-w-7xl mx-auto">
-
+<div class="bg-black min-h-screen text-white pb-12">
+<div class="p-8 w-full mx-auto">
   <!-- ══ Page Header ═══════════════════════════════════════════════════════ -->
   <div class="flex items-center justify-between mb-6">
     <div>
       <div class="flex items-center gap-2 mb-1">
-        <lucide-icon [name]="ZapIcon" class="w-4 h-4 text-primary"></lucide-icon>
-        <span class="text-[11px] font-bold text-primary uppercase tracking-[0.15em]">Security Orchestration</span>
+        <lucide-icon [name]="ZapIcon" class="w-5 h-5 text-primary"></lucide-icon>
+        <span class="text-sm font-bold text-primary uppercase tracking-[0.15em]">Security Orchestration</span>
       </div>
-      <h1 class="text-xl font-bold text-white tracking-tight">SOAR — Native Automation</h1>
-      <p class="text-xs text-on-surface-variant mt-0.5">Automated threat response engine — native to NDR</p>
+      <h1 class="text-3xl font-bold text-white tracking-tight mt-1">SOAR — Native Automation</h1>
+      <p class="text-sm text-on-surface-variant mt-1.5">Automated threat response engine — native to NDR</p>
     </div>
-    <div class="flex items-center gap-2 text-xs text-on-surface-variant font-mono bg-surface-container border border-outline/10 px-3 py-1.5 rounded-lg">
-      <span class="status-dot-live w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0"></span>
+    <div class="flex items-center gap-2 text-sm text-on-surface-variant font-mono bg-[#121212] border border-white/10 px-4 py-2 rounded-lg">
+      <span class="status-dot-live w-2 h-2 rounded-full bg-primary flex-shrink-0"></span>
       ENGINE RUNNING
     </div>
   </div>
   <!-- ══ Tab Bar ════════════════════════════════════════════════════════════ -->
-  <div class="flex items-center gap-0 border-b border-outline/10 mb-6">
+  <div class="flex items-center gap-1 mb-10 bg-[#121212] p-1.5 rounded-full border border-white/5 w-fit shadow-lg">
 
     <button (click)="switchTab('cases')"
-      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
-        (activeTab() === 'cases' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
-      <lucide-icon [name]="ShieldIcon" class="w-3.5 h-3.5"></lucide-icon>
+      [class]="'relative flex items-center gap-2 px-6 py-3 text-base font-bold transition-all rounded-full ' +
+        (activeTab() === 'cases' ? 'bg-primary text-black shadow-[0_0_20px_rgba(105,246,184,0.5)]' : 'bg-transparent text-gray-400 hover:text-white hover:bg-white/5')">
+      <lucide-icon [name]="ShieldIcon" class="w-5 h-5"></lucide-icon>
       Cases
-      <span *ngIf="cases().length > 0" class="ml-0.5 text-[10px] font-bold bg-primary/15 text-primary px-1.5 py-0.5 rounded">
+      <span *ngIf="cases().length > 0" [class]="'ml-1 text-xs font-bold px-2 py-0.5 rounded ' + (activeTab() === 'cases' ? 'bg-black/20 text-black' : 'bg-primary/20 text-primary')">
         {{ cases().length }}
       </span>
     </button>
 
     <button (click)="switchTab('playbooks')"
-      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
-        (activeTab() === 'playbooks' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
-      <lucide-icon [name]="ZapIcon" class="w-3.5 h-3.5"></lucide-icon>
+      [class]="'relative flex items-center gap-2 px-6 py-3 text-base font-bold transition-all rounded-full ' +
+        (activeTab() === 'playbooks' ? 'bg-primary text-black shadow-[0_0_20px_rgba(105,246,184,0.5)]' : 'bg-transparent text-gray-400 hover:text-white hover:bg-white/5')">
+      <lucide-icon [name]="ZapIcon" class="w-5 h-5"></lucide-icon>
       Playbooks
     </button>
 
     <button (click)="switchTab('integrations')"
-      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
-        (activeTab() === 'integrations' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
-      <lucide-icon [name]="LinkIcon" class="w-3.5 h-3.5"></lucide-icon>
+      [class]="'relative flex items-center gap-2 px-6 py-3 text-base font-bold transition-all rounded-full ' +
+        (activeTab() === 'integrations' ? 'bg-primary text-black shadow-[0_0_20px_rgba(105,246,184,0.5)]' : 'bg-transparent text-gray-400 hover:text-white hover:bg-white/5')">
+      <lucide-icon [name]="LinkIcon" class="w-5 h-5"></lucide-icon>
       Integrations
     </button>
 
     <button (click)="switchTab('activity')"
-      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
-        (activeTab() === 'activity' ? 'border-primary text-white' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
-      <lucide-icon [name]="ActivityIcon" class="w-3.5 h-3.5"></lucide-icon>
+      [class]="'relative flex items-center gap-2 px-6 py-3 text-base font-bold transition-all rounded-full ' +
+        (activeTab() === 'activity' ? 'bg-primary text-black shadow-[0_0_20px_rgba(105,246,184,0.5)]' : 'bg-transparent text-gray-400 hover:text-white hover:bg-white/5')">
+      <lucide-icon [name]="ActivityIcon" class="w-5 h-5"></lucide-icon>
       Activity Log
     </button>
 
     <button (click)="switchTab('blocks')"
-      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
-        (activeTab() === 'blocks' ? 'border-red-400 text-red-300' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
-      <lucide-icon [name]="BanIcon" class="w-3.5 h-3.5"></lucide-icon>
+      [class]="'relative flex items-center gap-2 px-6 py-3 text-base font-bold transition-all rounded-full ' +
+        (activeTab() === 'blocks' ? 'bg-red-500 text-white shadow-[0_0_20px_rgba(239,68,68,0.5)]' : 'bg-transparent text-gray-400 hover:text-white hover:bg-white/5')">
+      <lucide-icon [name]="BanIcon" class="w-5 h-5"></lucide-icon>
       Active Blocks
-      <span *ngIf="activeBlocks().length > 0" class="ml-0.5 text-[10px] font-bold bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded">
+      <span *ngIf="activeBlocks().length > 0" [class]="'ml-1 text-xs font-bold px-2 py-0.5 rounded ' + (activeTab() === 'blocks' ? 'bg-black/20 text-white' : 'bg-red-500/20 text-red-400')">
         {{ activeBlocks().length }}
       </span>
     </button>
 
     <button (click)="switchTab('isolations')"
-      [class]="'relative flex items-center gap-2 px-5 py-3 text-sm font-semibold transition-colors border-b-2 -mb-px ' +
-        (activeTab() === 'isolations' ? 'border-amber-400 text-amber-300' : 'border-transparent text-on-surface-variant hover:text-white hover:border-outline/30')">
-      <lucide-icon [name]="WifiOffIcon" class="w-3.5 h-3.5"></lucide-icon>
+      [class]="'relative flex items-center gap-2 px-6 py-3 text-base font-bold transition-all rounded-full ' +
+        (activeTab() === 'isolations' ? 'bg-amber-500 text-black shadow-[0_0_20px_rgba(245,158,11,0.5)]' : 'bg-transparent text-gray-400 hover:text-white hover:bg-white/5')">
+      <lucide-icon [name]="WifiOffIcon" class="w-5 h-5"></lucide-icon>
       Isolated Devices
-      <span *ngIf="isolations().length > 0" class="ml-0.5 text-[10px] font-bold bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">
+      <span *ngIf="isolations().length > 0" [class]="'ml-1 text-xs font-bold px-2 py-0.5 rounded ' + (activeTab() === 'isolations' ? 'bg-black/20 text-black' : 'bg-amber-500/20 text-amber-400')">
         {{ isolations().length }}
       </span>
     </button>
@@ -948,7 +948,7 @@
     </div>
 
     <!-- Empty -->
-    <div *ngIf="playbooks().length === 0" class="flex flex-col items-center justify-center py-16 border border-outline/10 border-dashed rounded-xl bg-surface-container/10">
+    <div *ngIf="playbooks().length === 0" class="flex flex-col items-center justify-center py-16 border border-white/10 border-dashed rounded-xl bg-[#121212] shadow-sm">
       <lucide-icon [name]="ZapIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
       <p class="text-sm font-semibold text-on-surface-variant">No playbooks configured</p>
       <p class="text-xs text-on-surface-variant/60 mt-1 mb-4">Create a playbook to automate response actions.</p>
@@ -959,10 +959,10 @@
     </div>
 
     <!-- Table -->
-    <div *ngIf="playbooks().length > 0" class="border border-outline/10 rounded-xl overflow-hidden">
+    <div *ngIf="playbooks().length > 0" class="border border-white/10 rounded-xl overflow-hidden shadow-lg bg-[#121212]">
       <table class="soar-table w-full text-left text-sm">
-        <thead class="bg-surface-container/60">
-          <tr class="border-b border-outline/10 text-[10px] uppercase tracking-[0.12em] text-on-surface-variant font-bold">
+        <thead class="bg-[#0a0a0a]">
+          <tr class="border-b border-white/10 text-[11px] uppercase tracking-[0.15em] text-white/60 font-bold">
             <th class="px-4 py-3 w-16">Enabled</th>
             <th class="px-4 py-3">Playbook</th>
             <th class="px-4 py-3">Trigger Condition</th>
@@ -971,8 +971,8 @@
             <th class="px-4 py-3 w-20"></th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-outline/5 bg-surface-container-highest">
-          <tr *ngFor="let pb of playbooks()" class="soar-row group hover:bg-surface-container/40">
+        <tbody class="divide-y divide-white/5 bg-[#121212]">
+          <tr *ngFor="let pb of playbooks()" class="soar-row group hover:bg-white/5 transition-colors">
             <!-- Toggle -->
             <td class="px-4 py-3.5">
               <button (click)="togglePlaybook(pb)" [title]="pb.enabled ? 'Click to disable' : 'Click to enable'"
@@ -1049,7 +1049,7 @@
     </div>
 
     <!-- Empty -->
-    <div *ngIf="integrations().length === 0" class="flex flex-col items-center justify-center py-16 border border-outline/10 border-dashed rounded-xl bg-surface-container/10">
+    <div *ngIf="integrations().length === 0" class="flex flex-col items-center justify-center py-16 border border-white/10 border-dashed rounded-xl bg-[#121212] shadow-sm">
       <lucide-icon [name]="LinkIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
       <p class="text-sm font-semibold text-on-surface-variant">No integrations configured</p>
       <p class="text-xs text-on-surface-variant/60 mt-1 mb-4">Add a notification channel for playbook actions.</p>
@@ -1060,10 +1060,10 @@
     </div>
 
     <!-- Integration list table -->
-    <div *ngIf="integrations().length > 0" class="border border-outline/10 rounded-xl overflow-hidden">
+    <div *ngIf="integrations().length > 0" class="border border-white/10 rounded-xl overflow-hidden shadow-lg bg-[#121212]">
       <table class="soar-table w-full text-left text-sm">
-        <thead class="bg-surface-container/60">
-          <tr class="border-b border-outline/10 text-[10px] uppercase tracking-[0.12em] text-on-surface-variant font-bold">
+        <thead class="bg-[#0a0a0a]">
+          <tr class="border-b border-white/10 text-[11px] uppercase tracking-[0.15em] text-white/60 font-bold">
             <th class="px-4 py-3 w-16">Status</th>
             <th class="px-4 py-3 w-16">Type</th>
             <th class="px-4 py-3">Name</th>
@@ -1071,8 +1071,8 @@
             <th class="px-4 py-3 w-28"></th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-outline/5 bg-surface-container-highest">
-          <tr *ngFor="let int of integrations()" class="soar-row group hover:bg-surface-container/40">
+        <tbody class="divide-y divide-white/5 bg-[#121212]">
+          <tr *ngFor="let int of integrations()" class="soar-row group hover:bg-white/5 transition-colors">
 
             <!-- Status dot + toggle -->
             <td class="px-4 py-3.5">
@@ -1154,25 +1154,25 @@
     </div>
 
     <!-- Empty -->
-    <div *ngIf="runs().length === 0" class="flex flex-col items-center justify-center py-16 border border-outline/10 rounded-xl bg-surface-container/10">
+    <div *ngIf="runs().length === 0" class="flex flex-col items-center justify-center py-16 border border-white/10 border-dashed rounded-xl bg-[#121212] shadow-sm">
       <lucide-icon [name]="ActivityIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
       <p class="text-sm font-semibold text-on-surface-variant">No executions recorded</p>
       <p class="text-xs text-on-surface-variant/60 mt-1">Playbook runs will appear here.</p>
     </div>
 
     <!-- Log table -->
-    <div *ngIf="runs().length > 0" class="border border-outline/10 rounded-xl overflow-hidden">
+    <div *ngIf="runs().length > 0" class="border border-white/10 rounded-xl overflow-hidden shadow-lg bg-[#121212]">
       <table class="soar-table w-full text-left text-sm">
-        <thead class="bg-surface-container/60">
-          <tr class="border-b border-outline/10 text-[10px] uppercase tracking-[0.12em] text-on-surface-variant font-bold">
+        <thead class="bg-[#0a0a0a]">
+          <tr class="border-b border-white/10 text-[11px] uppercase tracking-[0.15em] text-white/60 font-bold">
             <th class="px-4 py-3 w-44">Timestamp</th>
             <th class="px-4 py-3">Playbook</th>
             <th class="px-4 py-3 w-24">Result</th>
             <th class="px-4 py-3">Details</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-outline/5 bg-surface-container-highest">
-          <tr *ngFor="let run of runs()" class="soar-row hover:bg-surface-container/40">
+        <tbody class="divide-y divide-white/5 bg-[#121212]">
+          <tr *ngFor="let run of runs()" class="soar-row hover:bg-white/5 transition-colors">
             <td class="px-4 py-3 font-mono text-xs text-on-surface-variant whitespace-nowrap">
               {{ formatDate(run.created_at) }}
             </td>
@@ -1220,17 +1220,17 @@
 
     <!-- Empty state -->
     <div *ngIf="!loadingBlocks() && activeBlocks().length === 0"
-      class="flex flex-col items-center justify-center py-16 border border-outline/10 rounded-xl bg-surface-container/20">
+      class="flex flex-col items-center justify-center py-16 border border-white/10 border-dashed rounded-xl bg-[#121212] shadow-sm">
       <lucide-icon [name]="ShieldOffIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
       <p class="text-sm font-semibold text-on-surface-variant">No active blocks</p>
       <p class="text-xs text-on-surface-variant/60 mt-1">Use the Block IP button or configure a playbook with block_ip action.</p>
     </div>
 
     <!-- Blocks table -->
-    <div *ngIf="activeBlocks().length > 0" class="overflow-x-auto rounded-xl border border-outline/10">
+    <div *ngIf="activeBlocks().length > 0" class="border border-white/10 rounded-xl overflow-hidden shadow-lg bg-[#121212]">
       <table class="soar-table w-full text-left text-sm">
-        <thead>
-          <tr class="text-[10px] uppercase text-on-surface-variant/60">
+        <thead class="bg-[#0a0a0a]">
+          <tr class="border-b border-white/10 text-[11px] uppercase tracking-[0.15em] text-white/60 font-bold">
             <th class="px-4 py-3 font-semibold">Source IP</th>
             <th class="px-4 py-3 font-semibold">Triggered By</th>
             <th class="px-4 py-3 font-semibold">Enforcement</th>
@@ -1240,8 +1240,8 @@
             <th class="px-4 py-3 font-semibold text-right">Actions</th>
           </tr>
         </thead>
-        <tbody>
-          <tr *ngFor="let b of activeBlocks()" class="border-t border-outline/8 hover:bg-surface-container/50 transition-colors">
+        <tbody class="divide-y divide-white/5 bg-[#121212]">
+          <tr *ngFor="let b of activeBlocks()" class="soar-row hover:bg-white/5 transition-colors">
             <td class="px-4 py-3 font-mono text-white text-xs">
               {{ b.src_ip }}
               <span *ngIf="b.src_port" class="text-on-surface-variant">:{{ b.src_port }}</span>
@@ -1306,17 +1306,17 @@
 
     <!-- Empty state -->
     <div *ngIf="!loadingIsolations() && isolations().length === 0"
-      class="flex flex-col items-center justify-center py-16 border border-outline/10 rounded-xl bg-surface-container/20">
+      class="flex flex-col items-center justify-center py-16 border border-white/10 border-dashed rounded-xl bg-[#121212] shadow-sm">
       <lucide-icon [name]="WifiIcon" class="w-8 h-8 text-on-surface-variant/30 mb-3"></lucide-icon>
       <p class="text-sm font-semibold text-on-surface-variant">No isolated devices</p>
       <p class="text-xs text-on-surface-variant/60 mt-1">Isolate a device to cut it off from the network immediately.</p>
     </div>
 
     <!-- Isolations table -->
-    <div *ngIf="isolations().length > 0" class="overflow-x-auto rounded-xl border border-outline/10">
+    <div *ngIf="isolations().length > 0" class="border border-white/10 rounded-xl overflow-hidden shadow-lg bg-[#121212]">
       <table class="soar-table w-full text-left text-sm">
-        <thead>
-          <tr class="text-[10px] uppercase text-on-surface-variant/60">
+        <thead class="bg-[#0a0a0a]">
+          <tr class="border-b border-white/10 text-[11px] uppercase tracking-[0.15em] text-white/60 font-bold">
             <th class="px-4 py-3 font-semibold">Target IP</th>
             <th class="px-4 py-3 font-semibold">Method</th>
             <th class="px-4 py-3 font-semibold">Enforcement</th>
@@ -1327,8 +1327,8 @@
             <th class="px-4 py-3 font-semibold text-right">Actions</th>
           </tr>
         </thead>
-        <tbody>
-          <tr *ngFor="let iso of isolations()" class="border-t border-outline/8 hover:bg-surface-container/50 transition-colors">
+        <tbody class="divide-y divide-white/5 bg-[#121212]">
+          <tr *ngFor="let iso of isolations()" class="soar-row hover:bg-white/5 transition-colors">
             <td class="px-4 py-3 font-mono text-white text-xs">{{ iso.target_ip }}</td>
             <td class="px-4 py-3 text-xs">
               <span class="inline-block bg-amber-500/15 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
@@ -1367,8 +1367,8 @@
   <!-- ══════════════════════════════════════════════════════════════════════
        MODAL — Isolation Progress
   ══════════════════════════════════════════════════════════════════════════ -->
-  <div *ngIf="showIsolationProgress()" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-sm shadow-2xl">
+  <div *ngIf="showIsolationProgress()" class="fixed inset-0 z-40 flex items-start pt-32 justify-center pb-8 overflow-y-auto bg-black/70 backdrop-blur-sm">
+    <div class="soar-modal bg-[#121212] border border-white/10 rounded-xl w-full max-w-sm shadow-2xl">
 
       <!-- Header -->
       <div class="px-6 py-4 border-b border-outline/10 flex items-center gap-3">
@@ -1442,8 +1442,8 @@
   <!-- ══════════════════════════════════════════════════════════════════════
        MODAL — Isolate Device
   ══════════════════════════════════════════════════════════════════════════ -->
-  <div *ngIf="showIsolateModal()" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-md shadow-2xl">
+  <div *ngIf="showIsolateModal()" class="fixed inset-0 z-40 flex items-start pt-32 justify-center pb-8 overflow-y-auto bg-black/60 backdrop-blur-sm">
+    <div class="soar-modal bg-[#121212] border border-white/10 rounded-xl w-full max-w-md shadow-2xl">
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10">
         <div>
@@ -1516,8 +1516,8 @@
   <!-- ══════════════════════════════════════════════════════════════════════
        MODAL — Manual Block
   ══════════════════════════════════════════════════════════════════════════ -->
-  <div *ngIf="showBlockModal()" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-md shadow-2xl">
+  <div *ngIf="showBlockModal()" class="fixed inset-0 z-40 flex items-start pt-32 justify-center pb-8 overflow-y-auto bg-black/60 backdrop-blur-sm">
+    <div class="soar-modal bg-[#121212] border border-white/10 rounded-xl w-full max-w-md shadow-2xl">
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10">
         <div>
@@ -1591,7 +1591,7 @@
   <!-- ══════════════════════════════════════════════════════════════════════
        MODAL — New Case
   ══════════════════════════════════════════════════════════════════════════ -->
-  <div *ngIf="showNewCase()" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+  <div *ngIf="showNewCase()" class="fixed inset-0 bg-black/80 z-40 flex items-start pt-32 justify-center pb-8 overflow-y-auto backdrop-blur-sm">
     <div class="soar-modal case-create-modal">
       <div class="modal-header">
         <div>
@@ -1681,8 +1681,8 @@
   <!-- ══════════════════════════════════════════════════════════════════════
        MODAL — Playbook (Create / Edit)
   ══════════════════════════════════════════════════════════════════════════ -->
-  <div *ngIf="showNewPlaybook()" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-lg shadow-2xl">
+  <div *ngIf="showNewPlaybook()" class="fixed inset-0 z-40 flex items-start pt-32 justify-center pb-8 overflow-y-auto bg-black/60 backdrop-blur-sm">
+    <div class="soar-modal bg-[#121212] border border-white/10 rounded-xl w-full max-w-lg shadow-2xl">
 
       <!-- Header -->
       <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10">
@@ -1690,8 +1690,7 @@
           <h2 class="text-sm font-bold text-white">{{ editingPbId ? 'Edit Playbook' : 'New Playbook' }}</h2>
           <p class="text-xs text-on-surface-variant mt-0.5">Define trigger condition and response action</p>
         </div>
-        <button (click)="showNewPlaybook.set(false)"
-          class="text-on-surface-variant hover:text-white p-1.5 rounded hover:bg-surface-container transition-all text-sm leading-none">✕</button>
+        <button (click)="showNewPlaybook.set(false)" class="modal-close">✕</button>
       </div>
 
       <!-- Form -->
@@ -1823,8 +1822,8 @@
   <!-- ══════════════════════════════════════════════════════════════════════
        MODAL — Integration (Add / Edit)
   ══════════════════════════════════════════════════════════════════════════ -->
-  <div *ngIf="showNewIntegration()" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-    <div class="soar-modal bg-surface-container-highest border border-outline/15 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col">
+  <div *ngIf="showNewIntegration()" class="fixed inset-0 z-40 flex items-start pt-32 justify-center pb-8 overflow-y-auto bg-black/60 backdrop-blur-sm">
+    <div class="soar-modal bg-[#121212] border border-white/10 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col">
 
       <!-- Header -->
       <div class="flex items-center justify-between px-6 py-4 border-b border-outline/10 flex-shrink-0">
@@ -1834,8 +1833,7 @@
             {{ editingIntId ? 'Update channel configuration' : 'Connect a notification channel to your playbooks' }}
           </p>
         </div>
-        <button (click)="showNewIntegration.set(false)"
-          class="text-on-surface-variant hover:text-white p-1.5 rounded hover:bg-surface-container transition-all text-sm leading-none">✕</button>
+        <button (click)="showNewIntegration.set(false)" class="modal-close">✕</button>
       </div>
 
       <!-- Form -->

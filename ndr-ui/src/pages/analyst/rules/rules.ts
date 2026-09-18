@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
-import { LucideAngularModule } from 'lucide-angular';
+import { LucideAngularModule, ShieldCheck, Activity, Target } from 'lucide-angular';
 import { RulesBase } from '../../shared/rules/rules-base';
 
 import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
@@ -15,6 +15,10 @@ import { reportRxjsError } from '../../../services/error-reporter/error-reporter
   styleUrl: './rules.css'
 })
 export class Rules extends RulesBase implements OnInit {
+  ShieldCheckIcon = ShieldCheck;
+  ActivityIcon = Activity;
+  TargetIcon = Target;
+
   rules: any[] = [];
 
   categoryFilter: string = '';

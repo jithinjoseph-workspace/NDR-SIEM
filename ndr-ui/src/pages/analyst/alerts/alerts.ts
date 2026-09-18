@@ -610,6 +610,7 @@ export class Alerts implements OnInit, OnDestroy {
       case 'CRITICAL': return 'sev-critical';
       case 'HIGH':     return 'sev-high';
       case 'MEDIUM':   return 'sev-medium';
+      case 'INFO':     return 'sev-info';
       default:         return 'sev-low';
     }
   }

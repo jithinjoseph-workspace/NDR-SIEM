@@ -113,8 +113,8 @@
               {{ log.source === 'agent-z' ? 'AGENT-Z' : log.source === 'agent-s' ? 'AGENT-S' : (log.source || '-')?.toUpperCase() }}
             </span>
             <span [class]="getProtoClass(log.proto)">{{ log.proto || '–' }}</span>
-            <span class="ip-value">{{ log.src || '–' }}</span>
-            <span class="ip-value">{{ log.dst || '–' }}</span>
+            <span class="ip-value src-ip">{{ log.src || '–' }}</span>
+            <span class="ip-value dst-ip">{{ log.dst || '–' }}</span>
             <span [class]="getEventBadgeClass(log.event_type)">{{ (log.event_type || 'conn').toUpperCase() }}</span>
           </div>
 

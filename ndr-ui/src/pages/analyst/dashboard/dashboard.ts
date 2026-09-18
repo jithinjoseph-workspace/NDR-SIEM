@@ -10,17 +10,18 @@ import { startWith, switchMap } from 'rxjs/operators';
 import { toSignal } from '@angular/core/rxjs-interop';
 import {
   LucideAngularModule,
-  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw, Bot, X, ChevronRight, Zap
+  TrendingUp, TriangleAlert, Shield, Activity, ArrowUpRight, RefreshCw, Bot, X, ChevronRight, Zap, Map, Network
 } from 'lucide-angular';
 import { Router } from '@angular/router';
 import * as d3 from 'd3';
 import { SiemDashboard } from '../../siem/dashboard/siem-dashboard';
+import { ThreatMap } from '../threat-map/threat-map';
 
 import { reportRxjsError } from '../../../services/error-reporter/error-reporter';
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, LucideAngularModule, SiemDashboard],
+  imports: [CommonModule, LucideAngularModule, SiemDashboard, ThreatMap],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })
@@ -65,13 +66,15 @@ export class Dashboard implements OnInit, OnDestroy {
   XIcon = X;
   ChevronRightIcon = ChevronRight;
   ZapIcon = Zap;
+  MapIcon = Map;
+  NetworkIcon = Network;
 
   liveEventStreamRef = viewChild<ElementRef>('liveEventStream');
   @ViewChild('severityDonutChart') severityDonutChartRef!: ElementRef;
   @ViewChild('topDstIpsChart') topDstIpsChartRef!: ElementRef;
   protocolPieChartRef = viewChild<ElementRef>('protocolPieChart');
 
-  chartDataSnapshot = signal<{ labels: string[], data: number[] }>({ labels: [], data: [] });
+  chartDataSnapshot = signal<{ labels: string[], data: number[], critical: number[], high: number[], medium: number[], low: number[] }>({ labels: [], data: [], critical: [], high: [], medium: [], low: [] });
 
   private subs: Subscription[] = [];
 
@@ -109,7 +112,7 @@ export class Dashboard implements OnInit, OnDestroy {
     effect(() => {
       const snap = this.chartDataSnapshot();
       const el = this.liveEventStreamRef(); // Safely wait for the DOM element
-      if (snap.data.length > 0 && el) {
+      if (snap.labels.length > 0 && el) {
         untracked(() => this.drawLiveEventStream());
       }
     });
@@ -271,6 +274,8 @@ export class Dashboard implements OnInit, OnDestroy {
 
   openNetworkMap() { this.router.navigate(['/analyst/network-map']); }
 
+  openThreatMap() { this.router.navigate(['/analyst/threat-map']); }
+
   openAiReport() { this.router.navigate(['/analyst/ai-report']); }
 
   // ── Private helpers ────────────────────────────────────────────────────────
@@ -383,7 +388,7 @@ export class Dashboard implements OnInit, OnDestroy {
   private drawLiveEventStreamRaw() {
     const snap = this.chartDataSnapshot();
     const liveStreamEl = this.liveEventStreamRef();
-    if (!liveStreamEl || !snap.data.length) return;
+    if (!liveStreamEl || !snap.labels.length) return;
     const el = liveStreamEl.nativeElement;
 
     // Clear previous SVG
@@ -391,43 +396,98 @@ export class Dashboard implements OnInit, OnDestroy {
 
     const width = el.clientWidth || 600;
     const height = el.clientHeight || 250;
-    const margin = { top: 20, right: 20, bottom: 30, left: 40 };
+    const margin = { top: 20, right: 40, bottom: 30, left: 40 };
 
     const svg = d3.select(el).append("svg")
       .attr("width", width)
       .attr("height", height);
 
-    const x = d3.scalePoint()
-      .domain(snap.labels)
+    const x = d3.scaleLinear()
+      .domain([0, Math.max(0, snap.labels.length - 1)])
       .range([margin.left, width - margin.right]);
 
-    const maxVal = d3.max(snap.data) || 0;
-    const yDomainMax = maxVal > 0 ? maxVal * 1.1 : 2;
+    // X Axis
+    svg.append("g")
+      .attr("transform", `translate(0,${height - margin.bottom})`)
+      .call(d3.axisBottom(x)
+        .tickValues(d3.range(snap.labels.length).filter(i => !(i % Math.max(1, Math.floor(snap.labels.length / 5)))))
+        .tickFormat(d => snap.labels[d as number])
+      )
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll("text").attr("fill", "#a4abbf").style("font-family", "var(--font-mono)"));
 
-    const y = d3.scaleLinear()
-      .domain([0, yDomainMax])
+    // Left Y Axis (Events Volume)
+    const maxEvents = d3.max(snap.data) || 0;
+    const yEventsDomainMax = maxEvents > 0 ? maxEvents * 1.1 : 2;
+    const yLeft = d3.scaleLinear()
+      .domain([0, yEventsDomainMax])
       .range([height - margin.bottom, margin.top]);
 
+    // Right Y Axis (Alerts)
+    const allAlertVals = [...snap.critical, ...snap.high, ...snap.medium, ...snap.low];
+    const maxAlerts = d3.max(allAlertVals) || 0;
+    const yAlertsDomainMax = Math.max(5, maxAlerts * 1.2);
+    const yRight = d3.scaleLinear()
+      .domain([0, yAlertsDomainMax])
+      .range([height - margin.bottom, margin.top]);
+
+    // Left Axis (Grid lines)
+    svg.append("g")
+      .attr("transform", `translate(${margin.left},0)`)
+      .call(d3.axisLeft(yLeft).ticks(5).tickSize(-width + margin.left + margin.right))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick line")
+        .attr("stroke", "rgba(255,255,255,0.05)")
+        .attr("stroke-dasharray", "4,4"))
+      .call(g => g.selectAll(".tick text")
+        .attr("fill", "#69f6b8")
+        .style("font-family", "var(--font-mono)")
+        .attr("dx", "-10"));
+
+    // Right Axis
+    svg.append("g")
+      .attr("transform", `translate(${width - margin.right},0)`)
+      .call(d3.axisRight(yRight).ticks(5).tickSize(0))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick text")
+        .attr("fill", "#94a3b8")
+        .style("font-family", "var(--font-mono)")
+        .attr("dx", "10"));
+
+    // Generators
     const area = d3.area<number>()
-      .x((d, i) => x(snap.labels[i])!)
+      .x((d, i) => x(i)!)
       .y0(height - margin.bottom)
-      .y1(d => y(d))
-      .curve(d3.curveMonotoneX);
+      .y1(d => yLeft(d))
+      .curve(d3.curveBasis);
 
-    const line = d3.line<number>()
-      .x((d, i) => x(snap.labels[i])!)
-      .y(d => y(d))
-      .curve(d3.curveMonotoneX);
+    const lineLeft = d3.line<number>()
+      .x((d, i) => x(i)!)
+      .y(d => yLeft(d))
+      .curve(d3.curveBasis);
 
-    // Add Area Gradient
+    const lineRight = (dataArr: number[]) => d3.line<number>()
+      .x((d, i) => x(i)!)
+      .y(d => yRight(d))
+      .curve(d3.curveBasis)(dataArr);
+
+    // Defs & Gradients
     const defs = svg.append("defs");
     const gradient = defs.append("linearGradient")
       .attr("id", "area-gradient")
       .attr("x1", "0%").attr("y1", "0%")
       .attr("x2", "0%").attr("y2", "100%");
-    gradient.append("stop").attr("offset", "0%").attr("stop-color", "rgba(105, 246, 184, 0.3)");
+    gradient.append("stop").attr("offset", "0%").attr("stop-color", "rgba(105, 246, 184, 0.15)");
     gradient.append("stop").attr("offset", "100%").attr("stop-color", "rgba(105, 246, 184, 0)");
 
+    // Blur filter for glowing lines
+    const filter = defs.append("filter").attr("id", "glow");
+    filter.append("feGaussianBlur").attr("stdDeviation", "2.5").attr("result", "coloredBlur");
+    const feMerge = filter.append("feMerge");
+    feMerge.append("feMergeNode").attr("in", "coloredBlur");
+    feMerge.append("feMergeNode").attr("in", "SourceGraphic");
+
+    // Draw Event Volume Area (Background)
     svg.append("path")
       .datum(snap.data)
       .attr("fill", "url(#area-gradient)")
@@ -436,75 +496,135 @@ export class Dashboard implements OnInit, OnDestroy {
     svg.append("path")
       .datum(snap.data)
       .attr("fill", "none")
-      .attr("stroke", "#69f6b8")
+      .attr("stroke", "rgba(105, 246, 184, 0.3)")
       .attr("stroke-width", 2)
-      .attr("d", line);
+      .attr("d", lineLeft);
 
-    // X Axis
-    svg.append("g")
-      .attr("transform", `translate(0,${height - margin.bottom})`)
-      .call(d3.axisBottom(x).tickValues(x.domain().filter((_, i) => !(i % Math.max(1, Math.floor(snap.labels.length / 5))))))
-      .call(g => g.select(".domain").remove())
-      .call(g => g.selectAll("text").attr("fill", "#a4abbf"));
+    // Draw Alert Lines (Foreground)
+    const colors = {
+      critical: "#ef4444",
+      high: "#f59e0b",
+      medium: "#38bdf8",
+      low: "#34d399"
+    };
 
-    // Y Axis with Grid Lines
-    svg.append("g")
-      .attr("transform", `translate(${margin.left},0)`)
-      .call(d3.axisLeft(y).ticks(5).tickSize(-width + margin.left + margin.right))
-      .call(g => g.select(".domain").remove())
-      .call(g => g.selectAll(".tick line")
-        .attr("stroke", "#2b3240")
-        .attr("stroke-dasharray", "4,4"))
-      .call(g => g.selectAll(".tick text")
-        .attr("fill", "#a4abbf")
-        .attr("dx", "-10"));
+    const drawGlowingLine = (dataArr: number[], color: string) => {
+      svg.append("path")
+        .datum(dataArr)
+        .attr("fill", "none")
+        .attr("stroke", color)
+        .attr("stroke-width", 2.5)
+        .attr("filter", "url(#glow)")
+        .attr("d", lineRight(dataArr));
+    };
 
-    // Tooltip setup
+    drawGlowingLine(snap.low, colors.low);
+    drawGlowingLine(snap.medium, colors.medium);
+    drawGlowingLine(snap.high, colors.high);
+    drawGlowingLine(snap.critical, colors.critical);
+
+    // Tooltip & Interactive Elements
     let tooltip = d3.select("body").select<HTMLDivElement>(".chart-tooltip");
     if (tooltip.empty()) {
       tooltip = d3.select("body").append("div")
         .attr("class", "chart-tooltip")
         .style("position", "absolute")
         .style("opacity", 0)
-        .style("background", "#1e293b")
+        .style("background", "rgba(15, 23, 42, 0.95)")
+        .style("backdrop-filter", "blur(8px)")
         .style("color", "#f8fafc")
-        .style("padding", "8px 12px")
-        .style("border-radius", "6px")
-        .style("font-size", "12px")
+        .style("padding", "14px 18px")
+        .style("border-radius", "10px")
+        .style("font-size", "13px")
         .style("pointer-events", "none")
-        .style("box-shadow", "0 4px 6px rgba(0,0,0,0.3)")
-        .style("border", "1px solid #334155")
-        .style("z-index", "9999");
+        .style("box-shadow", "0 10px 30px -5px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08) inset")
+        .style("z-index", "9999")
+        .style("min-width", "220px");
     }
 
-    // Map data for dots to easily access label in events
-    const chartData = snap.data.map((d, i) => ({
-      value: d,
-      label: snap.labels[i]
-    }));
+    const crosshair = svg.append("line")
+      .attr("y1", margin.top)
+      .attr("y2", height - margin.bottom)
+      .attr("stroke", "rgba(255,255,255,0.3)")
+      .attr("stroke-width", 1)
+      .attr("stroke-dasharray", "4,4")
+      .style("opacity", 0);
 
-    // Data points (circles)
-    svg.selectAll(".dot")
-      .data(chartData)
-      .enter().append("circle")
-      .attr("class", "dot")
-      .attr("cx", d => x(d.label)!)
-      .attr("cy", d => y(d.value))
-      .attr("r", 4)
-      .attr("fill", "#0f172a") // match dark background
-      .attr("stroke", "#69f6b8")
-      .attr("stroke-width", 2)
-      .style("cursor", "pointer")
-      .on("mouseover", function (event, d) {
-        d3.select(this).transition().duration(100).attr("r", 6).attr("fill", "#69f6b8");
-        tooltip.transition().duration(200).style("opacity", .9);
-        tooltip.html(`<strong>Time:</strong> ${d.label}<br/><strong>Events:</strong> ${d.value}`)
-          .style("left", (event.pageX + 10) + "px")
-          .style("top", (event.pageY - 28) + "px");
+    // Transparent overlay for hover detection
+    svg.append("rect")
+      .attr("class", "overlay")
+      .attr("width", width)
+      .attr("height", height)
+      .style("fill", "none")
+      .style("pointer-events", "all")
+      .on("mousemove", (event) => {
+        const [mouseX] = d3.pointer(event);
+        
+        // Since x is a linear scale mapping [0, length-1] to [margin.left, width-margin.right],
+        // we can invert the pixel coordinate directly to get the closest data index!
+        const exactIndex = x.invert(mouseX);
+        const closestIndex = Math.max(0, Math.min(snap.labels.length - 1, Math.round(exactIndex)));
+        
+        if (closestIndex >= 0 && closestIndex < snap.labels.length) {
+          const currentLabel = snap.labels[closestIndex];
+          const cx = x(closestIndex)!;
+          
+          crosshair
+            .attr("x1", cx)
+            .attr("x2", cx)
+            .style("opacity", 1);
+          
+          const evVal = snap.data[closestIndex] || 0;
+          const cVal = snap.critical[closestIndex] || 0;
+          const hVal = snap.high[closestIndex] || 0;
+          const mVal = snap.medium[closestIndex] || 0;
+          const lVal = snap.low[closestIndex] || 0;
+
+          tooltip.transition().duration(50).style("opacity", 1);
+          tooltip.html(`
+            <div style="font-family: var(--font-display); font-size: 15px; font-weight: 700; color: #f8fafc; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; margin-bottom: 8px;">${currentLabel}</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; background: rgba(105, 246, 184, 0.1); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(105, 246, 184, 0.2);">
+              <span style="color: #69f6b8; font-family: var(--font-mono); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Event Vol</span>
+              <strong style="color: #ffffff; font-size: 16px;">${evVal.toLocaleString()}</strong>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="display: flex; justify-content: space-between; gap: 24px; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="width: 8px; height: 8px; border-radius: 50%; background: ${colors.critical}; box-shadow: 0 0 8px ${colors.critical};"></span>
+                  <span style="color: #cbd5e1; font-weight: 500;">Critical</span>
+                </div>
+                <strong style="color: #ffffff;">${cVal.toLocaleString()}</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; gap: 24px; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="width: 8px; height: 8px; border-radius: 50%; background: ${colors.high}; box-shadow: 0 0 8px ${colors.high};"></span>
+                  <span style="color: #cbd5e1; font-weight: 500;">High</span>
+                </div>
+                <strong style="color: #ffffff;">${hVal.toLocaleString()}</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; gap: 24px; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="width: 8px; height: 8px; border-radius: 50%; background: ${colors.medium}; box-shadow: 0 0 8px ${colors.medium};"></span>
+                  <span style="color: #cbd5e1; font-weight: 500;">Medium</span>
+                </div>
+                <strong style="color: #ffffff;">${mVal.toLocaleString()}</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; gap: 24px; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="width: 8px; height: 8px; border-radius: 50%; background: ${colors.low}; box-shadow: 0 0 8px ${colors.low};"></span>
+                  <span style="color: #cbd5e1; font-weight: 500;">Low</span>
+                </div>
+                <strong style="color: #ffffff;">${lVal.toLocaleString()}</strong>
+              </div>
+            </div>
+          `)
+            .style("left", (event.pageX + 20) + "px")
+            .style("top", (event.pageY - 100) + "px");
+        }
       })
-      .on("mouseout", function () {
-        d3.select(this).transition().duration(100).attr("r", 4).attr("fill", "#0f172a");
-        tooltip.transition().duration(500).style("opacity", 0);
+      .on("mouseout", () => {
+        crosshair.style("opacity", 0);
+        tooltip.transition().duration(200).style("opacity", 0);
       });
   }
 

@@ -156,7 +156,7 @@
         <p class="metric-detail">Agent-Z {{ zeekEvents() }} / Agent-S {{ suricataEvents() }}</p>
       </div>
       
-      <div class="metric-wave" style="--accent: #c6cede;">
+      <div class="metric-wave">
         <svg viewBox="0 0 2400 120" preserveAspectRatio="none">
           <path class="wave-back" d="M0,60 C150,120 450,0 600,60 C750,120 1050,0 1200,60 L1200,120 L0,120 Z"></path>
           <path class="wave-back" transform="translate(1200, 0)" d="M0,60 C150,120 450,0 600,60 C750,120 1050,0 1200,60 L1200,120 L0,120 Z"></path>
@@ -187,6 +187,25 @@
         <p class="metric-detail">{{ hitsLastHour() }} new hits in the last hour</p>
       </div>
       
+      <div class="metric-bars">
+        <i class="bar" style="--h: 40%"></i>
+        <i class="bar" style="--h: 80%"></i>
+        <i class="bar" style="--h: 60%"></i>
+        <i class="bar" style="--h: 100%"></i>
+        <i class="bar" style="--h: 30%"></i>
+        <i class="bar" style="--h: 70%"></i>
+        <i class="bar" style="--h: 90%"></i>
+        <i class="bar" style="--h: 50%"></i>
+        <i class="bar" style="--h: 20%"></i>
+        <i class="bar" style="--h: 85%"></i>
+        <i class="bar" style="--h: 45%"></i>
+        <i class="bar" style="--h: 65%"></i>
+        <i class="bar" style="--h: 75%"></i>
+        <i class="bar" style="--h: 35%"></i>
+        <i class="bar" style="--h: 95%"></i>
+        <i class="bar" style="--h: 60%"></i>
+        <i class="bar" style="--h: 80%"></i>
+      </div>
     </article>
 
     <article
@@ -250,6 +269,32 @@
     </article>
   </div>
 
+  <div class="maps-grid">
+    <article
+      class="map-card threat-map-card clickable-card"
+      style="border: none; background: transparent; box-shadow: none;"
+      role="button" tabindex="0"
+      (click)="openThreatMap()"
+      (keydown.enter)="openThreatMap()"
+      (keydown.space)="openThreatMap()">
+      <div class="map-preview-container" style="padding: 0;">
+        <app-threat-map [previewMode]="true"></app-threat-map>
+      </div>
+    </article>
+
+    <article
+      class="map-card network-map-card clickable-card"
+      style="border: none; background: transparent; box-shadow: none;"
+      role="button" tabindex="0"
+      (click)="openNetworkMap()"
+      (keydown.enter)="openNetworkMap()"
+      (keydown.space)="openNetworkMap()">
+      <div class="map-preview-container" style="padding: 0; display: flex; align-items: center; justify-content: center;">
+        <img src="assets/images/network_topology.png" alt="Network Topology" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+      </div>
+    </article>
+  </div>
+
   <div class="dashboard-grid">
     <section class="panel chart-panel">
       <div class="panel-header">
@@ -257,9 +302,11 @@
           <h4>Live Event Stream</h4>
           <p>Event volume sampled from the active monitoring window.</p>
         </div>
-        <div class="live-pill">
-          <span></span>
-          Live
+        <div class="chart-controls">
+          <div class="live-pill">
+            <span></span>
+            Live
+          </div>
         </div>
       </div>
 

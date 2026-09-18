@@ -29,7 +29,7 @@ export const routes: Routes = [
       { path: 'soar',        canActivate: [authGuard], data: { role: 'analyst', permission: 'soar'        }, loadComponent: () => import('../pages/analyst/soar/soar').then(m => m.Soar) },
       { path: 'evidence',    canActivate: [authGuard], data: { role: 'analyst', permission: 'evidence'    }, loadComponent: () => import('../pages/analyst/evidence/evidence').then(m => m.EvidenceComponent) },
       { path: 'ai-activity', canActivate: [authGuard], data: { role: 'analyst', permission: 'ai-activity' }, loadComponent: () => import('../pages/analyst/ai-activity/ai-activity').then(m => m.AiActivity) },
-      { path: 'threat-map',  canActivate: [authGuard], data: { role: 'analyst', permission: 'intel'       }, loadComponent: () => import('../pages/analyst/threat-map/threat-map').then(m => m.ThreatMap) },
+      { path: 'threat-map',  canActivate: [authGuard], data: { role: 'analyst' }, loadComponent: () => import('../pages/analyst/threat-map/threat-map').then(m => m.ThreatMap) },
       { path: 'ai-report',   canActivate: [authGuard], data: { role: 'analyst', permission: 'ai-report'   }, loadComponent: () => import('../pages/analyst/ai-report/ai-report').then(m => m.AiReport) },
       { path: 'assets',      canActivate: [authGuard], data: { role: 'analyst', permission: 'assets'      }, loadComponent: () => import('../pages/analyst/assets/assets').then(m => m.Assets) },
       { path: 'rules',       canActivate: [authGuard], data: { permission: 'rules'                        }, loadComponent: () => import('../pages/analyst/rules/rules').then(m => m.Rules) },

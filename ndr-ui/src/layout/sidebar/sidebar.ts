@@ -41,9 +41,14 @@ export class Sidebar implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.buildNavigation();
-    this.navigationSub = this.router.events
-      .pipe(filter(e => e instanceof NavigationEnd))
-      .subscribe(() => this.buildNavigation());
+  }
+
+  trackGroup(index: number, group: NavGroup) {
+    return group.section;
+  }
+
+  trackItem(index: number, item: NavItem) {
+    return item.route;
   }
 
   ngOnDestroy() { this.navigationSub?.unsubscribe(); }
@@ -77,7 +82,7 @@ export class Sidebar implements OnInit, OnDestroy {
     const threatItems: NavItem[] = [];
     if (hasNdr && has('alerts')) threatItems.push({ label: 'Alerts',       route: '/analyst/alerts',     icon: Bell,    permission: 'alerts' });
     if (hasNdr && has('intel'))  threatItems.push({ label: 'Threat Intel', route: '/analyst/intel',       icon: Search,  permission: 'intel'  });
-    if (hasNdr && has('intel'))  threatItems.push({ label: 'Attack Map',   route: '/analyst/threat-map',  icon: MapIcon, permission: 'intel'  });
+    if (hasNdr)  threatItems.push({ label: 'Attack Map',   route: '/analyst/threat-map',  icon: MapIcon });
 
     const networkItems: NavItem[] = [];
     if (hasNdr && has('logs'))        networkItems.push({ label: 'Network',     route: '/analyst/logs',        icon: FileText, permission: 'logs'        });
@@ -105,12 +110,6 @@ export class Sidebar implements OnInit, OnDestroy {
     // SIEM section — Sources managed in tenant-admin; nothing analyst-visible here
     const siemItems: NavItem[] = [];
 
-    // XDR unified alerts — visible to any tenant with NDR or SIEM
-    const xdrItems: NavItem[] = [];
-    if (has('alerts')) {
-      xdrItems.push({ label: 'Unified Alerts', route: '/xdr/alerts', icon: Bell, permission: 'alerts' });
-    }
-
     this.navGroups = [
       ...(overviewItems.length  ? [{ section: 'OVERVIEW',  collapsed: false, items: overviewItems  }] : []),
       ...(threatItems.length    ? [{ section: 'THREATS',   collapsed: false, items: threatItems    }] : []),
@@ -120,7 +119,6 @@ export class Sidebar implements OnInit, OnDestroy {
       ...(responseItems.length  ? [{ section: 'RESPONSE',  collapsed: false, items: responseItems  }] : []),
       ...(intelItems.length     ? [{ section: 'INTEL',     collapsed: false, items: intelItems     }] : []),
       ...(siemItems.length      ? [{ section: 'SIEM',      collapsed: false, items: siemItems      }] : []),
-      ...(xdrItems.length       ? [{ section: 'XDR',       collapsed: false, items: xdrItems       }] : []),
     ];
 
     // Restore any previously collapsed groups so navigation doesn't reset them

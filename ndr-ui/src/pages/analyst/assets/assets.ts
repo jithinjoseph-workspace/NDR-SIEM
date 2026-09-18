@@ -1,4 +1,4 @@
-import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, AfterViewInit, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../../../services/api/api';
@@ -18,13 +18,15 @@ import {
   ChevronDown,
   ShieldCheck,
   ShieldOff,
-  AlertTriangle
+  AlertTriangle,
+  ArrowRight,
+  Network
 } from 'lucide-angular';
 
 import { DeviceDrawer } from '../../../components/device-drawer/device-drawer';
 import { AuthService } from '../../../services/auth/auth';
 
-
+declare var echarts: any;
 @Component({
   selector: 'app-assets',
   standalone: true,
@@ -32,7 +34,7 @@ import { AuthService } from '../../../services/auth/auth';
   templateUrl: './assets.html',
   styleUrl: './assets.css',
 })
-export class Assets implements OnInit {
+export class Assets implements OnInit, AfterViewInit {
   ServerIcon = Server;
   MonitorIcon = Monitor;
   SmartphoneIcon = Smartphone;
@@ -48,6 +50,8 @@ export class Assets implements OnInit {
   AlertTriangleIcon = AlertTriangle;
   EditIcon = Edit;
   ChevronDownIcon = ChevronDown;
+  ArrowRightIcon = ArrowRight;
+  NetworkIcon = Network;
 
   assets: any[] = [];
   filteredAssets: any[] = [];
@@ -59,8 +63,36 @@ export class Assets implements OnInit {
   editingIp: string | null = null;
   editNameValue = '';
 
+  timeFilter = '24h';
+  isTimeDropdownOpen = false;
+  subnetSort = 'top';
+  isSubnetSortDropdownOpen = false;
+
+  setTimeFilter(val: string) {
+    this.timeFilter = val;
+    this.isTimeDropdownOpen = false;
+    this.fetchAndRenderThreatLandscape();
+  }
+
+  setSubnetSort(val: string) {
+    this.subnetSort = val;
+    this.isSubnetSortDropdownOpen = false;
+    if (val === 'top') {
+      this.enrichedSubnets.sort((a, b) => b.assetCount - a.assetCount);
+    } else {
+      this.enrichedSubnets.sort((a, b) => a.assetCount - b.assetCount);
+    }
+  }
+
   subnets: any[] = [];
   isSubnetDropdownOpen = false;
+
+  @ViewChild('sunburstContainer') sunburstContainer?: ElementRef;
+  @ViewChild('threatLandscapeContainer') threatLandscapeContainer?: ElementRef;
+
+  sunburstChart: any;
+  threatLandscapeChart: any;
+  enrichedSubnets: any[] = [];
 
   selectedAsset: any = null;
 
@@ -111,9 +143,315 @@ export class Assets implements OnInit {
     this.loadSubnets();
   }
 
+  ngAfterViewInit() {
+    // Small delay to ensure DOM is ready and visible
+    setTimeout(() => {
+      this.initCharts();
+    }, 100);
+  }
+
+  initCharts() {
+    if (typeof echarts === 'undefined') return;
+    
+    if (this.sunburstContainer && !this.sunburstChart) {
+      this.sunburstChart = echarts.init(this.sunburstContainer.nativeElement, 'dark');
+      this.updateSunburst();
+    }
+    
+    if (this.threatLandscapeContainer && !this.threatLandscapeChart) {
+      this.threatLandscapeChart = echarts.init(this.threatLandscapeContainer.nativeElement, 'dark');
+      this.fetchAndRenderThreatLandscape();
+    }
+  }
+
+  enrichSubnets() {
+    if (!this.subnets || this.subnets.length === 0) return;
+    if (!this.assets || this.assets.length === 0) {
+       this.enrichedSubnets = [...this.subnets];
+       return;
+    }
+    
+    this.enrichedSubnets = this.subnets.map(s => {
+      let count = 0;
+      let roles: {[role: string]: number} = {};
+      
+      this.assets.forEach(a => {
+        if (a.ip && this.isIpInCidr(a.ip, s.cidr)) {
+          count++;
+          const role = (a.role || a.device_type || 'UNKNOWN').toUpperCase();
+          roles[role] = (roles[role] || 0) + 1;
+        }
+      });
+      
+      let dominant = 'UNKNOWN';
+      let max = 0;
+      for (const [r, c] of Object.entries(roles)) {
+        if (c > max) { max = c; dominant = r; }
+      }
+      
+      const pct = count ? Math.min(100, count * 5) : 0;
+      
+      return { ...s, assetCount: count, dominantRole: dominant, assetPercent: pct };
+    });
+    
+    // Sort by assetCount desc
+    this.enrichedSubnets.sort((a, b) => b.assetCount - a.assetCount);
+  }
+
+  updateSunburst() {
+    if (!this.sunburstChart || this.assets.length === 0) return;
+    
+    const typeCount = {
+      'Workstations': this.stats.workstations.count,
+      'Servers': this.stats.servers.count,
+      'IoT Devices': this.stats.iot.count,
+      'Networking': this.stats.networking.count
+    };
+    const total = this.totalAssets;
+
+    const pieData = [
+      { name: 'Workstations', value: typeCount['Workstations'] },
+      { name: 'Servers', value: typeCount['Servers'] },
+      { name: 'IoT Devices', value: typeCount['IoT Devices'] },
+      { name: 'Networking', value: typeCount['Networking'] }
+    ];
+
+    const colorPalette = [
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#5eb5ff'}, {offset: 1, color: '#005ee6'}]),
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#69f6b8'}, {offset: 1, color: '#008f52'}]),
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#ff8b84'}, {offset: 1, color: '#d60000'}]),
+      new echarts.graphic.LinearGradient(0, 0, 1, 1, [{offset: 0, color: '#c084fc'}, {offset: 1, color: '#6a0dad'}])
+    ];
+
+    this.sunburstChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: { 
+        trigger: 'item', 
+        backgroundColor: 'rgba(10, 25, 47, 0.95)', 
+        borderColor: '#00a2ff', 
+        textStyle: { color: '#fff' } 
+      },
+      color: colorPalette,
+      legend: {
+        orient: 'vertical',
+        left: '42%',
+        top: 'center',
+        itemGap: 18,
+        icon: 'circle',
+        itemWidth: 12,
+        textStyle: {
+          rich: {
+            name: { color: '#cbd5e1', fontSize: 15, width: 110 },
+            val: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', width: 28, align: 'right' },
+            pct: { color: '#64748b', fontSize: 15, width: 50, align: 'right' }
+          }
+        },
+        formatter: (name: string) => {
+          const data = pieData.find(d => d.name === name);
+          const val = data ? data.value : 0;
+          const pct = total ? Math.round((val / total) * 100) : 0;
+          return `{name|${name}} {val|${val}} {pct|(${pct}%)}`;
+        }
+      },
+      series: [
+        {
+          type: 'pie',
+          radius: ['50%', '75%'],
+          center: ['22%', '50%'],
+          avoidLabelOverlap: false,
+          itemStyle: {
+            borderRadius: 10,
+            borderColor: '#0a0f1a',
+            borderWidth: 4,
+            shadowBlur: 15,
+            shadowColor: 'rgba(0, 0, 0, 0.4)'
+          },
+          label: {
+            show: true,
+            position: 'center',
+            formatter: `{a|${total}}\n{b|Assets}`,
+            rich: {
+              a: {
+                fontSize: 36,
+                fontWeight: 900,
+                color: '#ffffff',
+                lineHeight: 40,
+                textShadowColor: 'rgba(61, 158, 255, 0.5)',
+                textShadowBlur: 15
+              },
+              b: {
+                fontSize: 11,
+                color: '#64748b',
+                fontWeight: 600,
+                letterSpacing: 2
+              }
+            }
+          },
+          labelLine: { show: false },
+          data: pieData
+        }
+      ]
+    }, true);
+  }
+
+  private parseAlertDate(value: any): number {
+    if (value === null || value === undefined || value === '') return 0;
+    if (typeof value === 'number') {
+      return value > 9999999999 ? value : value * 1000;
+    }
+    const raw = String(value).trim();
+    if (/^\d+$/.test(raw)) return this.parseAlertDate(Number(raw));
+    const n = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    const z = /Z$|[+-]\d{2}:?\d{2}$/.test(n) ? n : `${n}Z`;
+    const d = new Date(z);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+
+  fetchAndRenderThreatLandscape() {
+    if (!this.threatLandscapeChart) return;
+    this.api.getAlerts().subscribe({
+      next: (hits: any[]) => {
+        const nowMs = Date.now();
+        let bucketMs = 3600 * 1000; // 24h default
+        let numBuckets = 24;
+        let formatLabel = (d: Date) => `${d.getHours().toString().padStart(2, '0')}:00`;
+
+        if (this.timeFilter === '7d') {
+          bucketMs = 24 * 3600 * 1000;
+          numBuckets = 7;
+          formatLabel = (d: Date) => `${d.getMonth()+1}/${d.getDate()}`;
+        } else if (this.timeFilter === '30d') {
+          bucketMs = 24 * 3600 * 1000;
+          numBuckets = 30;
+          formatLabel = (d: Date) => `${d.getMonth()+1}/${d.getDate()}`;
+        }
+        
+        const dataHigh = new Array(numBuckets).fill(0);
+        const dataMedium = new Array(numBuckets).fill(0);
+        const dataLow = new Array(numBuckets).fill(0);
+        const dataInfo = new Array(numBuckets).fill(0);
+        const labels: string[] = [];
+        
+        for (let i = numBuckets - 1; i >= 0; i--) {
+          const d = new Date(nowMs - (i * bucketMs));
+          labels.push(formatLabel(d));
+        }
+
+        hits.forEach(hit => {
+          const ts = this.parseAlertDate(hit.timestamp || hit.ts);
+          if (ts === 0) return;
+          const diffMs = nowMs - ts;
+          const index = (numBuckets - 1) - Math.floor(diffMs / bucketMs);
+          
+          if (index >= 0 && index < numBuckets) {
+            const sev = (hit.severity || '').toUpperCase();
+            if (sev === 'CRITICAL' || sev === 'HIGH') dataHigh[index]++;
+            else if (sev === 'MEDIUM') dataMedium[index]++;
+            else if (sev === 'LOW') dataLow[index]++;
+            else dataInfo[index]++;
+          }
+        });
+
+        this.threatLandscapeChart.setOption({
+          backgroundColor: 'transparent',
+          tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(9, 18, 29, 0.9)',
+            borderColor: 'rgba(255, 255, 255, 0.1)',
+            textStyle: { color: '#ffffff' },
+            axisPointer: { type: 'line', lineStyle: { color: 'rgba(255, 255, 255, 0.2)', type: 'dashed' } },
+            formatter: (params: any[]) => {
+              let res = `<div style="margin-bottom: 8px; font-size: 12px; color: #6b7a90">${params[0].axisValue}</div>`;
+              params.forEach(p => {
+                res += `<div style="display: flex; justify-content: space-between; gap: 20px; font-size: 13px;">
+                          <div style="display: flex; align-items: center; gap: 6px;">
+                            ${p.marker} <span>${p.seriesName}</span>
+                          </div>
+                          <strong>${p.value}</strong>
+                        </div>`;
+              });
+              return res;
+            }
+          },
+          grid: { top: 20, right: 20, bottom: 30, left: 40 },
+          xAxis: {
+            type: 'category',
+            boundaryGap: false,
+            data: labels,
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: { color: '#6b7a90', fontSize: 11, margin: 12 }
+          },
+          yAxis: {
+            type: 'value',
+            splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)', type: 'dashed' } },
+            axisLabel: { color: '#6b7a90', fontSize: 11 }
+          },
+          color: ['#005aff', '#009dff', '#ffa600', '#f43f5e'],
+          series: [
+            {
+              name: 'Info', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(0, 90, 255, 0.3)' },
+                  { offset: 1, color: 'rgba(0, 90, 255, 0.01)' }
+                ])
+              },
+              data: dataInfo
+            },
+            {
+              name: 'Low', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(0, 157, 255, 0.3)' },
+                  { offset: 1, color: 'rgba(0, 157, 255, 0.01)' }
+                ])
+              },
+              data: dataLow
+            },
+            {
+              name: 'Medium', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(255, 166, 0, 0.3)' },
+                  { offset: 1, color: 'rgba(255, 166, 0, 0.01)' }
+                ])
+              },
+              data: dataMedium
+            },
+            {
+              name: 'High', type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { width: 2 },
+              areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(244, 63, 94, 0.3)' },
+                  { offset: 1, color: 'rgba(244, 63, 94, 0.01)' }
+                ])
+              },
+              data: dataHigh
+            }
+          ]
+        });
+      },
+      error: () => {}
+    });
+  }
+
   loadSubnets() {
     this.api.getIpamSubnets().subscribe({
-      next: (data: any) => { this.subnets = Array.isArray(data) ? data : []; },
+      next: (data: any[]) => { 
+        this.subnets = Array.isArray(data) ? data : []; 
+        this.enrichSubnets();
+        setTimeout(() => {
+          if (!this.threatLandscapeChart && this.threatLandscapeContainer && typeof echarts !== 'undefined') {
+            this.threatLandscapeChart = echarts.init(this.threatLandscapeContainer.nativeElement, 'dark');
+            this.fetchAndRenderThreatLandscape();
+          }
+        }, 100);
+      },
       error: () => { this.subnets = []; }
     });
   }
@@ -152,8 +490,13 @@ export class Assets implements OnInit {
         }
         this.calculateStats();
         this.filterAssets();
+        this.enrichSubnets();
         this.loading = false;
         this.cdr.detectChanges();
+        setTimeout(() => {
+          this.initCharts();
+          this.updateSunburst();
+        }, 100);
       },
       error: (err) => {
         console.error("HTTP error:", err);

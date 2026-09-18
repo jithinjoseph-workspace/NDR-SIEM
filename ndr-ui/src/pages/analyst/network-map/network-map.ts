@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Api } from '../../../services/api/api';
 import { ArkimeService } from '../../../services/arkime/arkime';
@@ -28,7 +28,10 @@ import {
   Tv,
   HelpCircle,
   Users,
-  ArrowLeft
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-angular';
 import { AuthService } from '../../../services/auth/auth';
 
@@ -68,9 +71,11 @@ export class NetworkMap implements OnInit, OnDestroy {
   edgeCount: number = 0;
   viewState: 'loading' | 'loaded' | 'error' | 'empty' = 'loading';
   errorMessage: string = '';
+  @Input() previewMode = false;
   selectedNode: any = null;
   lastUpdated: string = '--';
 
+  showInsights: boolean = false;
 
   nodesData: any[] = [];
   edgesData: any[] = [];
@@ -93,6 +98,16 @@ export class NetworkMap implements OnInit, OnDestroy {
   ThreatIcon = TriangleAlert;
   XIcon = X;
   ArrowLeftIcon = ArrowLeft;
+  ChevronDownIcon = ChevronDown;
+  ChevronRightIcon = ChevronRight;
+  ChevronLeftIcon = ChevronLeft;
+
+  isDsbCollapsed: boolean = false;
+
+  toggleDsb() {
+    this.isDsbCollapsed = !this.isDsbCollapsed;
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 250);
+  }
 
   /** Sensor IDs this user is scoped to (from JWT). */
   sensorIds: string[] = [];
@@ -204,6 +219,10 @@ export class NetworkMap implements OnInit, OnDestroy {
     this.applyFocus();
   }
 
+  toggleInsights() {
+    this.showInsights = !this.showInsights;
+  }
+
   focusMode: boolean = false;
   activeFilter: string = 'all';
   selectedPathNode: any = null;
@@ -269,6 +288,17 @@ export class NetworkMap implements OnInit, OnDestroy {
   get externalCount(): number { return this.nodesData.filter((n: any) => !n.is_internal && !n.threat).length; }
   get threatCount():   number { return this.nodesData.filter((n: any) => n.threat).length; }
   get trafficCount():  number { return this.nodesData.filter((n: any) => (n.connections || 0) > 5).length; }
+
+  get topTalkers(): any[] {
+    return [...this.nodesData]
+      .filter((n: any) => (n.connections || 0) > 0)
+      .sort((a: any, b: any) => (b.connections || 0) - (a.connections || 0))
+      .slice(0, 5);
+  }
+
+  get threatNodes(): any[] {
+    return this.nodesData.filter((n: any) => n.threat);
+  }
 
   setFilter(filter: string) {
     this.activeFilter = filter;
@@ -594,6 +624,10 @@ export class NetworkMap implements OnInit, OnDestroy {
     else if (this.nodeCount > 20) targetScale = 0.5;
     else targetScale = 0.8;
 
+    if (this.previewMode) {
+      targetScale *= 0.55;
+    }
+
     const transform = d3.zoomIdentity
         .translate(width / 2 * (1 - targetScale), height / 2 * (1 - targetScale))
         .scale(targetScale);
@@ -613,24 +647,48 @@ export class NetworkMap implements OnInit, OnDestroy {
     if (g.empty()) {
       const defs = svg.append('defs');
 
-      const glowFilter = defs.append('filter').attr('id', 'glow');
-      glowFilter.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'coloredBlur');
-      const feMerge = glowFilter.append('feMerge');
-      feMerge.append('feMergeNode').attr('in', 'coloredBlur');
-      feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+      const addGlow = (id: string, color: string) => {
+        const filter = defs.append('filter').attr('id', id).attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+        filter.append('feGaussianBlur').attr('stdDeviation', '4').attr('result', 'blur');
+        filter.append('feComponentTransfer').attr('in', 'blur').attr('result', 'glow')
+          .append('feFuncA').attr('type', 'linear').attr('slope', '1.5');
+        const feMerge = filter.append('feMerge');
+        feMerge.append('feMergeNode').attr('in', 'glow');
+        feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+      };
 
-      defs
-        .append('marker')
-        .attr('id', 'arrow')
-        .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 20)
-        .attr('refY', 0)
-        .attr('markerWidth', 6)
-        .attr('markerHeight', 6)
-        .attr('orient', 'auto')
-        .append('path')
-        .attr('d', 'M0,-5L10,0L0,5')
-        .attr('fill', '#7ca3ff70');
+      addGlow('glow-cyan', '#00ccff');
+      addGlow('glow-gold', '#ffcc00');
+      addGlow('glow-green', '#00ff66');
+
+      const shadow = defs.append('filter').attr('id', 'btn-shadow');
+      shadow.append('feDropShadow').attr('dx', '0').attr('dy', '4').attr('stdDeviation', '4').attr('flood-color', '#000000').attr('flood-opacity', '0.8');
+
+      const addGrad = (id: string, c1: string, c2: string) => {
+        const grad = defs.append('linearGradient').attr('id', id).attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
+        grad.append('stop').attr('offset', '0%').attr('stop-color', c1);
+        grad.append('stop').attr('offset', '100%').attr('stop-color', c2);
+      };
+      
+      addGrad('grad-cyan', '#0055ff', '#002288');
+      addGrad('grad-gold', '#ffaa00', '#aa5500');
+      addGrad('grad-green', '#00ff66', '#006622');
+
+      const addArrow = (id: string, color: string) => {
+        defs.append('marker')
+          .attr('id', id)
+          .attr('viewBox', '0 -5 10 10')
+          .attr('refX', 30)
+          .attr('refY', 0)
+          .attr('markerWidth', 7)
+          .attr('markerHeight', 7)
+          .attr('orient', 'auto')
+          .append('path')
+          .attr('d', 'M0,-5L10,0L0,5')
+          .attr('fill', color);
+      };
+      addArrow('arrow-cyan', '#00ccff');
+      addArrow('arrow-gold', '#ffcc00');
 
       g = svg.append('g').attr('class', 'main-container');
       
@@ -654,24 +712,48 @@ export class NetworkMap implements OnInit, OnDestroy {
     const nodesLayer = g.select('.nodes-layer');
 
     const link = linksLayer
-      .selectAll<SVGLineElement, any>('line')
+      .selectAll<SVGGElement, any>('g.edge-group')
       .data(edges, (d: any) => `${d.source.id || d.source}-${d.target.id || d.target}`)
       .join(
-        enter => enter.append('line')
-          .attr('class', (d: any) => (d.connections > 10 ? 'traffic-flow' : ''))
-          .attr('stroke', (d: any) => {
-            const w = Math.log((d.connections || 1) + 1);
-            return w > 3 ? '#f8a01080' : '#7ca3ff46';
-          })
-          .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1), 4))
-          .attr('stroke-linecap', 'round')
-          .attr('marker-end', 'url(#arrow)')
-          .style('opacity', (d: any) => {
-             if (!this.isSearchActive) return 1;
-             const s = d.source?.id || d.source;
-             const t = d.target?.id || d.target;
-             return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
-          }),
+        enter => {
+          const eg = enter.append('g')
+            .attr('class', 'edge-group')
+            .style('opacity', (d: any) => {
+               if (!this.isSearchActive) return 1;
+               const s = d.source?.id || d.source;
+               const t = d.target?.id || d.target;
+               return (this.searchMatches.has(s) || this.searchMatches.has(t)) ? 1 : 0.15;
+            });
+            
+          eg.append('line')
+            .attr('class', 'base-link')
+            .attr('stroke', (d: any) => {
+               const w = Math.log((d.connections || 1) + 1);
+               return w > 3 ? '#ffaa00' : '#0077ff';
+            })
+            .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1) * 2, 8))
+            .attr('stroke-linecap', 'round')
+            .attr('marker-end', (d: any) => {
+               const w = Math.log((d.connections || 1) + 1);
+               return w > 3 ? 'url(#arrow-gold)' : 'url(#arrow-cyan)';
+            });
+
+          eg.append('line')
+            .attr('class', 'beaded-link')
+            .attr('stroke', (d: any) => {
+               const w = Math.log((d.connections || 1) + 1);
+               return w > 3 ? '#ffeebb' : '#aaddff';
+            })
+            .attr('stroke-width', (d: any) => Math.min(Math.log((d.connections || 1) + 1) * 2, 8))
+            .attr('stroke-dasharray', '2, 8')
+            .attr('stroke-linecap', 'round')
+            .style('display', (d: any) => {
+               const w = Math.log((d.connections || 1) + 1);
+               return w > 3 ? 'block' : 'none';
+            });
+            
+          return eg;
+        },
         update => {
           update.style('opacity', (d: any) => {
              if (!this.isSearchActive) return 1;
@@ -689,10 +771,10 @@ export class NetworkMap implements OnInit, OnDestroy {
       .data(edges.filter((d: any) => d.connections > 5), (d: any) => `${d.source.id || d.source}-${d.target.id || d.target}`)
       .join(
          enter => enter.append('text')
-          .attr('fill', '#f8a010b0')
-          .attr('font-size', '8px')
-          .attr('font-family', 'monospace')
-          .attr('font-weight', '700')
+          .attr('fill', '#e2e8f0') // Clean white/gray
+          .attr('font-size', '10px') 
+          .attr('font-family', 'var(--font-sans)')
+          .attr('font-weight', '500')
           .text((d: any) => d.connections)
           .style('opacity', (d: any) => {
              if (!this.isSearchActive) return 1;
@@ -744,32 +826,43 @@ export class NetworkMap implements OnInit, OnDestroy {
               d3.select(this).raise(); // Bring node to front when hovered
             });
 
+          // Base rim (dark blue/black)
           nodeEnter.append('circle')
+            .attr('class', 'node-rim')
+            .attr('r', (d: any) => {
+               const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
+               const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
+               return base + bonus + 6;
+            })
+            .attr('fill', '#040b16')
+            .attr('stroke', '#0044aa')
+            .attr('stroke-width', 1.5)
+            .attr('filter', 'url(#btn-shadow)');
+
+          // Inner colored core
+          nodeEnter.append('circle')
+            .attr('class', 'node-core')
             .attr('r', (d: any) => {
                const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
                const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
                return base + bonus;
             })
             .attr('fill', (d: any) => {
-              if (d.threat) return '#2b1214';
-              return d.is_internal ? '#0c2a2c' : '#101c35';
+               if (d.threat) return 'url(#grad-gold)';
+               return d.is_internal ? 'url(#grad-green)' : 'url(#grad-cyan)';
             })
             .attr('stroke', (d: any) => {
-              if (d.threat) return '#ff716a';
-              return d.is_internal ? '#69f6b8' : '#7ca3ff';
+               if (d.threat) return '#ffeebb';
+               return d.is_internal ? '#ccffdd' : '#aaddff';
             })
-            .attr('stroke-width', 1.4)
-            .attr('filter', (d: any) => (d.is_internal ? 'url(#glow)' : ''));
+            .attr('stroke-width', 2);
 
           nodeEnter.append('path')
             .attr('d', (d: any) => this.getNodeIconPath(d))
             .attr('transform', (d: any) => (d.type === 'cluster' ? 'translate(-12, -12) scale(1)' : 'translate(-9, -9) scale(0.75)'))
             .attr('fill', 'none')
-            .attr('stroke', (d: any) => {
-              if (d.threat) return '#ffb3ad';
-              return d.is_internal ? '#9ffbd0' : '#b8ccff';
-            })
-            .attr('stroke-width', 2)
+            .attr('stroke', '#ffffff')
+            .attr('stroke-width', 1.5)
             .attr('stroke-linecap', 'round')
             .attr('stroke-linejoin', 'round')
             .style('display', (d: any) => (this.hasFavicon(d) ? 'none' : 'block'));
@@ -788,18 +881,11 @@ export class NetworkMap implements OnInit, OnDestroy {
 
           nodeEnter.append('text')
             .attr('text-anchor', 'middle')
-            .attr('y', 34)
-            .attr('stroke', '#0a101d')
-            .attr('stroke-width', 3)
-            .attr('stroke-linejoin', 'round')
-            .attr('paint-order', 'stroke')
-            .attr('fill', (d: any) => {
-              if (d.threat) return '#ff918b';
-              return d.is_internal ? '#69f6b8' : '#9bb7ff';
-            })
-            .attr('font-size', '10px')
+            .attr('y', 36)
+            .attr('fill', '#ffffff')
+            .attr('font-size', '11.5px')
+            .attr('font-family', 'var(--font-sans)')
             .attr('font-weight', '700')
-            .attr('font-family', 'var(--font-mono)')
             .text((d: any) => {
               const t = d.label || d.id;
               if (t.length > 20) return t.substring(0, 18) + '...';
@@ -808,10 +894,10 @@ export class NetworkMap implements OnInit, OnDestroy {
 
           nodeEnter.append('text')
             .attr('text-anchor', 'middle')
-            .attr('y', 46)
-            .attr('fill', '#6e7588')
-            .attr('font-size', '8px')
-            .attr('font-family', 'var(--font-mono)')
+            .attr('y', 50)
+            .attr('fill', '#71717a') // Muted gray
+            .attr('font-size', '10px')
+            .attr('font-family', 'var(--font-sans)')
             .text((d: any) => {
                 if (d.type === 'cluster') return '';
                 return d.type && d.type !== 'unknown' ? d.type : (d.is_internal ? 'internal' : 'external');
@@ -820,13 +906,13 @@ export class NetworkMap implements OnInit, OnDestroy {
           nodeEnter.filter((d: any) => (d.connections || 0) > 0)
             .append('text')
             .attr('class', 'connection-count')
-            .attr('x', 16)
-            .attr('y', -16)
+            .attr('x', 18)
+            .attr('y', -18)
             .attr('text-anchor', 'middle')
-            .attr('fill', '#d8deec')
-            .attr('font-size', '8px')
-            .attr('font-family', 'monospace')
-            .attr('font-weight', '800')
+            .attr('fill', '#e2e8f0') 
+            .attr('font-size', '10px') 
+            .attr('font-family', 'var(--font-sans)')
+            .attr('font-weight', '600')
             .text((d: any) => (d.connections > 0 ? `${d.connections}` : ''));
 
           nodeEnter.transition().duration(500).style('opacity', (d: any) => {
@@ -849,7 +935,13 @@ export class NetworkMap implements OnInit, OnDestroy {
           });
           
           // Ensure dynamic elements update if data changes mid-session
-          update.select('circle')
+          update.select('.node-rim')
+            .attr('r', (d: any) => {
+               const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
+               const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
+               return base + bonus + 6;
+            });
+          update.select('.node-core')
             .attr('r', (d: any) => {
                const base = d.type === 'cluster' ? 24 : (d.is_internal ? 20 : 16);
                const bonus = Math.min(Math.log((d.connections || 0) + 1) * 3, 15);
@@ -873,7 +965,13 @@ export class NetworkMap implements OnInit, OnDestroy {
       );
 
     const tickFn = () => {
-      link
+      link.select('.base-link')
+        .attr('x1', (d: any) => d.source.x)
+        .attr('y1', (d: any) => d.source.y)
+        .attr('x2', (d: any) => d.target.x)
+        .attr('y2', (d: any) => d.target.y);
+        
+      link.select('.beaded-link')
         .attr('x1', (d: any) => d.source.x)
         .attr('y1', (d: any) => d.source.y)
         .attr('x2', (d: any) => d.target.x)
