@@ -85,6 +85,7 @@ async fn geo_lookup_batch(state: &AppState, ips: &[String]) -> Vec<Value> {
                     "status":      "success",
                     "country":     geo.country_name,
                     "countryCode": geo.country_code,
+                    "city":        geo.city,
                     "lat":         geo.latitude.unwrap_or(0.0),
                     "lon":         geo.longitude.unwrap_or(0.0),
                 }));
@@ -96,7 +97,7 @@ async fn geo_lookup_batch(state: &AppState, ips: &[String]) -> Vec<Value> {
     if !unresolved.is_empty() {
         let batch: Vec<Value> = unresolved.iter().map(|ip| json!({ "query": ip })).collect();
         if let Ok(resp) = HTTP_CLIENT
-            .post("http://ip-api.com/batch?fields=query,country,countryCode,lat,lon,status")
+            .post("http://ip-api.com/batch?fields=query,country,countryCode,city,lat,lon,status")
             .json(&batch)
             .send()
             .await
@@ -10469,6 +10470,30 @@ pub async fn get_active_sessions(
         }));
     }
     Json(json!({"status":"ok","sessions":sessions}))
+}
+
+#[derive(serde::Deserialize)]
+pub struct GeoLookupBody {
+    pub ips: Vec<String>,
+}
+
+/// Real IP geolocation for arbitrary (e.g. session login) IPs, reusing the
+/// same local GeoLite2 DB + ip-api.com fallback as the threat map widgets —
+/// added so the frontend no longer has to fabricate a location by hashing
+/// the IP string against a fixed list of cities. Private/unresolvable IPs
+/// (localhost, LAN ranges, sensors behind NAT) are returned as unresolved
+/// rather than assigned a fake city.
+pub async fn geo_lookup(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<GeoLookupBody>,
+) -> Json<Value> {
+    if extract_claims(&headers).is_none() {
+        return Json(json!({"status":"error","message":"Unauthorized"}));
+    }
+    let ips: Vec<String> = body.ips.into_iter().take(100).collect();
+    let results = geo_lookup_batch(&state, &ips).await;
+    Json(json!({"status":"ok","results":results}))
 }
 
 // DELETE /api/admin/sessions/:username — force logout all sessions for a user

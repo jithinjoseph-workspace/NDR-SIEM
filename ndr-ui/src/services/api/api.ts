@@ -754,6 +754,9 @@ export class Api {
   getSoarCases(): Observable<any> {
     return this.http.get(`${this.baseUrl}/soar/cases`);
   }
+  getActiveBlocks(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/blocks`);
+  }
   createSoarCase(payload: any): Observable<any> {
     return this.http.post(`${this.baseUrl}/soar/cases`, payload);
   }
@@ -913,6 +916,10 @@ export class Api {
 
   forceLogoutDevice(username: string, ip: string, device: string): Observable<any> {
     return this.http.delete(`${this.baseUrl}/admin/sessions/${encodeURIComponent(username)}/device`, { body: { ip, device } });
+  }
+
+  geoLookup(ips: string[]): Observable<any> {
+    return this.http.post(`${this.baseUrl}/geo-lookup`, { ips });
   }
 
   // ── Honeypots ──────────────────────────────────────────────────────────────
