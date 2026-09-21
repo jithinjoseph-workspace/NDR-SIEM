@@ -3,6 +3,8 @@
 
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
+use redis::aio::MultiplexedConnection;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -11,6 +13,70 @@ use tracing::{error, info, warn};
 use crate::api::AppState;
 use crate::normalizer::EventSource;
 use crate::storage::clickhouse::NdrEvent;
+
+// How long (seconds) a fingerprint is remembered. 0 disables de-duplication.
+// Memory: roughly events/sec x TTL x ~90 bytes in Redis (e.g. 1,000 eps x 900 s = ~80 MB).
+fn dedup_ttl_secs() -> u64 {
+    std::env::var("EVENT_DEDUP_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(900)
+}
+
+// Identity of an event = every stored column. Two events with the same fingerprint
+// are the same log line delivered twice (e.g. a log file re-read after rotation).
+fn event_fingerprint(tenant_id: &str, e: &NdrEvent) -> String {
+    let mut h = Sha256::new();
+    for part in [
+        e.timestamp.to_string(), e.source.clone(), e.src_ip.clone(), e.dst_ip.clone(),
+        e.src_port.to_string(), e.dst_port.to_string(), e.proto.clone(), e.event_type.clone(),
+        e.community_id.clone(), e.sensor_id.clone(), tenant_id.to_string(), e.raw.clone(),
+    ] {
+        h.update(part.as_bytes());
+        h.update([0x1f]);
+    }
+    let d = h.finalize();
+    d[..16].iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+// Drops events already seen within the TTL window. Atomic across all engine
+// instances (Redis SET NX). Fails OPEN: on any Redis problem every event is kept,
+// so this can never lose data - at worst a duplicate gets through.
+async fn dedup_events(
+    redis: &mut MultiplexedConnection,
+    tenant_id: &str,
+    events: Vec<NdrEvent>,
+    ttl_secs: u64,
+) -> Vec<NdrEvent> {
+    if ttl_secs == 0 || events.is_empty() { return events; }
+    let mut pipe = redis::pipe();
+    for e in &events {
+        pipe.cmd("SET")
+            .arg(format!("ndr:evseen:{}", event_fingerprint(tenant_id, e)))
+            .arg(1)
+            .arg("NX")
+            .arg("EX")
+            .arg(ttl_secs);
+    }
+    let res: Result<Vec<Option<String>>, _> = pipe.query_async(redis).await;
+    match res {
+        Ok(flags) if flags.len() == events.len() => {
+            let total = events.len();
+            let kept: Vec<NdrEvent> = events
+                .into_iter()
+                .zip(flags)
+                .filter_map(|(e, first_time)| first_time.map(|_| e))
+                .collect();
+            let dropped = total - kept.len();
+            if dropped > 0 {
+                warn!("Dropped {} duplicate event(s) (tenant={})", dropped, tenant_id);
+            }
+            kept
+        }
+        Ok(_) => events,
+        Err(e) => {
+            warn!("Event de-dup check failed, keeping events (tenant={}): {}", tenant_id, e);
+            events
+        }
+    }
+}
 
 // Drains the channel every 100 ms and batch-inserts into ClickHouse.
 // One HTTP round-trip per tenant per tick instead of one per event.
@@ -24,7 +90,9 @@ use crate::storage::clickhouse::NdrEvent;
 async fn batch_writer(
     ch: Arc<crate::storage::clickhouse::ClickhouseStorage>,
     mut rx: mpsc::Receiver<(NdrEvent, String)>,
+    mut redis: MultiplexedConnection,
 ) {
+    let dedup_ttl = dedup_ttl_secs();
     let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(100));
     let mut buf: HashMap<String, Vec<NdrEvent>> = HashMap::new();
 
@@ -36,6 +104,8 @@ async fn batch_writer(
             _ = ticker.tick() => {
                 if buf.is_empty() { continue; }
                 for (tenant_id, events) in buf.drain() {
+                    let events = dedup_events(&mut redis, &tenant_id, events, dedup_ttl).await;
+                    if events.is_empty() { continue; }
                     if let Err(e) = ch.batch_insert_events_for_tenant(events, &tenant_id).await {
                         warn!("ClickHouse batch insert error (tenant={}): {}", tenant_id, e);
                     }
@@ -60,7 +130,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
     // Bounded at 50 K entries — when CH is slow the channel fills and try_send fails, which
     // naturally slows Kafka consumption (backpressure) instead of OOM-ing the process.
     let (ch_tx, ch_rx) = mpsc::channel::<(NdrEvent, String)>(50_000);
-    tokio::spawn(batch_writer(state.ch_storage.clone(), ch_rx));
+    tokio::spawn(batch_writer(state.ch_storage.clone(), ch_rx, state.redis_mux.clone()));
 
     info!("Kafka consumer ready — group: ndr-engine-group instance: {}", instance_id);
     use dashmap::DashMap;
@@ -1511,4 +1581,71 @@ fn guess_os_from_ua(ua: &str) -> String {
     if ua.contains("Debian") { return "Debian Linux".to_string(); }
     if ua.contains("Linux") { return "Linux".to_string(); }
     String::new()
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+
+    fn ev(ts: u32, raw: &str) -> NdrEvent {
+        NdrEvent {
+            timestamp: ts, source: "agent-z".into(), src_ip: "192.168.1.76".into(),
+            dst_ip: "8.8.8.8".into(), src_port: 40000, dst_port: 53, proto: "udp".into(),
+            event_type: "conn".into(), community_id: "1:abc=".into(), raw: raw.into(),
+            tenant_id: "default".into(), sensor_id: "local-central".into(),
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_sensitive() {
+        assert_eq!(event_fingerprint("default", &ev(1, "{\"uid\":\"A\"}")), event_fingerprint("default", &ev(1, "{\"uid\":\"A\"}")));
+        assert_ne!(event_fingerprint("default", &ev(1, "{\"uid\":\"A\"}")), event_fingerprint("default", &ev(1, "{\"uid\":\"B\"}")));
+        assert_ne!(event_fingerprint("default", &ev(1, "{}")), event_fingerprint("default", &ev(2, "{}")));
+        assert_ne!(event_fingerprint("default", &ev(1, "{}")), event_fingerprint("other", &ev(1, "{}")));
+        assert_eq!(event_fingerprint("default", &ev(1, "{}")).len(), 32);
+    }
+
+    // Needs a real Redis:  TEST_REDIS_URL=redis://127.0.0.1:6390 cargo test -p ndr-engine dedup_tests -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn dedup_against_real_redis() {
+        let url = std::env::var("TEST_REDIS_URL").expect("TEST_REDIS_URL");
+        let client = redis::Client::open(url).unwrap();
+        let mut conn = client.get_multiplexed_tokio_connection().await.unwrap();
+        let salt = format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let raws: Vec<String> = (0..5).map(|i| format!("{{\"uid\":\"{}-{}\"}}", salt, i)).collect();
+
+        // first delivery: all 5 kept
+        let first = dedup_events(&mut conn, "default", raws.iter().map(|r| ev(10, r)).collect(), 60).await;
+        assert_eq!(first.len(), 5);
+        // the same 5 again (e.g. file re-read): all dropped
+        let again = dedup_events(&mut conn, "default", raws.iter().map(|r| ev(10, r)).collect(), 60).await;
+        assert_eq!(again.len(), 0);
+        // 3 new + 1 duplicate of a new one inside the same batch: 3 kept
+        let mixed: Vec<NdrEvent> = vec![ev(11, &format!("{}-x", salt)), ev(11, &format!("{}-y", salt)),
+                                        ev(11, &format!("{}-x", salt)), ev(11, &format!("{}-z", salt))];
+        assert_eq!(dedup_events(&mut conn, "default", mixed, 60).await.len(), 3);
+        // a same-content event for another tenant is NOT a duplicate
+        assert_eq!(dedup_events(&mut conn, "tenant2", vec![ev(10, &raws[0])], 60).await.len(), 1);
+        // TTL 0 disables de-dup entirely
+        assert_eq!(dedup_events(&mut conn, "default", raws.iter().map(|r| ev(10, r)).collect(), 0).await.len(), 5);
+    }
+
+    // Redis dies mid-flight => every event is still kept (fail open, no data loss).
+    // Uses its own throwaway server: TEST_REDIS_URL_KILL (the test shuts it down).
+    #[tokio::test]
+    #[ignore]
+    async fn fails_open_when_redis_dies() {
+        let url = std::env::var("TEST_REDIS_URL_KILL").expect("TEST_REDIS_URL_KILL");
+        let client = redis::Client::open(url).unwrap();
+        let mut conn = client.get_multiplexed_tokio_connection().await.unwrap();
+        // sanity: works while the server is up
+        assert_eq!(dedup_events(&mut conn, "default", vec![ev(1, "{\"k\":1}")], 60).await.len(), 1);
+        assert_eq!(dedup_events(&mut conn, "default", vec![ev(1, "{\"k\":1}")], 60).await.len(), 0);
+        let _: Result<(), _> = redis::cmd("SHUTDOWN").arg("NOSAVE").query_async(&mut conn).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // server is gone: the very same (already-seen) events must be KEPT, not dropped
+        let kept = dedup_events(&mut conn, "default", vec![ev(1, "{\"k\":1}"), ev(2, "{\"k\":2}"), ev(3, "{\"k\":3}")], 60).await;
+        assert_eq!(kept.len(), 3);
+    }
 }
