@@ -581,7 +581,7 @@ step "Analytics Database  (ClickHouse)"
 
 if [ "$DEPLOY_MODE" = "local" ]; then
     log "ClickHouse — Docker container cluster (2 nodes, bridge network)"
-    log "  Credentials:  ndr / ndr123"
+    log "  Credentials:  user ndr, random password stored in $INSTALL_DIR/.env"
     log "  Endpoint:     http://localhost:8123  (node 1, localhost-only)"
 
     CH_NEEDS_IMPORT=false
@@ -648,7 +648,14 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     CLICKHOUSE_URL="http://localhost:8123"
     CLICKHOUSE_URL_SECONDARY="http://localhost:8123"
     CLOUD_CH_USER="ndr"
-    CLOUD_CH_PASS="ndr123"
+    # Use the random password already written to .env earlier in this run. It was
+    # previously forced to a hardcoded "ndr123" here, giving every install the same
+    # database credential. ClickHouse reads it from CLICKHOUSE_PASSWORD at start-up,
+    # so a re-run simply rotates it consistently across the stack.
+    CLOUD_CH_PASS=$(grep '^CLICKHOUSE_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    if [ -z "$CLOUD_CH_PASS" ]; then
+        CLOUD_CH_PASS=$(openssl rand -hex 16 2>/dev/null || echo "$(date +%s%N | sha256sum | head -c 32)")
+    fi
     CLOUD_KAFKA="kafka1:9092,kafka2:9092,kafka3:9092"
 else
     log "Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
