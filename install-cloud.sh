@@ -499,6 +499,49 @@ fi
 # cloud install — removed rather than kept in sync by hand.
 log "✅ Using downloaded nginx.conf (auth_service routing included)"
 
+# ── Step 5b: GeoIP / ASN databases ────────────
+# docker-compose.yml already mounts $INSTALL_DIR/rust/ndr-engine/data into
+# every engine container at /app/ndr-engine/data - the exact path
+# GeoIpLookup::open("data/GeoLite2-City.mmdb") and AsnLookup::open(...) look
+# for. Nothing ever populated that host path though: no installer download
+# these, and MaxMind's own GeoLite2 requires a personal account + license
+# key that can't be scripted here. DB-IP Lite publishes free MMDB-format
+# databases with no account needed, schema-compatible with maxminddb's
+# built-in geoip2::City/Asn structs (same standard GeoIP2 schema, not
+# anything MaxMind-account-specific) - confirmed live: the download URL
+# returns real data, and exactly 100 city lookups vs 200 in an unrelated
+# ip-api.com batch call is what surfaced the silent-failure bug fixed
+# earlier today, so the schema question there is already proven out by
+# the same investigation.
+step "Downloading GeoIP/ASN databases (DB-IP Lite, no account needed)"
+
+GEOIP_DIR="$INSTALL_DIR/rust/ndr-engine/data"
+mkdir -p "$GEOIP_DIR"
+YEAR_MONTH=$(date -u +%Y-%m)
+
+download_dbip() {
+    local kind="$1" dest_name="$2"
+    local url="https://download.db-ip.com/free/dbip-${kind}-lite-${YEAR_MONTH}.mmdb.gz"
+    local tmp_gz="$GEOIP_DIR/.${kind}.mmdb.gz.tmp"
+    if curl -fsSL --max-time 300 "$url" -o "$tmp_gz" 2>/tmp/ndr_geoip_err; then
+        if gunzip -t "$tmp_gz" 2>/dev/null && gunzip -c "$tmp_gz" > "$GEOIP_DIR/$dest_name.tmp" 2>/dev/null; then
+            mv "$GEOIP_DIR/$dest_name.tmp" "$GEOIP_DIR/$dest_name"
+            rm -f "$tmp_gz"
+            log "✅ $dest_name downloaded ($(du -h "$GEOIP_DIR/$dest_name" | cut -f1))"
+        else
+            rm -f "$tmp_gz" "$GEOIP_DIR/$dest_name.tmp"
+            warn "$dest_name download was incomplete/corrupt — engine runs fine without it, falls back to ip-api.com. Re-run install-cloud.sh to retry."
+        fi
+    else
+        rm -f "$tmp_gz"
+        warn "$dest_name download failed ($(cat /tmp/ndr_geoip_err 2>/dev/null)) — engine runs fine without it, falls back to ip-api.com. Re-run install-cloud.sh to retry."
+    fi
+}
+
+download_dbip "city" "GeoLite2-City.mmdb"
+download_dbip "asn"  "GeoLite2-ASN.mmdb"
+rm -f /tmp/ndr_geoip_err
+
 # ── Step 6: Start Docker stack ────────────────
 step "Starting Docker stack (cloud profile)"
 
@@ -783,6 +826,45 @@ while true; do
             fi
         fi
     fi
+
+    # Monthly GeoIP/ASN refresh — DB-IP Lite publishes new files each month;
+    # re-download once the current one turns stale and restart just the
+    # engines (not the whole stack) to pick it up. Same download+gunzip
+    # logic as the install-time step, kept in sync with it by hand since
+    # this runs standalone on the host, not through install-cloud.sh.
+    # GEOIP_LAST_CHECK guards against retrying every 30s forever if DB-IP
+    # is unreachable — at most once per day once the file is stale.
+    GEOIP_DIR="\$INSTALL_DIR/rust/ndr-engine/data"
+    GEOIP_LAST_CHECK="\$GEOIP_DIR/.last-refresh-check"
+    if { [ ! -f "\$GEOIP_DIR/GeoLite2-City.mmdb" ] || \
+         [ -n "\$(find "\$GEOIP_DIR/GeoLite2-City.mmdb" -mtime +25 2>/dev/null)" ]; } && \
+       { [ ! -f "\$GEOIP_LAST_CHECK" ] || [ -n "\$(find "\$GEOIP_LAST_CHECK" -mtime +1 2>/dev/null)" ]; }; then
+        touch "\$GEOIP_LAST_CHECK"
+        YEAR_MONTH=\$(date -u +%Y-%m)
+        REFRESHED=false
+        for pair in "city:GeoLite2-City.mmdb" "asn:GeoLite2-ASN.mmdb"; do
+            kind="\${pair%%:*}"; dest_name="\${pair##*:}"
+            url="https://download.db-ip.com/free/dbip-\${kind}-lite-\${YEAR_MONTH}.mmdb.gz"
+            tmp_gz="\$GEOIP_DIR/.\${kind}.mmdb.gz.tmp"
+            if curl -fsSL --max-time 300 "\$url" -o "\$tmp_gz" 2>/dev/null && \
+               gunzip -t "\$tmp_gz" 2>/dev/null && \
+               gunzip -c "\$tmp_gz" > "\$GEOIP_DIR/\$dest_name.tmp" 2>/dev/null; then
+                mv "\$GEOIP_DIR/\$dest_name.tmp" "\$GEOIP_DIR/\$dest_name"
+                rm -f "\$tmp_gz"
+                REFRESHED=true
+                logger -t ndr-updater "GeoIP: \$dest_name refreshed to \$YEAR_MONTH"
+            else
+                rm -f "\$tmp_gz" "\$GEOIP_DIR/\$dest_name.tmp"
+                logger -t ndr-updater "GeoIP: \$dest_name refresh failed for \$YEAR_MONTH, keeping existing file"
+            fi
+        done
+        if [ "\$REFRESHED" = true ]; then
+            cd "\$INSTALL_DIR" || exit 1
+            docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --no-deps ndr-engine-1 ndr-engine-2 ndr-engine-3 2>&1 | logger -t ndr-updater
+            logger -t ndr-updater "Engines restarted to pick up refreshed GeoIP data"
+        fi
+    fi
+
     sleep 30
 done
 WATCHEREOF
