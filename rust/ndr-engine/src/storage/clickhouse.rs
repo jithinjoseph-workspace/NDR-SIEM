@@ -1717,8 +1717,12 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     pub async fn remove_sensor_assignment(&self, user_id: &str, sensor_id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        // mutations_sync=1: block until applied, so the API's "removed" response
+        // is only sent once a follow-up list call would actually reflect it
+        // (found via TC-065: the async default left a brief window where a
+        // freshly "removed" assignment still showed up).
         self.client
-            .query("ALTER TABLE ndr.user_sensor_assignments DELETE WHERE user_id = ? AND sensor_id = ? AND tenant_id = ?")
+            .query("ALTER TABLE ndr.user_sensor_assignments DELETE WHERE user_id = ? AND sensor_id = ? AND tenant_id = ? SETTINGS mutations_sync=1")
             .bind(user_id)
             .bind(sensor_id)
             .bind(tenant_id)
@@ -4395,6 +4399,28 @@ pub async fn get_sensor_key_prefix_by_id(
         .await?;
 
     Ok(rows.into_iter().next().map(|r| r.key_prefix))
+}
+
+/// Owning tenant of a sensor key by its UUID id — lets a caller confirm a
+/// tenant_admin only ever acts on their own tenant's key (TC-070: revoking
+/// used to be super_admin-only with no creator/tenant exception at all).
+pub async fn get_sensor_key_tenant_by_id(
+    &self,
+    id: &str,
+) -> anyhow::Result<Option<String>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row { tenant_id: String }
+
+    let rows = self.client
+        .query(&format!(
+            "SELECT tenant_id FROM ndr.sensor_keys FINAL \
+             WHERE id = '{}' LIMIT 1",
+            sql_escape(id)
+        ))
+        .fetch_all::<Row>()
+        .await?;
+
+    Ok(rows.into_iter().next().map(|r| r.tenant_id))
 }
 
 pub async fn reactivate_sensor_key(

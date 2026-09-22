@@ -6121,10 +6121,22 @@ pub async fn revoke_sensor_key_api(
         Some(c) => c,
         None => return Json(json!({"status": "error", "message": "Unauthorized"})),
     };
+    // TC-070: a tenant_admin can create a sensor key for their own tenant but
+    // previously had no way to revoke one — strictly super_admin-only, no
+    // exception for a key that actually belongs to their own tenant. Now
+    // allowed for their own tenant's keys only; cross-tenant still forbidden.
     if claims.role != "super_admin" {
-        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can revoke sensor keys"}));
+        if claims.role != "tenant_admin" {
+            return Json(json!({"status": "error", "message": "Forbidden: Only super_admin or tenant_admin can revoke sensor keys"}));
+        }
+        match state.ch_storage.get_sensor_key_tenant_by_id(&id).await {
+            Ok(Some(owner_tenant)) if owner_tenant == claims.tenant_id => {}
+            Ok(Some(_)) => return Json(json!({"status": "error", "message": "Forbidden: cannot revoke another tenant's sensor key"})),
+            Ok(None) => return Json(json!({"status": "error", "message": "Sensor key not found"})),
+            Err(e) => return Json(json!({"status": "error", "message": e.to_string()})),
+        }
     }
-    
+
     match state.ch_storage.revoke_sensor_key(&id).await {
         Ok(_) => {
             // Immediately evict from shared Redis cache so ALL engine

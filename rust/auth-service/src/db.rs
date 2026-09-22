@@ -164,9 +164,11 @@ impl AuthDb {
 
     /// Update password hash (password reset).
     pub async fn set_password_hash(&self, user_id: &str, new_hash: &str) -> Result<()> {
+        // mutations_sync=1: block until applied - a password reset must take
+        // effect before this call returns, not asynchronously later.
         self.client
             .query(&format!(
-                "ALTER TABLE users UPDATE password_hash = '{}' WHERE id = '{}'",
+                "ALTER TABLE users UPDATE password_hash = '{}' WHERE id = '{}' SETTINGS mutations_sync=1",
                 escape(new_hash), escape(user_id)
             ))
             .execute()
@@ -282,9 +284,11 @@ impl AuthDb {
             Some(h) => format!(", password_hash = '{}'", escape(h)),
             None    => String::new(),
         };
+        // mutations_sync=1: block until applied - a role/tenant/active change
+        // (e.g. the privilege-escalation fix) must be immediately in effect.
         let q = format!(
             "ALTER TABLE users UPDATE role = '{}', tenant_id = '{}', \
-                    permissions = '{}', active = {}{} WHERE id = '{}'",
+                    permissions = '{}', active = {}{} WHERE id = '{}' SETTINGS mutations_sync=1",
             escape(role), escape(tenant_id), escape(permissions),
             active_u8, hash_clause, escape(id)
         );
@@ -293,8 +297,11 @@ impl AuthDb {
     }
 
     pub async fn set_user_active(&self, id: &str, active: bool) -> Result<()> {
+        // mutations_sync=1: block until applied (TC-062 found a ~0.6s window
+        // where a just-deactivated user could still log in under the async
+        // default).
         let q = format!(
-            "ALTER TABLE users UPDATE active = {} WHERE id = '{}'",
+            "ALTER TABLE users UPDATE active = {} WHERE id = '{}' SETTINGS mutations_sync=1",
             active as u8, escape(id)
         );
         self.client.query(&q).execute().await?;
@@ -303,7 +310,7 @@ impl AuthDb {
 
     pub async fn update_user_permissions(&self, id: &str, permissions: &str) -> Result<()> {
         let q = format!(
-            "ALTER TABLE users UPDATE permissions = '{}' WHERE id = '{}'",
+            "ALTER TABLE users UPDATE permissions = '{}' WHERE id = '{}' SETTINGS mutations_sync=1",
             escape(permissions), escape(id)
         );
         self.client.query(&q).execute().await?;
@@ -311,8 +318,10 @@ impl AuthDb {
     }
 
     pub async fn update_user_password(&self, id: &str, hash: &str) -> Result<()> {
+        // mutations_sync=1: same reasoning as set_password_hash - a password
+        // reset must be immediately effective.
         let q = format!(
-            "ALTER TABLE users UPDATE password_hash = '{}' WHERE id = '{}'",
+            "ALTER TABLE users UPDATE password_hash = '{}' WHERE id = '{}' SETTINGS mutations_sync=1",
             escape(hash), escape(id)
         );
         self.client.query(&q).execute().await?;
@@ -320,14 +329,16 @@ impl AuthDb {
     }
 
     pub async fn delete_user(&self, id: &str) -> Result<()> {
-        let q = format!("ALTER TABLE users DELETE WHERE id = '{}'", escape(id));
+        // mutations_sync=1: block until applied - a deleted user shouldn't
+        // still be listable/loggable-in immediately after this returns.
+        let q = format!("ALTER TABLE users DELETE WHERE id = '{}' SETTINGS mutations_sync=1", escape(id));
         self.client.query(&q).execute().await?;
         Ok(())
     }
 
     pub async fn update_user_gmail(&self, id: &str, gmail: &str) -> Result<()> {
         let q = format!(
-            "ALTER TABLE users UPDATE gmail = '{}' WHERE id = '{}'",
+            "ALTER TABLE users UPDATE gmail = '{}' WHERE id = '{}' SETTINGS mutations_sync=1",
             escape(gmail), escape(id)
         );
         self.client.query(&q).execute().await?;
@@ -336,7 +347,7 @@ impl AuthDb {
 
     pub async fn update_user_secret_code(&self, id: &str, code: &str) -> Result<()> {
         let q = format!(
-            "ALTER TABLE users UPDATE secret_code = '{}' WHERE id = '{}'",
+            "ALTER TABLE users UPDATE secret_code = '{}' WHERE id = '{}' SETTINGS mutations_sync=1",
             escape(code), escape(id)
         );
         self.client.query(&q).execute().await?;
@@ -370,7 +381,7 @@ impl AuthDb {
 
     pub async fn reset_password_by_username(&self, username: &str, hash: &str) -> Result<()> {
         let q = format!(
-            "ALTER TABLE users UPDATE password_hash = '{}' WHERE username = '{}'",
+            "ALTER TABLE users UPDATE password_hash = '{}' WHERE username = '{}' SETTINGS mutations_sync=1",
             escape(hash), escape(username)
         );
         self.client.query(&q).execute().await?;
