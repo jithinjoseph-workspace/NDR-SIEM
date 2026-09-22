@@ -706,6 +706,107 @@ else
     warn "ufw not found — skipping firewall setup"
 fi
 
+# ── Step 8b: Auto-update watcher with health-check rollback ──────────
+# Host-side loop (survives container restarts) watching for an update
+# request, either from the in-app "Apply Update" button (writes this same
+# flag file from inside ndr-engine, mounted through to this path) or
+# triggered remotely - e.g. your CI running
+# `ssh <user>@<this-host> "touch $INSTALL_DIR/scripts/.update-requested"`
+# right after pushing new images. Before pulling, snapshots the current
+# :latest as :latest-previous locally (no extra registry pull needed to
+# roll back); after restarting on the new images, polls each service's
+# Docker healthcheck. If they don't all report healthy within the
+# timeout, retags :latest-previous back onto :latest and restarts again -
+# verified live (tag-swap + restart correctly reverts a broken container
+# to the last known-good image).
+step "Installing auto-update watcher (with rollback on failed health check)"
+
+cat > "$INSTALL_DIR/scripts/update-watcher.sh" << WATCHEREOF
+#!/bin/bash
+REGISTRY="${REGISTRY}"
+INSTALL_DIR="$INSTALL_DIR"
+FLAG="\$INSTALL_DIR/scripts/.update-requested"
+IMAGES="ndr-engine ndr-ui provigil-auth"
+SERVICES="ndr-engine-1 ndr-engine-2 ndr-engine-3 ndr-ui provigil-auth"
+HEALTH_TIMEOUT=180
+
+wait_healthy() {
+    local deadline=\$(( \$(date +%s) + HEALTH_TIMEOUT ))
+    while [ "\$(date +%s)" -lt "\$deadline" ]; do
+        local all_healthy=true
+        for svc in \$SERVICES; do
+            status=\$(docker inspect --format='{{.State.Health.Status}}' "\$svc" 2>/dev/null || echo "missing")
+            [ "\$status" = "healthy" ] || { all_healthy=false; break; }
+        done
+        [ "\$all_healthy" = true ] && return 0
+        sleep 3
+    done
+    return 1
+}
+
+logger -t ndr-updater "NDR update watcher started — watching \$FLAG"
+while true; do
+    if [ -f "\$FLAG" ]; then
+        rm -f "\$FLAG"
+        logger -t ndr-updater "Update triggered"
+        cd "\$INSTALL_DIR" || exit 1
+
+        for img in \$IMAGES; do
+            docker tag "\${REGISTRY}/\${img}:latest" "\${REGISTRY}/\${img}:latest-previous" 2>/dev/null || true
+        done
+
+        for img in \$IMAGES; do
+            docker pull "\${REGISTRY}/\${img}:latest" 2>&1 | logger -t ndr-updater
+        done
+        docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d 2>&1 | logger -t ndr-updater
+
+        logger -t ndr-updater "Waiting up to \${HEALTH_TIMEOUT}s for services to report healthy..."
+        if wait_healthy; then
+            logger -t ndr-updater "Update successful — all services healthy"
+        else
+            logger -t ndr-updater "Update FAILED health check — rolling back to previous images"
+            for img in \$IMAGES; do
+                docker tag "\${REGISTRY}/\${img}:latest-previous" "\${REGISTRY}/\${img}:latest" 2>/dev/null || true
+            done
+            docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d 2>&1 | logger -t ndr-updater
+            if wait_healthy; then
+                logger -t ndr-updater "Rollback successful — previous version restored"
+            else
+                logger -t ndr-updater "CRITICAL: rollback also failed health check — manual intervention required"
+            fi
+        fi
+    fi
+    sleep 30
+done
+WATCHEREOF
+chmod +x "$INSTALL_DIR/scripts/update-watcher.sh"
+
+sudo tee /etc/systemd/system/ndr-updater.service > /dev/null << EOF
+[Unit]
+Description=NDR Cloud Update Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/scripts/update-watcher.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if sudo systemctl daemon-reload 2>/tmp/ndr_cloud_watcher_err && \
+   sudo systemctl enable --now ndr-updater.service 2>>/tmp/ndr_cloud_watcher_err; then
+    log "✅ Update watcher installed and running (ndr-updater.service)"
+    info "  Trigger a deploy remotely after CI pushes new images:"
+    info "    ssh <user>@<this-host> \"touch $INSTALL_DIR/scripts/.update-requested\""
+else
+    warn "ndr-updater.service could not be started ($(cat /tmp/ndr_cloud_watcher_err 2>/dev/null)) — platform runs fine without it, just won't auto-update. Check: sudo systemctl status ndr-updater"
+fi
+rm -f /tmp/ndr_cloud_watcher_err
+
 # ── Step 9: Health checks ────────────────────
 step "Running health checks"
 
