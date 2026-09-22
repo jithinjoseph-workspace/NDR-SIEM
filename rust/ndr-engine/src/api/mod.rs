@@ -10515,14 +10515,24 @@ pub async fn force_logout_user(
     let mut mux = state.redis_mux.clone();
     let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, target_username);
     let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+    // auth-service checks its own provigil:session:{jti} key, not ndr:session:{jti} —
+    // deleting only the ndr: copy left the session alive there, so a "revoked" token
+    // kept working on /api/auth/me and could even be renewed via /api/auth/refresh.
+    // Both namespaces are written together at login (login.rs), so the same jti list
+    // deletes both.
+    let provigil_user_set_key   = format!("provigil:user_sessions:{}:{}", tenant_id, target_username);
+    let provigil_tenant_set_key = format!("provigil:tenant_sessions:{}", tenant_id);
 
     let jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
     let count = jtis.len();
     for jti in &jtis {
         let _: redis::RedisResult<i64> = mux.del(format!("ndr:session:{}", jti)).await;
         let _: redis::RedisResult<i64> = mux.srem(&tenant_set_key, jti).await;
+        let _: redis::RedisResult<i64> = mux.del(format!("provigil:session:{}", jti)).await;
+        let _: redis::RedisResult<i64> = mux.srem(&provigil_tenant_set_key, jti).await;
     }
     let _: redis::RedisResult<i64> = mux.del(&user_set_key).await;
+    let _: redis::RedisResult<i64> = mux.del(&provigil_user_set_key).await;
 
     // Push force_logout WS message — Angular filters by target_username
     let msg = serde_json::to_string(&json!({
@@ -10562,6 +10572,10 @@ pub async fn force_logout_device(
     let mut mux = state.redis_mux.clone();
     let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, target_username);
     let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+    // Same fix as force_logout_user: also clear the provigil: copy auth-service
+    // actually checks, or the session (and a refresh off it) keeps working there.
+    let provigil_user_set_key   = format!("provigil:user_sessions:{}:{}", tenant_id, target_username);
+    let provigil_tenant_set_key = format!("provigil:tenant_sessions:{}", tenant_id);
 
     let jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
     let mut count = 0usize;
@@ -10573,6 +10587,9 @@ pub async fn force_logout_device(
             let _: redis::RedisResult<i64> = mux.del(&session_key).await;
             let _: redis::RedisResult<i64> = mux.srem(&user_set_key, jti).await;
             let _: redis::RedisResult<i64> = mux.srem(&tenant_set_key, jti).await;
+            let _: redis::RedisResult<i64> = mux.del(format!("provigil:session:{}", jti)).await;
+            let _: redis::RedisResult<i64> = mux.srem(&provigil_user_set_key, jti).await;
+            let _: redis::RedisResult<i64> = mux.srem(&provigil_tenant_set_key, jti).await;
             count += 1;
         }
     }
