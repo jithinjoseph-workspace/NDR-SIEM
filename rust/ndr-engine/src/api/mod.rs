@@ -9827,6 +9827,19 @@ pub async fn add_trusted_domain(
     let category = body.category.as_deref().unwrap_or("dns_beacon").to_string();
     let note     = body.note.as_deref().unwrap_or("").to_string();
 
+    // TC-089: this previously accepted an empty domain and an unbounded-length
+    // note with no validation at all. 253 is the real DNS max hostname length;
+    // 500 is a sane cap for a free-text note field.
+    if domain.is_empty() {
+        return Json(json!({"error": "Domain is required"}));
+    }
+    if domain.chars().count() > 253 {
+        return Json(json!({"error": "Domain is too long (max 253 characters)"}));
+    }
+    if note.chars().count() > 500 {
+        return Json(json!({"error": "Note is too long (max 500 characters)"}));
+    }
+
     // super_admin can create global (tenant_id='') or any tenant; others are scoped to their tenant
     let tenant_id = if claims.role == "super_admin" {
         body.tenant_id.clone().unwrap_or_default()
