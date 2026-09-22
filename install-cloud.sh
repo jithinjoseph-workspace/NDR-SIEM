@@ -337,14 +337,29 @@ sudo chmod -R 755 /opt/ndr
 sudo chown -R "$USERNAME:$USERNAME" /opt/ndr
 log "✅ Created /opt/ndr/pcap and /opt/ndr/evidence"
 
-# ── SSL directory setup ───────────────────────
-sudo mkdir -p /etc/ssl/ndr
-sudo chmod 750 /etc/ssl/ndr
-log "✅ SSL directory created at /etc/ssl/ndr"
-info "  Place your certificates here:"
-info "    /etc/ssl/ndr/cert.pem   (TLS certificate)"
-info "    /etc/ssl/ndr/key.pem    (TLS private key)"
-info "  Use certbot: certbot certonly --standalone -d your.domain.com"
+# ── TLS certificate for Nginx ──────────────────
+# nginx.conf (downloaded from the repo above) has SSL active by default and
+# reads from config/nginx/ssl/, which docker-compose.yml mounts into the
+# container at /etc/nginx/ssl/. Generate a self-signed cert there now so
+# nginx has something valid to start with; skipped if a real CA-signed one
+# has already been placed at the same path.
+SSL_DIR="$INSTALL_DIR/config/nginx/ssl"
+if [ ! -f "$SSL_DIR/ndr.crt" ] || [ ! -f "$SSL_DIR/ndr.key" ]; then
+    log "Generating self-signed TLS certificate for $PUBLIC_IP..."
+    mkdir -p "$SSL_DIR"
+    openssl req -x509 -nodes -days 730 -newkey rsa:2048 \
+        -keyout "$SSL_DIR/ndr.key" \
+        -out    "$SSL_DIR/ndr.crt" \
+        -subj   "/CN=$PUBLIC_IP" \
+        -addext "subjectAltName=IP:$PUBLIC_IP,IP:127.0.0.1,DNS:localhost" \
+        2>/dev/null
+    chmod 600 "$SSL_DIR/ndr.key"
+    log "✅ TLS certificate generated → $SSL_DIR"
+else
+    log "TLS certificate already exists — skipping generation"
+fi
+info "  For a real domain, use certbot then replace $SSL_DIR/ndr.crt + ndr.key,"
+info "  then: docker restart ndr-nginx"
 
 # ── Step 3: Configure ClickHouse ─────────────
 step "Configuring ClickHouse"
@@ -452,86 +467,14 @@ else
     warn "  AI: No Groq key set — add a provider in Settings > AI Providers after install."
 fi
 
-# ── Step 5: Cloud nginx config ────────────────
-step "Writing cloud nginx configuration"
-
-mkdir -p "$INSTALL_DIR/config/nginx"
-cat > "$INSTALL_DIR/config/nginx/nginx.conf" << 'NGINXEOF'
-events { worker_connections 1024; }
-
-http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-
-    upstream ndr_engines {
-        least_conn;
-        server ndr-engine-1:3000 max_fails=3 fail_timeout=30s;
-        server ndr-engine-2:3000 max_fails=3 fail_timeout=30s;
-        server ndr-engine-3:3000 max_fails=3 fail_timeout=30s;
-    }
-
-    upstream ws_engines {
-        ip_hash;
-        server ndr-engine-1:3000;
-        server ndr-engine-2:3000;
-        server ndr-engine-3:3000;
-    }
-
-    # Redirect HTTP → HTTPS (enable after placing certs)
-    # server {
-    #     listen 80;
-    #     server_name _;
-    #     return 301 https://$host$request_uri;
-    # }
-
-    server {
-        listen 80;
-
-        # SSL (uncomment after placing certs at /etc/ssl/ndr/)
-        # listen 443 ssl;
-        # ssl_certificate     /etc/ssl/ndr/cert.pem;
-        # ssl_certificate_key /etc/ssl/ndr/key.pem;
-        # ssl_protocols       TLSv1.2 TLSv1.3;
-
-        client_max_body_size 500m;
-
-        location /ws {
-            proxy_pass         http://ws_engines;
-            proxy_http_version 1.1;
-            proxy_set_header   Upgrade    $http_upgrade;
-            proxy_set_header   Connection "upgrade";
-            proxy_set_header   Host       $host;
-            proxy_read_timeout 3600s;
-        }
-
-        location /api {
-            proxy_pass         http://ndr_engines;
-            proxy_http_version 1.1;
-            proxy_set_header   Host              $host;
-            proxy_set_header   X-Real-IP         $remote_addr;
-            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-            proxy_set_header   X-Forwarded-Proto $scheme;
-            proxy_read_timeout 120s;
-        }
-
-        location /health {
-            proxy_pass http://ndr_engines;
-        }
-
-        location / {
-            proxy_pass         http://ndr-ui:80;
-            proxy_http_version 1.1;
-            proxy_set_header   Host              $host;
-            proxy_set_header   X-Real-IP         $remote_addr;
-            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-            proxy_set_header   X-Forwarded-Proto $scheme;
-            proxy_read_timeout 60s;
-        }
-    }
-}
-NGINXEOF
-log "✅ Cloud nginx config written"
-info "  SSL: uncomment the ssl_* lines after placing certs at /etc/ssl/ndr/"
+# ── Step 5: Nginx config ──────────────────────
+# Already the correct file — downloaded from config/nginx/ (repo source of
+# truth, has the real auth_service upstream + /api/auth/* routing) by the
+# bootstrap step above. Nothing to write here; a separate embedded copy used
+# to overwrite it with a stale version missing auth_service entirely, which
+# silently broke login (and everything else under /api/auth/*) on every
+# cloud install — removed rather than kept in sync by hand.
+log "✅ Using downloaded nginx.conf (auth_service routing included)"
 
 # ── Step 6: Start Docker stack ────────────────
 step "Starting Docker stack (cloud profile)"
@@ -785,19 +728,20 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${BLUE}  Public IP   :${NC} $PUBLIC_IP"
 echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP (port 80)"
-echo -e "${BLUE}  API (HTTPS) :${NC} https://$PUBLIC_IP (port 443, after cert setup)"
+echo -e "${BLUE}  API (HTTPS) :${NC} https://$PUBLIC_IP (port 443, self-signed cert)"
 [ -n "$PUBLIC_URL" ] && echo -e "${BLUE}  Public URL  :${NC} $PUBLIC_URL"
 echo -e "${BLUE}  ClickHouse  :${NC} internal only (clickhouse1:8123, clickhouse2:8123)"
 echo -e "${BLUE}  Kafka       :${NC} internal only (sensors use HTTP POST to /api/ingest)"
 echo -e "${BLUE}  Redis       :${NC} internal only (ndr-redis:6379)"
-echo -e "${BLUE}  SSL certs   :${NC} /etc/ssl/ndr/cert.pem + key.pem"
+echo -e "${BLUE}  SSL certs   :${NC} $INSTALL_DIR/config/nginx/ssl/ndr.crt + ndr.key (self-signed, already active)"
 echo ""
 echo -e "${YELLOW}  Next steps:${NC}"
-echo "   1. Point your domain DNS → $PUBLIC_IP"
-echo "   2. Run: certbot certonly --standalone -d your.domain.com"
-echo "   3. Copy certs to /etc/ssl/ndr/"
-echo "   4. Edit $INSTALL_DIR/config/nginx/nginx.conf — uncomment SSL lines"
-echo "   5. Restart nginx: docker restart ndr-nginx"
+echo "   1. (Optional, for a real domain instead of the self-signed cert)"
+echo "      Point your domain DNS → $PUBLIC_IP"
+echo "   2. sudo docker stop ndr-nginx"
+echo "   3. certbot certonly --standalone -d your.domain.com"
+echo "   4. Copy the resulting cert/key to $INSTALL_DIR/config/nginx/ssl/ndr.crt + ndr.key"
+echo "   5. sudo docker start ndr-nginx"
 echo "   6. On sensors: set CLOUD_URL=$SENSOR_URL in /opt/ndr-sensor/.env"
 echo ""
 echo -e "${GREEN}  Install log: $INSTALL_DIR/install-cloud.log${NC}"
