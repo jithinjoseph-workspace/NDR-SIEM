@@ -8,28 +8,32 @@ use super::analyzer::{build_exposure, match_iocs, ExposureProfile, IocMatch};
 use super::cloud_trust::TrustedRanges;
 
 pub fn spawn_predictor(
-    ch:      Arc<crate::storage::ClickhouseStorage>,
-    trusted: Arc<RwLock<TrustedRanges>>,
+    ch:        Arc<crate::storage::ClickhouseStorage>,
+    trusted:   Arc<RwLock<TrustedRanges>>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(300)).await;
         loop {
-            info!("Threat predictor: generating predictions");
-            let Ok(tenants) = ch.get_all_tenants().await else {
-                tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
-                continue;
-            };
-            let trusted_snap = trusted.read().await;
-            for tenant_id in tenants {
-                if !ch.get_tenant_ai_enabled(&tenant_id).await {
-                    continue;
-                }
-                if let Err(e) = run_prediction(&ch, &tenant_id, &trusted_snap).await {
-                    warn!("Prediction failed for {}: {}", tenant_id, e);
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                info!("Threat predictor: generating predictions");
+                'work: {
+                    let Ok(tenants) = ch.get_all_tenants().await else {
+                        break 'work;
+                    };
+                    let trusted_snap = trusted.read().await;
+                    for tenant_id in tenants {
+                        if !ch.get_tenant_ai_enabled(&tenant_id).await {
+                            continue;
+                        }
+                        if let Err(e) = run_prediction(&ch, &tenant_id, &trusted_snap).await {
+                            warn!("Prediction failed for {}: {}", tenant_id, e);
+                        }
+                    }
+                    info!("Threat predictor: cycle complete — next run in 6 hours");
+                    drop(trusted_snap);
                 }
             }
-            info!("Threat predictor: cycle complete — next run in 6 hours");
-            drop(trusted_snap);
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });

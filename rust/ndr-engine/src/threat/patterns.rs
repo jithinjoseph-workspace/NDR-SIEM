@@ -6,14 +6,19 @@ pub fn spawn_pattern_sync(
     ch: Arc<crate::storage::ClickhouseStorage>,
     chain_trigger: Arc<Notify>,
     redis: Arc<redis::Client>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
-        sync_mitre_attack(&ch, &redis).await;
-        chain_trigger.notify_one();
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(7 * 24 * 3600)).await;
+        if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
             sync_mitre_attack(&ch, &redis).await;
             chain_trigger.notify_one();
+        }
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(7 * 24 * 3600)).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                sync_mitre_attack(&ch, &redis).await;
+                chain_trigger.notify_one();
+            }
         }
     });
 }

@@ -13,8 +13,9 @@ const REFRESH_SECS: u64 = 300; // 5 minutes
 const WINDOW_HOURS: u32 = 24;
 
 pub fn spawn_entity_scorer(
-    ch:    Arc<ClickhouseStorage>,
-    cache: Arc<dashmap::DashMap<String, f32>>,
+    ch:        Arc<ClickhouseStorage>,
+    cache:     Arc<dashmap::DashMap<String, f32>>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
         // Run immediately on startup so the in-memory cache is pre-populated.
@@ -22,7 +23,9 @@ pub fn spawn_entity_scorer(
         run_refresh(&ch, &cache).await;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(REFRESH_SECS)).await;
-            run_refresh(&ch, &cache).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                run_refresh(&ch, &cache).await;
+            }
         }
     });
 }

@@ -4,22 +4,24 @@ use tracing::{info, warn};
 use crate::ai::provider::{generate, UseCase};
 use crate::storage::clickhouse::tenant_db_pub;
 
-pub fn spawn_correlator(ch: Arc<crate::storage::ClickhouseStorage>) {
+pub fn spawn_correlator(ch: Arc<crate::storage::ClickhouseStorage>, is_leader: Arc<std::sync::atomic::AtomicBool>) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(900)).await;
         loop {
-            match ch.get_all_tenants().await {
-                Ok(tenants) => {
-                    for tenant_id in tenants {
-                        let ai_enabled = ch.get_tenant_ai_enabled(&tenant_id).await;
-                        if let Err(e) = run_correlation(&ch, &tenant_id, ai_enabled).await {
-                            warn!("Correlation failed for {}: {}", tenant_id, e);
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                match ch.get_all_tenants().await {
+                    Ok(tenants) => {
+                        for tenant_id in tenants {
+                            let ai_enabled = ch.get_tenant_ai_enabled(&tenant_id).await;
+                            if let Err(e) = run_correlation(&ch, &tenant_id, ai_enabled).await {
+                                warn!("Correlation failed for {}: {}", tenant_id, e);
+                            }
                         }
                     }
+                    Err(e) => warn!("correlator: failed to get tenants: {}", e),
                 }
-                Err(e) => warn!("correlator: failed to get tenants: {}", e),
+                info!("Correlation cycle complete — next run in 6 hours");
             }
-            info!("Correlation cycle complete — next run in 6 hours");
             tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
         }
     });

@@ -27,12 +27,15 @@ pub fn spawn_beacon_detector(
     ch:        Arc<ClickhouseStorage>,
     redis_mux: redis::aio::MultiplexedConnection,
     ws_tx:     tokio::sync::broadcast::Sender<String>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
         // Initial delay — let traffic accumulate before first scan
         tokio::time::sleep(std::time::Duration::from_secs(180)).await;
         loop {
-            run_scan(&ch, &redis_mux, &ws_tx).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                run_scan(&ch, &redis_mux, &ws_tx).await;
+            }
             tokio::time::sleep(std::time::Duration::from_secs(1800)).await; // every 30 min
         }
     });

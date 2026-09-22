@@ -55,6 +55,14 @@ impl LeaderElection {
         self.is_leader.load(Ordering::Relaxed)
     }
 
+    /// A cheap, cloneable handle to the same flag `is_leader()` reads — pass this
+    /// into background tasks so they can skip real work when not the leader,
+    /// instead of only checking leadership once at spawn time (which previously
+    /// let a task started as leader keep running forever after losing it).
+    pub fn is_leader_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.is_leader)
+    }
+
     #[allow(dead_code)]
     pub fn instance_id(&self) -> &str {
         &self.instance_id

@@ -95,14 +95,17 @@ fn cidr_to_range(cidr: &str) -> Option<(u32, u32)> {
 /// Uses Redis only for a heartbeat timestamp — no cross-engine locking needed
 /// because this task is already leader-only (spawned from spawn_threat_tasks).
 pub fn spawn_trust_updater(
-    trusted: Arc<RwLock<TrustedRanges>>,
-    redis:   Arc<redis::Client>,
-    asn:     Arc<Option<crate::enrichment::AsnLookup>>,
-    ch:      Arc<crate::storage::ClickhouseStorage>,
+    trusted:   Arc<RwLock<TrustedRanges>>,
+    redis:     Arc<redis::Client>,
+    asn:       Arc<Option<crate::enrichment::AsnLookup>>,
+    ch:        Arc<crate::storage::ClickhouseStorage>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
         loop {
-            refresh(&trusted, &redis, &asn, &ch).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                refresh(&trusted, &redis, &asn, &ch).await;
+            }
             // 23h sleep so refresh always completes well before the 24h cache window
             tokio::time::sleep(std::time::Duration::from_secs(23 * 3600)).await;
         }

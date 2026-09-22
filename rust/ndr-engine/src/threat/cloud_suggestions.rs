@@ -10,12 +10,14 @@ const REJECTED_KEY:   &str = "trusted_cloud_rejected";
 
 /// Spawn background task: every 6h scan traffic for unknown high-volume orgs,
 /// ask AI if they are legitimate cloud/CDN providers, store suggestions in ndr.settings.
-pub fn spawn_suggestion_scanner(ch: Arc<ClickhouseStorage>) {
+pub fn spawn_suggestion_scanner(ch: Arc<ClickhouseStorage>, is_leader: Arc<std::sync::atomic::AtomicBool>) {
     tokio::spawn(async move {
         // Initial delay — let the engine fully start before first scan
         tokio::time::sleep(std::time::Duration::from_secs(120)).await;
         loop {
-            run_scan(&ch).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                run_scan(&ch).await;
+            }
             // Check every 15 min so new unknown providers appear in admin page quickly
             tokio::time::sleep(std::time::Duration::from_secs(900)).await;
         }

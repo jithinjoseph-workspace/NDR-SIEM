@@ -74,6 +74,10 @@ pub fn spawn_all(
         let entity_cache_for_spawn = entity_cache.clone();
         let redis_mux_for_spawn    = redis_mux.clone();
         let ws_tx_for_spawn        = ws_tx.clone();
+        // Same flag election_arc.is_leader() reads — cloned once here so every
+        // spawned task can poll it every cycle instead of only checking
+        // leadership at spawn time (see spawn_threat_tasks doc comment below).
+        let is_leader_for_spawn    = election_arc.is_leader_flag();
         election_arc.start(
             move || {
                 if !flag.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -86,6 +90,7 @@ pub fn spawn_all(
                         entity_cache_for_spawn.clone(),
                         redis_mux_for_spawn.clone(),
                         ws_tx_for_spawn.clone(),
+                        Arc::clone(&is_leader_for_spawn),
                     );
                 } else {
                     tracing::info!("Re-elected — tasks already running, no restart needed");
@@ -108,6 +113,15 @@ pub fn spawn_all(
 }
 
 /// Start all 5 threat background tasks. Called once when this engine wins election.
+///
+/// `is_leader` is polled by each task every cycle, not just read once here at
+/// spawn time. Tasks are only ever spawned once per process (re-election just
+/// logs and returns, see the caller) — they keep running for the process
+/// lifetime, but skip their real work whenever this engine isn't the current
+/// leader. Without this, an instance that later lost leadership (e.g. after a
+/// Redis restart) kept running the full analysis suite forever in parallel
+/// with the new leader — duplicate entity scoring, predictions, correlation,
+/// all double-writing the same ClickHouse tables.
 fn spawn_threat_tasks(
     ch:           Arc<crate::storage::ClickhouseStorage>,
     redis:        Arc<redis::Client>,
@@ -116,6 +130,7 @@ fn spawn_threat_tasks(
     entity_cache: Arc<dashmap::DashMap<String, f32>>,
     redis_mux:    redis::aio::MultiplexedConnection,
     ws_tx:        tokio::sync::broadcast::Sender<String>,
+    is_leader:    Arc<std::sync::atomic::AtomicBool>,
 ) {
     let chain_trigger = Arc::new(tokio::sync::Notify::new());
 
@@ -125,9 +140,12 @@ fn spawn_threat_tasks(
         Arc::clone(&redis),
         Arc::clone(&asn),
         Arc::clone(&ch),
+        Arc::clone(&is_leader),
     );
 
     // Only collect external feeds if any active tenant purchased threat_intel.
+    // Not leader-gated below: collector.rs wraps a loop shared with siem-engine
+    // in provigil-common, out of scope for this fix - flagged separately.
     {
         let ch_feat = Arc::clone(&ch);
         tokio::spawn(async move {
@@ -143,16 +161,16 @@ fn spawn_threat_tasks(
             }
         });
     }
-    predictor::spawn_predictor(Arc::clone(&ch), Arc::clone(&trusted));
-    patterns::spawn_pattern_sync(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&redis));
-    chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&trusted), Arc::clone(&asn));
-    correlator::spawn_correlator(Arc::clone(&ch));
-    cloud_suggestions::spawn_suggestion_scanner(Arc::clone(&ch));
-    beacon_detector::spawn_beacon_detector(Arc::clone(&ch), redis_mux, ws_tx);
-    entity_scorer::spawn_entity_scorer(Arc::clone(&ch), entity_cache);
-    crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch));
-    lateral_movement::spawn_lateral_movement_detector(Arc::clone(&ch));
-    jarm::spawn_jarm_scanner(Arc::clone(&ch));
+    predictor::spawn_predictor(Arc::clone(&ch), Arc::clone(&trusted), Arc::clone(&is_leader));
+    patterns::spawn_pattern_sync(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&redis), Arc::clone(&is_leader));
+    chain_matcher::spawn_chain_matcher(Arc::clone(&ch), Arc::clone(&chain_trigger), Arc::clone(&trusted), Arc::clone(&asn), Arc::clone(&is_leader));
+    correlator::spawn_correlator(Arc::clone(&ch), Arc::clone(&is_leader));
+    cloud_suggestions::spawn_suggestion_scanner(Arc::clone(&ch), Arc::clone(&is_leader));
+    beacon_detector::spawn_beacon_detector(Arc::clone(&ch), redis_mux, ws_tx, Arc::clone(&is_leader));
+    entity_scorer::spawn_entity_scorer(Arc::clone(&ch), entity_cache, Arc::clone(&is_leader));
+    crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch), Arc::clone(&is_leader));
+    lateral_movement::spawn_lateral_movement_detector(Arc::clone(&ch), Arc::clone(&is_leader));
+    jarm::spawn_jarm_scanner(Arc::clone(&ch), Arc::clone(&is_leader));
 
     tracing::info!("All 12 threat background tasks started on elected leader");
 }

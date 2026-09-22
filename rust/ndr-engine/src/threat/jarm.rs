@@ -400,13 +400,18 @@ pub fn check_blocklist(fp: &str) -> Option<&'static str> {
 /// Spawn the JARM background task.
 /// Runs on a 6-hour cycle. Queries active TLS servers from network_logs for each
 /// tenant and fingerprints any server not yet observed. C2 matches create alerts.
-pub fn spawn_jarm_scanner(ch: std::sync::Arc<crate::storage::ClickhouseStorage>) {
+pub fn spawn_jarm_scanner(
+    ch: std::sync::Arc<crate::storage::ClickhouseStorage>,
+    is_leader: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     tokio::spawn(async move {
         // Stagger against other tasks
         tokio::time::sleep(Duration::from_secs(90)).await;
 
         loop {
-            run_jarm_cycle(&ch).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                run_jarm_cycle(&ch).await;
+            }
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });

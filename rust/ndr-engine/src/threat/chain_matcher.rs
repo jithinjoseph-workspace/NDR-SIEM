@@ -8,22 +8,25 @@ use crate::storage::clickhouse::tenant_db_pub;
 use super::cloud_trust::TrustedRanges;
 
 pub fn spawn_chain_matcher(
-    ch:      Arc<crate::storage::ClickhouseStorage>,
-    trigger: Arc<Notify>,
-    trusted: Arc<tokio::sync::RwLock<TrustedRanges>>,
-    asn:     Arc<Option<crate::enrichment::AsnLookup>>,
+    ch:        Arc<crate::storage::ClickhouseStorage>,
+    trigger:   Arc<Notify>,
+    trusted:   Arc<tokio::sync::RwLock<TrustedRanges>>,
+    asn:       Arc<Option<crate::enrichment::AsnLookup>>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         loop {
-            match ch.get_all_tenants().await {
-                Ok(tenants) => {
-                    for tenant_id in &tenants {
-                        if !ch.get_tenant_ai_enabled(tenant_id).await { continue; }
-                        run_matching(Arc::clone(&ch), tenant_id, &trusted, &asn).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                match ch.get_all_tenants().await {
+                    Ok(tenants) => {
+                        for tenant_id in &tenants {
+                            if !ch.get_tenant_ai_enabled(tenant_id).await { continue; }
+                            run_matching(Arc::clone(&ch), tenant_id, &trusted, &asn).await;
+                        }
                     }
+                    Err(e) => warn!("chain_matcher: failed to get tenants: {}", e),
                 }
-                Err(e) => warn!("chain_matcher: failed to get tenants: {}", e),
             }
 
             tokio::select! {
