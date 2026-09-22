@@ -405,6 +405,12 @@ else
     NDR_AGENT_SECRET=$(openssl rand -hex 32)
 fi
 
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^DEPLOY_WEBHOOK_SECRET=." "$INSTALL_DIR/.env"; then
+    DEPLOY_WEBHOOK_SECRET=$(grep "^DEPLOY_WEBHOOK_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+else
+    DEPLOY_WEBHOOK_SECRET=$(openssl rand -hex 32)
+fi
+
 # Random per-install ClickHouse password — was previously hardcoded to
 # "ndr123" for every cloud install, which meant every deployment shared
 # the same database credential. Preserved across re-runs of this script
@@ -457,6 +463,7 @@ CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=$JWT_SECRET
 NDR_AGENT_SECRET=$NDR_AGENT_SECRET
+DEPLOY_WEBHOOK_SECRET=$DEPLOY_WEBHOOK_SECRET
 CORS_ORIGIN=$CORS_VALUE
 OPENSEARCH_URL=
 ARKIME_URL=
@@ -800,12 +807,48 @@ EOF
 if sudo systemctl daemon-reload 2>/tmp/ndr_cloud_watcher_err && \
    sudo systemctl enable --now ndr-updater.service 2>>/tmp/ndr_cloud_watcher_err; then
     log "✅ Update watcher installed and running (ndr-updater.service)"
-    info "  Trigger a deploy remotely after CI pushes new images:"
-    info "    ssh <user>@<this-host> \"touch $INSTALL_DIR/scripts/.update-requested\""
 else
     warn "ndr-updater.service could not be started ($(cat /tmp/ndr_cloud_watcher_err 2>/dev/null)) — platform runs fine without it, just won't auto-update. Check: sudo systemctl status ndr-updater"
 fi
 rm -f /tmp/ndr_cloud_watcher_err
+
+# ── Step 8c: Deploy webhook — lets CI trigger the watcher over HTTPS ──
+# scripts/deploy-webhook.py (downloaded by the bootstrap step above, part of
+# scripts/) checks X-Deploy-Secret and, if it matches, touches the same flag
+# update-watcher.sh already polls. Runs on the host (needs no container
+# access itself), reached through nginx's /deploy-webhook location - the
+# secret is the only auth, so nginx rate-limits it hard (2r/m) and it's
+# never exposed on its own port outside the Docker bridge.
+step "Installing deploy webhook (CI trigger)"
+
+sudo tee /etc/systemd/system/ndr-deploy-webhook.service > /dev/null << EOF
+[Unit]
+Description=NDR Deploy Webhook
+After=network.target
+
+[Service]
+Type=simple
+Environment=DEPLOY_WEBHOOK_SECRET=$DEPLOY_WEBHOOK_SECRET
+Environment=UPDATE_FLAG_PATH=$INSTALL_DIR/scripts/.update-requested
+Environment=DEPLOY_WEBHOOK_PORT=8099
+ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/deploy-webhook.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if sudo systemctl daemon-reload 2>/tmp/ndr_cloud_webhook_err && \
+   sudo systemctl enable --now ndr-deploy-webhook.service 2>>/tmp/ndr_cloud_webhook_err; then
+    log "✅ Deploy webhook installed and running (ndr-deploy-webhook.service)"
+    info "  Trigger a deploy from CI right after release.sh pushes new images:"
+    info "    curl -X POST https://$PUBLIC_IP/deploy-webhook -H \"X-Deploy-Secret: $DEPLOY_WEBHOOK_SECRET\""
+    info "  (secret also saved in $INSTALL_DIR/.env as DEPLOY_WEBHOOK_SECRET)"
+else
+    warn "ndr-deploy-webhook.service could not be started ($(cat /tmp/ndr_cloud_webhook_err 2>/dev/null)) — you can still trigger updates via: touch $INSTALL_DIR/scripts/.update-requested"
+fi
+rm -f /tmp/ndr_cloud_webhook_err
 
 # ── Step 9: Health checks ────────────────────
 step "Running health checks"

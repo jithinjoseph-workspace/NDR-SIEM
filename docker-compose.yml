@@ -483,6 +483,8 @@ services:
       - "3000:443"   # HTTPS — legacy port (keep for existing bookmarks)
       - "80:80"      # HTTP — issues 301 redirect to https
       - "3080:80"    # HTTP — legacy port
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # so /deploy-webhook can reach the host-level webhook listener (scripts/deploy-webhook.py, not a container)
     volumes:
       - ${INSTALL_DIR}/config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ${INSTALL_DIR}/config/nginx/ssl:/etc/nginx/ssl:ro   # TLS cert & key
