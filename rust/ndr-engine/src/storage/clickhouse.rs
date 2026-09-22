@@ -4369,11 +4369,14 @@ pub async fn revoke_sensor_key(
     &self,
     id: &str,
 ) -> anyhow::Result<()> {
+    // mutations_sync=1: block until applied - found via TC-070 re-test that
+    // a revoke reported success while a follow-up list call still showed
+    // active=true for a few moments after.
     self.client
         .query(&format!(
             "ALTER TABLE ndr.sensor_keys \
              UPDATE active = 0 \
-             WHERE id = '{}'", sql_escape(id)
+             WHERE id = '{}' SETTINGS mutations_sync=1", sql_escape(id)
         ))
         .execute().await?;
     Ok(())
