@@ -15,7 +15,8 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     echo ""
     echo "  NDR Cloud Installer — downloading required files..."
     echo ""
-    read -rp "  GitHub token (provided by Proma Secure): " GH_TOKEN
+    read -rsp "  GitHub token (provided by Proma Secure): " GH_TOKEN
+    echo
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
     sudo mkdir -p "$INSTALL_DIR"
