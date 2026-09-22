@@ -69,7 +69,23 @@ download_file("install-cloud.sh",    f"{dest}/install-cloud.sh")
 download_file("start.sh",            f"{dest}/start.sh")
 download_file("stop.sh",             f"{dest}/stop.sh")
 download_file("status.sh",           f"{dest}/status.sh")
-download_dir("config",               f"{dest}/config")
+
+# Only the config files cloud mode's docker-compose.yml actually mounts -
+# not the whole config/ tree (which also has SIEM-only nginx/ClickHouse
+# variants, a Dockerfile+xml unused by the pre-built clickhouse image, a
+# Vector config cloud mode never runs, and a stale dev-machine ndr.crt/
+# ndr.key that would block generating a real cert for this install).
+for f in [
+    "config/clickhouse/init.sql",
+    "config/clickhouse/cluster/keeper-config.xml",
+    "config/clickhouse/cluster/ch1-config.xml",
+    "config/clickhouse/cluster/ch2-config.xml",
+    "config/clickhouse/cluster/z-ndr-listen.xml",
+    "config/clickhouse/cluster/users.xml",
+    "config/nginx/nginx.conf",
+]:
+    download_file(f, f"{dest}/{f}")
+
 download_dir("scripts",              f"{dest}/scripts")
 download_dir("rust/ndr-engine/rules",f"{dest}/rust/ndr-engine/rules")
 PYEOF
