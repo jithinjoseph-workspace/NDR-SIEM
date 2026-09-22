@@ -94,17 +94,31 @@ async fn geo_lookup_batch(state: &AppState, ips: &[String]) -> Vec<Value> {
         }
     }
 
-    if !unresolved.is_empty() {
-        let batch: Vec<Value> = unresolved.iter().map(|ip| json!({ "query": ip })).collect();
-        if let Ok(resp) = HTTP_CLIENT
+    // ip-api.com's batch endpoint hard-caps at 100 queries per request and
+    // returns 422 for anything larger - which failed silently here before:
+    // resp.json::<Vec<Value>>() errors on that response body (not an array),
+    // the `if let Ok(...)` just dropped it, and every unresolved IP ended up
+    // with no geo data and no log line explaining why. Confirmed live -
+    // batching exactly 100 succeeds, 101+ returns 422.
+    for chunk in unresolved.chunks(100) {
+        let batch: Vec<Value> = chunk.iter().map(|ip| json!({ "query": ip })).collect();
+        match HTTP_CLIENT
             .post("http://ip-api.com/batch?fields=query,country,countryCode,city,lat,lon,status")
             .json(&batch)
             .send()
             .await
         {
-            if let Ok(fallback) = resp.json::<Vec<Value>>().await {
-                results.extend(fallback);
+            Ok(resp) => {
+                let status = resp.status();
+                match resp.json::<Vec<Value>>().await {
+                    Ok(fallback) => results.extend(fallback),
+                    Err(e) => tracing::warn!(
+                        "geo_lookup_batch: ip-api.com returned {} for a {}-IP batch, body didn't parse: {}",
+                        status, chunk.len(), e
+                    ),
+                }
             }
+            Err(e) => tracing::warn!("geo_lookup_batch: ip-api.com request failed for a {}-IP batch: {}", chunk.len(), e),
         }
     }
 
