@@ -66,9 +66,10 @@ def download_dir(repo_path, local_path):
 
 download_file("docker-compose.yml",  f"{dest}/docker-compose.yml")
 download_file("install-cloud.sh",    f"{dest}/install-cloud.sh")
-download_file("start.sh",            f"{dest}/start.sh")
-download_file("stop.sh",             f"{dest}/stop.sh")
-download_file("status.sh",           f"{dest}/status.sh")
+# NOT start.sh/stop.sh/status.sh here - those are install.sh/install-customer.sh's
+# on-prem scripts (PRODUCT_MODE, --profile onpremise, systemd Agent-Z/Agent-S,
+# nginx-ndr.conf/nginx-siem.conf/nginx-both.conf). Cloud mode writes its own
+# versions later, once docker-compose.cloud.yml actually exists to reference.
 
 # Only the config files cloud mode's docker-compose.yml actually mounts -
 # not the whole config/ tree (which also has SIEM-only nginx/ClickHouse
@@ -90,7 +91,6 @@ download_dir("scripts",              f"{dest}/scripts")
 download_dir("rust/ndr-engine/rules",f"{dest}/rust/ndr-engine/rules")
 PYEOF
     chmod +x "$INSTALL_DIR/install-cloud.sh"
-    chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
     echo ""
     exec bash "$INSTALL_DIR/install-cloud.sh" "$INSTALL_DIR"
 fi
@@ -535,6 +535,86 @@ services:
     image: ${REGISTRY}/provigil-auth:latest
     build: !reset null
 OVERRIDE
+
+# ── Write cloud-specific start/stop/status scripts ────────────────────
+# Not install.sh/install-customer.sh's on-prem start.sh/stop.sh/status.sh -
+# those assume PRODUCT_MODE, --profile onpremise, systemd Agent-Z/Agent-S,
+# and copy from nginx-ndr.conf/nginx-siem.conf/nginx-both.conf, none of
+# which apply here and would silently break the auth_service nginx routing
+# fixed above. These reference the actual cloud compose files instead.
+cat > "$INSTALL_DIR/start.sh" << 'STARTEOF'
+#!/bin/bash
+INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$INSTALL_DIR"
+echo ""
+echo "  Starting NDR Cloud Stack..."
+echo ""
+sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d
+echo ""
+echo "  Docker stack started:"
+sudo docker ps --format "    {{.Names}}\t{{.Status}}"
+echo ""
+STARTEOF
+
+cat > "$INSTALL_DIR/stop.sh" << 'STOPEOF'
+#!/bin/bash
+INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$INSTALL_DIR"
+echo ""
+echo "  Stopping NDR Cloud Stack..."
+echo ""
+sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml down
+echo ""
+echo "  Docker stack stopped"
+echo ""
+STOPEOF
+
+cat > "$INSTALL_DIR/status.sh" << 'STATUSEOF'
+#!/bin/bash
+INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$INSTALL_DIR/.env" ]; then
+    source "$INSTALL_DIR/.env"
+fi
+
+echo ""
+echo "  NDR Cloud Stack Status"
+echo "  ──────────────────────────────────────────────────"
+echo ""
+
+echo "  Docker containers:"
+sudo docker ps --format "    {{.Names}}\t{{.Status}}" 2>/dev/null || echo "    Docker not running"
+echo ""
+
+echo "  ClickHouse:"
+echo "    node1 : $(curl -s --max-time 3 http://localhost:8123/ping 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  Kafka topics:"
+sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server localhost:9092 --list 2>/dev/null \
+    | sed 's/^/    /' || echo "    not ready"
+echo ""
+
+echo "  Valkey:"
+echo "    ping  : $(sudo docker exec ndr-valkey valkey-cli ping 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  Auth (provigil-auth):"
+echo "    health: $(curl -s --max-time 3 "http://localhost:3001/api/auth/check-username?username=ping" 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  NDR Engine:"
+echo "    health: $(curl -sk --max-time 3 "https://localhost/api/health" 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  Access:"
+echo "    API (HTTP)  : http://${HOST_IP:-localhost}"
+echo "    API (HTTPS) : https://${HOST_IP:-localhost}"
+echo ""
+STATUSEOF
+
+chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
+log "✅ Cloud start.sh/stop.sh/status.sh written"
 
 cd "$INSTALL_DIR"
 sudo docker compose down 2>/dev/null || true
