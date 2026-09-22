@@ -15,7 +15,7 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     echo ""
     echo "  NDR Cloud Installer — downloading required files..."
     echo ""
-    read -rsp "  GitHub token (provided by Proma Secure): " GH_TOKEN
+    read -rsp "  GitHub token (optional, press Enter to skip): " GH_TOKEN
     echo
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
@@ -30,7 +30,9 @@ import urllib.request, json, os, base64, sys
 token    = os.environ["GH_TOKEN"]
 dest     = os.environ["INSTALL_DIR"]
 api_base = "https://api.github.com/repos/jithinjoseph-workspace/NDR-SIEM"
-headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+headers  = {"Accept": "application/vnd.github.v3+json"}
+if token:
+    headers["Authorization"] = f"token {token}"
 
 def gh_get(url):
     req = urllib.request.Request(url, headers=headers)
