@@ -27,7 +27,7 @@ import urllib.request, json, os, base64, sys
 
 token    = os.environ["GH_TOKEN"]
 dest     = os.environ["INSTALL_DIR"]
-api_base = "https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
+api_base = "https://api.github.com/repos/jithinjoseph-workspace/NDR-SIEM"
 headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
 def gh_get(url):
@@ -40,7 +40,7 @@ def gh_get(url):
         sys.exit(1)
 
 def download_file(repo_path, local_path):
-    meta = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
+    meta = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=auth/service"))
     content = base64.b64decode(meta["content"].replace("\n", ""))
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     with open(local_path, "wb") as f:
@@ -49,11 +49,11 @@ def download_file(repo_path, local_path):
 
 def download_dir(repo_path, local_path):
     os.makedirs(local_path, exist_ok=True)
-    items = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
+    items = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=auth/service"))
     for item in items:
         target = os.path.join(local_path, item["name"])
         if item["type"] == "file":
-            meta = json.loads(gh_get(f"{api_base}/contents/{item['path']}?ref=arkime"))
+            meta = json.loads(gh_get(f"{api_base}/contents/{item['path']}?ref=auth/service"))
             content = base64.b64decode(meta["content"].replace("\n", ""))
             with open(target, "wb") as f:
                 f.write(content)
