@@ -1973,8 +1973,21 @@ for integration in &integrations {
 
 pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let claims = extract_claims(&headers);
-    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
-    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+
+    // This route is intentionally public (see the `public` allowlist in
+    // auth_middleware) — Docker's own healthchecks (docker-compose.yml) curl
+    // it with no Authorization header, and other services' startup depends
+    // on that succeeding. But it used to return full platform-wide metrics
+    // (event/hit counts, sigma rule count, per-service up/down) to that same
+    // unauthenticated request. Docker only needs a 2xx; an anonymous caller
+    // gets a bare status now, and the detailed metrics are reserved for
+    // authenticated users (already tenant-scoped below).
+    let Some(claims) = claims else {
+        return Json(json!({ "status": "ok" }));
+    };
+
+    let tenant_id = claims.tenant_id.clone();
+    let sensor_ids = claims.sensor_ids;
     let ch_stats = state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await.unwrap_or(json!({}));
     let clickhouse_status = if state.ch_storage.health_check().await {
         "running"

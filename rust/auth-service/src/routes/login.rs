@@ -4,7 +4,7 @@ use redis::AsyncCommands;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::AppState;
+use crate::{jwt as session, AppState};
 use provigil_common::create_jwt;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -391,6 +391,36 @@ pub async fn issue_full_token(
         let _: redis::RedisResult<bool> = conn.expire(&ndr_tenant_set, state.refresh_ttl).await;
         let _: redis::RedisResult<i64>  = conn.sadd(&ndr_user_set, &jti).await;
         let _: redis::RedisResult<bool> = conn.expire(&ndr_user_set, state.refresh_ttl).await;
+
+        // ── Enforce max concurrent sessions — evict the oldest past the cap ──
+        // Nothing evicted this before: sessions just accumulated until their
+        // TTL expired naturally, so one account could end up with dozens of
+        // simultaneously live sessions.
+        if state.max_sessions > 0 {
+            let all_jtis: Vec<String> = conn.smembers(&user_set_key).await.unwrap_or_default();
+            if all_jtis.len() > state.max_sessions {
+                let mut by_login_time: Vec<(String, i64)> = Vec::with_capacity(all_jtis.len());
+                for j in &all_jtis {
+                    let lt: Option<String> = conn
+                        .hget(format!("provigil:session:{}", j), "login_time")
+                        .await.unwrap_or(None);
+                    by_login_time.push((j.clone(), lt.and_then(|s| s.parse().ok()).unwrap_or(0)));
+                }
+                by_login_time.sort_by_key(|(_, t)| *t);
+                let evict_count = all_jtis.len() - state.max_sessions;
+                for (old_jti, _) in by_login_time.into_iter().take(evict_count) {
+                    let _ = session::revoke_session(&state, &old_jti).await;
+                    let _: redis::RedisResult<i64> = conn.srem(&user_set_key, &old_jti).await;
+                    let _: redis::RedisResult<i64> = conn.srem(&tenant_set_key, &old_jti).await;
+                    let _: redis::RedisResult<i64> = conn.srem(&ndr_user_set, &old_jti).await;
+                    let _: redis::RedisResult<i64> = conn.srem(&ndr_tenant_set, &old_jti).await;
+                }
+                tracing::info!(
+                    "Evicted {} oldest session(s) for '{}' (max_concurrent_sessions={})",
+                    evict_count, username, state.max_sessions
+                );
+            }
+        }
     }
 
     // ── New-device detection (background, never blocks login) ──────────────
