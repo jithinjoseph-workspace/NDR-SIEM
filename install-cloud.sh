@@ -140,6 +140,32 @@ PUBLIC_IP=$(curl -s --max-time 10 ifconfig.me 2>/dev/null || \
             hostname -I | awk '{print $1}')
 log "✅ Public IP: $PUBLIC_IP"
 
+# ── Public URL (optional) ─────────────────────
+# The auto-detected IP is only correct when this machine is directly reachable
+# on it. Behind a domain, reverse proxy or tunnel (ngrok, Cloudflare Tunnel...)
+# customers use a different address, and the API must allow that origin (CORS).
+# Set PUBLIC_URL in the environment, or enter it when asked. Leave it empty to
+# keep the default (the detected IP).
+PUBLIC_URL="${PUBLIC_URL:-}"
+if [ -z "$PUBLIC_URL" ] && [ -t 0 ]; then
+    read -rp "  Public URL sensors/users will use, e.g. https://ndr.example.com (Enter = use $PUBLIC_IP): " PUBLIC_URL
+fi
+PUBLIC_URL="${PUBLIC_URL%/}"
+if [ -n "$PUBLIC_URL" ] && ! echo "$PUBLIC_URL" | grep -qE '^https?://[^/[:space:]]+$'; then
+    case "$PUBLIC_URL" in
+        http://*|https://*) err "PUBLIC_URL must be just scheme://host[:port] (no path): got '$PUBLIC_URL'" ;;
+        *)                  PUBLIC_URL="https://$PUBLIC_URL" ;;
+    esac
+fi
+if [ -n "$PUBLIC_URL" ]; then
+    SENSOR_URL="$PUBLIC_URL"
+    CORS_VALUE="$PUBLIC_URL,http://$PUBLIC_IP,https://$PUBLIC_IP"
+    log "✅ Public URL: $PUBLIC_URL"
+else
+    SENSOR_URL="https://$PUBLIC_IP"
+    CORS_VALUE="http://$PUBLIC_IP"
+fi
+
 USERNAME=$(whoami)
 HOME_DIR=$HOME
 INSTALL_DIR="${1:-$(cd "$(dirname "$0")" && pwd)}"
@@ -397,7 +423,7 @@ CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=$JWT_SECRET
 NDR_AGENT_SECRET=$NDR_AGENT_SECRET
-CORS_ORIGIN=http://$PUBLIC_IP
+CORS_ORIGIN=$CORS_VALUE
 OPENSEARCH_URL=
 ARKIME_URL=
 ARKIME_PASS=
@@ -509,7 +535,7 @@ step "Starting Docker stack (cloud profile)"
 
 info "  ℹ️  Cloud mode starts: kafka (internal), redis, ndr-engine x3, nginx, ndr-ui"
 info "  ℹ️  Skipped (onpremise profile only): opensearch, vector"
-info "  ℹ️  Sensors send data via HTTP POST to https://$PUBLIC_IP/api/ingest"
+info "  ℹ️  Sensors send data via HTTP POST to $SENSOR_URL/api/ingest"
 info "  ℹ️  Kafka runs internally only — not exposed to sensors"
 info ""
 
@@ -527,6 +553,8 @@ sudo docker pull "${REGISTRY}/ndr-engine:latest" 2>/tmp/ndr_cloud_err \
   || err "Could not pull ${REGISTRY}/ndr-engine:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
 sudo docker pull "${REGISTRY}/ndr-ui:latest" 2>/tmp/ndr_cloud_err \
   || err "Could not pull ${REGISTRY}/ndr-ui:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
+sudo docker pull "${REGISTRY}/provigil-auth:latest" 2>/tmp/ndr_cloud_err \
+  || err "Could not pull ${REGISTRY}/provigil-auth:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
 rm -f /tmp/ndr_cloud_err
 
 # ── Write compose override (pre-built images, no build:) ─────────────
@@ -540,6 +568,9 @@ services:
     image: ${REGISTRY}/ndr-engine:latest
   ndr-ui:
     image: ${REGISTRY}/ndr-ui:latest
+    build: !reset null
+  provigil-auth:
+    image: ${REGISTRY}/provigil-auth:latest
     build: !reset null
 OVERRIDE
 
@@ -752,6 +783,7 @@ echo ""
 echo -e "${BLUE}  Public IP   :${NC} $PUBLIC_IP"
 echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP (port 80)"
 echo -e "${BLUE}  API (HTTPS) :${NC} https://$PUBLIC_IP (port 443, after cert setup)"
+[ -n "$PUBLIC_URL" ] && echo -e "${BLUE}  Public URL  :${NC} $PUBLIC_URL"
 echo -e "${BLUE}  ClickHouse  :${NC} internal only (clickhouse1:8123, clickhouse2:8123)"
 echo -e "${BLUE}  Kafka       :${NC} internal only (sensors use HTTP POST to /api/ingest)"
 echo -e "${BLUE}  Redis       :${NC} internal only (ndr-redis:6379)"
@@ -763,7 +795,7 @@ echo "   2. Run: certbot certonly --standalone -d your.domain.com"
 echo "   3. Copy certs to /etc/ssl/ndr/"
 echo "   4. Edit $INSTALL_DIR/config/nginx/nginx.conf — uncomment SSL lines"
 echo "   5. Restart nginx: docker restart ndr-nginx"
-echo "   6. On sensors: set CLOUD_URL=https://$PUBLIC_IP in /opt/ndr-sensor/.env"
+echo "   6. On sensors: set CLOUD_URL=$SENSOR_URL in /opt/ndr-sensor/.env"
 echo ""
 echo -e "${GREEN}  Install log: $INSTALL_DIR/install-cloud.log${NC}"
 echo ""
