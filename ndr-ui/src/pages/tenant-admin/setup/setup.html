@@ -328,10 +328,49 @@
             {{ isCommandPending(sensor, 'restart') ? 'Restarting...' : 'Restart' }}
           </button>
         </div>
+        <div class="sensor-revoke-row" *ngIf="sensor.active">
+          <button class="revoke-btn" type="button"
+            (click)="askRevokeExternalSensor(sensor)"
+            [disabled]="!!revokingSensorId"
+            title="Deactivate this sensor's key. Works even when the sensor is offline.">
+            <lucide-icon [name]="BanIcon" class="w-4 h-4"></lucide-icon>
+            Revoke sensor key
+          </button>
+        </div>
       </article>
     </div>
 
   </ng-container>
+
+  <!-- ── REVOKE SENSOR CONFIRMATION ── -->
+  <div *ngIf="pendingRevokeSensor as target" class="swal-backdrop" (click)="cancelRevokeExternalSensor()">
+    <div class="swal-card" role="alertdialog" aria-modal="true" aria-labelledby="revoke-title"
+         (click)="$event.stopPropagation()">
+      <div class="swal-icon" aria-hidden="true">
+        <span class="swal-ring"></span>
+        <lucide-icon [name]="BanIcon" class="swal-icon-glyph"></lucide-icon>
+      </div>
+      <h3 id="revoke-title" class="swal-title">Revoke this sensor?</h3>
+      <p class="swal-text">
+        <strong>{{ target.displayName }}</strong>'s key will stop being accepted right away.
+      </p>
+      <div class="swal-note">
+        The machine itself keeps running and keeps trying to connect. To stop it completely,
+        run <code>sudo systemctl stop ndr-agent</code> on it or uninstall the sensor.
+      </div>
+      <div class="swal-actions">
+        <button type="button" class="swal-btn swal-confirm"
+                (click)="confirmRevokeExternalSensor()" [disabled]="!!revokingSensorId">
+          <span *ngIf="revokingSensorId" class="swal-spinner"></span>
+          {{ revokingSensorId ? 'Revoking...' : 'Yes, revoke it' }}
+        </button>
+        <button type="button" class="swal-btn swal-cancel"
+                (click)="cancelRevokeExternalSensor()" [disabled]="!!revokingSensorId">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── ADD SENSOR MODAL ── -->
   <div *ngIf="showAddSensorModal" class="modal-backdrop" (click)="showAddSensorModal = false">

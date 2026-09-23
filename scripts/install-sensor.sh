@@ -785,7 +785,14 @@ EOF
         [ -f "$d/$alt.zeek" ] || [ -f "$d/$alt" ] && { echo "@load $alt"; return; }
       done
     fi
-    warn "  Agent-Z: skipping missing script: $s"
+    # >&2 is required: zeek_load runs inside $(...) in the local.zeek heredoc
+    # below, which captures stdout into the file. warn() prints ANSI-colored
+    # text to stdout, so without this the escape codes (\x1b) land in
+    # local.zeek in place of an @load line and Zeek fails to parse it,
+    # crash-looping forever (seen live: "local.zeek, line 8: unrecognized
+    # character: '\x1b'" when misc/detect-traceroute is missing on the
+    # installed Zeek version). install.sh's copy already used plain stderr.
+    warn "  Agent-Z: skipping missing script: $s" >&2
   }
 
   tee "$ZEEK_SITE/local.zeek" > /dev/null << ZEEKCONF

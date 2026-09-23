@@ -1,4 +1,4 @@
-import { Directive, OnDestroy, OnInit, ChangeDetectorRef, signal, computed } from '@angular/core';
+import { Directive, HostListener, OnDestroy, OnInit, ChangeDetectorRef, signal, computed } from '@angular/core';
 import { Router } from '@angular/router';
 import {
   Activity,
@@ -20,6 +20,7 @@ import {
   WifiOff,
   Clock,
   X,
+  Ban,
 } from 'lucide-angular';
 import { Subscription, timer } from 'rxjs';
 import { filter } from 'rxjs/operators';
@@ -56,6 +57,8 @@ export abstract class SetupBase implements OnInit, OnDestroy {
   externalError = '';
   externalActionMessage = '';
   pendingExternalCommand: { sensorId: string; command: SensorControlCommand } | null = null;
+  revokingSensorId: string | null = null;
+  pendingRevokeSensor: ExternalSensorCard | null = null;
   showAddSensorModal = false;
   newSensorName = '';
   creatingSensor = false;
@@ -97,6 +100,7 @@ export abstract class SetupBase implements OnInit, OnDestroy {
   WifiOffIcon = WifiOff;
   ClockIcon = Clock;
   XIcon = X;
+  BanIcon = Ban;
 
   constructor(
     protected api: Api,
@@ -296,6 +300,59 @@ export abstract class SetupBase implements OnInit, OnDestroy {
         this.externalError =
           error?.error?.message || `Unable to ${command} ${sensorName}.`;
         this.pendingExternalCommand = null;
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  /** Deactivates the sensor's key. Unlike start/stop/restart this does not need
+   *  the sensor to be online - it is the way to cut off a sensor that is stuck,
+   *  offline, or misbehaving. The backend only lets tenant_admin/super_admin do
+   *  this, and a tenant_admin only for their own tenant's keys. */
+  askRevokeExternalSensor(sensor: ExternalSensorCard) {
+    if (!this.canViewExternalSensors || this.revokingSensorId) {
+      return;
+    }
+    this.pendingRevokeSensor = sensor;
+  }
+
+  @HostListener('document:keydown.escape')
+  cancelRevokeExternalSensor() {
+    // Ignored while the request is in flight so the dialog can't vanish mid-revoke.
+    if (this.revokingSensorId) {
+      return;
+    }
+    this.pendingRevokeSensor = null;
+  }
+
+  confirmRevokeExternalSensor() {
+    const sensor = this.pendingRevokeSensor;
+    if (!sensor || this.revokingSensorId) {
+      return;
+    }
+    const sensorName = this.getSensorDisplayName(sensor);
+
+    this.revokingSensorId = sensor.id;
+    this.externalActionMessage = '';
+    this.externalError = '';
+
+    this.api.revokeSensorKey(sensor.id).subscribe({
+      next: response => {
+        this.revokingSensorId = null;
+        this.pendingRevokeSensor = null;
+        if (response?.status === 'ok') {
+          this.externalActionMessage = `${sensorName} revoked.`;
+          this.loadExternalSensors(true);
+        } else {
+          // The API reports refusals (forbidden, not found) as HTTP 200 with status "error".
+          this.externalError = response?.message || `Unable to revoke ${sensorName}.`;
+        }
+        this.cdr.detectChanges();
+      },
+      error: error => {
+        this.revokingSensorId = null;
+        this.pendingRevokeSensor = null;
+        this.externalError = error?.error?.message || `Unable to revoke ${sensorName}.`;
         this.cdr.detectChanges();
       },
     });

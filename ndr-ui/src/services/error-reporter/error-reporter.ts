@@ -21,12 +21,26 @@ export function reportClientError(message: string, stack: string, url: string): 
 }
 
 /**
+ * 401s are never useful signal here: the auth interceptor synthesizes one
+ * client-side for every in-flight request the instant a session ends
+ * (logout, force-logout, expired token) - by design, to stop those requests
+ * from hitting the wire. A page can have a dozen+ independent polling
+ * subscriptions alive at once (e.g. the super_admin overview page), so one
+ * logout used to flood this endpoint with a near-duplicate report per
+ * subscription for the exact same expected event, not an application bug.
+ */
+function isIgnorable401(err: any): boolean {
+  return err?.status === 401;
+}
+
+/**
  * Drop-in for RxJS `.subscribe({ error: ... })` callbacks that previously
  * swallowed the error silently (`() => {}`). RxJS marks such errors as
  * "handled", so they never reach GlobalErrorHandler on their own — this
  * routes them into the same /api/client-errors pipeline explicitly.
  */
 export function reportRxjsError(err: any): void {
+  if (isIgnorable401(err)) return;
   const message = err?.error?.message || err?.message || String(err);
   const stack = err?.stack || '';
   reportClientError(message, stack, window.location.href);
@@ -40,9 +54,10 @@ export class GlobalErrorHandler implements ErrorHandler {
     // .catch()) doesn't go through it, so it's covered separately here.
     window.addEventListener('unhandledrejection', (event) => {
       const reason = event.reason;
+      console.error('Unhandled promise rejection:', reason);
+      if (isIgnorable401(reason)) return;
       const message = reason?.message || String(reason);
       const stack = reason?.stack || '';
-      console.error('Unhandled promise rejection:', reason);
       reportClientError(message, stack, window.location.href);
     });
   }
