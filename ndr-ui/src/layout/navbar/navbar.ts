@@ -367,6 +367,11 @@ export class Navbar implements OnInit, OnDestroy {
         this.applySystemStatus(data);
         this.cdr.detectChanges();
       },
+      // Without this, any failure (401 on an already-cleared session right
+      // as logout navigates away, a network blip, etc.) surfaces as an
+      // uncaught console error every 10s instead of being handled quietly -
+      // matches the pattern already used by loadActiveAnnouncements below.
+      error: () => {},
     });
   }
 
