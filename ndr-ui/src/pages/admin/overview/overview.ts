@@ -2781,6 +2781,18 @@ export class Overview implements OnInit, AfterViewInit, OnDestroy {
       renderer.domElement.setAttribute('aria-hidden', 'true');
       host.appendChild(renderer.domElement);
 
+      // See the matching comment in tenant-admin/users.ts's initThreeCyberTopology -
+      // without this, a lost WebGL context leaves the rAF loop below calling
+      // render() on a dead context forever instead of stopping or recovering.
+      renderer.domElement.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        if (this.meshAnimationFrame !== null) { cancelAnimationFrame(this.meshAnimationFrame); this.meshAnimationFrame = null; }
+      }, false);
+      renderer.domElement.addEventListener('webglcontextrestored', () => {
+        this.destroyCommandMesh();
+        this.initCommandMesh();
+      }, false);
+
       const count = 240;
       const positions = new Float32Array(count * 3);
       const colors = new Float32Array(count * 3);

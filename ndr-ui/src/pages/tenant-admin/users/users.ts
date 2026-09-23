@@ -929,6 +929,23 @@ export class UsersSection implements OnInit, OnDestroy, AfterViewInit {
       host.appendChild(renderer.domElement);
       this.threeRenderer = renderer;
 
+      // WebGL contexts can be lost at any time (GPU driver reset, memory
+      // pressure, or our own disposeThreeCyberTopology() calling
+      // forceContextLoss() on navigation away from this page) - without
+      // listening for it, the rAF loop below keeps calling render() on a
+      // dead context forever (wasted CPU, frozen visual, never recovers).
+      // preventDefault() is required for the browser to attempt automatic
+      // restoration; only rebuild on restore, not on loss itself, so this
+      // doesn't fight with the intentional forceContextLoss() cleanup path.
+      renderer.domElement.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        if (this.threeAnimId) { cancelAnimationFrame(this.threeAnimId); this.threeAnimId = undefined; }
+      }, false);
+      renderer.domElement.addEventListener('webglcontextrestored', () => {
+        this.disposeThreeCyberTopology();
+        this.initThreeCyberTopology();
+      }, false);
+
       // 0. Distant starfield backdrop — added to the scene, not the
       // rotating group, so it stays fixed behind everything for depth.
       // Purely atmospheric, not tied to any real data.
