@@ -6205,10 +6205,17 @@ pub async fn reactivate_sensor_key_api(
     }
     
     match state.ch_storage.reactivate_sensor_key(&id).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "Sensor key reactivated"
-        })),
+        Ok(_) => {
+            // A revoked key is cached as such for a short while; clear it so the
+            // reactivated key works immediately.
+            if let Ok(Some(prefix)) = state.ch_storage.get_sensor_key_prefix_by_id(&id).await {
+                state.sensor_key_cache.invalidate_by_prefix(&prefix).await;
+            }
+            Json(json!({
+                "status": "ok",
+                "message": "Sensor key reactivated"
+            }))
+        },
         Err(e) => Json(json!({
             "status": "error",
             "message": e.to_string()
@@ -6413,7 +6420,49 @@ async fn handle_linux_endpoint_event(state: &AppState, raw: Value, tenant_id: &s
     }
 }
 
+/// Marker on the "bad key" reply so the wrappers below can tell it apart from
+/// other errors and check whether the key was revoked (rather than unknown).
+const INVALID_KEY_CODE: &str = "invalid_sensor_key";
+
+/// A sensor holding a key that an admin revoked gets HTTP 401 + `sensor_revoked`
+/// instead of the old HTTP 200 + error body. With 200, Vector counted every
+/// batch as delivered and kept shipping forever, and the agent never found out.
+/// Only someone who holds the real (bcrypt-verified) key can see this answer, so
+/// it tells an attacker nothing about which keys exist.
+async fn revoked_response(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Option<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let key = headers.get("X-Sensor-Key")?.to_str().ok()?;
+    if !crate::auth::sensor_cache::is_revoked(&state.sensor_key_cache, &state.ch_storage, key).await {
+        return None;
+    }
+    Some((
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "status": "revoked",
+            "code": "sensor_revoked",
+            "message": "This sensor key was revoked",
+            "command": "uninstall",
+        })),
+    ).into_response())
+}
+
 pub async fn ingest_events(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let out = ingest_events_inner(State(state.clone()), headers.clone(), body).await;
+    if out.0.get("code").and_then(|c| c.as_str()) == Some(INVALID_KEY_CODE) {
+        if let Some(r) = revoked_response(&state, &headers).await { return r; }
+    }
+    out.into_response()
+}
+
+async fn ingest_events_inner(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     body: String,
@@ -6425,6 +6474,7 @@ pub async fn ingest_events(
         Some(tid) => tid,
         None => return Json(json!({
             "status": "error",
+            "code": INVALID_KEY_CODE,
             "message": "Invalid or missing X-Sensor-Key"
         })),
     };
@@ -6609,12 +6659,25 @@ pub async fn sensor_checkin(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CheckinRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let out = sensor_checkin_inner(State(state.clone()), headers.clone(), Json(payload)).await;
+    if out.0.get("code").and_then(|c| c.as_str()) == Some(INVALID_KEY_CODE) {
+        if let Some(r) = revoked_response(&state, &headers).await { return r; }
+    }
+    out.into_response()
+}
+
+async fn sensor_checkin_inner(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<CheckinRequest>,
 ) -> Json<Value> {
     let tenant_id = match validate_sensor_key_cached(
         &headers, &state.ch_storage, Some(&state.sensor_key_cache)
     ).await {
         Some(t) => t,
-        None => return Json(json!({"status": "error", "message": "invalid sensor key"})),
+        None => return Json(json!({"status": "error", "code": INVALID_KEY_CODE, "message": "invalid sensor key"})),
     };
 
     let sensor_id = match extract_sensor_key_prefix(&headers) {

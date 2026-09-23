@@ -248,3 +248,30 @@ pub async fn resolve_tenant(
     );
     Some(tenant_id)
 }
+
+/// True when `api_key` is a real key that an admin has revoked (the bcrypt hash
+/// matches an inactive row). An unknown or malformed key is NOT "revoked".
+/// The verdict is cached (as an inactive entry) so a sensor that keeps
+/// retrying costs one Redis read, not a DB query plus bcrypt, per request.
+pub async fn is_revoked(
+    cache: &SensorKeyCache,
+    ch: &crate::storage::ClickhouseStorage,
+    api_key: &str,
+) -> bool {
+    if api_key.len() < 16 {
+        return false;
+    }
+    if let Some(info) = cache.get(api_key).await {
+        return !info.active;
+    }
+    if !ch.is_revoked_sensor_key(api_key).await.unwrap_or(false) {
+        return false;
+    }
+    let info = SensorKeyInfo {
+        tenant_id: String::new(),
+        key_prefix: api_key.chars().take(16).collect(),
+        active: false,
+    };
+    cache.insert(api_key, &info).await;
+    true
+}

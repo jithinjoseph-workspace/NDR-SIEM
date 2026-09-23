@@ -2152,6 +2152,67 @@ def check_and_execute_command():
     except Exception as e:
         print(f"[NDR] Command poll error: {e}")
 
+# ── Key revoked by an admin: stop shipping and remove this sensor ────────────
+# The platform answers HTTP 401 {"status":"revoked"} to a key that was revoked
+# (and only to someone holding that exact key). Two answers in a row are
+# required so a single odd reply can never wipe a sensor. Optional sensor.conf
+# key UNINSTALL_ON_REVOKE=0 keeps the software installed and only stops it.
+UNINSTALL_ON_REVOKE  = config.get('UNINSTALL_ON_REVOKE', '1').strip() != '0'
+REVOKED_CONFIRMS     = 2
+_revoked_seen        = 0
+_removal_started     = False
+REMOVAL_SCRIPT       = '/tmp/ndr-remove-sensor.sh'
+
+def _is_revoked_reply(resp):
+    if resp.status_code != 401:
+        return False
+    try:
+        return resp.json().get('status') == 'revoked'
+    except Exception:
+        return False
+
+def handle_revoked():
+    """Called after the platform confirmed twice that this sensor's key is revoked."""
+    global MANUALLY_STOPPED, _removal_started
+    MANUALLY_STOPPED = True
+    print("[NDR] *** This sensor's key was REVOKED - stopping all services ***")
+    execute_command('stop')          # log shipping stops right away
+    if not UNINSTALL_ON_REVOKE:
+        print("[NDR] UNINSTALL_ON_REVOKE=0 - services stopped, software left in place")
+        return
+    if _removal_started:
+        return
+    try:
+        r = requests.get(f'{CLOUD_URL}/api/uninstall-sensor.sh', timeout=15)
+        body = r.text
+        # sanity: only run what really is the uninstall script
+        if r.status_code != 200 or not body.startswith('#!') or 'NDR Sensor Uninstall' not in body:
+            raise RuntimeError(f"unexpected uninstall script (HTTP {r.status_code})")
+        with open(REMOVAL_SCRIPT, 'w') as f:
+            f.write(body)
+        os.chmod(REMOVAL_SCRIPT, 0o700)
+    except Exception as e:
+        # services are stopped; try again on the next check-in
+        print(f"[NDR] Could not fetch the uninstall script ({e}) - will retry")
+        return
+    # The script stops ndr-agent (this process), so it must run OUTSIDE the
+    # agent's systemd cgroup or it would be killed part-way. A transient unit does that.
+    log_path = '/var/log/ndr-sensor-removal.log'
+    try:
+        if subprocess.run(['which', 'systemd-run'], capture_output=True).returncode == 0:
+            cmd = ['systemd-run', '--unit=ndr-sensor-removal', '--collect',
+                   f'--property=StandardOutput=file:{log_path}',
+                   f'--property=StandardError=file:{log_path}',
+                   'bash', REMOVAL_SCRIPT]
+            subprocess.run(cmd, capture_output=True, timeout=20, check=True)
+        else:
+            subprocess.Popen(['bash', REMOVAL_SCRIPT], stdout=open(log_path, 'a'),
+                             stderr=subprocess.STDOUT, start_new_session=True)
+        _removal_started = True
+        print(f"[NDR] Uninstall started (log: {log_path})")
+    except Exception as e:
+        print(f"[NDR] Could not start the uninstall ({e}) - services stay stopped, will retry")
+
 def do_checkin():
     """Single combined check-in — replaces the old 3 separate polls
     (heartbeat, command, pcap pending) with one request.
@@ -2183,6 +2244,15 @@ def do_checkin():
             headers={'X-Sensor-Key': API_KEY},
             timeout=10
         )
+        global _revoked_seen
+        if _is_revoked_reply(resp):
+            _revoked_seen += 1
+            print(f"[NDR] Platform says this sensor key is revoked ({_revoked_seen}/{REVOKED_CONFIRMS})")
+            if _revoked_seen >= REVOKED_CONFIRMS:
+                handle_revoked()
+            return 10
+        _revoked_seen = 0
+
         if resp.status_code != 200:
             print(f"[NDR] Checkin HTTP {resp.status_code}")
             return 30

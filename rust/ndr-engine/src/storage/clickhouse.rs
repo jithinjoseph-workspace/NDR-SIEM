@@ -4045,6 +4045,21 @@ pub async fn validate_sensor_key(
     Ok(None)
 }
 
+/// True when `key` matches (bcrypt) a sensor key that has been revoked.
+pub async fn is_revoked_sensor_key(&self, key: &str) -> anyhow::Result<bool> {
+    if key.len() < 16 { return Ok(false); }
+    let prefix = &key[..16];
+    let rows = self.client
+        .query(&format!(
+            "SELECT key_hash FROM ndr.sensor_keys FINAL \
+             WHERE key_prefix = '{}' AND active = 0 LIMIT 1",
+            sql_escape(prefix)
+        ))
+        .fetch_all::<String>()
+        .await?;
+    Ok(rows.first().map(|h| bcrypt::verify(key, h).unwrap_or(false)).unwrap_or(false))
+}
+
 pub async fn get_sensor_keys(
     &self,
     tenant_id: &str,
