@@ -503,6 +503,13 @@ GROQ_API_KEY=$GROQ_API_KEY
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
 INGEST_RATE_LIMIT=50000
+# How many tenants ndr-engine's background analysis tasks (entity scoring,
+# correlation, pattern matching, etc.) process at once, instead of one at a
+# time. Higher = faster full-tenant-set cycles but more concurrent load on
+# ClickHouse and any configured AI provider; size against your actual
+# hardware and tenant count. Default (10) is reasonable for a modest
+# tenant count - raise it for hundreds-to-thousands of tenants.
+TENANT_SCAN_CONCURRENCY=10
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
@@ -671,7 +678,16 @@ log "✅ Docker stack started with pre-built images"
 # before returning, so ch1 and ch2 are guaranteed healthy at this point.
 
 # ── Step 7: Create Kafka topic ───────────────
-step "Creating Kafka topics (3 partitions, replication-factor 3)"
+# Partition count was a fixed 3 regardless of expected scale - Kafka's real
+# parallelism ceiling IS its partition count (at most N things can consume
+# in parallel, no matter how many ndr-engine replicas you run), so this
+# needs to be sized to your actual tenant/sensor volume, not left at a
+# fixed demo-scale default. Override with KAFKA_PARTITIONS=N before running
+# this script if you know your expected scale; can only be *increased*
+# later (kafka-topics.sh --alter --partitions N), never decreased, so it's
+# safer to size a bit generously up front than to under-provision.
+KAFKA_PARTITIONS="${KAFKA_PARTITIONS:-3}"
+step "Creating Kafka topics (${KAFKA_PARTITIONS} partitions, replication-factor 3)"
 
 log "Waiting for Kafka to be ready..."
 sleep 20
@@ -692,13 +708,13 @@ if sudo docker exec kafka1 \
     --bootstrap-server localhost:9092 \
     --create --if-not-exists \
     --topic ndr-events \
-    --partitions 3 \
+    --partitions "$KAFKA_PARTITIONS" \
     --replication-factor 3 \
     2>/tmp/ndr_cloud_err; then
-  log "✅ Kafka topic ndr-events created with 3 partitions, replication-factor 3"
+  log "✅ Kafka topic ndr-events created with ${KAFKA_PARTITIONS} partitions, replication-factor 3"
 else
   record_error "Kafka" "topic creation failed ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
-    "Run manually once Kafka is confirmed healthy: sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic ndr-events --partitions 3 --replication-factor 3"
+    "Run manually once Kafka is confirmed healthy: sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic ndr-events --partitions $KAFKA_PARTITIONS --replication-factor 3"
 fi
 
 if sudo docker exec kafka1 \
