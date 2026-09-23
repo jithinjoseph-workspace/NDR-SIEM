@@ -360,14 +360,20 @@ async fn emit(
 // Covers IPv4 RFC-1918, IPv4 loopback, IPv6 ULA (fc00::/7), IPv6 link-local (fe80::/10),
 // and IPv6 loopback (::1) so multiflow detectors work correctly on dual-stack networks.
 fn is_private(col: &str) -> String {
+    // ClickHouse evaluates isIPAddressInRange over the whole column block before
+    // combining with other WHERE conditions (no short-circuit on `dst_ip != ''`
+    // guards elsewhere in the query), so a single empty-string row throws
+    // CANNOT_PARSE_TEXT and aborts the whole query. Guard the argument itself.
+    let safe = format!("if({c} = '', '0.0.0.0', {c})", c = col);
     format!(
-        "(isIPAddressInRange({c},'10.0.0.0/8') \
-          OR isIPAddressInRange({c},'192.168.0.0/16') \
-          OR isIPAddressInRange({c},'172.16.0.0/12') \
-          OR isIPAddressInRange({c},'127.0.0.0/8') \
-          OR isIPAddressInRange({c},'fc00::/7') \
-          OR isIPAddressInRange({c},'fe80::/10') \
+        "(isIPAddressInRange({safe},'10.0.0.0/8') \
+          OR isIPAddressInRange({safe},'192.168.0.0/16') \
+          OR isIPAddressInRange({safe},'172.16.0.0/12') \
+          OR isIPAddressInRange({safe},'127.0.0.0/8') \
+          OR isIPAddressInRange({safe},'fc00::/7') \
+          OR isIPAddressInRange({safe},'fe80::/10') \
           OR {c} = '::1')",
+        safe = safe,
         c = col
     )
 }
