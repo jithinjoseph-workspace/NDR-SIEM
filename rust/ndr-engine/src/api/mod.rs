@@ -9424,12 +9424,13 @@ pub async fn list_ai_suppressions(
     let rows: Vec<SupRow> = state.ch_storage.client
         .query(&format!(
             "SELECT suppress_ip, signature_name, community_id, suppress_scope \
-             FROM ndr.ai_suppressions FINAL \
+             FROM {src} \
              WHERE active = 1 \
                AND (expires_at IS NULL OR expires_at > now()) \
                AND (tenant_id = '{tid}' OR tenant_id = '') \
              ORDER BY rowNumberInAllBlocks() DESC \
-             LIMIT 200"
+             LIMIT 200",
+            src = crate::storage::clickhouse::suppressions_source(&claims.tenant_id),
         ))
         .fetch_all::<SupRow>().await.unwrap_or_default();
 

@@ -304,6 +304,32 @@ pub fn tenant_db_pub(tenant_id: &str) -> String {
     tenant_db(tenant_id)
 }
 
+/// Every suppression that applies to `tenant_id`, as a subquery to put in a FROM.
+///
+/// save_ai_suppression() writes a tenant's suppressions to that tenant's own
+/// database (`ndr_<tenant>.ai_suppressions`), but the alert list, the
+/// suppression list endpoint and the report counts all read the global
+/// `ndr.ai_suppressions` instead. For every tenant except `default` (whose
+/// database IS `ndr`) the row was saved and then never found, so a suppressed
+/// alert reappeared on the next page load - the click only hid it in the
+/// browser. Reading the tenant's table (plus any global rows with an empty
+/// tenant_id, which apply to everyone) fixes that. Columns are listed
+/// explicitly so the UNION does not depend on column order across tables.
+/// FINAL is applied inside, so callers must not add it again.
+pub fn suppressions_source(tenant_id: &str) -> String {
+    let db = tenant_db(tenant_id);
+    const COLS: &str = "suppress_ip, signature_name, community_id, suppress_scope, active, expires_at, tenant_id";
+    if db == "ndr" {
+        format!("(SELECT {COLS} FROM ndr.ai_suppressions FINAL)")
+    } else {
+        format!(
+            "(SELECT {COLS} FROM {db}.ai_suppressions FINAL \
+              UNION ALL \
+              SELECT {COLS} FROM ndr.ai_suppressions FINAL WHERE tenant_id = '')"
+        )
+    }
+}
+
 pub fn sql_escape_pub(value: &str) -> String {
     sql_escape(value)
 }
@@ -3299,10 +3325,11 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         struct GroupSup { suppress_ip: String, signature_name: String }
         let group_sups: Vec<GroupSup> = self.client.query(&format!(
             "SELECT suppress_ip, signature_name \
-             FROM ndr.ai_suppressions FINAL \
+             FROM {src} \
              WHERE active = 1 AND community_id = '' AND suppress_ip != '' \
                AND (expires_at IS NULL OR expires_at > now()) \
                AND (tenant_id = '{tid}' OR tenant_id = '')",
+            src = suppressions_source(tenant_id),
             tid = sql_escape(tenant_id)
         )).fetch_all::<GroupSup>().await.unwrap_or_default();
 
@@ -3337,7 +3364,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                {sf} \
                {ipf} \
                AND community_id NOT IN ( \
-                 SELECT community_id FROM ndr.ai_suppressions FINAL \
+                 SELECT community_id FROM {src} \
                  WHERE active = 1 AND community_id != '' \
                    AND (expires_at IS NULL OR expires_at > now()) \
                    AND (tenant_id = '{tid}' OR tenant_id = '') \
@@ -3348,6 +3375,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             tf  = time_filter,
             sf  = sensor_filter,
             ipf = ip_filter_sql,
+            src = suppressions_source(tenant_id),
             tid = sql_escape(tenant_id),
             gf  = group_filter,
             lim = limit))
@@ -3530,11 +3558,12 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             let tf = format!("AND timestamp > now() - INTERVAL {} HOUR", hours);
             let sf_sup = format!(
                 "AND community_id NOT IN ( \
-                   SELECT community_id FROM ndr.ai_suppressions FINAL \
+                   SELECT community_id FROM {src} \
                    WHERE active = 1 AND community_id != '' \
                      AND (expires_at IS NULL OR expires_at > now()) \
                      AND (tenant_id = '{tid}' OR tenant_id = '') \
                  )",
+                src = suppressions_source(tenant_id),
                 tid = sql_escape(tenant_id)
             );
             (format!("{db}.ndr_hits FINAL", db = db_name), tf, sf_sup)
@@ -4678,7 +4707,7 @@ pub async fn clear_sensor_command(
         )).execute().await?;
         // Force immediate deduplication so FINAL queries see the new row without
         // waiting for the background merge (table is tiny so this is cheap).
-        let _ = self.client.query("OPTIMIZE TABLE ndr.ai_suppressions FINAL")
+        let _ = self.client.query(&format!("OPTIMIZE TABLE {db}.ai_suppressions FINAL"))
             .execute().await;
         Ok(())
     }
