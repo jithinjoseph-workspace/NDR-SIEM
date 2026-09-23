@@ -631,7 +631,7 @@ pub async fn set_user_password(
     password_hash: &str,
 ) -> anyhow::Result<()> {
     self.client
-        .query("ALTER TABLE ndr.users UPDATE password_hash = ? WHERE id = ?")
+        .query("ALTER TABLE ndr.users UPDATE password_hash = ? WHERE id = ? SETTINGS mutations_sync=1")
         .bind(password_hash)
         .bind(id)
         .execute()
@@ -644,7 +644,7 @@ pub async fn delete_user(
     &self, id: &str
 ) -> anyhow::Result<()> {
     self.client
-        .query("ALTER TABLE ndr.users DELETE WHERE id = ?")
+        .query("ALTER TABLE ndr.users DELETE WHERE id = ? SETTINGS mutations_sync=1")
         .bind(id)
         .execute()
         .await?;
@@ -1776,7 +1776,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
 
     pub async fn delete_rule_state(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
         self.client
-            .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ? AND tenant_id = ?")
+            .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ? AND tenant_id = ? SETTINGS mutations_sync=1")
             .bind(id)
             .bind(tenant_id)
             .execute()
@@ -1893,7 +1893,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     pub async fn delete_sigma_rule(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         self.client
-            .query(&format!("ALTER TABLE {}.sigma_rules DELETE WHERE id = ?", db))
+            .query(&format!("ALTER TABLE {}.sigma_rules DELETE WHERE id = ? SETTINGS mutations_sync=1", db))
             .bind(id)
             .execute()
             .await?;
@@ -2492,7 +2492,7 @@ pub async fn save_ai_provider(
 /// Hard-delete a provider by name.
 pub async fn delete_ai_provider(&self, name: &str) -> anyhow::Result<()> {
     self.client.query(&format!(
-        "ALTER TABLE ndr.ai_providers DELETE WHERE name = '{}'", Self::_esc_ai(name)
+        "ALTER TABLE ndr.ai_providers DELETE WHERE name = '{}' SETTINGS mutations_sync=1", Self::_esc_ai(name)
     )).execute().await?;
     Ok(())
 }
@@ -4655,7 +4655,7 @@ pub async fn clear_sensor_command(
         let db = tenant_db(tenant_id);
         self.client.query(&format!(
             "ALTER TABLE {}.ai_suppressions UPDATE active = 0 \
-             WHERE id = '{}' AND tenant_id = '{}'",
+             WHERE id = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(id), sql_escape(tenant_id)
         )).execute().await?;
         Ok(())
@@ -4665,7 +4665,7 @@ pub async fn clear_sensor_command(
         let db = tenant_db(tenant_id);
         self.client.query(&format!(
             "ALTER TABLE {}.ai_suppressions DELETE \
-             WHERE id = '{}' AND tenant_id = '{}'",
+             WHERE id = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(id), sql_escape(tenant_id)
         )).execute().await?;
         Ok(())
@@ -5723,7 +5723,7 @@ pub async fn delete_ai_annotations_for_cid(
     let db = tenant_db(tenant_id);
     self.client.query(&format!(
         "ALTER TABLE {}.evidence_annotations DELETE
-         WHERE community_id = '{}' AND tag = 'ai_analysis'",
+         WHERE community_id = '{}' AND tag = 'ai_analysis' SETTINGS mutations_sync=1",
         db, sql_escape(community_id)
     )).execute().await?;
     Ok(())
@@ -6346,7 +6346,7 @@ pub async fn get_ioc_hits(
     pub async fn update_asset_os(&self, ip: &str, os_name: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         let query = format!(
-            "ALTER TABLE {}.assets UPDATE os_guess = '{}' WHERE tenant_id = '{}' AND ip = '{}'",
+            "ALTER TABLE {}.assets UPDATE os_guess = '{}' WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(os_name), sql_escape(tenant_id), sql_escape(ip)
         );
         self.client.query(&query).execute().await?;
@@ -6797,7 +6797,7 @@ pub async fn get_ioc_hits(
             format!("id = '{}' AND tenant_id = '{}'", sql_escape(id), sql_escape(tenant_id))
         };
         let q = format!(
-            "ALTER TABLE ndr.active_blocks UPDATE status = 'revoked' WHERE {}",
+            "ALTER TABLE ndr.active_blocks UPDATE status = 'revoked' WHERE {} SETTINGS mutations_sync=1",
             where_clause
         );
         self.client.query(&q).execute().await?;
@@ -7250,15 +7250,18 @@ pub async fn get_ioc_hits(
                             admin_user.trim(), tenant_id, permissions
                         );
 
-                        // Permanently delete seed accounts — known credentials from init.sql
+                        // Permanently delete seed accounts — known credentials from init.sql.
+                        // mutations_sync=1: these are known/public default credentials being
+                        // removed for security — must be gone immediately, not eventually.
                         let _ = self.client.query(
                             "ALTER TABLE ndr.users DELETE \
-                             WHERE username IN ('admin', 'tenant-admin') AND tenant_id = 'default'"
+                             WHERE username IN ('admin', 'tenant-admin') AND tenant_id = 'default' \
+                             SETTINGS mutations_sync=1"
                         ).execute().await;
 
                         // Delete the 'default' tenant row — not needed on licensed installs
                         let _ = self.client.query(
-                            "ALTER TABLE ndr.tenants DELETE WHERE id = 'default'"
+                            "ALTER TABLE ndr.tenants DELETE WHERE id = 'default' SETTINGS mutations_sync=1"
                         ).execute().await;
 
                         // Clear plaintext password from .env after use
@@ -7367,7 +7370,7 @@ pub async fn get_ioc_hits(
     pub async fn delete_license(&self, id: &str) -> anyhow::Result<()> {
         self.client
             .query(&format!(
-                "ALTER TABLE ndr.licenses DELETE WHERE id = '{}'",
+                "ALTER TABLE ndr.licenses DELETE WHERE id = '{}' SETTINGS mutations_sync=1",
                 sql_escape(id)
             ))
             .execute()
