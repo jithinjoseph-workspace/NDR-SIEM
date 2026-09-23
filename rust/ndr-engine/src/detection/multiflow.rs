@@ -372,6 +372,9 @@ fn is_private(col: &str) -> String {
           OR isIPAddressInRange({safe},'127.0.0.0/8') \
           OR isIPAddressInRange({safe},'fc00::/7') \
           OR isIPAddressInRange({safe},'fe80::/10') \
+          OR isIPAddressInRange({safe},'ff00::/8') \
+          OR isIPAddressInRange({safe},'224.0.0.0/4') \
+          OR isIPAddressInRange({safe},'169.254.0.0/16') \
           OR {c} = '::1')",
         safe = safe,
         c = col
@@ -977,9 +980,15 @@ async fn detect_new_external_contact(ch: &ClickhouseStorage, tenant: &str, sup: 
         tracing::info!("multiflow[new-contact] {}/{} → {} (first seen in 30d)",
             tenant, r.src_ip, r.dst_ip);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
+        // A first-seen destination is context, not evidence: laptops and servers
+        // reach new update mirrors, CDNs and SaaS hosts every day. This used to
+        // score 65 (MEDIUM) and carry "t:command-and-control", which also made
+        // each one count as stage 6 of an attack chain (threat/patterns.rs).
+        // Now LOW and untagged as C2; real C2 still raises its own alerts
+        // (dns-beaconing, dga, doh-evasion, threat intel) that carry that tag.
         emit(ch, tenant, &make_cid("newcontact", tenant, &key),
-            &r.src_ip, &r.dst_ip, 65.0,
-            vec!["new-external-contact".into(), "t:command-and-control".into()], &sid).await;
+            &r.src_ip, &r.dst_ip, 25.0,
+            vec!["new-external-contact".into()], &sid).await;
     }
 }
 
