@@ -43,10 +43,10 @@
     <span *ngIf="!loading" class="rules-count-badge">
       <ng-container *ngIf="isSearching">Searching…</ng-container>
       <ng-container *ngIf="!isSearching && searchQuery">
-        {{ filteredRules.length }} result{{ filteredRules.length !== 1 ? 's' : '' }}
+        {{ rulesTotal }} result{{ rulesTotal !== 1 ? 's' : '' }}
       </ng-container>
       <ng-container *ngIf="!isSearching && !searchQuery">
-        {{ shownCount }} / {{ rules.length }} rules
+        {{ shownCount }} / {{ totalRuleCount }} rules
       </ng-container>
     </span>
   </div>
@@ -58,7 +58,7 @@
         <lucide-icon [name]="GavelIcon" class="w-10 h-10"></lucide-icon>
       </div>
       <span class="rules-stat-label">Total Rules</span>
-      <strong class="rules-stat-num">{{ rules.length }}</strong>
+      <strong class="rules-stat-num">{{ totalRuleCount }}</strong>
       <span class="rules-stat-sub">loaded in engine</span>
     </div>
     <div class="rules-stat-card rules-stat--green">
@@ -67,7 +67,7 @@
       </div>
       <span class="rules-stat-label">Active</span>
       <strong class="rules-stat-num rules-num-green">{{ activeRulesCount }}</strong>
-      <span class="rules-stat-sub">{{ rules.length > 0 ? ((activeRulesCount / rules.length * 100) | number:'1.0-0') + '% enabled' : 'no rules' }}</span>
+      <span class="rules-stat-sub">{{ totalRuleCount > 0 ? ((activeRulesCount / totalRuleCount * 100) | number:'1.0-0') + '% enabled' : 'no rules' }}</span>
     </div>
     <div class="rules-stat-card rules-stat--amber">
       <div class="rules-stat-watermark">
@@ -269,8 +269,9 @@
 
   <!-- Load more -->
   <div *ngIf="!loading && !isSearching && hasMore" class="rules-load-more">
-    <button class="rules-load-more-btn" (click)="loadMore()">
-      Load more <span class="rules-load-more-count">+{{ filteredRules.length - shownCount }} remaining</span>
+    <button class="rules-load-more-btn" (click)="loadMore()" [disabled]="loadingMore">
+      {{ loadingMore ? 'Loading…' : 'Load more' }}
+      <span *ngIf="!loadingMore" class="rules-load-more-count">+{{ remainingCount }} remaining</span>
     </button>
   </div>
 
@@ -287,8 +288,16 @@
     <span>Try a different name, tag, or severity level.</span>
   </div>
 
+  <!-- Load failed - shown instead of the empty state so a failed request is not mistaken for "no rules" -->
+  <div *ngIf="!loading && !isSearching && loadError" class="empty-state">
+    <lucide-icon [name]="InfoIcon" class="w-10 h-10"></lucide-icon>
+    <strong>Couldn't load rules</strong>
+    <span>The request failed (often a temporary rate limit or connection problem).</span>
+    <button type="button" class="rules-load-more-btn" (click)="retryLoad()">Try again</button>
+  </div>
+
   <!-- Empty (no rules at all) -->
-  <div *ngIf="!loading && rules.length === 0 && !searchQuery" class="empty-state">
+  <div *ngIf="!loading && !loadError && totalRuleCount === 0 && !searchQuery" class="empty-state">
     <lucide-icon [name]="GavelIcon" class="w-10 h-10"></lucide-icon>
     <strong>No SIGMA rules loaded</strong>
     <span>Click "New Rule" to create one, or sync community rules.</span>

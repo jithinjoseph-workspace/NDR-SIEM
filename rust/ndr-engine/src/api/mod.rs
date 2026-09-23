@@ -2553,8 +2553,16 @@ pub async fn get_rules(
     let total = result.len();
     let active_total = result.iter().filter(|r| r["enabled"] == json!(true)).count();
 
+    // order=desc: newest first. The list is community rules followed by the
+    // tenant's own custom rules, so reversing puts a just-created custom rule
+    // on page 1. Applied before pagination so it holds across pages - without
+    // it a new rule would sit at the very end of a 1,000+ rule list.
+    if params.get("order").map(|v| v == "desc").unwrap_or(false) {
+        result.reverse();
+    }
+
     // Optional pagination — callers that don't pass limit/offset (e.g. the
-    // admin rules page) get the full search-filtered set exactly as before.
+    // retrospective and overview pages) get the full search-filtered set.
     if let Some(limit) = params.get("limit").and_then(|v| v.parse::<usize>().ok()) {
         let offset = params.get("offset").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
         result = result.into_iter().skip(offset).take(limit).collect();

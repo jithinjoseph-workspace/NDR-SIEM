@@ -216,9 +216,10 @@ export class Api {
   // pull the entire (1000+ row) rule set on every load. X-Total-Count /
   // X-Active-Count let the caller show accurate summary stats even though
   // only one page of rows actually came back.
-  getRulesPage(limit: number, offset: number, q?: string): Observable<{ rules: any[]; total: number; activeTotal: number }> {
+  getRulesPage(limit: number, offset: number, q?: string, order?: 'desc'): Observable<{ rules: any[]; total: number; activeTotal: number }> {
     let url = `${this.baseUrl}/rules?limit=${limit}&offset=${offset}`;
     if (q) url += `&q=${encodeURIComponent(q)}`;
+    if (order) url += `&order=${order}`;
     return this.http.get<any[]>(url, { observe: 'response' }).pipe(
       map(resp => ({
         rules: resp.body || [],
