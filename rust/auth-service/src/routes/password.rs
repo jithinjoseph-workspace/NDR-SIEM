@@ -1,10 +1,9 @@
-use axum::{extract::State, http::HeaderMap, Json};
-use redis::AsyncCommands;
+use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::AppState;
-use provigil_common::validate_jwt;
+use crate::jwt::auth;
 use super::login::validate_password_strength;
 
 #[derive(Deserialize)]
@@ -14,40 +13,6 @@ pub struct ResetPasswordPayload {
     pub new_password: String,
     /// Present for self-service reset; absent for admin-initiated reset.
     pub old_password: Option<String>,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Token extraction + session check (same pattern as users.rs/tenants.rs)
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn extract_token(headers: &HeaderMap) -> Option<String> {
-    let from_cookie = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| c.split(';').find_map(|p| {
-            p.trim().strip_prefix("ndr_token=").map(str::to_owned)
-        }));
-    if from_cookie.is_some() {
-        return from_cookie;
-    }
-    headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-}
-
-async fn auth(headers: &HeaderMap, state: &AppState) -> Result<provigil_common::Claims, Json<Value>> {
-    let token = extract_token(headers)
-        .ok_or_else(|| Json(json!({ "status": "error", "message": "Unauthorized" })))?;
-    let claims = validate_jwt(&token, &state.jwt_secret)
-        .map_err(|_| Json(json!({ "status": "error", "message": "Token invalid or expired" })))?;
-    let key = format!("provigil:session:{}", claims.jti);
-    let alive: bool = state.valkey.clone().exists(&key).await.unwrap_or(false);
-    if !alive {
-        return Err(Json(json!({ "status": "error", "message": "Session revoked — please log in again" })));
-    }
-    Ok(claims)
 }
 
 /// POST /api/auth/reset-password
@@ -67,21 +32,21 @@ pub async fn handle(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<ResetPasswordPayload>,
-) -> Json<Value> {
+) -> impl IntoResponse {
     let username     = payload.username.trim();
     let tenant_id    = payload.tenant_id.trim();
     let new_password = payload.new_password.trim();
 
     if let Err(msg) = validate_password_strength(new_password) {
-        return Json(json!({ "status": "error", "message": msg }));
+        return Json(json!({ "status": "error", "message": msg })).into_response();
     }
 
     let user = match state.db.get_user(username, tenant_id).await {
         Ok(Some(u)) => u,
-        Ok(None)    => return Json(json!({ "status": "error", "message": "User not found" })),
+        Ok(None)    => return Json(json!({ "status": "error", "message": "User not found" })).into_response(),
         Err(e) => {
             tracing::error!("DB error in reset-password: {}", e);
-            return Json(json!({ "status": "error", "message": "Service unavailable" }));
+            return Json(json!({ "status": "error", "message": "Service unavailable" })).into_response();
         }
     };
 
@@ -90,26 +55,26 @@ pub async fn handle(
         Some(old_pw) => {
             match bcrypt::verify(old_pw, &user.password_hash) {
                 Ok(true) => {}
-                Ok(false) => return Json(json!({ "status": "error", "message": "Current password is incorrect" })),
-                Err(_)    => return Json(json!({ "status": "error", "message": "Internal error" })),
+                Ok(false) => return Json(json!({ "status": "error", "message": "Current password is incorrect" })).into_response(),
+                Err(_)    => return Json(json!({ "status": "error", "message": "Internal error" })).into_response(),
             }
         }
         // Admin reset path — now actually requires the JWT the doc comment always claimed it checked
         None => {
             let claims = match auth(&headers, &state).await {
                 Ok(c) => c,
-                Err(j) => return j,
+                Err((s, j)) => return (s, j).into_response(),
             };
             if claims.role != "super_admin" && claims.role != "tenant_admin" {
-                return Json(json!({ "status": "error", "message": "Forbidden" }));
+                return Json(json!({ "status": "error", "message": "Forbidden" })).into_response();
             }
             if user.role == "super_admin" {
-                return Json(json!({ "status": "error", "message": "Super admin password cannot be changed here" }));
+                return Json(json!({ "status": "error", "message": "Super admin password cannot be changed here" })).into_response();
             }
             if claims.role == "tenant_admin" {
                 let manageable_roles = ["analyst", "senior_analyst", "viewer"];
                 if claims.tenant_id != user.tenant_id || !manageable_roles.contains(&user.role.as_str()) {
-                    return Json(json!({ "status": "error", "message": "Forbidden" }));
+                    return Json(json!({ "status": "error", "message": "Forbidden" })).into_response();
                 }
             }
         }
@@ -119,15 +84,15 @@ pub async fn handle(
         Ok(h) => h,
         Err(e) => {
             tracing::error!("bcrypt hash error: {}", e);
-            return Json(json!({ "status": "error", "message": "Internal error" }));
+            return Json(json!({ "status": "error", "message": "Internal error" })).into_response();
         }
     };
 
     match state.db.set_password_hash(&user.id, &new_hash).await {
-        Ok(()) => Json(json!({ "status": "ok", "message": "Password updated successfully" })),
+        Ok(()) => Json(json!({ "status": "ok", "message": "Password updated successfully" })).into_response(),
         Err(e) => {
             tracing::error!("Failed to update password: {}", e);
-            Json(json!({ "status": "error", "message": "Failed to update password" }))
+            Json(json!({ "status": "error", "message": "Failed to update password" })).into_response()
         }
     }
 }

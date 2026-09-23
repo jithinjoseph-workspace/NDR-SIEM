@@ -257,8 +257,7 @@ pub async fn handle(
 
 #[derive(Deserialize)]
 pub struct CheckUsernameQuery {
-    pub username:  String,
-    pub tenant_id: Option<String>,
+    pub username: String,
 }
 
 pub async fn check_username(

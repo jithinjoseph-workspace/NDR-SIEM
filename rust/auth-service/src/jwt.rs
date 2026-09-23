@@ -1,7 +1,55 @@
 use anyhow::Result;
+use axum::http::{HeaderMap, StatusCode};
+use axum::Json;
 use redis::AsyncCommands;
+use serde_json::json;
 
 use crate::AppState;
+
+/// Token extraction helper (cookie first, then Bearer header).
+/// Was copy-pasted identically across 7 route files; consolidated here.
+pub fn extract_token(headers: &HeaderMap) -> Option<String> {
+    let from_cookie = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| c.split(';').find_map(|p| {
+            p.trim().strip_prefix("ndr_token=").map(str::to_owned)
+        }));
+    if from_cookie.is_some() {
+        return from_cookie;
+    }
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|v| v.trim().to_string())
+}
+
+/// Auth helper — validate JWT then confirm session still alive in Valkey
+/// (catches force-logged-out users whose token hasn't expired yet).
+/// Was copy-pasted across 7 route files; password.rs's copy had a different,
+/// buggy return type (Json<Value> instead of (StatusCode, Json<Value>)) that
+/// made an unauthenticated request return HTTP 200 with an error body instead
+/// of a real 401 — consolidated here so there is only one, correct version.
+pub async fn auth(headers: &HeaderMap, state: &AppState)
+    -> Result<provigil_common::Claims, (StatusCode, Json<serde_json::Value>)>
+{
+    let token = extract_token(headers).ok_or_else(|| (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "status": "error", "message": "Unauthorized" })),
+    ))?;
+    let claims = provigil_common::validate_jwt(&token, &state.jwt_secret).map_err(|_| (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "status": "error", "message": "Token invalid or expired" })),
+    ))?;
+    let key = format!("provigil:session:{}", claims.jti);
+    let alive: bool = state.valkey.clone().exists(&key).await.unwrap_or(false);
+    if !alive {
+        return Err((StatusCode::UNAUTHORIZED,
+            Json(json!({ "status": "error", "message": "Session revoked — please log in again" }))));
+    }
+    Ok(claims)
+}
 
 /// Revoke a specific session JTI (used by logout and token refresh rotation).
 ///

@@ -7,58 +7,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use redis::AsyncCommands;
 
 use crate::AppState;
-use provigil_common::validate_jwt;
+use crate::jwt::auth;
 use super::login::{default_permissions, validate_password_strength};
 use super::forgot::send_email;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Token extraction helper (cookie first, then Bearer header)
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn extract_token(headers: &HeaderMap) -> Option<String> {
-    let from_cookie = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| c.split(';').find_map(|p| {
-            p.trim().strip_prefix("ndr_token=").map(str::to_owned)
-        }));
-    if from_cookie.is_some() {
-        return from_cookie;
-    }
-    headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Auth helper — validate JWT then confirm session still alive in Valkey
-// (catches force-logged-out users whose token hasn't expired yet)
-// ─────────────────────────────────────────────────────────────────────────────
-
-async fn auth(headers: &HeaderMap, state: &AppState)
-    -> Result<provigil_common::Claims, (StatusCode, Json<serde_json::Value>)>
-{
-    let token = extract_token(headers).ok_or_else(|| (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "status": "error", "message": "Unauthorized" })),
-    ))?;
-    let claims = validate_jwt(&token, &state.jwt_secret).map_err(|_| (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "status": "error", "message": "Token invalid or expired" })),
-    ))?;
-    let key = format!("provigil:session:{}", claims.jti);
-    let alive: bool = state.valkey.clone().exists(&key).await.unwrap_or(false);
-    if !alive {
-        return Err((StatusCode::UNAUTHORIZED,
-            Json(json!({ "status": "error", "message": "Session revoked — please log in again" }))));
-    }
-    Ok(claims)
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Inline permissions helper

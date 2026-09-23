@@ -69,15 +69,6 @@ pub async fn call_provider_test(p: &AiProvider, system: &str, prompt: &str) -> R
     call_openai_compat_test(&p.api_key, &model, &format!("{base}{path}"), system, prompt).await
 }
 
-/// Used by the test endpoint to fire a one-shot call (non-chat).
-pub async fn call_provider_simple(p: &AiProvider, system: &str, prompt: &str) -> String {
-    if p.provider_type == "anthropic" {
-        return call_anthropic_simple(p, system, prompt).await;
-    }
-    let (base, path, model) = resolve_openai_params(p);
-    call_openai_compat(&p.api_key, &model, &format!("{base}{path}"), system, prompt).await
-}
-
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 fn resolve_openai_params(p: &AiProvider) -> (String, String, String) {
@@ -108,33 +99,6 @@ async fn call_provider_chat(
     call_openai_chat(&p.api_key, &model, &format!("{base}{path}"), system, history, user_msg).await
 }
 
-async fn call_openai_compat(key: &str, model: &str, endpoint: &str, system: &str, prompt: &str) -> String {
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap_or_default();
-
-    let body = serde_json::json!({
-        "model": model, "temperature": 0.1, "max_tokens": 1024,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": prompt}
-        ]
-    });
-
-    let resp = match http.post(endpoint).bearer_auth(key).json(&body).send().await {
-        Ok(r)  => r,
-        Err(e) => { tracing::error!("AI request to {} failed: {}", endpoint, e); return String::new(); }
-    };
-
-    let data: serde_json::Value = match resp.json().await {
-        Ok(d)  => d,
-        Err(e) => { tracing::error!("AI response parse failed: {}", e); return String::new(); }
-    };
-
-    data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string()
-}
-
 async fn call_openai_compat_test(key: &str, model: &str, endpoint: &str, system: &str, prompt: &str) -> Result<String, String> {
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -162,37 +126,6 @@ async fn call_openai_compat_test(key: &str, model: &str, endpoint: &str, system:
 
     let text = data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
     if text.is_empty() { Err(format!("API returned empty content (HTTP {})", status)) } else { Ok(text) }
-}
-
-async fn call_anthropic_simple(p: &AiProvider, system: &str, prompt: &str) -> String {
-    let model    = if p.model.is_empty()         { "claude-sonnet-4-6"         } else { p.model.as_str() };
-    let base     = if p.base_url.is_empty()      { "https://api.anthropic.com" } else { p.base_url.trim_end_matches('/') };
-    let path     = if p.endpoint_path.is_empty() { "/v1/messages"              } else { p.endpoint_path.as_str() };
-    let endpoint = format!("{base}{path}");
-
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap_or_default();
-
-    let resp = match http.post(&endpoint)
-        .header("x-api-key", &p.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .json(&serde_json::json!({
-            "model": model, "max_tokens": 1024, "system": system,
-            "messages": [{"role": "user", "content": prompt}]
-        })).send().await
-    {
-        Ok(r)  => r,
-        Err(e) => { tracing::error!("Anthropic request to {} failed: {}", endpoint, e); return String::new(); }
-    };
-
-    let data: serde_json::Value = match resp.json().await {
-        Ok(d)  => d,
-        Err(_) => return String::new(),
-    };
-
-    data["content"][0]["text"].as_str().unwrap_or("").trim().to_string()
 }
 
 async fn call_anthropic_test(p: &AiProvider, system: &str, prompt: &str) -> Result<String, String> {

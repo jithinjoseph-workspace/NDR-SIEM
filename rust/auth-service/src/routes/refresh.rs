@@ -15,7 +15,7 @@ pub async fn handle(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // Read token from cookie first (Angular), then Authorization header
-    let token = match extract_token(&headers) {
+    let token = match session::extract_token(&headers) {
         Some(t) => t,
         None    => return (
             StatusCode::UNAUTHORIZED,
@@ -89,21 +89,3 @@ pub async fn handle(
     ).await
 }
 
-fn extract_token(headers: &HeaderMap) -> Option<String> {
-    let from_cookie = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| {
-            c.split(';').find_map(|p| {
-                p.trim().strip_prefix("ndr_token=").map(str::to_owned)
-            })
-        });
-    if from_cookie.is_some() {
-        return from_cookie;
-    }
-    headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-}
