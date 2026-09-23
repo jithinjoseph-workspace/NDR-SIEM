@@ -362,7 +362,13 @@ export class Navbar implements OnInit, OnDestroy {
       return;
     }
 
-    this.api.getAgentStatus().subscribe({
+    // getDashboardStats() hits /api/health, which reports real platform health
+    // (Kafka + ClickHouse connectivity) - not getAgentStatus(), which checks for
+    // a local on-prem capture agent (Zeek/Suricata/Vector, install-customer.sh
+    // only) that doesn't exist on a cloud deployment with remote sensors. That
+    // mismatch made this always read DEGRADED on cloud installs regardless of
+    // whether the platform was actually healthy.
+    this.api.getDashboardStats().subscribe({
       next: data => {
         this.applySystemStatus(data);
         this.cdr.detectChanges();
@@ -409,10 +415,11 @@ export class Navbar implements OnInit, OnDestroy {
 
 
   private applySystemStatus(data: any) {
-    const zeekRunning = this.isRunning(data?.['agent-z']);
-    const suricataRunning = this.isRunning(data?.['agent-s']);
-    const vectorRunning = this.isRunning(data?.vector);
-    this.systemStatus = zeekRunning || suricataRunning || vectorRunning ? 'OPERATIONAL' : 'DEGRADED';
+    const kafkaRunning      = this.isRunning(data?.services?.kafka);
+    const clickhouseRunning = this.isRunning(data?.services?.clickhouse);
+    // Both are core to every deployment model (cloud and on-prem) - unlike the
+    // local capture agent, they're always meaningful to check here.
+    this.systemStatus = kafkaRunning && clickhouseRunning ? 'OPERATIONAL' : 'DEGRADED';
   }
 
   private isRunning(status: unknown) {
