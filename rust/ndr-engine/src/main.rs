@@ -330,22 +330,28 @@ async fn main() {
     }
 
     // ── SIEM syslog forwarder (optional, set SIEM_SYSLOG_HOST to enable) ────
+    // env::var() returns Ok("") for a var that's *set but empty* - which is
+    // exactly how every installer's default .env ships this (SIEM_SYSLOG_HOST=
+    // with no value), not just "unset". That previously fell into the "try to
+    // connect" branch and warned on every single startup with no SIEM
+    // configured at all - the normal/default case, not an error.
     let siem: Option<Arc<crate::siem::SiemForwarder>> =
-        if let Ok(host) = std::env::var("SIEM_SYSLOG_HOST") {
-            let port: u16 = std::env::var("SIEM_SYSLOG_PORT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(514);
-            match crate::siem::SiemForwarder::new(&host, port).await {
-                Ok(f) => {
-                    tracing::info!("SIEM syslog forwarder enabled → {}:{}", host, port);
-                    Some(Arc::new(f))
-                }
-                Err(e) => {
-                    tracing::warn!("SIEM forwarder init failed (disabling): {}", e);
-                    None
+        match std::env::var("SIEM_SYSLOG_HOST") {
+            Ok(host) if !host.trim().is_empty() => {
+                let port: u16 = std::env::var("SIEM_SYSLOG_PORT")
+                    .ok().and_then(|v| v.parse().ok()).unwrap_or(514);
+                match crate::siem::SiemForwarder::new(&host, port).await {
+                    Ok(f) => {
+                        tracing::info!("SIEM syslog forwarder enabled → {}:{}", host, port);
+                        Some(Arc::new(f))
+                    }
+                    Err(e) => {
+                        tracing::warn!("SIEM forwarder init failed (disabling): {}", e);
+                        None
+                    }
                 }
             }
-        } else {
-            None
+            _ => None,
         };
 
     // ── Seed in-memory threat-intel from persisted IOC watchlist ─────────
