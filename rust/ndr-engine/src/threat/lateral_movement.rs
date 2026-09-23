@@ -31,11 +31,22 @@ pub fn spawn_lateral_movement_detector(ch: Arc<ClickhouseStorage>, is_leader: Ar
 async fn run_scan(ch: &Arc<ClickhouseStorage>) -> anyhow::Result<()> {
     let tenants = ch.get_all_tenants().await
         .unwrap_or_else(|_| vec!["default".to_string()]);
-    for tenant in &tenants {
-        if let Err(e) = scan_tenant(ch, tenant).await {
-            warn!("lateral_movement: tenant {} failed — {}", tenant, e);
-        }
+    // Bounded concurrency (TENANT_SCAN_CONCURRENCY) instead of one tenant at
+    // a time - at real tenant counts, sequential scanning can push this well
+    // past its own 5-min cadence (SCAN_INTERVAL_SECS).
+    let sem = Arc::new(tokio::sync::Semaphore::new(super::tenant_scan_concurrency()));
+    let mut handles = Vec::with_capacity(tenants.len());
+    for tenant in tenants {
+        let ch2  = Arc::clone(ch);
+        let sem2 = Arc::clone(&sem);
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            if let Err(e) = scan_tenant(&ch2, &tenant).await {
+                warn!("lateral_movement: tenant {} failed — {}", tenant, e);
+            }
+        }));
     }
+    futures_util::future::join_all(handles).await;
     Ok(())
 }
 

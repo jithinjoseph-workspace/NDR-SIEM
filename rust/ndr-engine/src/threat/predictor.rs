@@ -21,17 +21,33 @@ pub fn spawn_predictor(
                     let Ok(tenants) = ch.get_all_tenants().await else {
                         break 'work;
                     };
-                    let trusted_snap = trusted.read().await;
+                    // Bounded concurrency (TENANT_SCAN_CONCURRENCY) instead of
+                    // one tenant at a time - previously held a single trusted
+                    // read-lock guard across the whole sequential loop, which
+                    // also would have blocked a concurrent version outright
+                    // (one guard can't be shared across spawned tasks); each
+                    // task now takes its own short-lived read() instead -
+                    // TrustedRanges reads are cheap and RwLock allows many
+                    // concurrent readers, so this doesn't add contention.
+                    let sem = Arc::new(tokio::sync::Semaphore::new(super::tenant_scan_concurrency()));
+                    let mut handles = Vec::with_capacity(tenants.len());
                     for tenant_id in tenants {
-                        if !ch.get_tenant_ai_enabled(&tenant_id).await {
-                            continue;
-                        }
-                        if let Err(e) = run_prediction(&ch, &tenant_id, &trusted_snap).await {
-                            warn!("Prediction failed for {}: {}", tenant_id, e);
-                        }
+                        let ch2      = Arc::clone(&ch);
+                        let trusted2 = Arc::clone(&trusted);
+                        let sem2     = Arc::clone(&sem);
+                        handles.push(tokio::spawn(async move {
+                            let _permit = sem2.acquire().await;
+                            if !ch2.get_tenant_ai_enabled(&tenant_id).await {
+                                return;
+                            }
+                            let trusted_snap = trusted2.read().await;
+                            if let Err(e) = run_prediction(&ch2, &tenant_id, &trusted_snap).await {
+                                warn!("Prediction failed for {}: {}", tenant_id, e);
+                            }
+                        }));
                     }
+                    futures_util::future::join_all(handles).await;
                     info!("Threat predictor: cycle complete — next run in 6 hours");
-                    drop(trusted_snap);
                 }
             }
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;

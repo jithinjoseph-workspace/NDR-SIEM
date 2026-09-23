@@ -15,11 +15,22 @@ pub fn spawn_asset_intel(ch: Arc<ClickhouseStorage>, is_leader: Arc<std::sync::a
             if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
                 info!("asset_intel: starting enrichment cycle");
                 let tenants = ch.get_all_tenants().await.unwrap_or_else(|_| vec!["default".to_string()]);
+                // Bounded concurrency (TENANT_SCAN_CONCURRENCY) instead of one
+                // tenant at a time - at real tenant counts, sequential asset
+                // enrichment can push this well past its own 15-min cadence.
+                let sem = Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+                let mut handles = Vec::with_capacity(tenants.len());
                 for tenant_id in tenants {
-                    if let Err(e) = enrich_tenant_assets(&ch, &tenant_id).await {
-                        warn!("asset_intel: failed for tenant {} — {}", tenant_id, e);
-                    }
+                    let ch2  = Arc::clone(&ch);
+                    let sem2 = Arc::clone(&sem);
+                    handles.push(tokio::spawn(async move {
+                        let _permit = sem2.acquire().await;
+                        if let Err(e) = enrich_tenant_assets(&ch2, &tenant_id).await {
+                            warn!("asset_intel: failed for tenant {} — {}", tenant_id, e);
+                        }
+                    }));
                 }
+                futures_util::future::join_all(handles).await;
                 info!("asset_intel: cycle complete — next run in 15 min");
             }
             tokio::time::sleep(Duration::from_secs(900)).await;

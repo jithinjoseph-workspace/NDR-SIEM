@@ -13,6 +13,25 @@ pub mod jarm;
 
 use std::sync::Arc;
 
+/// How many tenants a background task processes concurrently, instead of
+/// one at a time. Every tenant-looping task here used a plain sequential
+/// `for tenant_id in tenants { ... .await }` - fine at a handful of
+/// tenants, but at real scale (hundreds-to-thousands) it means a single
+/// slow tenant (or a task that calls out to an AI provider per tenant,
+/// like chain_matcher/correlator) pushes the whole cycle length out
+/// linearly, and multi-second-per-tenant tasks can end up taking longer
+/// than their own refresh interval - permanently falling behind, never
+/// completing one pass before the next is due. Configurable rather than a
+/// fixed constant since the safe value depends on real hardware (Click
+/// House capacity, AI provider rate limits) this code has no way to know.
+pub fn tenant_scan_concurrency() -> usize {
+    std::env::var("TENANT_SCAN_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n: &usize| n > 0)
+        .unwrap_or(10)
+}
+
 /// Start threat background tasks with Redis leader election.
 /// Only the elected leader runs tasks — automatic failover if leader dies.
 /// Returns (election handle, trusted ranges Arc) — both stored in AppState.
@@ -59,6 +78,22 @@ pub fn spawn_all(
     let ch_for_election = ch.clone();
     let trusted_for_spawn = Arc::clone(&trusted);
 
+    // Run on every instance unconditionally, regardless of election outcome -
+    // both back synchronous per-event lookups on the live Kafka ingestion
+    // path that every instance runs whether or not it's the current leader.
+    // Everything inside spawn_threat_tasks() below only ever runs on
+    // whichever instance holds (or once held) the leader election, so these
+    // two can't live there - a follower that never wins an election would
+    // never run them at all.
+    let is_leader_flag = election_arc.is_leader_flag();
+    cloud_trust::spawn_trust_updater(
+        Arc::clone(&trusted),
+        Arc::clone(&redis_client),
+        Arc::clone(&asn),
+        Arc::clone(&ch),
+    );
+    entity_scorer::spawn_entity_scorer(Arc::clone(&ch), Arc::clone(&entity_cache), Arc::clone(&is_leader_flag));
+
     tokio::spawn(async move {
         tokio::time::sleep(
             std::time::Duration::from_millis(jitter_ms)
@@ -71,7 +106,6 @@ pub fn spawn_all(
         let asn_for_elect   = asn.clone();
         let trusted_clone   = Arc::clone(&trusted_for_spawn);
 
-        let entity_cache_for_spawn = entity_cache.clone();
         let redis_mux_for_spawn    = redis_mux.clone();
         let ws_tx_for_spawn        = ws_tx.clone();
         // Same flag election_arc.is_leader() reads — cloned once here so every
@@ -87,7 +121,6 @@ pub fn spawn_all(
                         redis_for_elect.clone(),
                         asn_for_elect.clone(),
                         Arc::clone(&trusted_clone),
-                        entity_cache_for_spawn.clone(),
                         redis_mux_for_spawn.clone(),
                         ws_tx_for_spawn.clone(),
                         Arc::clone(&is_leader_for_spawn),
@@ -123,25 +156,22 @@ pub fn spawn_all(
 /// with the new leader — duplicate entity scoring, predictions, correlation,
 /// all double-writing the same ClickHouse tables.
 fn spawn_threat_tasks(
-    ch:           Arc<crate::storage::ClickhouseStorage>,
-    redis:        Arc<redis::Client>,
-    asn:          Arc<Option<crate::enrichment::AsnLookup>>,
-    trusted:      Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
-    entity_cache: Arc<dashmap::DashMap<String, f32>>,
-    redis_mux:    redis::aio::MultiplexedConnection,
-    ws_tx:        tokio::sync::broadcast::Sender<String>,
-    is_leader:    Arc<std::sync::atomic::AtomicBool>,
+    ch:        Arc<crate::storage::ClickhouseStorage>,
+    redis:     Arc<redis::Client>,
+    asn:       Arc<Option<crate::enrichment::AsnLookup>>,
+    trusted:   Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
+    redis_mux: redis::aio::MultiplexedConnection,
+    ws_tx:     tokio::sync::broadcast::Sender<String>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let chain_trigger = Arc::new(tokio::sync::Notify::new());
 
-    // Keywords read from ndr.settings at startup and every 23h
-    cloud_trust::spawn_trust_updater(
-        Arc::clone(&trusted),
-        Arc::clone(&redis),
-        Arc::clone(&asn),
-        Arc::clone(&ch),
-        Arc::clone(&is_leader),
-    );
+    // cloud_trust::spawn_trust_updater and entity_scorer::spawn_entity_scorer
+    // are NOT started here - see spawn_all() below. Both back per-event
+    // lookups on the live Kafka ingestion path that every instance runs
+    // regardless of leadership, so they can't only run when this function
+    // gets called (which only ever happens on whichever instance currently
+    // holds - or once held - the leader election).
 
     // Only collect external feeds if any active tenant purchased threat_intel.
     // Not leader-gated below: collector.rs wraps a loop shared with siem-engine
@@ -167,12 +197,11 @@ fn spawn_threat_tasks(
     correlator::spawn_correlator(Arc::clone(&ch), Arc::clone(&is_leader));
     cloud_suggestions::spawn_suggestion_scanner(Arc::clone(&ch), Arc::clone(&is_leader));
     beacon_detector::spawn_beacon_detector(Arc::clone(&ch), redis_mux, ws_tx, Arc::clone(&is_leader));
-    entity_scorer::spawn_entity_scorer(Arc::clone(&ch), entity_cache, Arc::clone(&is_leader));
     crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch), Arc::clone(&is_leader));
     lateral_movement::spawn_lateral_movement_detector(Arc::clone(&ch), Arc::clone(&is_leader));
     jarm::spawn_jarm_scanner(Arc::clone(&ch), Arc::clone(&is_leader));
 
-    tracing::info!("All 12 threat background tasks started on elected leader");
+    tracing::info!("Threat background tasks started on elected leader (cloud_trust + entity_scorer run independently on every instance, see spawn_all)");
 }
 
 // ── Row structs for ClickHouse queries ───────────────────────────────────────

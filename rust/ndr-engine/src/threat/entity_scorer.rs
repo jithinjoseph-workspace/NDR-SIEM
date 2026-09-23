@@ -20,32 +20,50 @@ pub fn spawn_entity_scorer(
     tokio::spawn(async move {
         // Run immediately on startup so the in-memory cache is pre-populated.
         // Previously delayed 60s, leaving entity_score=0 for all new hits in that window.
-        run_refresh(&ch, &cache).await;
+        //
+        // Unlike the other 11 leader-gated tasks, this one is NOT skipped
+        // wholesale on non-leader instances: `cache` also backs the
+        // synchronous per-event entity_score lookup on the live Kafka
+        // ingestion path (api/mod.rs), which every instance runs regardless
+        // of leadership (Kafka consumer-group partitions are spread across
+        // all 3, not just the leader). Gating this entire function behind
+        // is_leader (an earlier fix here today) silently left followers'
+        // caches permanently empty, so 2 of 3 engines quietly scored every
+        // event they processed with entity_score=0 - the original bug this
+        // task existed to prevent. is_leader is instead threaded down to
+        // gate only the ndr.entity_scores ClickHouse upsert, which is the
+        // part 3 engines genuinely shouldn't all do - the cache-refreshing
+        // SELECT (a read, not a write) runs on every instance every cycle.
+        run_refresh(&ch, &cache, &is_leader).await;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(REFRESH_SECS)).await;
-            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
-                run_refresh(&ch, &cache).await;
-            }
+            run_refresh(&ch, &cache, &is_leader).await;
         }
     });
 }
 
-async fn run_refresh(ch: &Arc<ClickhouseStorage>, cache: &Arc<dashmap::DashMap<String, f32>>) {
+async fn run_refresh(
+    ch:        &Arc<ClickhouseStorage>,
+    cache:     &Arc<dashmap::DashMap<String, f32>>,
+    is_leader: &Arc<std::sync::atomic::AtomicBool>,
+) {
     info!("entity_scorer: refreshing");
     let tenant_ids = ch.get_all_tenants().await
         .unwrap_or_else(|_| vec!["default".to_string()]);
 
-    // Refresh all tenants concurrently (bounded to 4 in-flight) so a slow scan
-    // on one tenant doesn't push the total past the 5-minute refresh window.
-    let sem = Arc::new(tokio::sync::Semaphore::new(4));
+    // Refresh all tenants concurrently (bounded, configurable via
+    // TENANT_SCAN_CONCURRENCY) so a slow scan on one tenant doesn't push the
+    // total past the 5-minute refresh window.
+    let sem = Arc::new(tokio::sync::Semaphore::new(super::tenant_scan_concurrency()));
     let mut handles = Vec::with_capacity(tenant_ids.len());
+    let write_scores = is_leader.load(std::sync::atomic::Ordering::Relaxed);
     for tenant_id in tenant_ids {
         let ch2    = ch.clone();
         let cache2 = cache.clone();
         let sem2   = sem.clone();
         handles.push(tokio::spawn(async move {
             let _permit = sem2.acquire().await;
-            if let Err(e) = refresh_tenant(&ch2, &tenant_id, &cache2).await {
+            if let Err(e) = refresh_tenant(&ch2, &tenant_id, &cache2, write_scores).await {
                 warn!("entity_scorer: tenant {} failed — {}", tenant_id, e);
             }
         }));
@@ -54,9 +72,10 @@ async fn run_refresh(ch: &Arc<ClickhouseStorage>, cache: &Arc<dashmap::DashMap<S
 }
 
 async fn refresh_tenant(
-    ch:        &Arc<ClickhouseStorage>,
-    tenant_id: &str,
-    cache:     &Arc<dashmap::DashMap<String, f32>>,
+    ch:          &Arc<ClickhouseStorage>,
+    tenant_id:   &str,
+    cache:       &Arc<dashmap::DashMap<String, f32>>,
+    write_scores: bool,
 ) -> anyhow::Result<()> {
     use crate::storage::clickhouse::{tenant_db_pub, sql_escape_pub};
 
@@ -106,8 +125,20 @@ async fn refresh_tenant(
 
     info!("entity_scorer: {} hosts for tenant {}", rows.len(), tenant_id);
 
-    // Update in-memory cache and collect rows for a single batch INSERT.
-    // Previously issued one INSERT per host (up to 100 round-trips per tenant).
+    // Cache refresh runs on every instance regardless of leadership - see the
+    // comment on spawn_entity_scorer. Only the ClickHouse upsert below is
+    // leader-gated.
+    for row in &rows {
+        let normalized: f32 = (row.accumulated_score as f32 / 10.0).min(100.0);
+        cache.insert(format!("{}:{}", tenant_id, row.src_ip), normalized);
+    }
+
+    if !write_scores {
+        return Ok(());
+    }
+
+    // Collect rows for a single batch INSERT. Previously issued one INSERT
+    // per host (up to 100 round-trips per tenant).
     #[derive(clickhouse::Row, serde::Serialize)]
     struct EntityScoreRow {
         src_ip:            String,
@@ -128,9 +159,6 @@ async fn refresh_tenant(
         }
         Ok(mut inserter) => {
             for row in &rows {
-                let normalized: f32 = (row.accumulated_score as f32 / 10.0).min(100.0);
-                cache.insert(format!("{}:{}", tenant_id, row.src_ip), normalized);
-
                 let r = EntityScoreRow {
                     src_ip:            row.src_ip.clone(),
                     tenant_id:         tenant_id.to_string(),

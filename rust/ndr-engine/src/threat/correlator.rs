@@ -11,12 +11,23 @@ pub fn spawn_correlator(ch: Arc<crate::storage::ClickhouseStorage>, is_leader: A
             if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
                 match ch.get_all_tenants().await {
                     Ok(tenants) => {
+                        // Bounded concurrency (TENANT_SCAN_CONCURRENCY) - this
+                        // makes an AI call per tenant, so sequential processing
+                        // at real tenant counts could take hours for one pass.
+                        let sem = Arc::new(tokio::sync::Semaphore::new(super::tenant_scan_concurrency()));
+                        let mut handles = Vec::with_capacity(tenants.len());
                         for tenant_id in tenants {
-                            let ai_enabled = ch.get_tenant_ai_enabled(&tenant_id).await;
-                            if let Err(e) = run_correlation(&ch, &tenant_id, ai_enabled).await {
-                                warn!("Correlation failed for {}: {}", tenant_id, e);
-                            }
+                            let ch2  = Arc::clone(&ch);
+                            let sem2 = Arc::clone(&sem);
+                            handles.push(tokio::spawn(async move {
+                                let _permit = sem2.acquire().await;
+                                let ai_enabled = ch2.get_tenant_ai_enabled(&tenant_id).await;
+                                if let Err(e) = run_correlation(&ch2, &tenant_id, ai_enabled).await {
+                                    warn!("Correlation failed for {}: {}", tenant_id, e);
+                                }
+                            }));
                         }
+                        futures_util::future::join_all(handles).await;
                     }
                     Err(e) => warn!("correlator: failed to get tenants: {}", e),
                 }

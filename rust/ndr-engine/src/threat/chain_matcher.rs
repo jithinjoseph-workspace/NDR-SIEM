@@ -20,10 +20,24 @@ pub fn spawn_chain_matcher(
             if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
                 match ch.get_all_tenants().await {
                     Ok(tenants) => {
-                        for tenant_id in &tenants {
-                            if !ch.get_tenant_ai_enabled(tenant_id).await { continue; }
-                            run_matching(Arc::clone(&ch), tenant_id, &trusted, &asn).await;
+                        // Bounded concurrency (TENANT_SCAN_CONCURRENCY) - this
+                        // makes AI calls per tenant (see run_matching), so
+                        // sequential processing at real tenant counts could
+                        // take hours for one sweep.
+                        let sem = Arc::new(tokio::sync::Semaphore::new(super::tenant_scan_concurrency()));
+                        let mut handles = Vec::with_capacity(tenants.len());
+                        for tenant_id in tenants {
+                            let ch2      = Arc::clone(&ch);
+                            let trusted2 = Arc::clone(&trusted);
+                            let asn2     = Arc::clone(&asn);
+                            let sem2     = Arc::clone(&sem);
+                            handles.push(tokio::spawn(async move {
+                                let _permit = sem2.acquire().await;
+                                if !ch2.get_tenant_ai_enabled(&tenant_id).await { return; }
+                                run_matching(Arc::clone(&ch2), &tenant_id, &trusted2, &asn2).await;
+                            }));
                         }
+                        futures_util::future::join_all(handles).await;
                     }
                     Err(e) => warn!("chain_matcher: failed to get tenants: {}", e),
                 }
