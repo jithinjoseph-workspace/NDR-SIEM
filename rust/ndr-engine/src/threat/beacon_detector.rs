@@ -51,11 +51,21 @@ async fn run_scan(
     let tenant_ids = ch.get_all_tenants().await
         .unwrap_or_else(|_| vec!["default".to_string()]);
 
-    for tenant_id in &tenant_ids {
-        if let Err(e) = scan_tenant(ch, tenant_id, redis_mux, ws_tx).await {
-            warn!("beacon_detector: tenant {} failed — {}", tenant_id, e);
-        }
+    let sem = Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+    let mut handles = Vec::with_capacity(tenant_ids.len());
+    for tenant_id in tenant_ids {
+        let ch2    = Arc::clone(ch);
+        let redis2 = redis_mux.clone();
+        let ws2    = ws_tx.clone();
+        let sem2   = Arc::clone(&sem);
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            if let Err(e) = scan_tenant(&ch2, &tenant_id, &redis2, &ws2).await {
+                warn!("beacon_detector: tenant {} failed — {}", tenant_id, e);
+            }
+        }));
     }
+    futures_util::future::join_all(handles).await;
 }
 
 async fn scan_tenant(

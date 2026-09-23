@@ -49,16 +49,26 @@ async fn run_scan(ch: &Arc<ClickhouseStorage>) {
 
     // Get top clean dst IPs from last 24h across ALL active tenants
     let tenant_ids = ch.get_all_tenants().await.unwrap_or_else(|_| vec!["default".to_string()]);
-    let mut combined: HashMap<String, u64> = HashMap::new();
-    for tid in &tenant_ids {
-        if !ch.get_tenant_ai_enabled(tid).await { continue; }
-        match ch.get_high_volume_clean_dst_ips(tid, 24, 30).await {
-            Ok(v) => {
-                for (ip, cnt) in v {
-                    *combined.entry(ip).or_default() += cnt;
-                }
+    let sem = Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+    let mut handles = Vec::with_capacity(tenant_ids.len());
+    for tid in tenant_ids {
+        let ch2  = Arc::clone(ch);
+        let sem2 = Arc::clone(&sem);
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            if !ch2.get_tenant_ai_enabled(&tid).await { return None; }
+            match ch2.get_high_volume_clean_dst_ips(&tid, 24, 30).await {
+                Ok(v) => Some(v),
+                Err(e) => { warn!("cloud_suggestions: query failed for tenant {} — {}", tid, e); None }
             }
-            Err(e) => warn!("cloud_suggestions: query failed for tenant {} — {}", tid, e),
+        }));
+    }
+    let mut combined: HashMap<String, u64> = HashMap::new();
+    for handle in futures_util::future::join_all(handles).await {
+        if let Ok(Some(v)) = handle {
+            for (ip, cnt) in v {
+                *combined.entry(ip).or_default() += cnt;
+            }
         }
     }
     if combined.is_empty() { return; }
