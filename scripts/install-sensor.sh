@@ -290,7 +290,7 @@ step "Capture Utilities"
 log "Checking packet capture tools..."
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-  software-properties-common zstd > /dev/null 2>&1 || true
+  software-properties-common zstd tcpdump > /dev/null 2>&1 || true
 
 # Helper: returns tshark major.minor as integers
 tshark_ver_ok() {
@@ -571,6 +571,9 @@ IFACE=${IFACE}
 KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
 NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
 INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Optional: this sensor ignores its own traffic to the platform so it doesn't raise alerts about itself.
+# EXCLUDE_CLOUD_TRAFFIC=0
+# EXCLUDE_CLOUD_IPS=203.0.113.10,203.0.113.11
 EOF
 
 # ── Search Backend ────────────────────────────────
@@ -1424,7 +1427,7 @@ log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
 """NDR Sensor Agent v2 — monitors and restarts all services"""
-import os, time, subprocess, threading, requests, json, hashlib, re
+import os, time, subprocess, threading, requests, json, hashlib, re, socket, ipaddress
 from datetime import datetime
 
 config = {}
@@ -1438,6 +1441,28 @@ CLOUD_URL = config.get('CLOUD_URL', '').rstrip('/')
 TENANT_ID = config.get('TENANT_ID', '')
 API_KEY   = config.get('API_KEY', '')
 IFACE     = config.get('IFACE', 'eth0')
+
+# ── Don't alert on this sensor's own reporting traffic ───────────────────────
+# The sensor ships its logs to the platform (CLOUD_URL) over the same interface
+# Zeek and Suricata are watching, so that traffic is analysed and can raise
+# alerts about the monitoring system itself (measured on one tenant: 115 of 129
+# alerts). A narrow capture filter drops just that conversation: packets between
+# THIS sensor's own addresses and the platform's addresses on the platform's
+# port, in both directions (dropping only one direction would leave Zeek half a
+# connection and it would alert on that instead). Everything else - other hosts,
+# other ports, other destinations, other hosts talking to the platform - is
+# still analysed. Arkime's packet capture and Vector's log shipping are not
+# affected. Optional sensor.conf keys:
+#   EXCLUDE_CLOUD_TRAFFIC=0         turn the filter off
+#   EXCLUDE_CLOUD_IPS=1.2.3.4,...   extra platform addresses (CLOUD_URL behind a proxy, etc.)
+EXCLUDE_ENABLED      = config.get('EXCLUDE_CLOUD_TRAFFIC', '1').strip() != '0'
+EXCLUDE_EXTRA_IPS    = [x.strip() for x in config.get('EXCLUDE_CLOUD_IPS', '').split(',') if x.strip()]
+EXCLUDE_BPF_FILE     = '/etc/ndr/exclude.bpf'
+EXCLUDE_RECHECK_SECS = 300
+CURRENT_EXCLUDE_BPF  = ''      # the filter Zeek/Suricata were last started with
+_exclude_checked_at  = 0.0
+_exclude_failed      = {'zeek': False, 'suricata': False}   # a tool that won't run with the filter
+_down_with_filter    = {'zeek': 0, 'suricata': 0}
 
 # Prevents check_and_restart from undoing an intentional stop command
 MANUALLY_STOPPED = False
@@ -1469,18 +1494,146 @@ def is_port_open(port):
 def is_capture_running():
     return is_running('arkime/bin/capture')
 
+# ── Exclusion filter (see the comment block near the top) ────────────────────
+
+def _valid_ip(s):
+    try:
+        return str(ipaddress.ip_address(str(s).strip().split('%')[0]))
+    except ValueError:
+        return None
+
+def cloud_endpoint():
+    """(host, port) of CLOUD_URL; port defaults from the scheme."""
+    from urllib.parse import urlparse
+    u = urlparse(CLOUD_URL)
+    return u.hostname or '', (u.port or (443 if u.scheme == 'https' else 80))
+
+def resolve_cloud_ips(host):
+    """Every address the platform's hostname resolves to (A and AAAA). Empty on failure."""
+    ip = _valid_ip(host)
+    if ip:
+        return {ip}
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return set()
+    return {a for a in (_valid_ip(i[4][0]) for i in infos) if a}
+
+def own_ips(iface):
+    """This machine's addresses on the capture interface."""
+    try:
+        out = subprocess.run(['ip', '-o', 'addr', 'show', 'dev', iface],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    ips = set()
+    for line in out.splitlines():
+        p = line.split()
+        if len(p) >= 4 and p[2] in ('inet', 'inet6'):
+            ip = _valid_ip(p[3].split('/')[0])
+            if ip:
+                ips.add(ip)
+    return ips
+
+def build_exclude_bpf(own, cloud, port, cap=16):
+    """BPF that drops traffic between this sensor and the platform on `port`,
+    both directions. '' when either side is unknown (then nothing is excluded)."""
+    own   = sorted({a for a in (_valid_ip(x) for x in own) if a})[:cap]
+    cloud = sorted({a for a in (_valid_ip(x) for x in cloud) if a})[:cap]
+    if not own or not cloud or not isinstance(port, int) or not (0 < port < 65536):
+        return ''
+    o = ' or '.join('host ' + a for a in own)
+    c = ' or '.join('host ' + a for a in cloud)
+    return 'not ((%s) and (%s) and port %d)' % (o, c, port)
+
+def bpf_ok(expr):
+    """True if libpcap accepts the filter. Without tcpdump we can't ask; the expression is
+    built only from validated addresses and an integer port, so it is well-formed anyway."""
+    try:
+        return subprocess.run(['tcpdump', '-d', expr], capture_output=True, timeout=10).returncode == 0
+    except FileNotFoundError:
+        return True
+    except subprocess.SubprocessError:
+        return False
+
+def desired_exclude_bpf():
+    """The filter the running tools should use, '' for none, or None to keep what is in
+    place (name resolution failed - a DNS blip must not drop the exclusion and restart)."""
+    if not EXCLUDE_ENABLED:
+        return ''
+    host, port = cloud_endpoint()
+    cloud = resolve_cloud_ips(host) | {i for i in map(_valid_ip, EXCLUDE_EXTRA_IPS) if i}
+    if not cloud:
+        return None
+    own = own_ips(IFACE)
+    if own & cloud:
+        return ''   # sensor runs on the platform's own machine: nothing to exclude
+    bpf = build_exclude_bpf(own, cloud, port)
+    if bpf and not bpf_ok(bpf):
+        print("[NDR] Exclusion filter rejected by libpcap, not using it: " + bpf)
+        return ''
+    return bpf
+
+def apply_exclusion(restart):
+    """Recompute the filter. If it changed: remember it, write it for Suricata, and
+    (when `restart`) restart Zeek and Suricata so it takes effect."""
+    global CURRENT_EXCLUDE_BPF
+    want = desired_exclude_bpf()
+    if want is None or want == CURRENT_EXCLUDE_BPF:
+        return
+    try:
+        with open(EXCLUDE_BPF_FILE, 'w') as f:
+            f.write(want + '\n')
+    except OSError as e:
+        print("[NDR] Could not write %s: %s" % (EXCLUDE_BPF_FILE, e))
+        return
+    print("[NDR] Exclusion filter %s: %s" % ('set' if want else 'cleared', want or '(none)'))
+    CURRENT_EXCLUDE_BPF = want
+    _exclude_failed['zeek'] = _exclude_failed['suricata'] = False   # new filter, new chance
+    if restart and not MANUALLY_STOPPED:
+        start_zeek()
+        start_suricata()
+
+def refresh_exclusion():
+    """Called every check-in; re-resolves the platform address every few minutes."""
+    global _exclude_checked_at
+    if time.time() - _exclude_checked_at < EXCLUDE_RECHECK_SECS:
+        return
+    _exclude_checked_at = time.time()
+    apply_exclusion(restart=True)
+
+def _note_down(name):
+    """A tool that keeps dying while it runs with the filter: stop using the filter for it."""
+    if CURRENT_EXCLUDE_BPF and not _exclude_failed[name]:
+        _down_with_filter[name] += 1
+        if _down_with_filter[name] >= 3:
+            _exclude_failed[name] = True
+            print("[NDR] %s keeps stopping with the exclusion filter - running it without the filter" % name)
+
+def _launch_zeek(use_filter):
+    cmd = ["/opt/zeek/bin/zeek", "-i", IFACE]
+    if use_filter:
+        cmd += ["-f", CURRENT_EXCLUDE_BPF]
+    cmd += ["local", "Log::default_logdir=/var/log/ndr/zeek"]
+    subprocess.Popen(cmd,
+        stdout=open("/var/log/ndr/zeek/startup.log", "w"),
+        stderr=subprocess.STDOUT
+    )
+
 def start_zeek():
     try:
         subprocess.run(['pkill', '-9', '-f', 'zeek'],
             capture_output=True)
         time.sleep(2)
-        subprocess.Popen(
-            ["/opt/zeek/bin/zeek", "-i", IFACE,
-             "local",
-             "Log::default_logdir=/var/log/ndr/zeek"],
-            stdout=open("/var/log/ndr/zeek/startup.log", "w"),
-            stderr=subprocess.STDOUT
-        )
+        use_filter = bool(CURRENT_EXCLUDE_BPF) and not _exclude_failed['zeek']
+        _launch_zeek(use_filter)
+        if use_filter:
+            # A bad option makes Zeek exit straight away; never leave the sensor without Zeek.
+            time.sleep(4)
+            if not is_running('zeek'):
+                print("[NDR] Zeek did not start with the exclusion filter - starting it without")
+                _exclude_failed['zeek'] = True
+                _launch_zeek(False)
         print("[NDR] ✅ Zeek started")
         return True
     except Exception as e:
@@ -1503,6 +1656,7 @@ def start_suricata():
             ["suricata",
              "-c", "/etc/suricata/suricata.yaml",
              "-i", IFACE,
+             *(["-F", EXCLUDE_BPF_FILE] if CURRENT_EXCLUDE_BPF and not _exclude_failed['suricata'] else []),
              "-l", "/var/log/ndr/suricata",
              "-D",
              "--pidfile", "/tmp/suricata.pid",
@@ -1730,16 +1884,20 @@ def check_and_restart():
 
     if not is_running('zeek'):
         print("[NDR] Zeek down — restarting")
+        _note_down('zeek')
         start_zeek()
         statuses['agent-z'] = 'restarting'
     else:
+        _down_with_filter['zeek'] = 0
         statuses['agent-z'] = 'running'
 
     if not is_running('suricata'):
         print("[NDR] Suricata down — restarting")
+        _note_down('suricata')
         start_suricata()
         statuses['agent-s'] = 'restarting'
     else:
+        _down_with_filter['suricata'] = 0
         statuses['agent-s'] = 'running'
 
     if not is_running('vector'):
@@ -2227,6 +2385,7 @@ if __name__ == '__main__':
     print("[NDR] Starting all services...")
     discover_subnets()
     bootstrap_from_arp_cache()
+    apply_exclusion(restart=False)   # before the first start so no restart is needed
     start_zeek()
     start_suricata()
     start_vector()
@@ -2239,6 +2398,7 @@ if __name__ == '__main__':
     checkin_interval = 30  # server will update this on first response
     while True:
         checkin_interval = do_checkin() or checkin_interval
+        refresh_exclusion()
         time.sleep(checkin_interval)
 AGENT
 chmod +x /opt/ndr-sensor/agent.py
