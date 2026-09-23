@@ -195,9 +195,47 @@ async fn main() {
 
     // Background drain: flushes channel to Kafka in micro-batches of ≤200
     // events every 100ms. /api/ingest returns immediately without waiting.
+    //
+    // The "batch" used to only describe how many events get COLLECTED before
+    // flushing - the actual flush itself called producer.send(...).await
+    // (the blocking variant, up to a 5s wait) sequentially, one event at a
+    // time, on this single task shared by the whole engine instance across
+    // every tenant. At real ingest volume this is a hard global throughput
+    // ceiling regardless of tenant count or Kafka partitions. Fixed with
+    // send_result() - librdkafka's actual non-blocking enqueue, returns a
+    // DeliveryFuture immediately instead of awaiting the broker round-trip -
+    // so all events in a batch get handed to librdkafka right away (which
+    // does its own real wire-level batching), and delivery confirmation for
+    // the whole batch is awaited concurrently instead of one at a time.
     {
         use rdkafka::producer::FutureRecord;
         let producer = kafka_producer.clone();
+
+        async fn flush_batch(
+            producer: &rdkafka::producer::FutureProducer,
+            batch: &mut Vec<(String, String)>,
+        ) {
+            let futures: Vec<_> = batch.drain(..).filter_map(|(_, payload)| {
+                let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
+                    .payload(&payload);
+                match producer.send_result(rec) {
+                    Ok(delivery) => Some(delivery),
+                    Err((e, _)) => {
+                        tracing::error!("Kafka enqueue error: {}", e);
+                        None
+                    }
+                }
+            }).collect();
+
+            for result in futures_util::future::join_all(futures).await {
+                match result {
+                    Ok(Ok(_)) => {}
+                    Ok(Err((e, _))) => tracing::error!("Kafka publish error: {}", e),
+                    Err(_) => tracing::error!("Kafka delivery future cancelled"),
+                }
+            }
+        }
+
         tokio::spawn(async move {
             let mut batch: Vec<(String, String)> = Vec::with_capacity(200);
             let mut ticker = tokio::time::interval(
@@ -210,16 +248,7 @@ async fn main() {
                             Some(ev) => {
                                 batch.push(ev);
                                 if batch.len() >= 200 {
-                                    for (_, payload) in batch.drain(..) {
-                                        let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
-                                            .payload(&payload);
-                                        if let Err((e, _)) = producer
-                                            .send(rec, std::time::Duration::from_secs(5))
-                                            .await
-                                        {
-                                            tracing::error!("Kafka publish error: {}", e);
-                                        }
-                                    }
+                                    flush_batch(&producer, &mut batch).await;
                                 }
                             }
                             None => break,
@@ -227,16 +256,7 @@ async fn main() {
                     }
                     _ = ticker.tick() => {
                         if !batch.is_empty() {
-                            for (_, payload) in batch.drain(..) {
-                                let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
-                                    .payload(&payload);
-                                if let Err((e, _)) = producer
-                                    .send(rec, std::time::Duration::from_secs(5))
-                                    .await
-                                {
-                                    tracing::error!("Kafka publish error: {}", e);
-                                }
-                            }
+                            flush_batch(&producer, &mut batch).await;
                         }
                     }
                 }

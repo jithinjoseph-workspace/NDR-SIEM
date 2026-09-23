@@ -510,6 +510,14 @@ INGEST_RATE_LIMIT=50000
 # hardware and tenant count. Default (10) is reasonable for a modest
 # tenant count - raise it for hundreds-to-thousands of tenants.
 TENANT_SCAN_CONCURRENCY=10
+# How many tenants' event batches the Kafka consumer's 100ms flush loop
+# writes to ClickHouse concurrently, instead of one at a time. Different
+# knob from TENANT_SCAN_CONCURRENCY above - this runs every 100ms in the
+# live ingestion path, not every few minutes-to-hours in background
+# analysis, so it needs its own value. Default (20) is reasonable for a
+# modest number of simultaneously-active tenants - raise it if many
+# tenants are pushing high event volume at the same time.
+INGEST_FLUSH_CONCURRENCY=20
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=

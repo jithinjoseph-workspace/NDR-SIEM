@@ -78,23 +78,46 @@ async fn dedup_events(
     }
 }
 
+// How many tenants' flushes run concurrently per 100ms tick, instead of the
+// fully-sequential H-4 fix below. Separate knob from
+// threat::tenant_scan_concurrency() - this runs every 100ms (not every
+// several minutes to hours), so its right concurrency level is a different
+// question with a different answer.
+fn ingest_flush_concurrency() -> usize {
+    std::env::var("INGEST_FLUSH_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n: &usize| n > 0)
+        .unwrap_or(20)
+}
+
 // Drains the channel every 100 ms and batch-inserts into ClickHouse.
 // One HTTP round-trip per tenant per tick instead of one per event.
 //
 // H-3 fix: channel is bounded (50 K events). Backpressure: if CH is slow and
 // the channel fills, try_send fails and the Kafka consumer slows naturally.
 //
-// H-4 fix: inserts are awaited directly instead of spawning a new task per
-// tenant per tick. Eliminates unbounded task accumulation when CH is slow.
-// With 1–5 tenants each insert is sub-100ms, so sequential is fine.
+// H-4 fix (original): inserts were awaited directly instead of spawning a
+// new task per tenant per tick, to eliminate *unbounded* task accumulation
+// when CH is slow - explicitly scoped to "with 1-5 tenants each insert is
+// sub-100ms, so sequential is fine". At real scale (hundreds-to-thousands
+// of tenants, some pushing "lakhs of events") sequential no longer holds:
+// if even a fraction of tenants have events in the same 100ms window, each
+// one waiting on the previous tenant's ClickHouse round-trip pushes the
+// flush past its own 100ms tick, backing up the whole pipeline. Fixed with
+// *bounded* concurrency (a semaphore, capped by INGEST_FLUSH_CONCURRENCY)
+// rather than reverting to the original unbounded tokio::spawn-per-tenant
+// that H-4 was written to fix - this avoids both failure modes instead of
+// trading one for the other.
 async fn batch_writer(
     ch: Arc<crate::storage::clickhouse::ClickhouseStorage>,
     mut rx: mpsc::Receiver<(NdrEvent, String)>,
-    mut redis: MultiplexedConnection,
+    redis: MultiplexedConnection,
 ) {
     let dedup_ttl = dedup_ttl_secs();
     let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(100));
     let mut buf: HashMap<String, Vec<NdrEvent>> = HashMap::new();
+    let sem = Arc::new(tokio::sync::Semaphore::new(ingest_flush_concurrency()));
 
     loop {
         tokio::select! {
@@ -103,13 +126,21 @@ async fn batch_writer(
             }
             _ = ticker.tick() => {
                 if buf.is_empty() { continue; }
+                let mut handles = Vec::with_capacity(buf.len());
                 for (tenant_id, events) in buf.drain() {
-                    let events = dedup_events(&mut redis, &tenant_id, events, dedup_ttl).await;
-                    if events.is_empty() { continue; }
-                    if let Err(e) = ch.batch_insert_events_for_tenant(events, &tenant_id).await {
-                        warn!("ClickHouse batch insert error (tenant={}): {}", tenant_id, e);
-                    }
+                    let ch2        = Arc::clone(&ch);
+                    let mut redis2 = redis.clone();
+                    let sem2       = Arc::clone(&sem);
+                    handles.push(tokio::spawn(async move {
+                        let _permit = sem2.acquire().await;
+                        let events = dedup_events(&mut redis2, &tenant_id, events, dedup_ttl).await;
+                        if events.is_empty() { return; }
+                        if let Err(e) = ch2.batch_insert_events_for_tenant(events, &tenant_id).await {
+                            warn!("ClickHouse batch insert error (tenant={}): {}", tenant_id, e);
+                        }
+                    }));
                 }
+                futures_util::future::join_all(handles).await;
             }
         }
     }
