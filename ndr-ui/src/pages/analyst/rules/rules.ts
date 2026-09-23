@@ -32,6 +32,8 @@ export class Rules extends RulesBase implements OnInit {
   rulesTotal = 0;
   rulesActiveTotal = 0;
   loadingMore = false;
+  /** First page failed to load - shown instead of "No SIGMA rules loaded" so a failed request is not mistaken for an empty list. */
+  loadError = false;
   private hitCountsCache: { [ruleName: string]: number } = {};
 
   get hasMoreRules(): boolean {
@@ -186,7 +188,7 @@ export class Rules extends RulesBase implements OnInit {
   }
 
   private fetchRulesPage(append: boolean) {
-    if (append) this.loadingMore = true; else this.loading = true;
+    if (append) this.loadingMore = true; else { this.loading = true; this.loadError = false; }
     this.api.getRulesPage(this.pageSize, this.rulesOffset).subscribe({
       next: (res) => {
         const mapped = res.rules.map((r: any) => this.mapAgentZRule(r));
@@ -201,6 +203,8 @@ export class Rules extends RulesBase implements OnInit {
       error: () => {
         this.loading = false;
         this.loadingMore = false;
+        if (append) this.showMessage("Couldn't load more rules - try again", 'error');
+        else this.loadError = true;
         this.cdr.detectChanges();
       }
     });

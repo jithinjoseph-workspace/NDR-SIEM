@@ -377,10 +377,8 @@ export class Alerts implements OnInit, OnDestroy {
         this.dismissGroup(alert.src_ip, tag);
         this.showToast(`Suppressed "${tag}" from ${alert.src_ip} for 24h`);
       },
-      error: () => {
-        this.dismissGroup(alert.src_ip, tag);
-        this.showToast(`Dismissed locally (backend error)`);
-      },
+      // Not saved: keep the alert visible so it does not silently reappear later
+      error: () => this.showToast(`Couldn't suppress "${tag}" from ${alert.src_ip} - nothing was saved`),
     });
   }
 
@@ -394,34 +392,37 @@ export class Alerts implements OnInit, OnDestroy {
         g.alerts.flatMap((a: any) => a.sigma_hits?.length ? a.sigma_hits : [])
       )];
       if (!ruleNames.length) return;
+      let saved = 0;
       for (const ruleName of ruleNames) {
-        if (!this.groupSups.some(s => s.src_ip === g.src_ip && s.tag === ruleName)) {
-          this.groupSups.push({ src_ip: g.src_ip, tag: ruleName });
-        }
         this.api.suppressAlert(g.src_ip, '', '', ruleName, 24).subscribe({
-          next: () => this.showToast(`Suppressed "${ruleName}" from ${g.src_ip} for 24h`),
-          error: () => {},
+          next: () => {
+            saved++;
+            if (!this.groupSups.some(s => s.src_ip === g.src_ip && s.tag === ruleName)) {
+              this.groupSups.push({ src_ip: g.src_ip, tag: ruleName });
+            }
+            this.showToast(`Suppressed "${ruleName}" from ${g.src_ip} for 24h`);
+            // hide the group only once every rule in it is saved
+            if (saved === ruleNames.length) this.dismissGroup(g.src_ip, g.tag);
+          },
+          error: () => {
+            this.showToast(`Couldn't suppress "${ruleName}" from ${g.src_ip} - nothing was saved`);
+          },
         });
       }
-      this.dismissGroup(g.src_ip, g.tag);
-      this.rebuild();
-      this.cdr.detectChanges();
       return;
     }
 
     // Non-sigma groups: suppress by primary tag as before
-    if (!this.groupSups.some(s => s.src_ip === g.src_ip && s.tag === g.tag)) {
-      this.groupSups.push({ src_ip: g.src_ip, tag: g.tag });
-    }
     this.api.suppressAlert(g.src_ip, '', '', g.tag, 24).subscribe({
       next: () => {
+        if (!this.groupSups.some(s => s.src_ip === g.src_ip && s.tag === g.tag)) {
+          this.groupSups.push({ src_ip: g.src_ip, tag: g.tag });
+        }
         this.dismissGroup(g.src_ip, g.tag);
         this.showToast(`Suppressed ${g.count} × ${g.tag} from ${g.src_ip} for 24h`);
       },
-      error: () => {
-        this.dismissGroup(g.src_ip, g.tag);
-        this.showToast(`Dismissed ${g.count} alerts locally`);
-      },
+      // Not saved: keep the group visible so it does not silently reappear later
+      error: () => this.showToast(`Couldn't suppress ${g.tag} from ${g.src_ip} - nothing was saved`),
     });
   }
 

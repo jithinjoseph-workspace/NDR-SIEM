@@ -393,9 +393,14 @@ export class Api {
   }
 
   suppressAlert(srcIp: string, dstIp: string, communityId: string, tag: string, durationHours = 24): Observable<any> {
-    return this.http.post(`${this.baseUrl}/ai-suppressions`, {
+    return this.http.post<any>(`${this.baseUrl}/ai-suppressions`, {
       src_ip: srcIp, dst_ip: dstIp, community_id: communityId, tag, duration_hours: durationHours
-    });
+    }).pipe(map(res => {
+      // The engine reports a failed save as HTTP 200 with {"error": ...}; without this the
+      // caller would treat it as saved and the alert would come back on the next refresh.
+      if (!res || res.error || res.ok !== true) throw new Error(res?.error || 'Suppression was not saved');
+      return res;
+    }));
   }
 
   // Alert triage (new): rule + AI review that produces recommendations only.
