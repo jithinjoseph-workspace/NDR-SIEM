@@ -21,6 +21,7 @@ export const routes: Routes = [
     children: [
       { path: 'dashboard',   canActivate: [authGuard], data: { role: 'analyst' }, loadComponent: () => import('../pages/analyst/dashboard/dashboard').then(m => m.Dashboard) },
       { path: 'alerts',      canActivate: [authGuard], data: { role: 'analyst', permission: 'alerts'      }, loadComponent: () => import('../pages/analyst/alerts/alerts').then(m => m.Alerts) },
+      { path: 'triage',      canActivate: [authGuard], data: { role: 'analyst', permission: 'alerts'      }, loadComponent: () => import('../pages/analyst/triage/triage').then(m => m.Triage) },
       { path: 'logs',        canActivate: [authGuard], data: { role: 'analyst', permission: 'logs'        }, loadComponent: () => import('../pages/analyst/logs/logs').then(m => m.Logs) },
       { path: 'live',        canActivate: [authGuard], data: { role: 'analyst', permission: 'live'        }, loadComponent: () => import('../pages/analyst/live/live').then(m => m.Live) },
       { path: 'intel',       canActivate: [authGuard], data: { role: 'analyst', permission: 'intel'       }, loadComponent: () => import('../pages/analyst/intel/intel').then(m => m.Intel) },

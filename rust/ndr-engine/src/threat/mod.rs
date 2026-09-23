@@ -200,6 +200,7 @@ fn spawn_threat_tasks(
     crate::enrichment::asset_intel::spawn_asset_intel(Arc::clone(&ch), Arc::clone(&is_leader));
     lateral_movement::spawn_lateral_movement_detector(Arc::clone(&ch), Arc::clone(&is_leader));
     jarm::spawn_jarm_scanner(Arc::clone(&ch), Arc::clone(&is_leader));
+    crate::triage::spawn_triage(Arc::clone(&ch), Arc::clone(&is_leader));
 
     tracing::info!("Threat background tasks started on elected leader (cloud_trust + entity_scorer run independently on every instance, see spawn_all)");
 }

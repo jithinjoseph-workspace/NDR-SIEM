@@ -20,6 +20,7 @@ mod ai;
 pub mod soar;
 mod monitor;
 mod threat;
+mod triage;
 mod leader;
 
 use api::{websocket::ws_handler, AppState};
@@ -880,6 +881,10 @@ async fn main() {
         .route("/api/settings/trusted-cloud", get(api::get_trusted_cloud_settings).put(api::update_trusted_cloud_settings))
         .route("/api/settings/trusted-cloud/suggestions/approve", post(api::approve_trusted_cloud_suggestion))
         .route("/api/settings/trusted-cloud/suggestions/reject",  post(api::reject_trusted_cloud_suggestion))
+        .route("/api/triage",                     get(triage::get_triage))
+        .route("/api/triage/run",                 post(triage::run_now))
+        .route("/api/triage/:id/apply",           post(triage::apply))
+        .route("/api/triage/:id/dismiss",         post(triage::dismiss))
         .route("/api/trusted-domains",            get(api::list_trusted_domains).post(api::add_trusted_domain))
         .route("/api/trusted-domains/delete",     post(api::delete_trusted_domain))
         .route("/api/trusted-domains/ai-suggest", post(api::ai_suggest_trusted_domains))

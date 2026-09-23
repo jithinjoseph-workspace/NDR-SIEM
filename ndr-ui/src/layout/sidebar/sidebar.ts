@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Bell, FileText, ShieldAlert, Search,
   Database, Settings, Network, Zap, FolderSearch, Bot, Server,
   ChevronDown, Map as MapIcon, Shield, RotateCcw,
-  Radio, BarChart2, ScrollText,
+  Radio, BarChart2, ScrollText, ListChecks,
   LucideAngularModule
 } from 'lucide-angular';
 import { AuthService } from '../../services/auth/auth';
@@ -81,6 +81,7 @@ export class Sidebar implements OnInit, OnDestroy {
 
     const threatItems: NavItem[] = [];
     if (hasNdr && has('alerts')) threatItems.push({ label: 'Alerts',       route: '/analyst/alerts',     icon: Bell,    permission: 'alerts' });
+    if (hasNdr && has('alerts')) threatItems.push({ label: 'Alert Triage', route: '/analyst/triage',     icon: ListChecks, permission: 'alerts' });
     if (hasNdr && has('intel'))  threatItems.push({ label: 'Threat Intel', route: '/analyst/intel',       icon: Search,  permission: 'intel'  });
     if (hasNdr)  threatItems.push({ label: 'Attack Map',   route: '/analyst/threat-map',  icon: MapIcon });
 

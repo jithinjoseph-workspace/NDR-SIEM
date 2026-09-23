@@ -398,6 +398,12 @@ export class Api {
     });
   }
 
+  // Alert triage (new): rule + AI review that produces recommendations only.
+  getTriage(): Observable<any>            { return this.http.get(`${this.baseUrl}/triage`); }
+  runTriage(): Observable<any>            { return this.http.post(`${this.baseUrl}/triage/run`, {}); }
+  applyTriage(id: string, hours = 24): Observable<any> { return this.http.post(`${this.baseUrl}/triage/${id}/apply`, { hours }); }
+  dismissTriage(id: string): Observable<any> { return this.http.post(`${this.baseUrl}/triage/${id}/dismiss`, {}); }
+
   getActiveSuppressions(): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/ai-suppressions`);
   }
