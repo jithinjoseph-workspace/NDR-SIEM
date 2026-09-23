@@ -2728,10 +2728,24 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     /// why this loops instead of a single cross-database query).
     pub async fn get_stats_all_tenants(&self) -> anyhow::Result<serde_json::Value> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        // Bounded concurrency (crate::threat::tenant_scan_concurrency) instead
+        // of one tenant at a time - this backs a super_admin dashboard widget
+        // polled every 10s; at real tenant counts, sequential per-tenant
+        // queries here would take far longer than the poll interval itself.
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_stats_by_tenant(&tid, &[]).await.ok()
+            }));
+        }
         let (mut events_total, mut hits_total, mut events_1h, mut hits_1h) = (0u64, 0u64, 0u64, 0u64);
         let (mut agent_z, mut agent_s) = (0u64, 0u64);
-        for tid in &tenant_ids {
-            if let Ok(s) = self.get_stats_by_tenant(tid, &[]).await {
+        for handle in futures_util::future::join_all(handles).await {
+            if let Ok(Some(s)) = handle {
                 events_total += s["events_total"].as_u64().unwrap_or(0);
                 hits_total   += s["hits_total"].as_u64().unwrap_or(0);
                 events_1h    += s["events_1h"].as_u64().unwrap_or(0);
@@ -2928,9 +2942,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_protocols_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_protocols_by_tenant(50, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_top_protocols_by_tenant(50, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let proto = row["proto"].as_str().unwrap_or("").to_string();
                 let cnt   = row["count"].as_u64().unwrap_or(0);
                 if proto.is_empty() { continue; }
@@ -2945,9 +2970,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_src_ips_by_tenant(100, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_top_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let ip  = row["ip"].as_str().unwrap_or("").to_string();
                 let cnt = row["count"].as_u64().unwrap_or(0);
                 if ip.is_empty() { continue; }
@@ -2962,9 +2998,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_dst_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_dst_ips_by_tenant(100, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_top_dst_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let ip  = row["ip"].as_str().unwrap_or("").to_string();
                 let cnt = row["count"].as_u64().unwrap_or(0);
                 if ip.is_empty() { continue; }
@@ -2979,9 +3026,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_external_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<(String, u64)>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_external_src_ips_by_tenant(100, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for (ip, cnt) in self.get_top_external_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for (ip, cnt) in rows {
                 *totals.entry(ip).or_insert(0) += cnt;
             }
         }
@@ -2993,9 +3051,19 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_country_attack_tags_all_tenants(&self) -> anyhow::Result<std::collections::HashMap<String, Vec<(String, u64)>>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_country_attack_tags(&tid, &[]).await.ok()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, std::collections::HashMap<String, u64>> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            if let Ok(per_country) = self.get_country_attack_tags(tid, &[]).await {
+        for handle in futures_util::future::join_all(handles).await {
+            if let Ok(Some(per_country)) = handle {
                 for (code, tags) in per_country {
                     let entry = totals.entry(code).or_default();
                     for (tag, cnt) in tags {
@@ -3013,10 +3081,21 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_threat_intel_hits_all_tenants(&self) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_threat_intel_hits_by_tenant(&tid, &[]).await.unwrap_or_default()
+            }));
+        }
         // Keyed by (src_ip, dst_ip): sum hits, keep the latest last_seen.
         let mut totals: std::collections::HashMap<(String, String), (u64, String)> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_threat_intel_hits_by_tenant(tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let src = row["src_ip"].as_str().unwrap_or("").to_string();
                 let dst = row["dst_ip"].as_str().unwrap_or("").to_string();
                 let hits = row["hits"].as_u64().unwrap_or(0);
