@@ -63,8 +63,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // Shared HTTP client for outbound webhook / integration calls.
 // reqwest::Client is internally Arc-based — cloning is cheap.
 // Standalone handlers that don't carry AppState use this module-level instance.
+//
+// reqwest::Client::new() has NO timeout by default, so a request to an
+// unreachable host hangs for however long the OS takes to give up on the TCP
+// connect (often 30s+ when the target silently drops packets instead of
+// sending RST - e.g. a cloud VM's security group, or a host.docker.internal
+// that doesn't resolve to anything on a remote-sensor deployment). Confirmed
+// live: /api/agent-status took ~30s per call on a cloud install with no
+// local capture agent, instead of failing fast. 10s covers this client's
+// slowest legitimate caller (the ip-api.com external geo lookup) with room
+// to spare, while turning agent-call hangs from ~30s into ~10s.
 static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
-    std::sync::LazyLock::new(reqwest::Client::new);
+    std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    });
 
 /// Batch geo-lookup for the threat/attack map widgets.
 ///
