@@ -429,7 +429,8 @@ export class NetworkMap implements OnInit, OnDestroy {
               this.zoomToNode(matchedNode);
             }
           }
-        }
+        },
+        error: () => {},
       });
     }, 300);
   }

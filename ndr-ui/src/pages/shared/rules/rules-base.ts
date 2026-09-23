@@ -196,6 +196,10 @@ export abstract class RulesBase {
               this.loadRules();
               this.cdr.detectChanges();
             },
+            error: () => {
+              this.showMessage('Rule saved, but reload failed — restart the engine to apply it', 'error');
+              this.cdr.detectChanges();
+            },
           });
         } else {
           this.showMessage(data.message || 'Error', 'error');
@@ -218,6 +222,10 @@ export abstract class RulesBase {
         next: () => {
           this.rules = this.rules.filter(r => r.id !== rule.id);
           this.showMessage(`Rule "${rule.name}" deleted`, 'success');
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          this.showMessage('Rule deleted, but reload failed — restart the engine to apply it', 'error');
           this.cdr.detectChanges();
         },
       }),

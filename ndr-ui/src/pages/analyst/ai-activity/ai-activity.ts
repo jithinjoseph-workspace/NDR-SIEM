@@ -150,6 +150,7 @@ export class AiActivity {
   deactivateSuppression(id: string) {
     this.api.deactivateAiSuppression(id).subscribe({
       next: () => this.refresh$.next(),
+      error: () => {},
     });
   }
 
@@ -157,6 +158,7 @@ export class AiActivity {
     if (!confirm('Delete this suppression rule permanently?')) return;
     this.api.deleteAiSuppression(id).subscribe({
       next: () => this.refresh$.next(),
+      error: () => {},
     });
   }
 

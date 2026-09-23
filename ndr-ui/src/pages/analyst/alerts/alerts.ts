@@ -400,6 +400,7 @@ export class Alerts implements OnInit, OnDestroy {
         }
         this.api.suppressAlert(g.src_ip, '', '', ruleName, 24).subscribe({
           next: () => this.showToast(`Suppressed "${ruleName}" from ${g.src_ip} for 24h`),
+          error: () => {},
         });
       }
       this.dismissGroup(g.src_ip, g.tag);
@@ -728,6 +729,7 @@ export class Alerts implements OnInit, OnDestroy {
     if (!cid) return;
     this.arkime.getSessionLink(cid).subscribe({
       next: (data: any) => { if (data.link) window.open(data.link, '_blank'); },
+      error: () => this.showToast('Failed to open Arkime session'),
     });
   }
 
