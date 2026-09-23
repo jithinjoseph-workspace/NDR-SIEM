@@ -331,7 +331,7 @@
         <div class="sensor-revoke-row" *ngIf="sensor.active">
           <button class="revoke-btn" type="button"
             (click)="askRevokeExternalSensor(sensor)"
-            [disabled]="!!revokingSensorId"
+            [disabled]="!!revokingSensorId()"
             title="Deactivate this sensor's key. Works even when the sensor is offline.">
             <lucide-icon [name]="BanIcon" class="w-4 h-4"></lucide-icon>
             Revoke sensor key
@@ -343,7 +343,7 @@
   </ng-container>
 
   <!-- ── REVOKE SENSOR CONFIRMATION ── -->
-  <div *ngIf="pendingRevokeSensor as target" class="swal-backdrop" (click)="cancelRevokeExternalSensor()">
+  <div *ngIf="pendingRevokeSensor() as target" class="swal-backdrop" (click)="cancelRevokeExternalSensor()">
     <div class="swal-card" role="alertdialog" aria-modal="true" aria-labelledby="revoke-title"
          (click)="$event.stopPropagation()">
       <div class="swal-icon" aria-hidden="true">
@@ -360,12 +360,12 @@
       </div>
       <div class="swal-actions">
         <button type="button" class="swal-btn swal-confirm"
-                (click)="confirmRevokeExternalSensor()" [disabled]="!!revokingSensorId">
-          <span *ngIf="revokingSensorId" class="swal-spinner"></span>
-          {{ revokingSensorId ? 'Revoking...' : 'Yes, revoke it' }}
+                (click)="confirmRevokeExternalSensor()" [disabled]="!!revokingSensorId()">
+          <span *ngIf="revokingSensorId()" class="swal-spinner"></span>
+          {{ revokingSensorId() ? 'Revoking...' : 'Yes, revoke it' }}
         </button>
         <button type="button" class="swal-btn swal-cancel"
-                (click)="cancelRevokeExternalSensor()" [disabled]="!!revokingSensorId">
+                (click)="cancelRevokeExternalSensor()" [disabled]="!!revokingSensorId()">
           Cancel
         </button>
       </div>

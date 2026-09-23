@@ -57,8 +57,11 @@ export abstract class SetupBase implements OnInit, OnDestroy {
   externalError = '';
   externalActionMessage = '';
   pendingExternalCommand: { sensorId: string; command: SensorControlCommand } | null = null;
-  revokingSensorId: string | null = null;
-  pendingRevokeSensor: ExternalSensorCard | null = null;
+  // Signals, not plain fields: this app has no zone.js, so a plain field changed
+  // inside an HTTP callback does not redraw the view on its own - the dialog
+  // sat on "Revoking..." until an unrelated click happened to trigger a redraw.
+  revokingSensorId = signal<string | null>(null);
+  pendingRevokeSensor = signal<ExternalSensorCard | null>(null);
   showAddSensorModal = false;
   newSensorName = '';
   creatingSensor = false;
@@ -310,36 +313,36 @@ export abstract class SetupBase implements OnInit, OnDestroy {
    *  offline, or misbehaving. The backend only lets tenant_admin/super_admin do
    *  this, and a tenant_admin only for their own tenant's keys. */
   askRevokeExternalSensor(sensor: ExternalSensorCard) {
-    if (!this.canViewExternalSensors || this.revokingSensorId) {
+    if (!this.canViewExternalSensors || this.revokingSensorId()) {
       return;
     }
-    this.pendingRevokeSensor = sensor;
+    this.pendingRevokeSensor.set(sensor);
   }
 
   @HostListener('document:keydown.escape')
   cancelRevokeExternalSensor() {
     // Ignored while the request is in flight so the dialog can't vanish mid-revoke.
-    if (this.revokingSensorId) {
+    if (this.revokingSensorId()) {
       return;
     }
-    this.pendingRevokeSensor = null;
+    this.pendingRevokeSensor.set(null);
   }
 
   confirmRevokeExternalSensor() {
-    const sensor = this.pendingRevokeSensor;
-    if (!sensor || this.revokingSensorId) {
+    const sensor = this.pendingRevokeSensor();
+    if (!sensor || this.revokingSensorId()) {
       return;
     }
     const sensorName = this.getSensorDisplayName(sensor);
 
-    this.revokingSensorId = sensor.id;
+    this.revokingSensorId.set(sensor.id);
     this.externalActionMessage = '';
     this.externalError = '';
 
     this.api.revokeSensorKey(sensor.id).subscribe({
       next: response => {
-        this.revokingSensorId = null;
-        this.pendingRevokeSensor = null;
+        this.revokingSensorId.set(null);
+        this.pendingRevokeSensor.set(null);
         if (response?.status === 'ok') {
           this.externalActionMessage = `${sensorName} revoked.`;
           this.loadExternalSensors(true);
@@ -350,8 +353,8 @@ export abstract class SetupBase implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
       error: error => {
-        this.revokingSensorId = null;
-        this.pendingRevokeSensor = null;
+        this.revokingSensorId.set(null);
+        this.pendingRevokeSensor.set(null);
         this.externalError = error?.error?.message || `Unable to revoke ${sensorName}.`;
         this.cdr.detectChanges();
       },
