@@ -200,6 +200,9 @@ impl Context {
         for (cidr, label) in [
             ("91.189.88.0/21",  "Ubuntu (Canonical) update, time and snap servers"),
             ("185.125.188.0/22", "Ubuntu (Canonical) update, time and snap servers"),
+            // Canonical's IPv6 block (ARIN NET6-2620-2D-4000-1, "Canonical USA Inc."): the same servers
+            // over IPv6. Without it a dual-stack host's Ubuntu updates were never recognised.
+            ("2620:2d:4000::/44", "Ubuntu (Canonical) update, time and snap servers"),
         ] {
             if let Ok(n) = IpNetwork::from_str(cidr) {
                 c.benign_nets.push((n, label.to_string()));
@@ -689,5 +692,21 @@ mod tests {
             "status":"pending","updated_at":0}"#;
         let r: Recommendation = serde_json::from_str(old).expect("old stored recommendation");
         assert!(r.sensors.is_empty());
+    }
+
+    #[test]
+    fn ubuntu_updates_over_ipv6_are_benign() {
+        // a real alert from the hosted site: INFO, abnormal-rst + flagged-host, to Canonical's IPv6 range
+        let g = one(row("fd17:625c:f037:2:4b31:3944:19c2:e15c", "2620:2d:4002:1::1061", "INFO", 17.0, &["abnormal-rst", "flagged-host"]));
+        let d = classify(&g, &Context::builtin());
+        assert_eq!(d.verdict, Verdict::Benign, "{d:?}");
+        assert!(d.reason.contains("Ubuntu"), "{}", d.reason);
+        // an address next to the block is NOT covered
+        let other = one(row("fd17:625c:f037:2:4b31:3944:19c2:e15c", "2620:2d:4010::1", "INFO", 17.0, &["abnormal-rst"]));
+        assert_eq!(classify(&other, &Context::builtin()).verdict, Verdict::Unknown);
+        // and the guard rails still win: a threat-intel match to that range is not hidden
+        let mut ti = one(row("fd17:625c:f037:2:4b31:3944:19c2:e15c", "2620:2d:4002:1::1061", "INFO", 17.0, &["abnormal-rst"]));
+        ti.threat_intel = true;
+        assert_eq!(classify(&ti, &Context::builtin()).verdict, Verdict::Suspicious);
     }
 }
