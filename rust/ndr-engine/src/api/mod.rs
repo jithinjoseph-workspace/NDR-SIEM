@@ -773,8 +773,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 .unwrap_or("-"),
         ),
     };
-    // Enrich
-    let enrichment = state.enrichment.enrich(src, dst);
+    // Enrich. This path used the built-in sensitive-country list (which includes IN) and ignored
+    // the tenant's own setting; homecountry::apply uses the tenant's list minus its home countries.
+    let mut enrichment = state.enrichment.enrich(src, dst);
+    crate::homecountry::apply(&state, &tenant_id, &mut enrichment).await;
 
     // Write permanent IOC hit records for any malicious IP match
     if enrichment.is_malicious {
@@ -6782,6 +6784,13 @@ async fn sensor_checkin_inner(
         Some(p) => p,
         None => return Json(json!({"status": "error", "message": "invalid sensor key prefix"})),
     };
+
+    // Remember which public address this sensor checks in from: the countries of a tenant's own
+    // sensors are never counted as "sensitive countries" (see homecountry.rs).
+    if let Some(ip) = crate::homecountry::client_ip(&headers) {
+        let mut rc = state.redis_mux.clone();
+        crate::homecountry::record_sensor_ip(&mut rc, &tenant_id, &sensor_id, ip).await;
+    }
 
     // ── 1. Heartbeat / status update (throttled via Redis) ───────────────
     // Only write to ClickHouse when status changes or every 5 minutes —

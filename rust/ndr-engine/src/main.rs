@@ -17,6 +17,7 @@ mod scoring;
 mod storage;
 mod evidence;
 mod ai;
+mod homecountry;
 #[cfg(feature = "soar")]
 pub mod soar;
 mod monitor;

@@ -1228,13 +1228,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             let critical_score = settings["critical_threshold"].as_f64().unwrap_or(90.0) as f32;
                             let high_score     = settings["alert_threshold"].as_f64().unwrap_or(75.0) as f32;
 
-                            // Override sensitive_country with tenant-configured list
-                            if let Some(sc) = settings["sensitive_countries"].as_str() {
-                                let list: Vec<&str> = sc.split(',').map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
-                                let src_cc = enrich.src_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
-                                let dst_cc = enrich.dst_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
-                                enrich.sensitive_country = list.iter().any(|&c| c == src_cc || c == dst_cc);
-                            }
+                            // Tenant's Sensitive Countries list, minus the countries its own sensors are in
+                            crate::homecountry::apply(&state, &tenant_id, &mut enrich).await;
 
                             let (score, severity) = match alert.severity {
                                 1 => (critical_score, "CRITICAL"),
@@ -1346,15 +1341,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                     event.dst_asn_org      = enrich.dst_asn.as_ref().map(|a| a.org.clone()).unwrap_or_default();
                     event.direction        = enrich.direction.clone();
 
-                    // Override sensitive_country with tenant-configured list (admin-editable per tenant)
-                    if let Ok(settings) = state.ch_storage.get_settings_by_tenant(&tenant_id).await {
-                        if let Some(sc) = settings["sensitive_countries"].as_str() {
-                            let list: Vec<&str> = sc.split(',').map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
-                            let src_cc = enrich.src_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
-                            let dst_cc = enrich.dst_geo.as_ref().map(|g| g.country_code.as_str()).unwrap_or("");
-                            enrich.sensitive_country = list.iter().any(|&c| c == src_cc || c == dst_cc);
-                        }
-                    }
+                    // Tenant's Sensitive Countries list (admin-editable), minus its own sensors' countries
+                    crate::homecountry::apply(&state, &tenant_id, &mut enrich).await;
 
                     let detections = {
                         let engine = state.detection.read().await;
