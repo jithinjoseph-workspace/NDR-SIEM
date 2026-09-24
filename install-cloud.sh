@@ -502,7 +502,7 @@ OPENAI_API_KEY=
 GROQ_API_KEY=$GROQ_API_KEY
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
-INGEST_RATE_LIMIT=50000
+INGEST_RATE_LIMIT=0
 # How many tenants ndr-engine's background analysis tasks (entity scoring,
 # correlation, pattern matching, etc.) process at once, instead of one at a
 # time. Higher = faster full-tenant-set cycles but more concurrent load on
