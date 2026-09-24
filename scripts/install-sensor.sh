@@ -1403,9 +1403,16 @@ method = "post"
 encoding.codec = "json"
 framing.method = "newline_delimited"
 
+# Fewer, larger requests: at thousands of sensors one request per second per
+# sensor (100 events / 1 s) is thousands of requests and TLS records a second on
+# the platform. 1000 events or 5 s (whichever first) is ~5x fewer requests, and
+# gzip cuts the bytes sent (the platform decompresses request bodies).
+compression = "gzip"
+
 [sinks.cloud_http.batch]
-max_events = 100
-timeout_secs = 1
+max_events = 1000
+max_bytes = 5000000
+timeout_secs = 5
 
 [sinks.cloud_http.request]
 retry_attempts = 5
