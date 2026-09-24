@@ -85,12 +85,12 @@ download_file("docker-compose.yml",  f"{dest}/docker-compose.yml")
 download_file("install-cloud.sh",    f"{dest}/install-cloud.sh")
 # NOT start.sh/stop.sh/status.sh here - those are install.sh/install-customer.sh's
 # on-prem scripts (PRODUCT_MODE, --profile onpremise, systemd Agent-Z/Agent-S,
-# nginx-ndr.conf/nginx-siem.conf/nginx-both.conf). Cloud mode writes its own
+# PRODUCT_MODE nginx variants). Cloud mode writes its own
 # versions later, once docker-compose.cloud.yml actually exists to reference.
 
 # Only the config files cloud mode's docker-compose.yml actually mounts -
-# not the whole config/ tree (which also has SIEM-only nginx/ClickHouse
-# variants, a Dockerfile+xml unused by the pre-built clickhouse image, a
+# not the whole config/ tree (which also has ClickHouse
+# files it does not use, a Dockerfile+xml unused by the pre-built clickhouse image, a
 # Vector config cloud mode never runs, and a stale dev-machine ndr.crt/
 # ndr.key that would block generating a real cert for this install).
 for f in [
@@ -598,7 +598,7 @@ OVERRIDE
 # ── Write cloud-specific start/stop/status scripts ────────────────────
 # Not install.sh/install-customer.sh's on-prem start.sh/stop.sh/status.sh -
 # those assume PRODUCT_MODE, --profile onpremise, systemd Agent-Z/Agent-S,
-# and copy from nginx-ndr.conf/nginx-siem.conf/nginx-both.conf, none of
+# and used to copy per-mode nginx files over nginx.conf, none of
 # which apply here and would silently break the auth_service nginx routing
 # fixed above. These reference the actual cloud compose files instead.
 cat > "$INSTALL_DIR/start.sh" << 'STARTEOF'

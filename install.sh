@@ -1394,19 +1394,8 @@ log "✅ Update watcher service installed and started"
 sudo docker compose --profile onpremise --profile siem down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
-# ── Select nginx config for this product mode ─────────────────────────────────
-# Each mode has its own config so nginx never tries to resolve upstreams
-# that aren't running (e.g. ndr-engine-1 in SIEM-only mode).
-if [ "$PRODUCT_MODE" = "siem" ]; then
-    cp "$INSTALL_DIR/config/nginx/nginx-siem.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-    log "nginx: SIEM-only config selected"
-elif [ "$PRODUCT_MODE" = "both" ]; then
-    cp "$INSTALL_DIR/config/nginx/nginx-both.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-    log "nginx: NDR+SIEM config selected"
-else
-    cp "$INSTALL_DIR/config/nginx/nginx-ndr.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-    log "nginx: NDR-only config selected"
-fi
+# nginx: config/nginx/nginx.conf is the only nginx config and is used as-is
+# (the old per-mode nginx-*.conf copies were removed).
 
 log "Starting Docker stack — product: ${PRODUCT_MODE}, mode: ${DEPLOY_MODE}"
 

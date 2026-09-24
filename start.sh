@@ -44,14 +44,9 @@ if [ "$PRODUCT_MODE" != "siem" ]; then
     log "Vector checkpoints cleared"
 fi
 
-# ── Select nginx config for this product mode ─────────────────────────────────
-if [ "$PRODUCT_MODE" = "siem" ]; then
-    cp "$INSTALL_DIR/config/nginx/nginx-siem.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-elif [ "$PRODUCT_MODE" = "both" ]; then
-    cp "$INSTALL_DIR/config/nginx/nginx-both.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-else
-    cp "$INSTALL_DIR/config/nginx/nginx-ndr.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-fi
+# nginx: config/nginx/nginx.conf is the only nginx config and is used as-is.
+# Nothing here copies another file over it (the old per-mode nginx-*.conf copies
+# silently reverted fixes made to nginx.conf).
 
 # ── Docker stack ──────────────────────────────
 log "Starting Docker stack..."
