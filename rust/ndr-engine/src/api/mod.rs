@@ -6468,6 +6468,16 @@ pub async fn ingest_events(
             out,
         ).into_response();
     }
+    // The engine's queue was full and some events were NOT queued. Answering HTTP 200 made
+    // Vector treat the whole batch as delivered, so those events were lost silently. A 503 makes
+    // Vector retry the batch (events already queued are de-duplicated downstream).
+    if ingest_reply_is_overloaded(&out.0) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::RETRY_AFTER, "2")],
+            out,
+        ).into_response();
+    }
     out.into_response()
 }
 
@@ -6530,6 +6540,7 @@ async fn ingest_events_inner(
 
     let mut published = 0u64;
     let mut failed = 0u64;
+    let mut queue_full = 0u64;
 
     // The sensor key prefix identifies which sensor sent these events.
     let key_prefix = extract_sensor_key_prefix(&headers).unwrap_or_default();
@@ -6584,17 +6595,24 @@ async fn ingest_events_inner(
                 published += 1;
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                // Channel full — system overloaded; Vector's disk buffer absorbs.
-                tracing::warn!("Ingest channel full — dropping event for tenant {}", tenant_id);
+                // Queue full: the caller gets HTTP 503 (see ingest_events) and retries the batch.
+                queue_full += 1;
                 failed += 1;
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 tracing::error!("Ingest channel closed — drain task died");
+                queue_full += 1;
                 failed += 1;
             }
         }
     }
 
+    if queue_full > 0 {
+        tracing::warn!(
+            "Ingest queue full: {} of {} events not queued for tenant {} - answering 503 so the sensor retries",
+            queue_full, events_arr.len(), tenant_id
+        );
+    }
     tracing::info!(
         "Ingest: queued={} failed={} tenant={}",
         published, failed, tenant_id
@@ -6604,6 +6622,7 @@ async fn ingest_events_inner(
         "status": "ok",
         "published": published,
         "failed": failed,
+        "queue_full": queue_full,
         "tenant_id": tenant_id
     }))
 }
@@ -11165,5 +11184,27 @@ pub async fn get_retrospective_scan(
                       Json(json!({"status":"error","message":"Scan not found"}))),
             }
         }
+    }
+}
+
+
+/// True when the ingest reply says some events could not be queued because the queue was full.
+fn ingest_reply_is_overloaded(reply: &Value) -> bool {
+    reply.get("queue_full").and_then(|n| n.as_u64()).unwrap_or(0) > 0
+}
+
+#[cfg(test)]
+mod ingest_reply_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_full_queue_makes_the_reply_a_retryable_503() {
+        assert!(ingest_reply_is_overloaded(&json!({"status":"ok","published":990,"failed":10,"queue_full":10})));
+        // a batch that was fully queued: normal 200
+        assert!(!ingest_reply_is_overloaded(&json!({"status":"ok","published":1000,"failed":0,"queue_full":0})));
+        // events that cannot be serialized are counted as failed but must NOT be retried forever
+        assert!(!ingest_reply_is_overloaded(&json!({"status":"ok","published":990,"failed":10,"queue_full":0})));
+        // replies from other paths (bad key, rate cap) carry no queue_full field
+        assert!(!ingest_reply_is_overloaded(&json!({"status":"error","code":"invalid_sensor_key"})));
     }
 }

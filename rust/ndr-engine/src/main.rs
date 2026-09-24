@@ -198,9 +198,14 @@ async fn main() {
         auth::sensor_cache::SensorKeyCache::new(Arc::new(redis_client.clone()))
     );
 
-    // ── Async ingest channel (50k event headroom before backpressure) ─────
+    // ── Async ingest channel: events wait here until the drain task hands them to Kafka ─────
+    // Capacity is how many events can be waiting at once (it is NOT a per-second rate; that is
+    // set by how fast the drain below can publish). When it is full /api/ingest answers 503 so
+    // the sensor retries, instead of dropping events. Memory is about 1 KB per queued event.
+    // Override: INGEST_QUEUE_CAPACITY (default 200,000, minimum 1,000).
     let (ingest_tx, mut ingest_rx) =
-        tokio::sync::mpsc::channel::<(String, String)>(50_000);
+        tokio::sync::mpsc::channel::<(String, String)>(ingest_queue_capacity());
+    let drain_batch = ingest_drain_batch();
 
     // Background drain: flushes channel to Kafka in micro-batches of ≤200
     // events every 100ms. /api/ingest returns immediately without waiting.
@@ -246,7 +251,7 @@ async fn main() {
         }
 
         tokio::spawn(async move {
-            let mut batch: Vec<(String, String)> = Vec::with_capacity(200);
+            let mut batch: Vec<(String, String)> = Vec::with_capacity(drain_batch);
             let mut ticker = tokio::time::interval(
                 std::time::Duration::from_millis(100)
             );
@@ -256,7 +261,7 @@ async fn main() {
                         match maybe {
                             Some(ev) => {
                                 batch.push(ev);
-                                if batch.len() >= 200 {
+                                if batch.len() >= drain_batch {
                                     flush_batch(&producer, &mut batch).await;
                                 }
                             }
@@ -1213,3 +1218,24 @@ async fn cleanup_expired_pcaps(ch: &storage::clickhouse::ClickhouseStorage) {
 
 
 
+
+
+/// Events the ingest queue can hold. See the comment where the channel is created.
+fn ingest_queue_capacity() -> usize {
+    std::env::var("INGEST_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 1_000)
+        .unwrap_or(200_000)
+}
+
+/// Events handed to Kafka per flush by the drain task. Delivery of a whole flush is awaited
+/// together, so larger flushes mean fewer waits per event, i.e. a higher publish rate.
+/// Override: INGEST_DRAIN_BATCH (default 1000, minimum 50).
+fn ingest_drain_batch() -> usize {
+    std::env::var("INGEST_DRAIN_BATCH")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 50)
+        .unwrap_or(1000)
+}
