@@ -4695,6 +4695,40 @@ pub async fn clear_sensor_command(
     /// Returns true if src_ip has ANY confirmed threat-intel hit in the last 24h.
     /// Used to hard-block suppression for compromised hosts — code enforcement,
     /// not AI prompt rules which LLMs can silently ignore.
+    /// How many alerts in the last 24 h involving `ip` matched a threat-intelligence feed, and up to
+    /// five of the peer addresses, so the AI can be given the facts instead of a verdict.
+    pub async fn host_threat_intel_summary(&self, tenant_id: &str, ip: &str) -> (u64, Vec<String>) {
+        let db = tenant_db(tenant_id);
+        let safe_ip = sql_escape(ip);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct TiRow { n: u64, peers: Vec<String> }
+        self.client
+            .query(&format!(
+                "SELECT count() AS n, groupUniqArray(5)(if(src_ip = '{ip}', dst_ip, src_ip)) AS peers \
+                 FROM {db}.ndr_hits FINAL \
+                 WHERE (src_ip = '{ip}' OR dst_ip = '{ip}') \
+                 AND threat_intel = 1 \
+                 AND timestamp > now() - INTERVAL 24 HOUR",
+                db = db, ip = safe_ip
+            ))
+            .fetch_one::<TiRow>()
+            .await
+            .map(|r| (r.n, r.peers))
+            .unwrap_or((0, Vec::new()))
+    }
+
+    /// Names an address was seen under in DNS traffic (newest first).
+    pub async fn passive_dns_names_for_ip(&self, ip: &str, limit: usize) -> Vec<String> {
+        self.client
+            .query(&format!(
+                "SELECT domain FROM ndr.passive_dns FINAL WHERE ip = '{}' ORDER BY last_seen DESC LIMIT {}",
+                sql_escape(ip), limit
+            ))
+            .fetch_all::<String>()
+            .await
+            .unwrap_or_default()
+    }
+
     pub async fn host_has_threat_intel_hit(&self, tenant_id: &str, ip: &str) -> bool {
         let db = tenant_db(tenant_id);
         let safe_ip = sql_escape(ip);

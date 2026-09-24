@@ -971,8 +971,21 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     // is skipped internally for those, but threat-intel and log evidence still captures.
     let severity_str = risk.severity.as_str().to_string();
     let hit_is_malicious = enrichment.is_malicious;
-    if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM")
+    // A conversation is captured and analysed once per AUTOCAPTURE_REPEAT_SECS (default 1 h), not
+    // for every alert it raises: the repeats were duplicate bundles and duplicate AI analyses.
+    let capture_allowed = if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM")
         && !hit.community_id.is_empty()
+    {
+        let mut rc = state.redis_mux.clone();
+        crate::ai::throttle::claim_once(
+            &mut rc,
+            &format!("ndr:autocap:{}:{}", tenant_id, hit.community_id),
+            crate::ai::throttle::capture_repeat_secs(),
+        ).await
+    } else {
+        false
+    };
+    if capture_allowed
     {
         let cid = hit.community_id.clone();
         let tenant = tenant_id.clone();
@@ -1008,6 +1021,14 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             "auto_captured_at": now_str
         });
 
+        // Facts about the two ends, for the AI (country / operator come from the local databases).
+        let dst_geo_c  = enrichment.dst_geo.clone();
+        let dst_asn_c  = enrichment.dst_asn.clone();
+        let src_geo_c  = enrichment.src_geo.clone();
+        let src_asn_c  = enrichment.src_asn.clone();
+        let dst_port_c = hit.agent_z.dest_port.or(hit.agent_s.dest_port);
+        let proto_c    = hit.agent_z.proto.clone().or_else(|| hit.agent_s.proto.clone());
+        let mut redis_c = state.redis_mux.clone();
         let ev_sem = evidence_semaphore();
         tokio::spawn(async move {
             // Acquire permit — at most 4 concurrent evidence+AI calls
@@ -1062,20 +1083,38 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     cid
                                 );
                             } else {
+                                // One AI analysis per source->destination pair per AI_ANALYSIS_REPEAT_SECS,
+                                // and a per-host hourly cap, so one chatty host cannot flood the list.
+                                let pair_key = format!("ndr:aiana:{}:{}:{}", tenant, src_ip_str, dst_ip_str);
+                                if !crate::ai::throttle::claim_once(&mut redis_c, &pair_key, crate::ai::throttle::pair_repeat_secs()).await {
+                                    tracing::info!("AI analysis skipped — {} -> {} was analysed recently (cid {})", src_ip_str, dst_ip_str, cid);
+                                    return;
+                                }
+                                let host_key = format!("ndr:aiana-host:{}:{}", tenant, src_ip_str);
+                                if !crate::ai::throttle::take_hourly_slot(&mut redis_c, &host_key, crate::ai::throttle::host_max_per_hour()).await {
+                                    crate::ai::throttle::release(&mut redis_c, &pair_key).await;
+                                    tracing::info!("AI analysis skipped — {} reached its hourly analysis limit (cid {})", src_ip_str, cid);
+                                    return;
+                                }
+
                                 let bundles = ch.get_bundles_for_cid(&tenant, &cid).await
                                     .unwrap_or_default();
 
-                                // Check if source host has confirmed C2/threat-intel history
-                                let host_compromised = ch.host_has_threat_intel_hit(&tenant, &src_ip_str).await;
-                                let host_context = if host_compromised {
-                                    format!(
-                                        "HOST THREAT HISTORY: {} has confirmed threat-intel C2 hit(s) \
-                                         in the last 24h — treat this host as compromised.\n",
-                                        src_ip_str
-                                    )
-                                } else {
-                                    String::new()
-                                };
+                                // Threat-intel history of the source host, as facts (not a verdict)
+                                let (ti_matches, ti_peers) = ch.host_threat_intel_summary(&tenant, &src_ip_str).await;
+                                let host_context = crate::ai::context::host_history_text(&src_ip_str, ti_matches, &ti_peers);
+
+                                // Who and what the two ends are: country, operator, names seen in DNS, service
+                                let dst_names = ch.passive_dns_names_for_ip(&dst_ip_str, 3).await;
+                                let src_names = ch.passive_dns_names_for_ip(&src_ip_str, 3).await;
+                                let ip_context = format!(
+                                    "{}{}{}",
+                                    crate::ai::context::ip_facts("SOURCE", &src_ip_str, crate::enrichment::is_private_ip(&src_ip_str),
+                                        src_geo_c.as_ref(), src_asn_c.as_ref(), &src_names),
+                                    crate::ai::context::ip_facts("DESTINATION", &dst_ip_str, crate::enrichment::is_private_ip(&dst_ip_str),
+                                        dst_geo_c.as_ref(), dst_asn_c.as_ref(), &dst_names),
+                                    crate::ai::context::connection_line(dst_port_c, proto_c.as_deref()),
+                                );
 
                                 // Look up asset info for src and dst IPs from the asset inventory
                                 let asset_context = {
@@ -1120,19 +1159,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     let sev = b["severity"].as_str().unwrap_or("UNKNOWN").to_string();
                                     let src  = b["src_ip"].as_str().unwrap_or("?");
                                     let dst  = b["dst_ip"].as_str().unwrap_or("?");
-                                    let mut entry = format!("  {}→{}", src, dst);
-                                    if !rule_name_str.is_empty() {
-                                        entry.push_str(&format!("\n    sig=\"{}\"", rule_name_str));
-                                    }
-                                    if !suricata_category_str.is_empty() {
-                                        entry.push_str(&format!("  category=\"{}\"", suricata_category_str));
-                                    }
-                                    if !app_proto_str.is_empty() {
-                                        entry.push_str(&format!("\n    proto={}", app_proto_str));
-                                    }
-                                    if !dns_query_str.is_empty() {
-                                        entry.push_str(&format!("  dns_query={}", dns_query_str));
-                                    }
+                                    let entry = format!("  {}→{}", src, dst);
                                     by_sev.entry(sev).or_default().push(entry);
                                 }
 
@@ -1148,6 +1175,15 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     }
                                 }
 
+                                // The details of the alert that triggered this analysis, stated once (they used to be
+                                // repeated on every bundle line even though they belong to this alert only).
+                                let mut latest = Vec::new();
+                                if !rule_name_str.is_empty()         { latest.push(format!("sig=\"{}\"", rule_name_str)); }
+                                if !suricata_category_str.is_empty() { latest.push(format!("category=\"{}\"", suricata_category_str)); }
+                                if !app_proto_str.is_empty()         { latest.push(format!("proto={}", app_proto_str)); }
+                                if !dns_query_str.is_empty()         { latest.push(format!("dns_query={}", dns_query_str)); }
+                                let latest_line = if latest.is_empty() { String::new() } else { format!("Latest alert: {}\n", latest.join("  ")) };
+
                                 let system_prompt = "You are a senior NDR (Network Detection & Response) \
                                     security analyst. You are given ALL alerts captured for a single \
                                     network session grouped by severity. Analyse the full picture and \
@@ -1156,20 +1192,26 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     RISK: combined impact across all severity levels (1-2 sentences)\n\
                                     ACTION: recommended immediate response steps (2-3 bullet points)\n\
                                     Be concise and actionable. No markdown headers.\n\
-                                    IMPORTANT: If HOST THREAT HISTORY shows a confirmed C2 hit, treat \
-                                    all alerts from that host as high-priority regardless of individual \
-                                    alert severity. DNS queries to ngrok, pagekite, or other tunneling \
-                                    domains from a compromised host indicate active C2 beaconing.\n\
-                                    Traffic to known cloud providers (Google, AWS, Microsoft, Cloudflare) \
-                                    is normal UNLESS the host is flagged as compromised OR a tunneling \
-                                    domain is in the dns_query field.";
+                                    Base your analysis ONLY on the facts given. Use the SOURCE and DESTINATION \
+                                    lines to say who the other side is (operator, country, service) and \
+                                    name it in THREAT. Traffic to a DNS server (port 53/853), NTP, a package \
+                                    mirror or the host's own internet provider is normally routine: say so, \
+                                    and do not raise the risk because of the destination country alone.\n\
+                                    A threat-intelligence match in HOST THREAT-INTEL MATCHES is a lead, not \
+                                    proof: weigh it against this session and say how sure you are. DNS \
+                                    queries to ngrok, pagekite or other tunneling domains are suspicious \
+                                    and can indicate C2 beaconing. Traffic to well-known cloud providers \
+                                    (Google, AWS, Microsoft, Cloudflare) is normal unless other evidence \
+                                    says otherwise.";
 
                                 let question = format!(
                                     "Session community_id: {cid}\n\
+                                     {ip_context}\
                                      {host_context}\
                                      {asset_context}\
                                      All captured alerts grouped by severity:\n\
-                                     {grouped}\n\
+                                     {grouped}\
+                                     {latest_line}\n\
                                      Tenant: {tenant}\n\
                                      Provide your comprehensive threat analysis.",
                                 );
