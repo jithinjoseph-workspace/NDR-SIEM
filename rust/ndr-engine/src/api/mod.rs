@@ -6459,6 +6459,15 @@ pub async fn ingest_events(
     if out.0.get("code").and_then(|c| c.as_str()) == Some(INVALID_KEY_CODE) {
         if let Some(r) = revoked_response(&state, &headers).await { return r; }
     }
+    // Only when an INGEST_RATE_LIMIT cap is set and exceeded: answer with a real 429
+    // (Vector retries it) instead of HTTP 200, which Vector counts as delivered.
+    if out.0.get("code").and_then(|c| c.as_u64()) == Some(429) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            out,
+        ).into_response();
+    }
     out.into_response()
 }
 

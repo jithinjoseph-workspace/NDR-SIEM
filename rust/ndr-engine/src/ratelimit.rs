@@ -21,12 +21,14 @@ const WINDOW:       Duration = Duration::from_secs(60);
 const LIMIT_API:    usize    = 300;
 const LIMIT_LOGIN:  usize    = 20;
 
+/// Events per sensor per 60 s. 0 (the default) means unlimited. Set
+/// INGEST_RATE_LIMIT=<n> to cap a runaway sensor again. (It used to default to
+/// 50,000 - about 833 events/s - and a sensor over that lost the excess silently.)
 fn ingest_event_limit() -> usize {
     std::env::var("INGEST_RATE_LIMIT")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n: &usize| n > 0)
-        .unwrap_or(50_000)
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 struct Bucket {
@@ -82,10 +84,13 @@ impl CountBucket {
 static INGEST_BUCKETS: LazyLock<Arc<DashMap<String, CountBucket>>> =
     LazyLock::new(|| Arc::new(DashMap::new()));
 
-/// Returns false (and logs a warning) if `sensor_key` has sent more than
-/// INGEST_RATE_LIMIT events in the last 60 seconds.
+/// Returns false if `sensor_key` has sent more than INGEST_RATE_LIMIT events in
+/// the last 60 seconds. Always true when the limit is 0 (unlimited, the default).
 pub fn check_ingest_rate(sensor_key: &str, event_count: usize) -> bool {
     let limit = ingest_event_limit();
+    if limit == 0 {
+        return true;
+    }
     INGEST_BUCKETS
         .entry(sensor_key.to_string())
         .or_insert_with(CountBucket::new)
@@ -113,4 +118,23 @@ pub async fn rate_limit_middleware(
     }
 
     Ok(next.run(req).await)
+}
+
+#[cfg(test)]
+mod ingest_limit_tests {
+    use super::*;
+
+    // One test: it changes a process-wide env var, so it must not run in parallel with another.
+    #[test]
+    fn unlimited_by_default_and_capped_when_set() {
+        std::env::remove_var("INGEST_RATE_LIMIT");
+        assert!(check_ingest_rate("t-unlimited", 10_000_000), "no limit set: everything passes");
+        std::env::set_var("INGEST_RATE_LIMIT", "0");
+        assert!(check_ingest_rate("t-unlimited", 10_000_000), "0 means unlimited");
+        std::env::set_var("INGEST_RATE_LIMIT", "1000");
+        assert!(check_ingest_rate("t-capped", 600));
+        assert!(!check_ingest_rate("t-capped", 600), "second batch would pass 1000 in the window");
+        assert!(check_ingest_rate("t-other", 900), "another sensor has its own budget");
+        std::env::remove_var("INGEST_RATE_LIMIT");
+    }
 }
