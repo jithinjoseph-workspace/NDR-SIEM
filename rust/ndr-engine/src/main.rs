@@ -6,6 +6,7 @@ mod api;
 mod auth;
 mod license;
 mod ratelimit;
+mod role;
 mod siem;
 mod consumer;
 mod correlator;
@@ -101,6 +102,13 @@ async fn main() {
         .init();
 
     info!("NDR Engine starting");
+
+    // What this process is for: all (default) | ingest | process | ui - see role.rs
+    let role = role::EngineRole::from_env();
+    info!(
+        "Engine role: {} (kafka consumer: {}, leader jobs: {}, full platform: {})",
+        role.as_str(), role.consumer(), role.leader_jobs(), role.full_platform()
+    );
 
     // ── Production credential warnings ────────────────────────────────────
     // Fail fast if JWT_SECRET is absent — every auth call would panic otherwise.
@@ -406,6 +414,8 @@ async fn main() {
         entity_cache.clone(),
         redis_mux.clone(),
         tx.clone(),
+        role.full_platform(),
+        role.leader_jobs(),
     );
 
     // Start sensor key cache refresh loop (after ch_storage is ready)
@@ -552,10 +562,12 @@ async fn main() {
     }
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
-    state.enrichment.asset_id.clone().spawn_auto_updater();
+    if role.full_platform() {
+        state.enrichment.asset_id.clone().spawn_auto_updater();
+    }
 
     // ── Background: session reaper (every 30s) ────────────────────────────
-    {
+    if role.full_platform() {
         let eng = state.correlator.clone();
         tokio::spawn(async move {
             loop {
@@ -568,7 +580,7 @@ async fn main() {
 
     // ── Background: threat intel refresh (every 60 min) ───────────────────
     // Fix background refresh — refresh NOW then every 60 min
-{
+if role.full_platform() {
     let ti = ti_ref.clone();
     let ch_storage = ch_storage_arc.clone();
     tokio::spawn(async move {
@@ -591,7 +603,7 @@ async fn main() {
     // On startup: seed Redis SET with all existing Unknown-vendor assets.
     // Worker: SPOP one item, OUI lookup, write DB. Sleeps 1s when set empty.
     // SADD in consumer ensures no duplicates; SPOP is atomic across instances.
-    {
+    if role.full_platform() {
         let ch_seed = state.ch_storage.clone();
         let mut redis_seed = state.redis_mux.clone();
         tokio::spawn(async move {
@@ -611,7 +623,7 @@ async fn main() {
             }
         });
     }
-    {
+    if role.full_platform() {
         let ch = state.ch_storage.clone();
         let asset_id = state.enrichment.asset_id.clone();
         let redis_client_vb = redis_client.clone();
@@ -655,7 +667,7 @@ async fn main() {
     }
 
     // ── Kafka consumer — auto-restarts on panic or error ─────────────────
-    {
+    if role.consumer() {
         let consumer_state = state.clone();
         tokio::spawn(async move {
             loop {
@@ -776,7 +788,7 @@ async fn main() {
 
     // ── Weekly SigmaHQ community rules auto-updater ────────────────────────
     // Remove any blocked rules that slipped into the DB (e.g. before blocklist existed)
-    {
+    if role.full_platform() {
         let ch_bl = ch_storage_arc.clone();
         tokio::spawn(async move {
             for &id in detection::updater::GLOBAL_RULE_BLOCKLIST {
@@ -785,17 +797,21 @@ async fn main() {
         });
     }
 
-    detection::spawn_sigma_updater(
-        rules_dir.clone(),
-        redis_url.clone(),
-        state.detection.clone(),
-        state.ch_storage.clone(),
-    );
+    if role.full_platform() {
+        detection::spawn_sigma_updater(
+            rules_dir.clone(),
+            redis_url.clone(),
+            state.detection.clone(),
+            state.ch_storage.clone(),
+        );
+    }
 
     // ── Multi-flow correlator (Tier 1/2/3 cross-flow detection) ───────────
     // Runs only on the elected leader — same election as threat tasks
     // so all singleton background work stays on one instance.
-    detection::multiflow::spawn(ch_storage_arc.clone(), election.clone());
+    if role.leader_jobs() {
+        detection::multiflow::spawn(ch_storage_arc.clone(), election.clone());
+    }
 
 
 
@@ -1014,7 +1030,7 @@ async fn main() {
             .unwrap_or_else(|_| provigil_common::kafka::DEFAULT_KAFKA_BROKERS.to_string()));
 
 // ── Background: agent status monitor ─────────────────────────────────
-    {
+    if role.full_platform() {
         let tx = tx.clone();
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -1040,7 +1056,7 @@ async fn main() {
     }
 
     // ── Background: Arkime → pcap_sessions sync — leader only ───────────────
-    {
+    if role.leader_jobs() {
         let arkime_state = state.clone();
         let election_arkime = election.clone();
         tokio::spawn(async move {
@@ -1052,7 +1068,7 @@ async fn main() {
     }
 
     // ── Background: daily PCAP file cleanup — leader only ────────────────────
-    {
+    if role.leader_jobs() {
         let ch_cleanup = state.ch_storage.clone();
         let election_pcap = election.clone();
         tokio::spawn(async move {
@@ -1090,7 +1106,7 @@ async fn main() {
     }
 
     // ── Background: version update checker (on-prem only, every 6h) ─────
-    {
+    if role.full_platform() {
         let update_status = state.update_status.clone();
         let http = state.http_client.clone();
         let current = env!("CARGO_PKG_VERSION").to_string();

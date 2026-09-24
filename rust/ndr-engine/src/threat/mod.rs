@@ -42,6 +42,9 @@ pub fn spawn_all(
     entity_cache: Arc<dashmap::DashMap<String, f32>>,
     redis_mux:    redis::aio::MultiplexedConnection,
     ws_tx:        tokio::sync::broadcast::Sender<String>,
+    // ENGINE_ROLE switches (see crate::role). Both true = behaviour before roles existed.
+    run_enrichment_caches: bool,
+    run_leader_jobs:       bool,
 ) -> (
     Arc<crate::leader::LeaderElection>,
     Arc<tokio::sync::RwLock<cloud_trust::TrustedRanges>>,
@@ -86,14 +89,19 @@ pub fn spawn_all(
     // two can't live there - a follower that never wins an election would
     // never run them at all.
     let is_leader_flag = election_arc.is_leader_flag();
-    cloud_trust::spawn_trust_updater(
-        Arc::clone(&trusted),
-        Arc::clone(&redis_client),
-        Arc::clone(&asn),
-        Arc::clone(&ch),
-    );
-    entity_scorer::spawn_entity_scorer(Arc::clone(&ch), Arc::clone(&entity_cache), Arc::clone(&is_leader_flag));
+    if run_enrichment_caches {
+        cloud_trust::spawn_trust_updater(
+            Arc::clone(&trusted),
+            Arc::clone(&redis_client),
+            Arc::clone(&asn),
+            Arc::clone(&ch),
+        );
+        entity_scorer::spawn_entity_scorer(Arc::clone(&ch), Arc::clone(&entity_cache), Arc::clone(&is_leader_flag));
+    }
 
+    // Without leader jobs (ingest / ui roles) this engine never joins the election, so it
+    // can never become leader and none of the elected-leader tasks start on it.
+    if run_leader_jobs {
     tokio::spawn(async move {
         tokio::time::sleep(
             std::time::Duration::from_millis(jitter_ms)
@@ -141,6 +149,7 @@ pub fn spawn_all(
             tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
         }
     });
+    }
 
     (election, trusted)
 }
