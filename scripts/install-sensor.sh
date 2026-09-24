@@ -2759,16 +2759,23 @@ def extract_with_tcpdump(pcap_files, meta, output):
             decompressed.append(d)
     if not decompressed:
         return False
-    # BPF: match both directions of the flow
-    bpf = (f"(host {src_ip} and host {dst_ip} "
-           f"and port {src_port} and port {dst_port})")
+    # BPF: match both directions of the flow. A port that is missing or 0 in the session
+    # metadata must not be part of the filter ("port 0" matches nothing).
+    clauses = [f"host {src_ip}", f"host {dst_ip}"]
+    for port in (src_port, dst_port):
+        if str(port).strip() not in ('', '0', 'None'):
+            clauses.append(f"port {port}")
+    bpf = "(" + " and ".join(clauses) + ")"
     try:
         cmd = ['tcpdump', '-r', decompressed[0],
                '-w', output, bpf]
         result = subprocess.run(
             cmd, capture_output=True, timeout=60)
+        # A pcap with no packets is exactly 24 bytes (the file header). That used to count as
+        # success, so nothing else was tried and an EMPTY capture was uploaded. A useful
+        # capture holds at least one packet: 24-byte header + 16-byte record header + data.
         if (os.path.exists(output) and
-                os.path.getsize(output) >= 24):
+                os.path.getsize(output) > 40):
             sz = os.path.getsize(output)
             src_sz = os.path.getsize(decompressed[0])
             # Same sanity check: if output ≈ full file,
