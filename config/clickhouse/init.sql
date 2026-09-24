@@ -380,6 +380,7 @@ CREATE TABLE IF NOT EXISTS ndr.sigma_rules ON CLUSTER ndr_cluster
     content     String,
     enabled     UInt8 DEFAULT 1,
     tenant_id   String DEFAULT 'default',
+    source      String DEFAULT 'custom',
     created_at  DateTime DEFAULT now(),
     updated_at  DateTime DEFAULT now()
 )
@@ -512,6 +513,8 @@ ORDER BY id;
 CREATE TABLE IF NOT EXISTS ndr.soar_cases ON CLUSTER ndr_cluster
 (
     id           String DEFAULT toString(generateUUIDv4()),
+    case_number  String DEFAULT '',
+    priority     String DEFAULT 'P2',
     title        String,
     description  String DEFAULT '',
     severity     String DEFAULT 'MEDIUM',

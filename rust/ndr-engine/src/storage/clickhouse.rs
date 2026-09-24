@@ -275,6 +275,16 @@ pub struct ClickhouseStorage {
     pub(crate) client: Client,
 }
 
+/// Columns added to tenant tables after their first release. The startup migration replays
+/// init.sql per tenant, but `CREATE TABLE IF NOT EXISTS` skips tables that already exist, so an
+/// existing tenant database never got them (creating a SOAR case failed with "No such column
+/// case_number in table ndr_<tenant>.soar_cases"). `{db}` is the tenant database.
+const TENANT_COLUMN_MIGRATIONS: &[&str] = &[
+    "ALTER TABLE {db}.soar_cases ADD COLUMN IF NOT EXISTS case_number String DEFAULT ''",
+    "ALTER TABLE {db}.soar_cases ADD COLUMN IF NOT EXISTS priority String DEFAULT 'P2'",
+    "ALTER TABLE {db}.sigma_rules ADD COLUMN IF NOT EXISTS source String DEFAULT 'custom'",
+];
+
 pub(crate) fn sql_escape(value: &str) -> String {
     // The clickhouse crate (0.11) treats EVERY `?` in the query text as a bind placeholder and
     // panics ("unbound query argument") when none is bound; there is no `??` escape. A value
@@ -1444,6 +1454,9 @@ pub async fn delete_announcement(
                                 tracing::debug!("Auto-migrate statement skipped for {}: {}", db_name, e);
                             }
                         }
+                        // CREATE TABLE IF NOT EXISTS above does nothing for tables that already exist,
+                        // so columns added to init.sql later never reached existing tenants.
+                        self.migrate_tenant_columns(&db_name).await;
                     }
                 }
             }
@@ -1458,6 +1471,16 @@ pub async fn delete_announcement(
 
 
 
+
+    /// Adds the columns in TENANT_COLUMN_MIGRATIONS to one tenant database (idempotent).
+    pub async fn migrate_tenant_columns(&self, db_name: &str) {
+        for template in TENANT_COLUMN_MIGRATIONS {
+            let stmt = template.replace("{db}", db_name);
+            if let Err(e) = self.client.query(&stmt).execute().await {
+                tracing::warn!("Tenant column migration failed for {}: {} ({})", db_name, stmt, e);
+            }
+        }
+    }
 
     pub async fn get_threat_intel_hits_by_tenant(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
     let db_name = tenant_db(tenant_id);
@@ -8014,5 +8037,49 @@ mod sql_escape_tests {
                 .expect("query must not panic or fail");
             assert_eq!(got, original);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tenant_column_migration_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway database that is dropped at the end):
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine tenant_column -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn an_old_tenant_table_gets_the_missing_columns_and_accepts_a_case() {
+        let ch = ClickhouseStorage::new();
+        let db = "ndr_zz_migtest";
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        ch.client.query(&format!("CREATE DATABASE {db}")).execute().await.unwrap();
+        // the OLD shapes: no case_number / priority / source
+        ch.client.query(&format!(
+            "CREATE TABLE {db}.soar_cases (id String, title String, updated_at DateTime DEFAULT now()) \
+             ENGINE = ReplacingMergeTree(updated_at) ORDER BY id")).execute().await.unwrap();
+        ch.client.query(&format!(
+            "CREATE TABLE {db}.sigma_rules (id String, name String, updated_at DateTime DEFAULT now()) \
+             ENGINE = ReplacingMergeTree(updated_at) ORDER BY id")).execute().await.unwrap();
+
+        // what the SOAR code does today fails on an old table
+        let before = ch.client.query(&format!(
+            "INSERT INTO {db}.soar_cases (id, case_number, title) VALUES ('a', 'C-1', 't')")).execute().await;
+        assert!(before.is_err(), "an old table must reject case_number (this is the reported bug)");
+
+        ch.migrate_tenant_columns(db).await;
+        ch.migrate_tenant_columns(db).await; // idempotent
+
+        ch.client.query(&format!(
+            "INSERT INTO {db}.soar_cases (id, case_number, title, priority) VALUES ('a', 'C-1', 't', 'P1')"))
+            .execute().await.expect("the case insert works after the migration");
+        let got: String = ch.client
+            .query(&format!("SELECT concat(case_number, '/', priority) FROM {db}.soar_cases WHERE id = 'a'"))
+            .fetch_one().await.unwrap();
+        assert_eq!(got, "C-1/P1");
+        ch.client.query(&format!("SELECT source FROM {db}.sigma_rules")).fetch_all::<String>().await
+            .expect("sigma_rules.source exists after the migration");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }
 }
