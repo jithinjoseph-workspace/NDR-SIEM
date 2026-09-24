@@ -336,6 +336,9 @@
   display: flex;
   flex-direction: column;
   height: 200px; /* Enforce strictly uniform height for all cards */
+  /* Without this the cards sit in a flex column with a max-height and are SQUASHED to fit when there
+     are many (13 analyses = ~40px slivers with clipped content); with it the list scrolls instead. */
+  flex-shrink: 0;
 }
 
 .analysis-card:hover, .prediction-card:hover {
