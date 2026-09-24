@@ -276,7 +276,11 @@ pub struct ClickhouseStorage {
 }
 
 pub(crate) fn sql_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('\'', "\\'")
+    // The clickhouse crate (0.11) treats EVERY `?` in the query text as a bind placeholder and
+    // panics ("unbound query argument") when none is bound; there is no `??` escape. A value
+    // such as a URL with a query string, a hostname or a rule text therefore killed the task
+    // running the query. `\x3F` is ClickHouse's own escape for `?` inside a string literal.
+    value.replace('\\', "\\\\").replace('\'', "\\'").replace('?', "\\x3F")
 }
 
 fn sql_array_literal(values: &[String]) -> String {
@@ -7976,5 +7980,39 @@ impl ClickhouseStorage {
         }
 
         Ok(saved)
+    }
+}
+
+
+#[cfg(test)]
+mod sql_escape_tests {
+    use super::*;
+
+    #[test]
+    fn question_marks_never_reach_the_query_text() {
+        assert_eq!(sql_escape("http://x/a?b=1"), "http://x/a\\x3Fb=1");
+        assert!(!sql_escape("what?? ?fields").contains('?'));
+        assert_eq!(sql_escape("it's"), "it\\'s");
+        assert_eq!(sql_escape("a\\b"), "a\\\\b");
+    }
+
+    // Against a real ClickHouse: the escaped value must come back exactly as it went in.
+    // Run: CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //      cargo test -p ndr-engine sql_escape -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn escaped_value_round_trips_through_a_real_clickhouse() {
+        let client = clickhouse::Client::default()
+            .with_url(std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123".into()))
+            .with_user(std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".into()))
+            .with_password(std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default());
+        for original in ["http://evil.example/a?b=1&c=?", "plain", "it's a ? and a \\ and ?fields", "??"] {
+            let got: String = client
+                .query(&format!("SELECT '{}'", sql_escape(original)))
+                .fetch_one()
+                .await
+                .expect("query must not panic or fail");
+            assert_eq!(got, original);
+        }
     }
 }
