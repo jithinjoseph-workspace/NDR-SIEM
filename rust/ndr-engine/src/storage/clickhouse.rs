@@ -2810,12 +2810,12 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
-            "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp) \
+            "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp), sensor_id \
              FROM {db}.ndr_events \
              WHERE 1=1{sf} \
              ORDER BY timestamp DESC LIMIT {limit}",
              db = db_name, sf = sf, limit = limit))
-            .fetch_all::<(String, String, String, String, String, u32)>()
+            .fetch_all::<(String, String, String, String, String, u32, String)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
             "src_ip":     r.0,
@@ -2823,7 +2823,8 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             "proto":      r.2,
             "source":     r.3,
             "event_type": r.4,
-            "timestamp":  r.5
+            "timestamp":  r.5,
+            "sensor_id":  r.6
         })).collect())
     }
 
@@ -2833,12 +2834,12 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let db_name = tenant_db(tenant_id);
         let sf = Self::sensor_filter(sensor_ids);
         let rows = self.client.query(&format!(
-            "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp) \
+            "SELECT src_ip, dst_ip, proto, source, event_type, toUInt32(timestamp), sensor_id \
              FROM {db}.ndr_events \
              WHERE timestamp >= now() - INTERVAL {hours} HOUR{sf} \
              ORDER BY timestamp DESC LIMIT {limit}",
              db = db_name, hours = hours, sf = sf, limit = limit))
-            .fetch_all::<(String, String, String, String, String, u32)>()
+            .fetch_all::<(String, String, String, String, String, u32, String)>()
             .await.unwrap_or_default();
         Ok(rows.iter().map(|r| serde_json::json!({
             "src_ip":     r.0,
@@ -2846,7 +2847,8 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             "proto":      r.2,
             "source":     r.3,
             "event_type": r.4,
-            "timestamp":  r.5
+            "timestamp":  r.5,
+            "sensor_id":  r.6
         })).collect())
     }
 
