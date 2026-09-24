@@ -71,8 +71,8 @@ export class Triage implements OnInit {
   load() {
     this.loading.set(true);
     this.api.getTriage().subscribe({
-      next: d => { this.accept(d); this.loading.set(false); },
-      error: e => { this.error.set('Could not load alert triage.'); this.loading.set(false); reportRxjsError(e); },
+      next: (d: any) => { this.accept(d); this.loading.set(false); },
+      error: (e: any) => { this.error.set('Could not load alert triage.'); this.loading.set(false); reportRxjsError(e); },
     });
   }
 
@@ -81,12 +81,12 @@ export class Triage implements OnInit {
     this.running.set(true);
     this.notice.set('');
     this.api.runTriage().subscribe({
-      next: d => {
+      next: (d: any) => {
         this.accept(d);
         this.running.set(false);
         if (d?.info?.throttled) this.notice.set('Checked a moment ago - showing the latest result.');
       },
-      error: e => { this.error.set('Could not re-check alerts.'); this.running.set(false); reportRxjsError(e); },
+      error: (e: any) => { this.error.set('Could not re-check alerts.'); this.running.set(false); reportRxjsError(e); },
     });
   }
 
@@ -95,7 +95,7 @@ export class Triage implements OnInit {
     this.busyId.set(rec.id);
     this.notice.set('');
     this.api.applyTriage(rec.id, 24).subscribe({
-      next: d => {
+      next: (d: any) => {
         this.busyId.set(null);
         if (d?.status === 'ok') {
           this.data.set(d);
@@ -105,7 +105,7 @@ export class Triage implements OnInit {
           this.error.set(d?.message || 'Could not hide this group.');
         }
       },
-      error: e => { this.busyId.set(null); this.error.set('Could not hide this group.'); reportRxjsError(e); },
+      error: (e: any) => { this.busyId.set(null); this.error.set('Could not hide this group.'); reportRxjsError(e); },
     });
   }
 
@@ -114,8 +114,8 @@ export class Triage implements OnInit {
     this.busyId.set(rec.id);
     this.notice.set('');
     this.api.dismissTriage(rec.id).subscribe({
-      next: d => { this.busyId.set(null); if (d?.status === 'ok') this.data.set(d); else this.error.set(d?.message || 'Could not dismiss.'); },
-      error: e => { this.busyId.set(null); this.error.set('Could not dismiss.'); reportRxjsError(e); },
+      next: (d: any) => { this.busyId.set(null); if (d?.status === 'ok') this.data.set(d); else this.error.set(d?.message || 'Could not dismiss.'); },
+      error: (e: any) => { this.busyId.set(null); this.error.set('Could not dismiss.'); reportRxjsError(e); },
     });
   }
 
@@ -135,7 +135,7 @@ export class Triage implements OnInit {
       const next = this.harmless().find(r => !this.impact(r).blocked);
       if (!next) break;
       try {
-        const d = await firstValueFrom(this.api.applyTriage(next.id, 24));
+        const d: any = await firstValueFrom(this.api.applyTriage(next.id, 24));
         if (d?.status !== 'ok') { this.error.set(d?.message || 'Stopped: the server refused one group.'); break; }
         this.data.set(d);
         done++;

@@ -1,18 +1,55 @@
 import requests
 import urllib3
+import time
 
 # Disable insecure request warnings if using self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Monkey-patch requests to avoid Nginx 429 Too Many Requests (limit_req rate=120r/m burst=30)
+original_get = requests.get
+def throttled_get(*args, **kwargs):
+    time.sleep(0.6)
+    return original_get(*args, **kwargs)
+requests.get = throttled_get
+
+original_post = requests.post
+def throttled_post(*args, **kwargs):
+    time.sleep(0.6)
+    return original_post(*args, **kwargs)
+requests.post = throttled_post
 
 # ==============================================================================
 # CONFIGURATION - Set these parameters before running on your Linux VM
 # ==============================================================================
 BASE_URL = "https://10.0.2.15:3000"
-SUPER_ADMIN_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJzdXBlcl9hZG1pbiIsInRlbmFudF9pZCI6ImRlZmF1bHQiLCJwZXJtaXNzaW9ucyI6WyJkYXNoYm9hcmQiLCJhbGVydHMiLCJpbnRlbCIsImV2aWRlbmNlIiwicnVsZXMiLCJzb2FyIiwicmVwb3J0cyIsInNldHRpbmdzIiwidXNlcnMiLCJ0ZW5hbnRzIiwic2Vuc29ycyIsImVuZ2luZXMiLCJhZG1pbiJdLCJmZWF0dXJlcyI6WyJuZHIiLCJzb2FyIiwidGhyZWF0X2ludGVsIiwiYWkiXSwic2Vuc29yX2lkcyI6W10sImV4cCI6MTc5MDIyODkyMywiaWF0IjoxNzkwMjI1MzIzLCJqdGkiOiI4NzkzZGFjNy1lOTMxLTQxY2MtYjA3ZS1hMjVkNGE5NjU2YjcifQ.qK85m1u0JyMgdhenh1CYO9gyKClh0gjovXCsmIsJfrk"
-TENANT_ADMIN_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZW5hbnQtYWRtaW4iLCJyb2xlIjoidGVuYW50X2FkbWluIiwidGVuYW50X2lkIjoiZGVmYXVsdCIsInBlcm1pc3Npb25zIjpbImRhc2hib2FyZCIsImFsZXJ0cyIsImludGVsIiwiZXZpZGVuY2UiLCJydWxlcyIsInNvYXIiLCJyZXBvcnRzIiwic2V0dGluZ3MiLCJ1c2VycyIsInNlbnNvcnMiXSwiZmVhdHVyZXMiOlsibmRyIiwic29hciIsInRocmVhdF9pbnRlbCIsImFpIl0sInNlbnNvcl9pZHMiOltdLCJleHAiOjE3OTAyMjkwMTgsImlhdCI6MTc5MDIyNTQxOCwianRpIjoiNjg2OTllNTQtZjVjYy00OGFhLWJjZTUtNjgzNTk3ZDIwZmFhIn0.ayAZm8FvRgXCaffwlVWWXJXeRlHTpPW7Bo4t6wGV_t8"
+
+# Provide your actual passwords here to automatically generate fresh tokens
+ADMIN_PASSWORD = "ndr@admin123"
+TENANT_ADMIN_PASSWORD = "ndr@tenant123"
+AUTO_ADMIN_PASSWORD = "your_auto_admin_password_here"
+ANALYST_PASSWORD = "Libin@41"
+
+def fetch_token(username, password, tenant_id=None):
+    if password == "your_admin_password_here" or "your_" in password:
+        return "PLACEHOLDER_TOKEN"
+    payload = {"username": username, "password": password}
+    if tenant_id:
+        payload["tenant_id"] = tenant_id
+    try:
+        resp = requests.post(f"{BASE_URL}/api/auth/login", json=payload, verify=False)
+        if resp.status_code == 200:
+            return resp.json().get("user", {}).get("token")
+        else:
+            print(f"[!] Failed to login {username}: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[!] Request error logging in {username}: {e}")
+    return "INVALID_TOKEN"
+
+SUPER_ADMIN_TOKEN = fetch_token("admin", ADMIN_PASSWORD)
+TENANT_ADMIN_TOKEN = fetch_token("tenant-admin", TENANT_ADMIN_PASSWORD)
 DISPOSABLE_TENANT_ID = "automated-test-tenant"
-DISPOSABLE_TENANT_USER_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhdXRvX2FkbWluIiwicm9sZSI6InRlbmFudF9hZG1pbiIsInRlbmFudF9pZCI6ImF1dG9tYXRlZC10ZXN0LXRlbmFudCIsInBlcm1pc3Npb25zIjpbImRhc2hib2FyZCIsImFsZXJ0cyIsImludGVsIiwiZXZpZGVuY2UiLCJydWxlcyIsInNvYXIiLCJyZXBvcnRzIiwic2V0dGluZ3MiLCJ1c2VycyIsInNlbnNvcnMiXSwiZmVhdHVyZXMiOlsibmRyIl0sInNlbnNvcl9pZHMiOltdLCJleHAiOjE3OTAwNjE1NDIsImlhdCI6MTc5MDA1Nzk0MiwianRpIjoiODkwNmZlYWUtZGEyMS00MDc3LTkwMjAtM2FlOGI0MDgwNGZiIn0.sZ_aE7LeesEUkXb6LR3NPxWWr6j8OG-yLcpjEiWsM18"
-ANALYST_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZWZhdWx0QW5hbHlzdCIsInJvbGUiOiJhbmFseXN0IiwidGVuYW50X2lkIjoiZGVmYXVsdCIsInBlcm1pc3Npb25zIjpbImRhc2hib2FyZCIsImFsZXJ0cyIsImFzc2V0cyIsImxvZ3MiLCJuZXR3b3JrLW1hcCIsImxpdmUiLCJydWxlcyIsImV2aWRlbmNlIiwiYWktYWN0aXZpdHkiLCJhaS1yZXBvcnQiLCJpbnRlbCIsInNvYXIiXSwiZmVhdHVyZXMiOlsibmRyIiwic29hciIsInRocmVhdF9pbnRlbCIsImFpIl0sInNlbnNvcl9pZHMiOlsibG9jYWwtY2VudHJhbCJdLCJleHAiOjE3OTAyMzExNDEsImlhdCI6MTc5MDIyNzU0MSwianRpIjoiODYzZjExMWMtNDEzNy00Njg0LTg1ZTktMDUwODI0ZjIxZWJhIn0.BUfo8ok-EgLwXGYmmWEI8XQOIWIKMMHyR26zgntbbao"
+DISPOSABLE_TENANT_USER_TOKEN = fetch_token("auto_admin", AUTO_ADMIN_PASSWORD, DISPOSABLE_TENANT_ID)
+ANALYST_TOKEN = fetch_token("defaultAnalyst", ANALYST_PASSWORD)
 
 sa_headers = {
     "Authorization": f"Bearer {SUPER_ADMIN_TOKEN}",
@@ -927,6 +964,337 @@ def test_tc_105(alert_id="test-alert-id"):
     except Exception as e:
         print_result("TC-105", "FAIL", str(e))
 
+def test_tc_106():
+    """Analyst - Incidents List"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/incidents", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-106", "PASS", "Successfully retrieved incidents.")
+        else:
+            print_result("TC-106", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-106", "FAIL", str(e))
+
+def test_tc_107():
+    """Analyst - SOAR Cases"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/soar/cases", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-107", "PASS", "Successfully retrieved SOAR cases.")
+        else:
+            print_result("TC-107", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-107", "FAIL", str(e))
+
+def test_tc_108():
+    """Analyst - Triage Data"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/triage", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-108", "PASS", "Successfully retrieved Triage data.")
+        else:
+            print_result("TC-108", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-108", "FAIL", str(e))
+
+def test_tc_109():
+    """Analyst - Assets"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/assets", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-109", "PASS", "Successfully retrieved assets.")
+        else:
+            print_result("TC-109", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-109", "FAIL", str(e))
+
+def test_tc_110():
+    """Analyst - Unified Stats"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/stats/unified", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-110", "PASS", "Successfully retrieved unified stats.")
+        else:
+            print_result("TC-110", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-110", "FAIL", str(e))
+
+def test_tc_111():
+    """Analyst - Recent Events"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/events", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-111", "PASS", "Successfully retrieved recent events.")
+        else:
+            print_result("TC-111", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-111", "FAIL", str(e))
+
+def test_tc_112():
+    """Analyst - Entity Scores"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/entity-scores", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-112", "PASS", "Successfully retrieved entity scores.")
+        else:
+            print_result("TC-112", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-112", "FAIL", str(e))
+
+def test_tc_113():
+    """Analyst - Threat Predictions"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/threat/predictions", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-113", "PASS", "Successfully retrieved threat predictions.")
+        else:
+            print_result("TC-113", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-113", "FAIL", str(e))
+
+def test_tc_114():
+    """Analyst - AI Activity"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/ai-activity", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-114", "PASS", "Successfully retrieved AI activity.")
+        else:
+            print_result("TC-114", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-114", "FAIL", str(e))
+
+def test_tc_115():
+    """Analyst - Retrospective"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/retrospective/fired-rules", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-115", "PASS", "Successfully retrieved retro rules.")
+        else:
+            print_result("TC-115", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-115", "FAIL", str(e))
+
+def test_tc_116():
+    """Analyst - SOAR Runs"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/soar/runs", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-116", "PASS", "Successfully retrieved SOAR runs.")
+        else:
+            print_result("TC-116", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-116", "FAIL", str(e))
+
+def test_tc_117():
+    """Analyst - Active Blocks"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/blocks", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-117", "PASS", "Successfully retrieved blocks.")
+        else:
+            print_result("TC-117", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-117", "FAIL", str(e))
+
+def test_tc_118():
+    """Analyst - Device Isolations"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/isolations", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-118", "PASS", "Successfully retrieved isolations.")
+        else:
+            print_result("TC-118", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-118", "FAIL", str(e))
+
+def test_tc_119():
+    """Analyst - Trigger Triage"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/triage/run", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-119", "PASS", "Successfully manually triggered triage.")
+        else:
+            print_result("TC-119", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-119", "FAIL", str(e))
+
+def test_tc_120():
+    """Analyst - Health Dashboard"""
+    try:
+        resp = requests.get(f"{BASE_URL}/health", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-120", "PASS", "Successfully checked dashboard stats.")
+        else:
+            print_result("TC-120", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-120", "FAIL", str(e))
+
+def test_tc_121():
+    """Analyst - RBAC - Global Telemetry"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/admin/telemetry", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-121", "PASS", "Successfully denied access to global telemetry.")
+        else:
+            print_result("TC-121", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-121", "FAIL", str(e))
+
+def test_tc_122():
+    """Analyst - RBAC - Start Services"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/start", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-122", "PASS", "Successfully denied access to start services.")
+        else:
+            print_result("TC-122", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-122", "FAIL", str(e))
+
+def test_tc_123():
+    """Analyst - RBAC - Stop Services"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/stop", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-123", "PASS", "Successfully denied access to stop services.")
+        else:
+            print_result("TC-123", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-123", "FAIL", str(e))
+
+def test_tc_124():
+    """Analyst - RBAC - Create User"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/auth/users", json={"username": "test"}, headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-124", "PASS", "Successfully denied access to create user.")
+        else:
+            print_result("TC-124", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-124", "FAIL", str(e))
+
+def test_tc_125():
+    """Analyst - RBAC - Edit User"""
+    try:
+        resp = requests.put(f"{BASE_URL}/api/auth/users/test-user", json={"role": "admin"}, headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-125", "PASS", "Successfully denied access to edit user.")
+        else:
+            print_result("TC-125", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-125", "FAIL", str(e))
+
+def test_tc_126():
+    """Analyst - RBAC - Create Tenant"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/auth/tenants", json={"name": "test"}, headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-126", "PASS", "Successfully denied access to create tenant.")
+        else:
+            print_result("TC-126", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-126", "FAIL", str(e))
+
+def test_tc_127():
+    """Analyst - RBAC - Scale Engines"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/admin/engines/scale", json={"replicas": 2}, headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-127", "PASS", "Successfully denied access to scale engines.")
+        else:
+            print_result("TC-127", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-127", "FAIL", str(e))
+
+def test_tc_128():
+    """Analyst - RBAC - View Engines"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/admin/engines", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-128", "PASS", "Successfully denied access to view engines.")
+        else:
+            print_result("TC-128", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-128", "FAIL", str(e))
+
+def test_tc_129():
+    """Analyst - RBAC - View Settings"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/settings", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-129", "PASS", "Successfully denied access to view settings.")
+        else:
+            print_result("TC-129", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-129", "FAIL", str(e))
+
+def test_tc_130():
+    """Analyst - RBAC - Update Settings"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/settings", json={}, headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-130", "PASS", "Successfully denied access to update settings.")
+        else:
+            print_result("TC-130", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-130", "FAIL", str(e))
+
+def test_tc_131():
+    """Analyst - RBAC - View AI Settings"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/settings/ai", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-131", "PASS", "Successfully denied access to view AI settings.")
+        else:
+            print_result("TC-131", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-131", "FAIL", str(e))
+
+def test_tc_132():
+    """Analyst - RBAC - Modify AI Providers"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/settings/ai/providers", json={}, headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-132", "PASS", "Successfully denied access to modify AI providers.")
+        else:
+            print_result("TC-132", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-132", "FAIL", str(e))
+
+def test_tc_133():
+    """Analyst - RBAC - Generate License"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/license/generate", json={}, headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-133", "PASS", "Successfully denied access to generate license.")
+        else:
+            print_result("TC-133", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-133", "FAIL", str(e))
+
+def test_tc_134():
+    """Analyst - RBAC - View Licenses"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/licenses", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-134", "PASS", "Successfully denied access to view licenses.")
+        else:
+            print_result("TC-134", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-134", "FAIL", str(e))
+
+def test_tc_135():
+    """Analyst - RBAC - Apply Update"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/admin/apply-update", headers=analyst_headers, verify=False)
+        if resp.status_code == 403:
+            print_result("TC-135", "PASS", "Successfully denied access to apply updates.")
+        else:
+            print_result("TC-135", "FAIL", f"Expected 403, got {resp.status_code}")
+    except Exception as e:
+        print_result("TC-135", "FAIL", str(e))
+
+
 
 if __name__ == "__main__":
     print("Starting Automated Tests (TC-051 to TC-065)...")
@@ -957,8 +1325,8 @@ if __name__ == "__main__":
     # test_tc_048()
     # test_tc_049()
     # test_tc_050()
-    print(f"Starting Automated Tests (TC-081 to TC-090)...")
-    print("-" * 50)
+    # print(f"Starting Automated Tests (TC-081 to TC-090)...")
+    # print("-" * 50)
     
     # Execute the tests
     # test_tc_066()
@@ -988,47 +1356,86 @@ if __name__ == "__main__":
     # test_tc_089()
     # test_tc_090()
     
-    print(f"Starting Analyst Automated Tests (TC-091 to TC-105)...")
-    print("-" * 50)
+    # print(f"Starting Analyst Automated Tests (TC-091 to TC-105)...")
+    # print("-" * 50)
     
     # Dynamically fetch IDs
-    test_alert_id = "test-alert-id"
-    test_user_id = "test-user-id"
-    try:
-        # We use sa_headers to fetch them so we are sure they exist
-        alert_resp = requests.get(f"{BASE_URL}/api/xdr/alerts", headers=sa_headers, verify=False)
-        if alert_resp.status_code == 200 and 'alerts' in alert_resp.json():
-            alerts_list = alert_resp.json().get('alerts', [])
-            if alerts_list:
-                test_alert_id = alerts_list[0].get('alert_id', 'test-alert-id')
-            
-        user_resp = requests.get(f"{BASE_URL}/api/auth/users", headers=sa_headers, verify=False)
-        if user_resp.status_code == 200 and 'users' in user_resp.json():
-            users_list = user_resp.json().get('users', [])
-            if users_list:
-                test_user_id = users_list[0].get('id', 'test-user-id')
-            
-        print(f"[*] Dynamically loaded alert_id: {test_alert_id}")
-        print(f"[*] Dynamically loaded user_id: {test_user_id}")
-    except Exception as e:
-        print(f"[!] Warning: Could not fetch dynamic IDs. Using defaults. Error: {e}")
+    # test_alert_id = "test-alert-id"
+    # test_user_id = "test-user-id"
+    # try:
+    #     # We use sa_headers to fetch them so we are sure they exist
+    #     alert_resp = requests.get(f"{BASE_URL}/api/xdr/alerts", headers=sa_headers, verify=False)
+    #     if alert_resp.status_code == 200 and 'alerts' in alert_resp.json():
+    #         alerts_list = alert_resp.json().get('alerts', [])
+    #         if alerts_list:
+    #             test_alert_id = alerts_list[0].get('alert_id', 'test-alert-id')
+    #         
+    #     user_resp = requests.get(f"{BASE_URL}/api/auth/users", headers=sa_headers, verify=False)
+    #     if user_resp.status_code == 200 and 'users' in user_resp.json():
+    #         users_list = user_resp.json().get('users', [])
+    #         if users_list:
+    #             test_user_id = users_list[0].get('id', 'test-user-id')
+    #         
+    #     print(f"[*] Dynamically loaded alert_id: {test_alert_id}")
+    #     print(f"[*] Dynamically loaded user_id: {test_user_id}")
+    # except Exception as e:
+    #     print(f"[!] Warning: Could not fetch dynamic IDs. Using defaults. Error: {e}")
+    # print("-" * 50)
+    
+    # test_tc_091()
+    # test_tc_092(test_alert_id)
+    # test_tc_093(test_alert_id)
+    # test_tc_094(test_alert_id)
+    # test_tc_095()
+    # test_tc_096()
+    # test_tc_097()
+    # test_tc_098()
+    # test_tc_099()
+    # test_tc_100()
+    # test_tc_101()
+    # test_tc_102(test_alert_id)
+    # test_tc_103()
+    # test_tc_104(test_user_id)
+    # test_tc_105(test_alert_id)
+
+    # print(f"Starting New Analyst Tests (TC-106 to TC-120)...")
+    # print("-" * 50)
+
+    # test_tc_106()
+    # test_tc_107()
+    # test_tc_108()
+    # test_tc_109()
+    # test_tc_110()
+    # test_tc_111()
+    # test_tc_112()
+    # test_tc_113()
+    # test_tc_114()
+    # test_tc_115()
+    # test_tc_116()
+    # test_tc_117()
+    # test_tc_118()
+    # test_tc_119()
+    # test_tc_120()
+
+    print(f"Starting Analyst RBAC Negative Tests (TC-121 to TC-135)...")
     print("-" * 50)
     
-    test_tc_091()
-    test_tc_092(test_alert_id)
-    test_tc_093(test_alert_id)
-    test_tc_094(test_alert_id)
-    test_tc_095()
-    test_tc_096()
-    test_tc_097()
-    test_tc_098()
-    test_tc_099()
-    test_tc_100()
-    test_tc_101()
-    test_tc_102(test_alert_id)
-    test_tc_103()
-    test_tc_104(test_user_id)
-    test_tc_105(test_alert_id)
+    test_tc_121()
+    test_tc_122()
+    test_tc_123()
+    test_tc_124()
+    test_tc_125()
+    test_tc_126()
+    test_tc_127()
+    test_tc_128()
+    test_tc_129()
+    test_tc_130()
+    test_tc_131()
+    test_tc_132()
+    test_tc_133()
+    test_tc_134()
+    test_tc_135()
 
     print("-" * 50)
     print("Tests complete. Please record the results.")
+
