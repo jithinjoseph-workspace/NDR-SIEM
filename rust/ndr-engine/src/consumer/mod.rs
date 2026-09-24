@@ -91,7 +91,21 @@ fn ingest_flush_concurrency() -> usize {
         .unwrap_or(20)
 }
 
-// Drains the channel every 100 ms and batch-inserts into ClickHouse.
+// How often buffered events are flushed to ClickHouse (per tenant, one insert).
+// It used to be a fixed 100 ms: every tenant with traffic did up to 10 inserts a
+// second, each a tiny part plus Keeper writes on the Replicated tables. At
+// hundreds of tenants that is thousands of inserts/s. 1 s gives ~10x fewer, larger
+// inserts for at most ~1 s extra delay before an event is stored and alerted on.
+// Override: INGEST_FLUSH_MS (minimum 100).
+fn ingest_flush_interval_ms() -> u64 {
+    std::env::var("INGEST_FLUSH_MS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|&n: &u64| n >= 100)
+        .unwrap_or(1000)
+}
+
+// Drains the channel every INGEST_FLUSH_MS (default 1 s) and batch-inserts into ClickHouse.
 // One HTTP round-trip per tenant per tick instead of one per event.
 //
 // H-3 fix: channel is bounded (50 K events). Backpressure: if CH is slow and
@@ -115,7 +129,7 @@ async fn batch_writer(
     redis: MultiplexedConnection,
 ) {
     let dedup_ttl = dedup_ttl_secs();
-    let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(100));
+    let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(ingest_flush_interval_ms()));
     let mut buf: HashMap<String, Vec<NdrEvent>> = HashMap::new();
     let sem = Arc::new(tokio::sync::Semaphore::new(ingest_flush_concurrency()));
 

@@ -7,7 +7,7 @@
 //! Schema note: ndr.sensor_keys stores key_hash (bcrypt) + key_prefix, NOT
 //! plain api_keys. So the cache can't be bulk-preloaded from DB. It is
 //! populated on first use (bcrypt verify + DB lookup), then cached in Redis
-//! with a 90s TTL. Revocation is immediate via invalidate().
+//! with a TTL (default 900s). Revocation is immediate via invalidate().
 
 use redis::AsyncCommands;
 use std::sync::Arc;
@@ -15,7 +15,24 @@ use std::sync::Arc;
 const CACHE_PREFIX: &str = "sensorkey:";
 // TTL slightly longer than the 60s refresh interval so entries don't
 // expire between refresh cycles under normal operation.
-const CACHE_TTL_SECS: usize = 90;
+//
+// The TTL is long on purpose: every miss costs a ClickHouse lookup plus a bcrypt
+// verify (~50 ms of CPU). At 3000 sensors a 90 s TTL meant ~33 verifies/s
+// (about 2 cores) forever. Revocation does not wait for the TTL:
+// invalidate_by_prefix() clears the entry immediately, so a longer TTL only
+// changes how often a healthy key is re-verified. Override: SENSOR_KEY_CACHE_TTL_SECS.
+const DEFAULT_CACHE_TTL_SECS: usize = 900;
+
+fn cache_ttl_secs() -> usize {
+    static TTL: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *TTL.get_or_init(|| {
+        std::env::var("SENSOR_KEY_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v >= 10)
+            .unwrap_or(DEFAULT_CACHE_TTL_SECS)
+    })
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SensorKeyInfo {
@@ -59,7 +76,7 @@ impl SensorKeyCache {
 
         let redis_key = format!("{}{}", CACHE_PREFIX, api_key);
         let Ok(json) = serde_json::to_string(info) else { return; };
-        let _: Result<(), _> = conn.set_ex(&redis_key, json, CACHE_TTL_SECS).await;
+        let _: Result<(), _> = conn.set_ex(&redis_key, json, cache_ttl_secs()).await;
     }
 
     /// Immediately remove a key from the shared Redis cache.

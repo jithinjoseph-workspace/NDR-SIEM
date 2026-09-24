@@ -4038,7 +4038,13 @@ pub async fn validate_sensor_key(
         .await?;
 
     if let Some((hash, tenant_id, _)) = result.first() {
-        if bcrypt::verify(key, hash).unwrap_or(false) {
+        // bcrypt is ~50 ms of pure CPU: run it on the blocking pool so it can
+        // never stall the async worker threads that serve every other request.
+        let (k, h) = (key.to_string(), hash.clone());
+        let ok = tokio::task::spawn_blocking(move || bcrypt::verify(k, &h).unwrap_or(false))
+            .await
+            .unwrap_or(false);
+        if ok {
             return Ok(Some(tenant_id.clone()));
         }
     }
@@ -4057,7 +4063,11 @@ pub async fn is_revoked_sensor_key(&self, key: &str) -> anyhow::Result<bool> {
         ))
         .fetch_all::<String>()
         .await?;
-    Ok(rows.first().map(|h| bcrypt::verify(key, h).unwrap_or(false)).unwrap_or(false))
+    let Some(hash) = rows.first().cloned() else { return Ok(false) };
+    let k = key.to_string();
+    Ok(tokio::task::spawn_blocking(move || bcrypt::verify(k, &hash).unwrap_or(false))
+        .await
+        .unwrap_or(false))
 }
 
 pub async fn get_sensor_keys(
