@@ -1414,18 +1414,25 @@ max_events = 1000
 max_bytes = 5000000
 timeout_secs = 5
 
+# Never give up on a batch because the platform is briefly down, restarting or answering
+# 429/503: with 5 attempts / 30 s a deploy or a burst silently threw batches away.
+# Backoff grows to at most 5 minutes so hundreds of sensors do not retry in lockstep.
+# A revoked key (401) is still not retried. 30 s per request: a 1000-event gzip batch over a
+# slow link can exceed 10 s, and a timeout only causes a retry (duplicate) of the same batch.
 [sinks.cloud_http.request]
-retry_attempts = 5
+retry_attempts = 1000000
 retry_initial_backoff_secs = 1
-retry_max_duration_secs = 30
-timeout_secs = 10
+retry_max_duration_secs = 300
+timeout_secs = 30
 headers.X-Sensor-Key = "${API_KEY}"
 headers.Content-Type = "application/x-ndjson"
 
+# "block" instead of "drop_newest": when the buffer is full Vector stops reading the log
+# files (their checkpoints keep the position) and resumes later, instead of dropping events.
 [sinks.cloud_http.buffer]
 type = "disk"
-max_size = 536870912
-when_full = "drop_newest"
+max_size = 1073741824
+when_full = "block"
 EOF
 
 # ── Sensor Agent ──────────────────────────────────
