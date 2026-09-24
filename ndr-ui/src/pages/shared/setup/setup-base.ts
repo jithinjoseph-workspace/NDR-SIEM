@@ -655,7 +655,9 @@ export abstract class SetupBase implements OnInit, OnDestroy {
       return false;
     }
 
-    return Date.now() - timestamp.getTime() <= 120000;
+    // 5 min: the engine records last_seen about every 2 min for a healthy sensor (it does not
+    // write on every 30 s check-in), so a 2 min window showed running sensors as offline.
+    return Date.now() - timestamp.getTime() <= 300000;
   }
 
   private parseDate(value: string): Date | null {
