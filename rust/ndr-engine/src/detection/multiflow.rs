@@ -918,17 +918,21 @@ async fn run_tier3(ch: &ClickhouseStorage, sup: &SharedSuppressMap) {
     futures_util::future::join_all(handles).await;
 }
 
-// Volume anomaly: last-hour event count > 3× 7-day hourly average
-async fn detect_volume_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
-    let db = db_for(tenant);
-    let t  = esc(tenant);
-    let q = format!(
+// Volume anomaly: last-hour event count far above the host's own 7-day hourly average.
+//
+// It counts log EVENTS, not bytes, so it says nothing about data leaving the network. It used to fire
+// at HIGH (75) as "t:exfiltration" on any 3x jump against an average of just over 10 events an hour,
+// with no minimum history: a fresh sensor's first apt upgrade or download produced a HIGH
+// "exfiltration" alert with no destination. Now: at least 3 days of baseline, at least 5x the
+// average, at least 300 events, and LOW without the exfiltration tag.
+pub(crate) fn volume_anomaly_query(db: &str, t: &str) -> String {
+    format!(
         "SELECT e.src_ip, \
                 toUInt64(count()) AS today_cnt, \
                 avg(b.value_f / 24.0) AS avg_hourly \
          FROM {db}.ndr_events e \
          LEFT JOIN ( \
-             SELECT src_ip, avg(value_f) AS value_f \
+             SELECT src_ip, avg(value_f) AS value_f, count() AS n_windows \
              FROM {db}.ndr_baselines \
              WHERE metric = 'event_count' \
                AND window_ts >= now() - INTERVAL 7 DAY \
@@ -938,8 +942,15 @@ async fn detect_volume_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &Share
          WHERE e.timestamp > now() - INTERVAL 1 HOUR \
            AND e.tenant_id = '{t}' AND e.src_ip != '' \
          GROUP BY e.src_ip \
-         HAVING today_cnt > 3 * avg_hourly AND avg_hourly > 10"
-    );
+         HAVING today_cnt > 5 * avg_hourly AND avg_hourly > 10 AND today_cnt >= 300 \
+                AND max(b.n_windows) >= 3"
+    )
+}
+
+async fn detect_volume_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
+    let db = db_for(tenant);
+    let t  = esc(tenant);
+    let q = volume_anomaly_query(&db, &t);
     let rows: Vec<VolAnomaly> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
         if is_suppressed(sup, "volanom", tenant, &r.src_ip, SUP_VOL_ANOMALY).await { continue; }
@@ -947,8 +958,8 @@ async fn detect_volume_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &Share
             tenant, r.src_ip, r.today_cnt, r.avg_hourly);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
         emit(ch, tenant, &make_cid("volanom", tenant, &r.src_ip),
-            &r.src_ip, "", 75.0,
-            vec!["volume-anomaly".into(), "t:exfiltration".into()], &sid).await;
+            &r.src_ip, "", 40.0,
+            vec!["volume-anomaly".into()], &sid).await;
     }
 }
 
@@ -1242,5 +1253,46 @@ async fn detect_dns_tunneling(ch: &ClickhouseStorage, tenant: &str, sup: &Shared
         emit(ch, tenant, &make_cid("dnstunnel", tenant, &r.src_ip),
             &r.src_ip, "", 80.0,
             vec!["dns-tunneling".into(), "t:exfiltration".into(), "t:command-and-control".into()], &sid).await;
+    }
+}
+
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway database, dropped at the end):
+    //   cargo test -p ndr-engine volume_anomaly -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn only_a_real_spike_against_a_mature_baseline_is_reported() {
+        let ch = ClickhouseStorage::new();
+        let db = "ndr_zz_voltest";
+        let x = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        x(format!("CREATE DATABASE {db}")).await;
+        x(format!("CREATE TABLE {db}.ndr_events (tenant_id String, src_ip String, timestamp DateTime) ENGINE = MergeTree ORDER BY timestamp")).await;
+        x(format!("CREATE TABLE {db}.ndr_baselines (tenant_id String, src_ip String, metric String, window_ts DateTime, value_f Float64, value_s String) ENGINE = MergeTree ORDER BY window_ts")).await;
+
+        // baseline: value_f is a DAILY count (the query divides by 24): 480/day = 20 events an hour
+        let baseline = |ip: &'static str, days: u32| { let x = &x; async move {
+            for d in 1..=days { x(format!("INSERT INTO {db}.ndr_baselines VALUES ('t','{ip}','event_count', now() - INTERVAL {d} DAY, 480, '')")).await; }
+        } };
+        let events = |ip: &'static str, n: u32| { let x = &x; async move {
+            x(format!("INSERT INTO {db}.ndr_events SELECT 't', '{ip}', now() - number FROM numbers({n})")).await;
+        } };
+        // 10.0.0.1: mature baseline, 2000 events this hour (100x)                -> reported
+        baseline("10.0.0.1", 5).await; events("10.0.0.1", 2000).await;
+        // 10.0.0.2: brand-new host, 1 day of baseline, same 2000 events          -> NOT reported (the bug)
+        baseline("10.0.0.2", 1).await; events("10.0.0.2", 2000).await;
+        // 10.0.0.3: mature baseline but only 3.5x (70 events)                    -> NOT reported
+        baseline("10.0.0.3", 5).await; events("10.0.0.3", 70).await;
+        // 10.0.0.4: mature baseline, 6x but only 120 events (below the floor)    -> NOT reported
+        baseline("10.0.0.4", 5).await; events("10.0.0.4", 120).await;
+
+        let rows: Vec<(String, u64, f64)> = ch.client.query(&volume_anomaly_query(db, "t")).fetch_all().await.unwrap();
+        let ips: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(ips, vec!["10.0.0.1"], "only the mature-baseline 100x spike: {rows:?}");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }
 }
