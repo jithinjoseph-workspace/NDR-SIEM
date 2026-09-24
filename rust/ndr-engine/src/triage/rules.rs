@@ -46,6 +46,8 @@ pub struct AlertRow {
     pub sigma_hits:   Vec<String>,
     pub threat_intel: bool,
     pub timestamp:    u64,
+    /// Sensor the alert came from (the key prefix). Empty for alerts stored before it was recorded.
+    pub sensor_id:    String,
 }
 
 impl AlertRow {
@@ -69,6 +71,7 @@ impl AlertRow {
             sigma_hits:   list("sigma_hits"),
             threat_intel: v.get("threat_intel").map(|x| x.as_u64().unwrap_or(0) > 0 || x.as_bool() == Some(true)).unwrap_or(false),
             timestamp:    v.get("timestamp").and_then(|x| x.as_u64()).unwrap_or(0),
+            sensor_id:    s("sensor_id"),
         })
     }
 }
@@ -110,6 +113,8 @@ pub struct Group {
     pub threat_intel: bool,
     pub first_seen:   u64,
     pub last_seen:    u64,
+    /// Every sensor that contributed an alert to this group ("" = sensor not recorded).
+    pub sensors:      BTreeSet<String>,
 }
 
 impl Group {
@@ -141,8 +146,9 @@ pub fn group_alerts(rows: &[AlertRow]) -> Vec<Group> {
             key, src_ip: src, dst_ip: dst, tag,
             count: 0, max_score: 0.0,
             severities: BTreeMap::new(), tags: BTreeSet::new(), sigma_hits: BTreeSet::new(),
-            threat_intel: false, first_seen: u64::MAX, last_seen: 0,
+            threat_intel: false, first_seen: u64::MAX, last_seen: 0, sensors: BTreeSet::new(),
         });
+        g.sensors.insert(r.sensor_id.clone());
         g.count += 1;
         if r.score > g.max_score { g.max_score = r.score; }
         *g.severities.entry(r.severity.clone()).or_insert(0) += 1;
@@ -379,6 +385,22 @@ pub struct Recommendation {
     /// "pending" | "applied" | "dismissed"
     pub status:     String,
     pub updated_at: u64,
+    /// Sensors the group's alerts came from; used to show a group only to an analyst who is
+    /// assigned to ALL of them. Absent in state saved before this existed.
+    #[serde(default)]
+    pub sensors:    Vec<String>,
+}
+
+/// Can a user restricted to `allowed` sensors see a group built from `rec_sensors`?
+/// No restriction (empty `allowed`, e.g. a tenant admin) sees everything. A restricted user sees a
+/// group only when EVERY contributing sensor is theirs: a group that mixes in another sensor's
+/// alerts would reveal that sensor's counts, and a group whose sensor is unknown cannot be
+/// verified, so both are hidden.
+pub fn visible_to(rec_sensors: &[String], allowed: &[String]) -> bool {
+    if allowed.is_empty() {
+        return true;
+    }
+    !rec_sensors.is_empty() && rec_sensors.iter().all(|s| allowed.contains(s))
 }
 
 impl Recommendation {
@@ -390,6 +412,7 @@ impl Recommendation {
             alert_count: g.count, max_score: g.max_score, severities: g.severities.clone(),
             first_seen: g.first_seen, last_seen: g.last_seen,
             status: "pending".into(), updated_at: now,
+            sensors: g.sensors.iter().cloned().collect(),
         }
     }
 }
@@ -449,9 +472,10 @@ mod tests {
         AlertRow {
             src_ip: src.into(), dst_ip: dst.into(), severity: sev.into(), score,
             tags: tags.iter().map(|t| t.to_string()).collect(), sigma_hits: vec![],
-            threat_intel: false, timestamp: 1_000,
+            threat_intel: false, timestamp: 1_000, sensor_id: String::new(),
         }
     }
+    fn on_sensor(mut r: AlertRow, sensor: &str) -> AlertRow { r.sensor_id = sensor.into(); r }
     fn one(r: AlertRow) -> Group { group_alerts(&[r]).remove(0) }
     fn ctx_with_own(ip: &str) -> Context {
         let mut c = Context::builtin();
@@ -625,5 +649,45 @@ mod tests {
         let out = merge(&[], recs, 1);
         let order: Vec<Verdict> = out.iter().map(|r| r.verdict).collect();
         assert_eq!(order, vec![Verdict::Suspicious, Verdict::Unknown, Verdict::Benign]);
+    }
+
+    // ── sensor assignment ────────────────────────────────────────────────────
+    fn ids(v: &[&str]) -> Vec<String> { v.iter().map(|x| x.to_string()).collect() }
+
+    #[test]
+    fn a_group_records_every_sensor_that_contributed() {
+        let g = group_alerts(&[
+            on_sensor(row("10.0.0.5", "8.8.8.8", "LOW", 20.0, &["new-external-contact"]), "S-A"),
+            on_sensor(row("10.0.0.5", "8.8.8.8", "LOW", 20.0, &["new-external-contact"]), "S-B"),
+        ]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].sensors.iter().cloned().collect::<Vec<_>>(), ids(&["S-A", "S-B"]));
+    }
+
+    #[test]
+    fn an_unrestricted_user_sees_every_group() {
+        assert!(visible_to(&ids(&["S-A"]), &[]));
+        assert!(visible_to(&ids(&["S-B", "S-C"]), &[]));
+        assert!(visible_to(&[], &[]), "even a group with no recorded sensor");
+    }
+
+    #[test]
+    fn a_restricted_analyst_sees_only_groups_made_entirely_of_their_sensors() {
+        let mine = ids(&["S-A"]);
+        assert!(visible_to(&ids(&["S-A"]), &mine));
+        assert!(!visible_to(&ids(&["S-B"]), &mine), "another sensor's group is hidden");
+        assert!(!visible_to(&ids(&["S-A", "S-B"]), &mine), "a group that mixes in another sensor would leak its counts");
+        assert!(!visible_to(&ids(&[""]), &mine), "alerts with no recorded sensor cannot be verified");
+        assert!(!visible_to(&[], &mine), "state saved before sensors were recorded stays hidden until the next run");
+        assert!(visible_to(&ids(&["S-A", "S-C"]), &ids(&["S-A", "S-C", "S-D"])), "several assigned sensors");
+    }
+
+    #[test]
+    fn saved_state_from_before_this_change_still_loads() {
+        let old = r#"{"id":"x","key":"a|b|t","src_ip":"a","dst_ip":"b","tag":"t","verdict":"benign","source":"rule",
+            "confidence":95,"reason":"r","alert_count":1,"max_score":1.0,"severities":{},"first_seen":0,"last_seen":0,
+            "status":"pending","updated_at":0}"#;
+        let r: Recommendation = serde_json::from_str(old).expect("old stored recommendation");
+        assert!(r.sensors.is_empty());
     }
 }
