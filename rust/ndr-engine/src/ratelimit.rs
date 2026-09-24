@@ -97,13 +97,32 @@ pub fn check_ingest_rate(sensor_key: &str, event_count: usize) -> bool {
         .allow_n(event_count, limit)
 }
 
+/// Endpoints that sensors (machines) call. They are NOT limited here: with thousands
+/// of sensors a shared per-IP counter only throttles healthy ones. Keys are
+/// validated by each handler, and the optional per-sensor INGEST_RATE_LIMIT still applies.
+pub fn is_sensor_path(path: &str) -> bool {
+    path == "/api/ingest"
+        || path.starts_with("/api/sensor/")
+        || matches!(path, "/api/pcap/pending" | "/api/pcap/upload" | "/api/pcap/upload-failed")
+}
+
 pub async fn rate_limit_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let ip    = addr.ip().to_string();
     let path  = req.uri().path().to_string();
+    if is_sensor_path(&path) {
+        return Ok(next.run(req).await);
+    }
+    // Count per real client. The connection address is always nginx's container IP, so
+    // keying on it made every browser and sensor share ONE 300-per-minute budget.
+    // nginx sets X-Real-IP to the real client (it is the only way in to the engines).
+    let ip = req.headers().get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<std::net::IpAddr>().ok())
+        .unwrap_or_else(|| addr.ip())
+        .to_string();
     let limit = if path.contains("/login") { LIMIT_LOGIN } else { LIMIT_API };
 
     let key = format!("{}:{}", ip, if path.contains("/login") { "login" } else { "api" });
@@ -123,6 +142,19 @@ pub async fn rate_limit_middleware(
 #[cfg(test)]
 mod ingest_limit_tests {
     use super::*;
+
+    #[test]
+    fn sensor_paths_are_exempt_from_the_shared_ip_limit() {
+        for p in ["/api/ingest", "/api/sensor/checkin", "/api/sensor/heartbeat", "/api/sensor/register",
+                  "/api/sensor/command", "/api/pcap/pending", "/api/pcap/upload", "/api/pcap/upload-failed"] {
+            assert!(is_sensor_path(p), "{p} should be exempt");
+        }
+        // UI routes stay limited - including look-alikes
+        for p in ["/api/sensors/assign", "/api/sensor-keys", "/api/sensor-keys/recent-ips", "/api/stats",
+                  "/api/ingest-stats", "/api/auth/login", "/api/pcap/download"] {
+            assert!(!is_sensor_path(p), "{p} must stay limited");
+        }
+    }
 
     // One test: it changes a process-wide env var, so it must not run in parallel with another.
     #[test]
