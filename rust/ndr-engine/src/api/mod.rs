@@ -459,6 +459,34 @@ fn announcement_targets_from_payload(payload: &Value) -> (String, Vec<String>, V
 }
 
 // Auth middleware
+/// The PCAP endpoints a sensor calls with its X-Sensor-Key (no user login). They were public
+/// (added 2026-06-21) until 40c9175 removed them on 2026-07-23; since then the login check
+/// answered every sensor pcap upload with 401 {"message":"Unauthorized"} before the handler
+/// could look at the sensor key. Each of these handlers validates the key itself
+/// (validate_sensor_key_cached). EXACT paths only: `/api/pcap/:session_id` (a user download)
+/// must keep requiring a login, and a prefix match would let a session id that starts with
+/// "upload" or "pending" past it.
+pub fn is_sensor_pcap_path(path: &str) -> bool {
+    matches!(path, "/api/pcap/upload" | "/api/pcap/upload-failed" | "/api/pcap/pending")
+}
+
+#[cfg(test)]
+mod pcap_public_path_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_three_sensor_endpoints_skip_the_login_check() {
+        for p in ["/api/pcap/upload", "/api/pcap/upload-failed", "/api/pcap/pending"] {
+            assert!(is_sensor_pcap_path(p), "{p} must be reachable with a sensor key");
+        }
+        // user-facing download and look-alikes keep requiring a login
+        for p in ["/api/pcap/abc123", "/api/pcap/uploadabc", "/api/pcap/pending/x", "/api/pcap/upload/x",
+                  "/api/pcap/", "/api/pcap", "/api/pcap/upload-failed2", "/api/evidence/pcap/upload"] {
+            assert!(!is_sensor_pcap_path(p), "{p} must stay protected");
+        }
+    }
+}
+
 pub async fn auth_middleware(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -473,7 +501,7 @@ pub async fn auth_middleware(
     // or with an expired/invalid token is exactly what needs reporting,
     // and gating it behind auth would silently drop those reports.
     let public = ["/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh", "/api/client-errors"];
-    if public.iter().any(|p| path.starts_with(p)) {
+    if public.iter().any(|p| path.starts_with(p)) || is_sensor_pcap_path(&path) {
         return next.run(request).await;
     }
 
