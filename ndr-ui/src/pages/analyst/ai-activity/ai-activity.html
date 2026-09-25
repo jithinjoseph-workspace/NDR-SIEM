@@ -996,7 +996,37 @@
               <span>{{ verdictState() === 'running' ? 'Investigating…' : (verdict() ? 'Investigate again' : 'Investigate with AI') }}</span>
             </button>
             <button class="btn-dossier-secondary" (click)="askAboutThis()"><span>Ask AI about this</span></button>
-            <button class="btn-dossier-secondary" (click)="suppressThis()"><span>Suppress for 24 h</span></button>
+            <button class="btn-dossier-secondary" (click)="openHidePanel()" [disabled]="hideState() === 'loading'"><span>{{ hideState() === 'loading' ? 'Checking…' : 'Hide alerts like this…' }}</span></button>
+          </div>
+
+          <!-- What hiding would take away, worked out on the server. Nothing happens until one button is clicked. -->
+          <div class="hide-panel" *ngIf="hideState() === 'open' && hidePlan() as p">
+            <div class="hide-head">
+              <span>Hide for</span>
+              <select class="hide-select" [ngModel]="hideHours()" (ngModelChange)="hideHours.set($event)">
+                <option *ngFor="let o of hideHourOptions" [ngValue]="o.h">{{ o.label }}</option>
+              </select>
+              <button class="hide-close" (click)="closeHidePanel()" title="Close">✕</button>
+            </div>
+
+            <div class="hide-option" [class.blocked]="!p.session.allowed">
+              <strong>Only this session</strong>
+              <span class="hide-detail">{{ p.session.impact.total }} alert(s): {{ p.src_ip }} ➔ {{ p.dst_ip }}</span>
+              <span class="hide-why" *ngFor="let b of p.session.blocked">{{ b }}</span>
+              <button class="btn-dossier-secondary" [disabled]="!p.session.allowed" (click)="hide('session')"><span>Hide this session</span></button>
+            </div>
+
+            <div class="hide-option" [class.blocked]="!p.pattern.allowed">
+              <strong>Every alert of this kind</strong>
+              <span class="hide-detail">
+                Source {{ p.src_ip }}, tag “{{ p.tag }}”. In the last {{ p.days }} days that is
+                {{ p.pattern.impact.total }} alert(s) ({{ severitySummary(p.pattern.impact) }}) to {{ p.pattern.impact.destinations }} destination(s).
+                Future alerts of this kind are hidden too.
+              </span>
+              <span class="hide-why" *ngFor="let b of p.pattern.blocked">{{ b }}</span>
+              <button class="btn-dossier-secondary" [disabled]="!p.pattern.allowed" (click)="hide('pattern')"><span>Hide all of this kind</span></button>
+            </div>
+            <p class="section-text ai-disclaimer">Hidden alerts stay stored and the rule expires by itself. Alerts that match threat intel, trigger a detection rule or are high/critical are never hidden from here.</p>
           </div>
           <p class="section-text ai-disclaimer">AI opinion, checked against the stored evidence. It never changes anything by itself.</p>
         </div>

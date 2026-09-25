@@ -5,6 +5,7 @@ pub mod provider;
 pub mod investigator;
 pub mod context;
 pub mod briefing;
+pub mod suppression;
 pub mod throttle;
 
 use serde_json::{json, Value};

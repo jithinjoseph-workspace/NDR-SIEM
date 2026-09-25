@@ -994,6 +994,8 @@ if role.full_platform() {
 .route("/api/aria/verdict",     get(api::aria_get_verdict))
 .route("/api/ai-activity", get(api::get_ai_activity))
 .route("/api/ai-activity/briefing", get(api::get_ai_briefing))
+.route("/api/ai-activity/suppression-preview", get(ai::suppression::preview))
+.route("/api/ai-activity/suppress", post(ai::suppression::apply))
 .route("/api/ai-suppressions",                get(api::list_ai_suppressions).post(api::create_manual_suppression))
 .route("/api/ai-suppressions/:id/deactivate", patch(api::deactivate_ai_suppression_handler))
 .route("/api/ai-suppressions/:id", delete(api::delete_ai_suppression_handler))

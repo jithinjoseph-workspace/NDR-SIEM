@@ -314,6 +314,18 @@ fn tenant_db(tenant_id: &str) -> String {
     }
 }
 
+/// The alerts a group suppression (source + tag) hides. The one definition of that match: the alert
+/// lists use it to hide them and the suppression preview uses it to show what would be hidden.
+/// "alert" is the fallback name for alerts that carry no detection tag at all.
+pub fn group_suppression_sql(src_ip: &str, name: &str) -> String {
+    if name == "alert" {
+        format!("(src_ip = '{}' AND empty(tags) AND empty(sigma_hits))", sql_escape(src_ip))
+    } else {
+        format!("(src_ip = '{}' AND (hasAny(tags, ['{name}']) OR hasAny(sigma_hits, ['{name}'])))",
+            sql_escape(src_ip), name = sql_escape(name))
+    }
+}
+
 /// " AND sensor_id IN (...)" for a sensor-scoped user, "" for an unscoped one.
 pub fn sensor_filter_pub(sensor_ids: &[String]) -> String {
     ClickhouseStorage::sensor_filter(sensor_ids)
@@ -3327,6 +3339,40 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         Ok(map)
     }
 
+    /// Alerts as the triage rules read them (same keys as `get_recent_hits_by_tenant`), for the
+    /// suppression preview. `condition` is a SQL condition over ndr_hits, built by the caller from
+    /// escaped values only.
+    async fn alert_rows_where(&self, tenant_id: &str, condition: &str, limit: u32) -> Vec<serde_json::Value> {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct R {
+            timestamp: u32, src_ip: String, dst_ip: String, severity: String, score: f32,
+            tags: Vec<String>, sigma_hits: Vec<String>, threat_intel: u8, sensor_id: String,
+        }
+        let rows = self.client.query(&format!(
+            "SELECT toUInt32(timestamp) AS timestamp, src_ip, dst_ip, severity, score, tags, sigma_hits, \
+                    threat_intel, sensor_id FROM {}.ndr_hits FINAL WHERE {} ORDER BY score DESC LIMIT {}",
+            tenant_db(tenant_id), condition, limit
+        )).fetch_all::<R>().await.unwrap_or_default();
+        rows.into_iter().map(|r| serde_json::json!({
+            "timestamp": r.timestamp, "src_ip": r.src_ip, "dst_ip": r.dst_ip, "severity": r.severity,
+            "score": r.score, "tags": r.tags, "sigma_hits": r.sigma_hits, "threat_intel": r.threat_intel,
+            "sensor_id": r.sensor_id,
+        })).collect()
+    }
+
+    /// The alerts of one session, limited to the sensors the caller may see.
+    pub async fn session_alert_rows(&self, tenant_id: &str, sensor_ids: &[String], community_id: &str) -> Vec<serde_json::Value> {
+        let cond = format!("community_id = '{}'{}", sql_escape(community_id), Self::sensor_filter(sensor_ids));
+        self.alert_rows_where(tenant_id, &cond, 200).await
+    }
+
+    /// Every alert a group suppression for (source, tag) would hide in the last `days` days, on ALL
+    /// sensors: the suppression is tenant-wide, so the preview must be as well.
+    pub async fn pattern_alert_rows(&self, tenant_id: &str, src_ip: &str, tag: &str, days: u32) -> Vec<serde_json::Value> {
+        let cond = format!("{} AND timestamp > now() - INTERVAL {} DAY", group_suppression_sql(src_ip, tag), days);
+        self.alert_rows_where(tenant_id, &cond, 5000).await
+    }
+
     pub async fn get_recent_hits_by_tenant(
         &self, limit: u64, tenant_id: &str, sensor_ids: &[String], hours: u32, ip_filter: Option<&str>,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -3368,18 +3414,9 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         let group_filter = if group_sups.is_empty() {
             String::new()
         } else {
-            let conds: Vec<String> = group_sups.iter().map(|s| {
-                if s.signature_name == "alert" {
-                    // 'alert' is the fallback for hits with no detection tags.
-                    // Suppress all untagged hits from this src_ip.
-                    format!("(src_ip = '{}' AND empty(tags) AND empty(sigma_hits))",
-                        sql_escape(&s.suppress_ip))
-                } else {
-                    format!("(src_ip = '{}' AND (hasAny(tags, ['{name}']) OR hasAny(sigma_hits, ['{name}'])))",
-                        sql_escape(&s.suppress_ip),
-                        name = sql_escape(&s.signature_name))
-                }
-            }).collect();
+            let conds: Vec<String> = group_sups.iter()
+                .map(|s| group_suppression_sql(&s.suppress_ip, &s.signature_name))
+                .collect();
             format!("AND NOT ({})", conds.join(" OR "))
         };
 

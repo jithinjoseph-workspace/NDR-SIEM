@@ -467,6 +467,55 @@ pub fn cached_ai<'a>(prev: &'a [Recommendation], key: &str) -> Option<&'a Recomm
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+// ── What a suppression would hide ─────────────────────────────────────────────
+
+/// Why an alert must stay in front of a person, whatever else is true of it. The same guard rails
+/// `classify` applies to a group, applied to a single alert.
+pub fn protected_reason(r: &AlertRow) -> Option<&'static str> {
+    if r.threat_intel { return Some("matches a threat-intelligence feed"); }
+    if !r.sigma_hits.is_empty() { return Some("triggered a detection rule"); }
+    if severity_rank(&r.severity) >= 3 { return Some("is high or critical severity"); }
+    if r.tags.iter().any(|t| ALARM_TAGS.contains(&t.as_str())) { return Some("carries an alarm tag"); }
+    None
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Impact {
+    pub total:        u32,
+    pub by_severity:  BTreeMap<String, u32>,
+    pub destinations: u32,
+    /// Alerts a suppression must never hide.
+    pub protected:    u32,
+    /// "12 alert(s) match a threat-intelligence feed", ...
+    pub reasons:      Vec<String>,
+    pub first_seen:   u64,
+    pub last_seen:    u64,
+}
+
+/// What hiding these alerts would take away from the analyst.
+pub fn impact(rows: &[AlertRow]) -> Impact {
+    let mut i = Impact::default();
+    let mut dsts = BTreeSet::new();
+    let mut why: BTreeMap<&'static str, u32> = BTreeMap::new();
+    for r in rows {
+        i.total += 1;
+        *i.by_severity.entry(if r.severity.is_empty() { "UNKNOWN".to_string() } else { r.severity.clone() }).or_insert(0) += 1;
+        if !r.dst_ip.is_empty() { dsts.insert(canon_ip(&r.dst_ip)); }
+        if r.timestamp > 0 {
+            i.first_seen = if i.first_seen == 0 { r.timestamp } else { i.first_seen.min(r.timestamp) };
+            i.last_seen = i.last_seen.max(r.timestamp);
+        }
+        if let Some(w) = protected_reason(r) {
+            i.protected += 1;
+            *why.entry(w).or_insert(0) += 1;
+        }
+    }
+    i.destinations = dsts.len() as u32;
+    i.reasons = why.into_iter().map(|(w, n)| format!("{n} alert(s) {w}")).collect();
+    i
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

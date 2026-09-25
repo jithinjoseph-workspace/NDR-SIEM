@@ -1946,3 +1946,16 @@
 .verdict-conf { font-family: var(--font-mono, monospace); font-size: 0.72rem; color: #94a3b8; }
 .verdict-error { color: #f87171; }
 .ai-disclaimer { color: #64748b; font-size: 0.7rem; margin-top: 8px; }
+
+/* Hide alerts like this */
+.hide-panel { margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(30, 58, 95, 0.9); border-radius: 8px; background: rgba(7, 14, 28, 0.6); }
+.hide-head { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; }
+.hide-select { background: #070e1c; color: #e2e8f0; border: 1px solid rgba(30, 58, 95, 0.8); border-radius: 5px; padding: 2px 6px; font-size: 0.75rem; }
+.hide-close { margin-left: auto; background: transparent; border: none; color: #64748b; cursor: pointer; }
+.hide-option { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid rgba(30, 58, 95, 0.5); }
+.hide-option strong { color: #e2e8f0; font-size: 0.8rem; }
+.hide-detail { color: #94a3b8; font-size: 0.75rem; line-height: 1.4; }
+.hide-why { color: #fbbf24; font-size: 0.72rem; }
+.hide-option.blocked .hide-detail { opacity: 0.7; }
+.hide-option .btn-dossier-secondary { align-self: flex-start; margin-top: 4px; }
+.hide-option .btn-dossier-secondary:disabled { opacity: 0.4; cursor: not-allowed; }

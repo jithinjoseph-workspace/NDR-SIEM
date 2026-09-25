@@ -813,6 +813,19 @@ export class Api {
     return this.http.get(`${this.baseUrl}/ai-activity/briefing`, { params });
   }
 
+  /** What hiding this session, or every alert of its kind, would take away (computed on the server). */
+  getSuppressionPreview(communityId: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/ai-activity/suppression-preview`, { params: { community_id: communityId } });
+  }
+
+  /** Hides a session or a pattern. The server re-checks the preview and refuses anything that must stay visible. */
+  applyAiSuppression(communityId: string, scope: 'session' | 'pattern', hours: number): Observable<any> {
+    return this.http.post<any>(`${this.baseUrl}/ai-activity/suppress`, { community_id: communityId, scope, hours }).pipe(map(res => {
+      if (!res || res.error || res.ok !== true) throw new Error(res?.error || 'Suppression was not saved');
+      return res;
+    }));
+  }
+
   deactivateAiSuppression(id: string): Observable<any> {
     return this.http.patch(`${this.baseUrl}/ai-suppressions/${id}/deactivate`, {});
   }

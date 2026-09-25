@@ -317,15 +317,45 @@ export class AiActivity implements OnInit, OnDestroy {
     this.aria.ask(`Explain session ${d.communityId} (${d.flow || 'flow unknown'}). Is it a real threat? What should I do?`);
   }
 
-  /** Mutes this one session for 24 hours (the alert stays stored). Asked for by the analyst, never automatic. */
-  suppressThis() {
-    const d = this.selectedDossierData();
-    const raw = d?.raw;
-    if (!d?.communityId || !raw?.src_ip) return;
-    if (!confirm(`Suppress this session for 24 hours?\n${d.flow}\nIt stays in the data; it just stops raising alerts.`)) return;
-    this.api.suppressAlert(raw.src_ip, raw.dst_ip || '', d.communityId, 'manual', 24).subscribe({
-      next: () => { this.actionNote.set('Suppressed for 24 hours.'); this.reloadOpenTab(); },
-      error: (e: any) => this.actionNote.set(e?.message || 'Could not suppress.'),
+  // ── Hide alerts like this: preview first, then an explicit choice ──
+  hidePlan = signal<any | null>(null);
+  hideState = signal<'closed' | 'loading' | 'open'>('closed');
+  hideHours = signal<number>(24);
+  readonly hideHourOptions = [{ h: 24, label: '24 hours' }, { h: 72, label: '3 days' }, { h: 168, label: '7 days' }];
+
+  openHidePanel() {
+    const cid = this.selectedDossierData()?.communityId;
+    if (!cid) return;
+    this.actionNote.set('');
+    this.hidePlan.set(null);
+    this.hideState.set('loading');
+    this.api.getSuppressionPreview(cid).subscribe({
+      next: (p: any) => {
+        if (p?.error) { this.actionNote.set(p.error); this.hideState.set('closed'); return; }
+        this.hidePlan.set(p);
+        this.hideState.set('open');
+      },
+      error: () => { this.actionNote.set('Could not load the preview.'); this.hideState.set('closed'); },
+    });
+  }
+
+  closeHidePanel() { this.hideState.set('closed'); }
+
+  severitySummary(imp: any): string {
+    const order = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO', 'UNKNOWN'];
+    return order.filter(k => imp?.by_severity?.[k]).map(k => `${imp.by_severity[k]} ${k.toLowerCase()}`).join(', ');
+  }
+
+  hide(scope: 'session' | 'pattern') {
+    const cid = this.selectedDossierData()?.communityId;
+    if (!cid) return;
+    this.api.applyAiSuppression(cid, scope, this.hideHours()).subscribe({
+      next: (r: any) => {
+        this.actionNote.set(`Hidden for ${r.hours} hours (${r.hidden_alerts} alert(s)).`);
+        this.hideState.set('closed');
+        this.reloadOpenTab();
+      },
+      error: (e: any) => this.actionNote.set(e?.message || 'Could not hide these alerts.'),
     });
   }
 
@@ -954,6 +984,7 @@ export class AiActivity implements OnInit, OnDestroy {
     this.selectedAnalysisId.set(a.id);
     const parsed = this.parseAnalysis(a.analysis);
     this.loadVerdict(a.community_id);
+    this.hideState.set('closed');
     this.selectedDossierData.set({
       type: 'analysis',
       title: parsed.threat ? parsed.threat.slice(0, 75) + '...' : `Threat Analysis ${a.id.slice(0, 8)}`,
