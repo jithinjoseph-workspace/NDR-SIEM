@@ -796,8 +796,21 @@ export class Api {
     return this.http.post(`${this.baseUrl}/evidence/trigger`, { community_id: communityId });
   }
 
-  getAiActivity(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/ai-activity`);
+  /** One page of AI analyses and suppressions. Without params: latest 50 analyses + 100 suppressions.
+   *  a_limit=0 / s_limit=0 skip that part; the reply carries analyses_total / suppressions_total. */
+  getAiActivity(p?: { a_limit?: number; a_offset?: number; s_limit?: number; s_offset?: number; severity?: string; q?: string; hours?: number }): Observable<any> {
+    const params: Record<string, string> = {};
+    for (const [k, v] of Object.entries(p ?? {})) {
+      if (v !== undefined && v !== null && v !== '' && v !== 'ALL') params[k] = String(v);
+    }
+    return this.http.get(`${this.baseUrl}/ai-activity`, { params });
+  }
+
+  /** The AI Activity briefing: fact summary, AI-worded when a provider is configured. */
+  getAiBriefing(hours = 24, refresh = false): Observable<any> {
+    const params: Record<string, string> = { hours: String(hours) };
+    if (refresh) params['refresh'] = '1';
+    return this.http.get(`${this.baseUrl}/ai-activity/briefing`, { params });
   }
 
   deactivateAiSuppression(id: string): Observable<any> {
@@ -816,8 +829,9 @@ export class Api {
     return this.http.put(`${this.baseUrl}/soar/integrations/${id}`, data);
   }
 
-  getThreatPredictions(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/threat/predictions`);
+  /** One page of predictions (newest first); the reply carries "total". */
+  getThreatPredictions(limit = 20, offset = 0): Observable<any> {
+    return this.http.get(`${this.baseUrl}/threat/predictions`, { params: { limit: String(limit), offset: String(offset) } });
   }
 
   getThreatPredictionsHistory(): Observable<any> {

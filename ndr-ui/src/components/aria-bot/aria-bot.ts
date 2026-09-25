@@ -9,6 +9,7 @@ import { HttpClient } from '@angular/common/http';
 import { interval, Subscription } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { DotLottie } from '@lottiefiles/dotlottie-web';
+import { AriaService } from '../../services/aria/aria.service';
 
 interface ChatMessage {
   role: 'user' | 'bot';
@@ -68,6 +69,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
 
   // ── Chat state ──
   isOpen = false;
+  private askSub?: Subscription;
   isTyping = false;
   inputText = '';
   messages: ChatMessage[] = [];
@@ -137,11 +139,19 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
     private http: HttpClient,
     private router: Router,
     private cdr: ChangeDetectorRef,
+    private ariaService: AriaService,
   ) { }
 
   // ── LIFECYCLE ──
 
   ngOnInit() {
+    this.askSub = this.ariaService.askRequests$.subscribe(q => {
+      this.isOpen = true;
+      this.unreadCount = 0;
+      this.showSpeech = false;
+      this.sendMessage(q);
+      this.cdr.detectChanges();
+    });
     const savedTheme = localStorage.getItem('aria_bot_theme');
     if (savedTheme === 'light' || savedTheme === 'dark') {
       this.botTheme = savedTheme;
@@ -186,6 +196,7 @@ export class AriaBot implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    this.askSub?.unsubscribe();
     this.pollSub?.unsubscribe();
     this.routerSub?.unsubscribe();
     clearInterval(this.proactiveSub);
