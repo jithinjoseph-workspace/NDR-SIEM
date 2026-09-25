@@ -6,17 +6,17 @@
 //! and the plain fact summary is shown instead. With no AI provider configured the page still
 //! gets the fact summary, so it is never empty.
 //!
+//! The finished briefing is cached in Valkey for a few minutes, so all engines share one copy and one AI call.
+//!
 //! Alerts that are only chatter (low score, or traffic to a trusted service) are left out of the
 //! "hosts to look at" and "rules" lists. They still count in the severity totals.
 
 use crate::ai::provider::UseCase;
-use crate::storage::clickhouse::{sensor_filter_pub, sql_escape_pub as esc, tenant_db_pub};
+use crate::storage::clickhouse::{sensor_filter_pub, tenant_db_pub};
 use crate::storage::ClickhouseStorage;
 use provigil_common::ai::{generate_with_providers, AiProvider};
 use serde::Serialize;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use redis::aio::MultiplexedConnection;
 
 /// Score below which an alert is treated as chatter when ranking hosts and rules.
 pub const MEANINGFUL_SCORE: u32 = 40;
@@ -234,31 +234,51 @@ pub async fn ask(providers: &[AiProvider], f: &Facts) -> String {
     generate_with_providers(providers, SYSTEM_PROMPT, &user_prompt(f)).await
 }
 
-// ── Cache: one briefing per tenant / scope / window for 3 minutes (per engine) ───────────
+// ── Cache: one briefing per tenant / scope / window, shared by every engine through Valkey ──
 
-type Cache = Mutex<HashMap<String, (Instant, Briefing)>>;
+/// Key for one briefing. Tenant and sensor scope are part of it, so one tenant never gets another's.
+pub fn cache_key(tenant_id: &str, sensor_ids: &[String], hours: u32, ai_allowed: bool) -> String {
+    let mut sensors = sensor_ids.to_vec();
+    sensors.sort();
+    format!("ndr:briefing:{}|{}|{}|{}", tenant_id, sensors.join(","), hours, ai_allowed)
+}
 
-fn cache() -> &'static Cache {
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+/// A stored briefing is `{"at": <unix seconds>, "b": <briefing>}`. `force` (the Refresh button) only
+/// bypasses a copy that is at least FORCE_MIN_AGE_SECS old, so the button cannot be used to hammer the AI.
+pub fn usable(at: u64, now: u64, force: bool) -> bool {
+    let age = now.saturating_sub(at);
+    age < if force { FORCE_MIN_AGE_SECS } else { CACHE_SECS }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+async fn cache_get(redis: &mut MultiplexedConnection, key: &str, force: bool) -> Option<serde_json::Value> {
+    let raw: Option<String> = redis::cmd("GET").arg(key).query_async(redis).await.ok().flatten();
+    let v: serde_json::Value = serde_json::from_str(&raw?).ok()?;
+    usable(v["at"].as_u64()?, now_secs(), force).then(|| v["b"].clone())
+}
+
+async fn cache_put(redis: &mut MultiplexedConnection, key: &str, b: &serde_json::Value) {
+    let wrapped = serde_json::json!({ "at": now_secs(), "b": b }).to_string();
+    let _: Result<(), _> = redis::cmd("SET").arg(key).arg(wrapped).arg("EX").arg(CACHE_SECS).query_async(redis).await;
 }
 
 /// The briefing for a tenant. `ai_allowed` is false when the tenant has AI switched off.
-/// `force` asks for a fresh one, but never more often than once a minute.
+/// If Valkey is unreachable the briefing is simply built each time (nothing is lost, only re-done).
 pub async fn briefing(
     ch: &ClickhouseStorage,
+    redis: &mut MultiplexedConnection,
     tenant_id: &str,
     sensor_ids: &[String],
     hours: u32,
     ai_allowed: bool,
     force: bool,
-) -> Briefing {
-    let key = format!("{}|{}|{}|{}", esc(tenant_id), sensor_ids.join(","), hours, ai_allowed);
-    if let Some((at, b)) = cache().lock().unwrap().get(&key) {
-        let age = at.elapsed();
-        if age < Duration::from_secs(if force { FORCE_MIN_AGE_SECS } else { CACHE_SECS }) {
-            return b.clone();
-        }
+) -> serde_json::Value {
+    let key = cache_key(tenant_id, sensor_ids, hours, ai_allowed);
+    if let Some(hit) = cache_get(redis, &key, force).await {
+        return hit;
     }
     let facts = gather(ch, tenant_id, sensor_ids, hours).await;
     let b = if !ai_allowed {
@@ -268,13 +288,15 @@ pub async fn briefing(
         let reply = if providers.is_empty() { String::new() } else { ask(&providers, &facts).await };
         compose(facts, &reply, "")
     };
-    cache().lock().unwrap().insert(key, (Instant::now(), b.clone()));
-    b
+    let v = serde_json::json!(b);
+    cache_put(redis, &key, &v).await;
+    v
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     fn facts() -> Facts {
         Facts {
@@ -431,5 +453,56 @@ mod tests {
         let sent = seen[0].1["messages"].to_string();
         assert!(sent.contains("ONLY the facts") && sent.contains("10.0.9.9: 3 alerts"), "system rules and the real facts are what the AI is given");
         assert!(ask(&[], &facts()).await.is_empty(), "no providers: empty, so compose falls back to the facts");
+    }
+
+    #[test]
+    fn the_cache_key_separates_tenants_scopes_windows_and_ai_state() {
+        let k = |t: &str, s: &[&str], h, ai| cache_key(t, &s.iter().map(|x| x.to_string()).collect::<Vec<_>>(), h, ai);
+        let base = k("a", &["s1", "s2"], 24, true);
+        assert_eq!(base, k("a", &["s2", "s1"], 24, true), "sensor order does not matter");
+        for other in [k("b", &["s1", "s2"], 24, true), k("a", &["s1"], 24, true), k("a", &[], 24, true),
+                      k("a", &["s1", "s2"], 168, true), k("a", &["s1", "s2"], 24, false)] {
+            assert_ne!(base, other);
+        }
+    }
+
+    #[test]
+    fn refresh_cannot_bypass_a_copy_younger_than_a_minute() {
+        assert!(usable(1000, 1100, false), "normal read: a 100 s old copy is used");
+        assert!(!usable(1000, 1000 + CACHE_SECS, false), "a copy at the cache limit is expired");
+        assert!(usable(1000, 1030, true), "refresh within a minute still gets the cached copy");
+        assert!(!usable(1000, 1061, true), "refresh after a minute rebuilds");
+        assert!(usable(2000, 1000, true), "a clock that went backwards does not force a rebuild");
+    }
+
+    // Against the real Valkey (two connections stand in for two engines):
+    //   VALKEY_URL=redis://127.0.0.1:6379 cargo test -p ndr-engine briefing_shared -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn briefing_shared_between_engines_through_valkey() {
+        let url = std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
+        let client = redis::Client::open(url).unwrap();
+        let mut engine1 = client.get_multiplexed_async_connection().await.unwrap();
+        let mut engine2 = client.get_multiplexed_async_connection().await.unwrap();
+        let key = cache_key("zz_cachetest", &[], 24, true);
+        let _: () = redis::cmd("DEL").arg(&key).query_async(&mut engine1).await.unwrap();
+
+        assert!(cache_get(&mut engine1, &key, false).await.is_none(), "empty to start with");
+        let b = serde_json::json!({"text": "hello", "source": "ai"});
+        cache_put(&mut engine1, &key, &b).await;
+        assert_eq!(cache_get(&mut engine2, &key, false).await, Some(b.clone()), "engine 2 sees what engine 1 stored");
+        assert_eq!(cache_get(&mut engine2, &key, true).await, Some(b.clone()), "Refresh inside a minute reuses it");
+        let ttl: i64 = redis::cmd("TTL").arg(&key).query_async(&mut engine1).await.unwrap();
+        assert!(ttl > 0 && ttl <= CACHE_SECS as i64, "it expires by itself: {ttl}");
+
+        // an old copy: Refresh rebuilds, a normal read still uses it
+        let old = serde_json::json!({"at": now_secs() - 120, "b": b}).to_string();
+        let _: () = redis::cmd("SET").arg(&key).arg(old).arg("EX").arg(60).query_async(&mut engine1).await.unwrap();
+        assert!(cache_get(&mut engine2, &key, true).await.is_none(), "Refresh on a 2-minute-old copy rebuilds");
+        assert!(cache_get(&mut engine2, &key, false).await.is_some());
+        // garbage in the key is a miss, not a crash
+        let _: () = redis::cmd("SET").arg(&key).arg("not json").arg("EX").arg(60).query_async(&mut engine1).await.unwrap();
+        assert!(cache_get(&mut engine1, &key, false).await.is_none());
+        let _: () = redis::cmd("DEL").arg(&key).query_async(&mut engine1).await.unwrap();
     }
 }

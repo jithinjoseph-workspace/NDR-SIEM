@@ -9736,8 +9736,9 @@ pub async fn get_ai_briefing(
     let hours = params.get("hours").and_then(|v| v.parse::<u32>().ok()).unwrap_or(24).clamp(1, 24 * 30);
     let force = params.get("refresh").map(|v| v == "1").unwrap_or(false);
     let ai_allowed = claims.role == "super_admin" || state.ch_storage.get_tenant_ai_enabled(&claims.tenant_id).await;
-    let b = crate::ai::briefing::briefing(&state.ch_storage, &claims.tenant_id, &claims.sensor_ids, hours, ai_allowed, force).await;
-    Json(json!(b))
+    let mut rc = state.redis_mux.clone();
+    let b = crate::ai::briefing::briefing(&state.ch_storage, &mut rc, &claims.tenant_id, &claims.sensor_ids, hours, ai_allowed, force).await;
+    Json(b)
 }
 
 /// PATCH /api/ai-suppressions/:id/deactivate
