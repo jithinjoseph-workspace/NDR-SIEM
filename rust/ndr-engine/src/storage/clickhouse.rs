@@ -5585,24 +5585,23 @@ pub async fn save_evidence_bundle(
     dst_ip: &str,
     severity: &str,
     alert_id: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let db = tenant_db(tenant_id);
 
-    // Skip insert if a bundle already exists for this community_id — prevents
-    // duplicate entries when the same alert is downloaded more than once.
-    #[derive(clickhouse::Row, serde::Deserialize)]
-    struct Count { n: u64 }
-    let existing: Vec<Count> = self.client
+    // One bundle per community_id — prevents duplicate entries when the same alert is captured or
+    // downloaded more than once. Returns the id that IS stored, which is not the `id` passed in when
+    // a bundle already existed: the caller must use it (and drop the file it just wrote), or its
+    // analysis ends up pointing at a bundle that does not exist.
+    let existing: Option<String> = self.client
         .query(&format!(
-            "SELECT count() as n FROM {}.evidence_bundles FINAL \
-             WHERE community_id = '{}'",
+            "SELECT id FROM {}.evidence_bundles FINAL WHERE community_id = '{}' ORDER BY captured_at LIMIT 1",
             db, sql_escape(community_id)
         ))
-        .fetch_all::<Count>()
+        .fetch_one::<String>()
         .await
-        .unwrap_or_default();
-    if existing.first().map(|r| r.n).unwrap_or(0) > 0 {
-        return Ok(());
+        .ok();
+    if let Some(stored) = existing {
+        return Ok(stored);
     }
 
     self.client.query(&format!(
@@ -5616,7 +5615,7 @@ pub async fn save_evidence_bundle(
         size_bytes, auto_captured, expires_days,
         sql_escape(src_ip), sql_escape(dst_ip), sql_escape(severity), sql_escape(alert_id)
     )).execute().await?;
-    Ok(())
+    Ok(id.to_string())
 }
 
 pub async fn get_evidence_bundle(
@@ -5896,7 +5895,7 @@ fn ai_annotations_grouped(db: &str, scf: &str) -> String {
     format!(
         "SELECT
              argMax(ea.id,         ea.created_at) as id,
-             argMax(ea.bundle_id,  ea.created_at) as bundle_id,
+             any(eb.id)                            as bundle_id,
              ea.community_id as community_id,
              argMax(ea.note,       ea.created_at) as analysis,
              toString(max(ea.created_at))          as created_at,
@@ -5907,7 +5906,9 @@ fn ai_annotations_grouped(db: &str, scf: &str) -> String {
              argMax(if(eb.dst_ip  != '' AND eb.dst_ip  != 'UNKNOWN', eb.dst_ip,  ''),
                     ea.created_at)                 as dst_ip
          FROM {db}.evidence_annotations ea
-         LEFT JOIN {db}.evidence_bundles eb ON ea.bundle_id = eb.id
+         LEFT JOIN (SELECT community_id, argMin(id, captured_at) AS id, argMin(severity, captured_at) AS severity,
+                           argMin(src_ip, captured_at) AS src_ip, argMin(dst_ip, captured_at) AS dst_ip
+                    FROM {db}.evidence_bundles GROUP BY community_id) eb ON ea.community_id = eb.community_id
          WHERE ea.tag = 'ai_analysis'{scf}
          GROUP BY ea.community_id",
         db = db, scf = scf
@@ -8289,13 +8290,15 @@ mod ai_activity_paging_tests {
         run(format!("CREATE DATABASE {db}")).await;
         run(format!("CREATE TABLE {db}.evidence_annotations (id String, bundle_id String, community_id String, tag String, \
              note String, created_at DateTime) ENGINE = MergeTree ORDER BY (community_id, created_at)")).await;
-        run(format!("CREATE TABLE {db}.evidence_bundles (id String, severity String, src_ip String, dst_ip String) \
+        run(format!("CREATE TABLE {db}.evidence_bundles (id String, community_id String, file_path String DEFAULT '', sha256 String DEFAULT '', \
+             size_bytes UInt64 DEFAULT 0, auto_captured UInt8 DEFAULT 0, expires_at DateTime DEFAULT now() + INTERVAL 90 DAY, \
+             src_ip String, dst_ip String, severity String, alert_id String DEFAULT '', captured_at DateTime DEFAULT now()) \
              ENGINE = ReplacingMergeTree ORDER BY id")).await;
 
         // 45 sessions: 5 CRITICAL, 10 HIGH, 30 MEDIUM; session 7 is analysed twice (must count once)
         for i in 0..45u32 {
             let sev = if i < 5 { "CRITICAL" } else if i < 15 { "HIGH" } else { "MEDIUM" };
-            run(format!("INSERT INTO {db}.evidence_bundles VALUES ('b{i}','{sev}','10.0.0.{i}','203.0.113.{i}')")).await;
+            run(format!("INSERT INTO {db}.evidence_bundles (id, community_id, severity, src_ip, dst_ip) VALUES ('b{i}','1:cid{i}','{sev}','10.0.0.{i}','203.0.113.{i}')")).await;
             run(format!("INSERT INTO {db}.evidence_annotations VALUES ('a{i}','b{i}','1:cid{i}','ai_analysis','note about host {i}', now() - {i})")).await;
         }
         run(format!("INSERT INTO {db}.evidence_annotations VALUES ('a7b','b7','1:cid7','ai_analysis','note about host 7 (newer)', now() + 1)")).await;
@@ -8335,7 +8338,7 @@ mod ai_activity_paging_tests {
         assert!(page("", "x'; DROP TABLE evidence_bundles; --", 20, 0).await.is_empty(), "q is escaped");
 
         // time range: a session analysed 10 days ago drops out of "last 24 hours" but not out of "all"
-        run(format!("INSERT INTO {db}.evidence_bundles VALUES ('b99','LOW','10.0.0.99','203.0.113.99')")).await;
+        run(format!("INSERT INTO {db}.evidence_bundles (id, community_id, severity, src_ip, dst_ip) VALUES ('b99','1:cid99','LOW','10.0.0.99','203.0.113.99')")).await;
         run(format!("INSERT INTO {db}.evidence_annotations VALUES ('a99','b99','1:cid99','ai_analysis','an old one', now() - INTERVAL 10 DAY)")).await;
         let in_range = |hours: u32| {
             let sql = ClickhouseStorage::ai_annotations_query(db, "", "", "", hours, 100, 0);
@@ -8444,6 +8447,62 @@ mod aria_real_schema_tests {
         assert!(ctx.contains("=== CRITICAL ALERTS (last 24h) ==="), "{ctx}");
         let latest = ch.get_latest_critical_hit_for_aria(tenant, &[]).await.unwrap();
         assert_eq!(latest.unwrap()["community_id"], "c0", "the status bar's latest critical alert loads too");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+    }
+}
+
+#[cfg(test)]
+mod evidence_bundle_identity_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway tenant database that is dropped at the end):
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine evidence_bundle_identity -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn a_second_capture_reuses_the_stored_bundle_and_analyses_keep_their_ips() {
+        let ch = ClickhouseStorage::new();
+        let tenant = "zz_bundleid";
+        let db = tenant_db(tenant);
+        let run = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        run(format!("CREATE DATABASE {db}")).await;
+        run(format!("CREATE TABLE {db}.evidence_bundles (id String, community_id String, file_path String DEFAULT '', sha256 String DEFAULT '', \
+             size_bytes UInt64 DEFAULT 0, auto_captured UInt8 DEFAULT 0, expires_at DateTime DEFAULT now() + INTERVAL 90 DAY, \
+             src_ip String, dst_ip String, severity String, alert_id String DEFAULT '', captured_at DateTime DEFAULT now()) \
+             ENGINE = ReplacingMergeTree ORDER BY id")).await;
+        run(format!("CREATE TABLE {db}.evidence_annotations (id String, bundle_id String, community_id String, author String, tag String, \
+             note String, created_at DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY (community_id, created_at)")).await;
+
+        let cid = "1:sessionsessionsessionsess=";
+        // first capture stores its bundle and returns its own id
+        let first = ch.save_evidence_bundle(tenant, "bundle-A", cid, "/x/A.zip", "sha", 10, 1, 90, "192.168.1.76", "208.95.112.1", "MEDIUM", cid).await.unwrap();
+        assert_eq!(first, "bundle-A");
+        // the same session is captured again (a later alert): the STORED id comes back, nothing is added
+        let second = ch.save_evidence_bundle(tenant, "bundle-B", cid, "/x/B.zip", "sha", 10, 1, 90, "192.168.1.76", "208.95.112.1", "MEDIUM", cid).await.unwrap();
+        assert_eq!(second, "bundle-A", "the caller must use the bundle that exists, and drop its own new file");
+        let n: u64 = ch.client.query(&format!("SELECT count() FROM {db}.evidence_bundles WHERE community_id = '{cid}'")).fetch_one().await.unwrap();
+        assert_eq!(n, 1);
+
+        // the analysis is saved against the stored id: the card has its severity, IPs and a working bundle link
+        ch.add_evidence_annotation(tenant, &second, cid, "ARIA-AI", "analysis text", "ai_analysis").await.unwrap();
+        // an analysis written the OLD way (against the id that was never stored) still resolves by session
+        let orphan_cid = "1:orphanorphanorphanorphan=";
+        ch.save_evidence_bundle(tenant, "bundle-C", orphan_cid, "/x/C.zip", "sha", 10, 1, 90, "10.0.0.5", "203.0.113.5", "CRITICAL", orphan_cid).await.unwrap();
+        ch.add_evidence_annotation(tenant, "never-stored-id", orphan_cid, "ARIA-AI", "old style analysis", "ai_analysis").await.unwrap();
+        // a session that has no bundle at all: no invented link
+        ch.add_evidence_annotation(tenant, "ghost", "1:nobundlenobundlenobundle=", "ARIA-AI", "no bundle", "ai_analysis").await.unwrap();
+
+        let rows = ch.get_ai_annotations_page(tenant, &[], "", "", 0, 50, 0).await.unwrap();
+        let by = |c: &str| rows.iter().find(|r| r["community_id"] == c).unwrap().clone();
+        let a = by(cid);
+        assert_eq!((a["severity"].as_str(), a["src_ip"].as_str(), a["dst_ip"].as_str(), a["bundle_id"].as_str()),
+                   (Some("MEDIUM"), Some("192.168.1.76"), Some("208.95.112.1"), Some("bundle-A")));
+        let o = by(orphan_cid);
+        assert_eq!((o["severity"].as_str(), o["src_ip"].as_str(), o["bundle_id"].as_str()), (Some("CRITICAL"), Some("10.0.0.5"), Some("bundle-C")),
+            "an analysis pointing at a never-stored id is repaired by joining on the session");
+        let g = by("1:nobundlenobundlenobundle=");
+        assert_eq!((g["severity"].as_str(), g["bundle_id"].as_str()), (Some(""), Some("")), "no bundle, no link");
         let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }
 }

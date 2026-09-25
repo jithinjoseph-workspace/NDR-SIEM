@@ -1054,14 +1054,19 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                     let size = zip_bytes.len() as u64;
 
                     if tokio::fs::write(&file_path, &zip_bytes).await.is_ok() {
-                        let _ = ch.save_evidence_bundle(
+                        let stored = ch.save_evidence_bundle(
                             &tenant, &bundle_id, &cid,
                             &file_path, &sha256, size,
                             1, // auto_captured
                             90, // expires in 90 days
                             &src_ip_str, &dst_ip_str, &severity_str,
                             &cid, // alert_id = community_id (natural cross-reference key)
-                        ).await;
+                        ).await.unwrap_or_else(|_| bundle_id.clone());
+                        if stored != bundle_id {
+                            // this session already had a bundle: the file just written is not referenced
+                            let _ = tokio::fs::remove_file(&file_path).await;
+                        }
+                        let bundle_id = stored;
                         let _ = ch.log_evidence_action(
                             &tenant, &cid, &bundle_id,
                             "auto_captured", "auto",
@@ -8397,12 +8402,15 @@ pub async fn trigger_evidence_capture(
                 let file_path = format!("{}/{}.zip", dir, bundle_id);
                 let size      = zip_bytes.len() as u64;
                 if tokio::fs::write(&file_path, &zip_bytes).await.is_ok() {
-                    let _ = ch.save_evidence_bundle(
+                    let stored = ch.save_evidence_bundle(
                         &tenant, &bundle_id, &cid,
                         &file_path, &bundle_sha256, size,
                         0, // manual capture (not auto)
                         90, &src_ip, &dst_ip, &severity, &cid,
-                    ).await;
+                    ).await.unwrap_or_else(|_| bundle_id.clone());
+                    if stored != bundle_id {
+                        let _ = tokio::fs::remove_file(&file_path).await;
+                    }
                 }
                 tracing::info!("Manual collect-pcap triggered bundle {} for cid {}", bundle_id, cid);
 
