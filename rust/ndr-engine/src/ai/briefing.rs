@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 /// Score below which an alert is treated as chatter when ranking hosts and rules.
 pub const MEANINGFUL_SCORE: u32 = 40;
-const CACHE_SECS: u64 = 600;
+const CACHE_SECS: u64 = 180;
 const FORCE_MIN_AGE_SECS: u64 = 60;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -234,7 +234,7 @@ pub async fn ask(providers: &[AiProvider], f: &Facts) -> String {
     generate_with_providers(providers, SYSTEM_PROMPT, &user_prompt(f)).await
 }
 
-// ── Cache: one briefing per tenant / scope / window for 10 minutes ───────────
+// ── Cache: one briefing per tenant / scope / window for 3 minutes (per engine) ───────────
 
 type Cache = Mutex<HashMap<String, (Instant, Briefing)>>;
 
