@@ -288,6 +288,21 @@ pub async fn get_predictions(
     tenant_id: &str,
     limit: u32,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
+    get_predictions_page(ch, tenant_id, limit, 0).await
+}
+
+pub async fn count_predictions(ch: &crate::storage::ClickhouseStorage, tenant_id: &str) -> u64 {
+    let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
+    ch.client.query(&format!("SELECT count() FROM {db}.threat_predictions"))
+        .fetch_one::<u64>().await.unwrap_or(0)
+}
+
+pub async fn get_predictions_page(
+    ch: &crate::storage::ClickhouseStorage,
+    tenant_id: &str,
+    limit: u32,
+    offset: u32,
+) -> anyhow::Result<Vec<serde_json::Value>> {
     let db = crate::storage::clickhouse::tenant_db_pub(tenant_id);
     let q = format!(
         "SELECT attack_type, probability, confidence, trend, trend_delta, \
@@ -295,10 +310,11 @@ pub async fn get_predictions(
                 explanation, recommendations, aria_briefing, alert_level, \
                 toString(predicted_at) as predicted_at
          FROM {db}.threat_predictions
-         ORDER BY predicted_at DESC
-         LIMIT {limit}",
+         ORDER BY predicted_at DESC, attack_type
+         LIMIT {limit} OFFSET {offset}",
         db = db,
         limit = limit,
+        offset = offset,
     );
 
     let rows = ch.client.query(&q).fetch_all::<PredictionRow>().await?;

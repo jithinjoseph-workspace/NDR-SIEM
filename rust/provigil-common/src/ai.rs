@@ -62,7 +62,12 @@ pub async fn generate_simple(ch: &Client, use_case: &str, system: &str, prompt: 
         warn!("ai_providers: no providers configured for use_case={use_case} — add one in Settings > AI Configuration");
         return String::new();
     }
-    for p in &providers {
+    generate_with_providers(&providers, system, prompt).await
+}
+
+/// Same as `generate_simple` for a provider list you already have (priority order, first non-empty answer wins).
+pub async fn generate_with_providers(providers: &[AiProvider], system: &str, prompt: &str) -> String {
+    for p in providers {
         if p.api_key.is_empty() { continue; }
         let result = call_simple(p, system, prompt).await;
         if !result.is_empty() { return result; }

@@ -66,6 +66,12 @@ pub fn host_history_text(host: &str, matches: u64, peers: &[String]) -> String {
     )
 }
 
+/// A community ID ("1:" + base64) named in a chat message, e.g. when the analyst asks about one session.
+pub fn community_id_in(text: &str) -> Option<String> {
+    let re = regex::Regex::new(r"\b1:[A-Za-z0-9+/]{20,}={0,2}").unwrap();
+    re.find(text).map(|m| m.as_str().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +113,14 @@ mod tests {
         assert!(t.contains("3 alert(s)") && t.contains("1.2.3.4"), "{t}");
         assert!(!t.to_lowercase().contains("treat this host as compromised"), "{t}");
         assert!(t.contains("not proof"), "{t}");
+    }
+
+    #[test]
+    fn a_community_id_is_found_in_a_question() {
+        let cid = "1:9Rz1A0f/82grK2YyQ5xLwEd7hUs=";
+        assert_eq!(community_id_in(&format!("Explain session {cid} please")).as_deref(), Some(cid));
+        assert_eq!(community_id_in("what happened at 1:30 pm? host 10.0.0.1:443"), None, "times and ports are not community ids");
+        assert_eq!(community_id_in(""), None);
     }
 
     // With the real GeoLite2 files shipped in data/ (run from the crate directory):

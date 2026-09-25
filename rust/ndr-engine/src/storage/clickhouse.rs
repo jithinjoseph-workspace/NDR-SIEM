@@ -314,6 +314,11 @@ fn tenant_db(tenant_id: &str) -> String {
     }
 }
 
+/// " AND sensor_id IN (...)" for a sensor-scoped user, "" for an unscoped one.
+pub fn sensor_filter_pub(sensor_ids: &[String]) -> String {
+    ClickhouseStorage::sensor_filter(sensor_ids)
+}
+
 pub fn tenant_db_pub(tenant_id: &str) -> String {
     tenant_db(tenant_id)
 }
@@ -4893,6 +4898,24 @@ pub async fn clear_sensor_command(
         &self,
         tenant_id: &str,
     ) -> anyhow::Result<Vec<serde_json::Value>> {
+        self.list_ai_suppressions_page(tenant_id, 100, 0).await
+    }
+
+    /// (all rules, active rules)
+    pub async fn count_ai_suppressions(&self, tenant_id: &str) -> (u64, u64) {
+        let db = tenant_db(tenant_id);
+        self.client.query(&format!(
+            "SELECT count(), countIf(active = 1) FROM {}.ai_suppressions FINAL WHERE tenant_id = '{}'",
+            db, sql_escape(tenant_id)
+        )).fetch_one::<(u64, u64)>().await.unwrap_or((0, 0))
+    }
+
+    pub async fn list_ai_suppressions_page(
+        &self,
+        tenant_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
         let db = tenant_db(tenant_id);
         #[derive(clickhouse::Row, serde::Deserialize)]
         struct Row {
@@ -4902,15 +4925,15 @@ pub async fn clear_sensor_command(
             ai_reason: String, ai_confidence: u8,
             active: u8, created_at: String,
         }
-        let rows = self.client.query(&format!(
+        let rows = if limit == 0 { Vec::new() } else { self.client.query(&format!(
             "SELECT id, signature_id as sig_id, signature_name as sig_name, \
              suppress_type, suppress_ip, src_ip, dst_ip, \
              ai_reason, ai_confidence, active, toString(created_at) as created_at \
              FROM {}.ai_suppressions FINAL \
              WHERE tenant_id = '{}' \
-             ORDER BY created_at DESC LIMIT 100",
-            db, sql_escape(tenant_id)
-        )).fetch_all::<Row>().await.unwrap_or_default();
+             ORDER BY created_at DESC, id LIMIT {} OFFSET {}",
+            db, sql_escape(tenant_id), limit, offset
+        )).fetch_all::<Row>().await.unwrap_or_default() };
         Ok(rows.iter().map(|r| json!({
             "id": r.id, "signature_id": r.sig_id, "signature_name": r.sig_name,
             "suppress_type": r.suppress_type, "suppress_ip": r.suppress_ip,
@@ -5820,19 +5843,61 @@ pub async fn get_all_ai_annotations(
     tenant_id: &str,
     sensor_ids: &[String],
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let db = tenant_db(tenant_id);
-    let sensor_cid_filter = if sensor_ids.is_empty() {
+    self.get_ai_annotations_page(tenant_id, sensor_ids, "", "", 0, 50, 0).await
+}
+
+fn ai_sensor_cid_filter(db: &str, sensor_ids: &[String]) -> String {
+    if sensor_ids.is_empty() {
         String::new()
     } else {
         let sf = Self::sensor_filter(sensor_ids);
         format!(" AND ea.community_id IN (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL WHERE 1=1{sf})", db = db, sf = sf)
-    };
-    // One row per community_id — most recent comprehensive analysis
-    let rows = self.client.query(&format!(
+    }
+}
+
+/// One row per community_id (the newest AI analysis), then filtered, newest first, one page.
+/// `severity` and `q` are optional filters ("" = none); `q` matches the analysis text, IPs and community id.
+/// `hours` > 0 keeps only analyses from the last N hours.
+pub fn ai_annotations_query(db: &str, scf: &str, severity: &str, q: &str, hours: u32, limit: u32, offset: u32) -> String {
+    format!(
+        "SELECT id, bundle_id, community_id, analysis, created_at, severity, src_ip, dst_ip FROM ({inner}) {w} \
+         ORDER BY created_at DESC, id LIMIT {limit} OFFSET {offset}",
+        inner = Self::ai_annotations_grouped(db, scf), w = Self::ai_annotations_where(severity, q, hours),
+        limit = limit, offset = offset
+    )
+}
+
+/// How many analyses match, per severity (for totals and the summary cards).
+pub fn ai_annotations_count_query(db: &str, scf: &str, q: &str, hours: u32) -> String {
+    format!(
+        "SELECT severity, count() FROM ({inner}) {w} GROUP BY severity",
+        inner = Self::ai_annotations_grouped(db, scf), w = Self::ai_annotations_where("", q, hours)
+    )
+}
+
+fn ai_annotations_where(severity: &str, q: &str, hours: u32) -> String {
+    let mut conds: Vec<String> = Vec::new();
+    if !severity.is_empty() {
+        conds.push(format!("upper(severity) = '{}'", sql_escape(&severity.to_uppercase())));
+    }
+    if hours > 0 {
+        conds.push(format!("created_at >= toString(now() - INTERVAL {} HOUR)", hours));
+    }
+    if !q.is_empty() {
+        let e = sql_escape(q);
+        conds.push(format!(
+            "(positionCaseInsensitive(analysis, '{e}') > 0 OR positionCaseInsensitive(src_ip, '{e}') > 0 \
+              OR positionCaseInsensitive(dst_ip, '{e}') > 0 OR positionCaseInsensitive(community_id, '{e}') > 0)", e = e));
+    }
+    if conds.is_empty() { String::new() } else { format!("WHERE {}", conds.join(" AND ")) }
+}
+
+fn ai_annotations_grouped(db: &str, scf: &str) -> String {
+    format!(
         "SELECT
              argMax(ea.id,         ea.created_at) as id,
              argMax(ea.bundle_id,  ea.created_at) as bundle_id,
-             ea.community_id,
+             ea.community_id as community_id,
              argMax(ea.note,       ea.created_at) as analysis,
              toString(max(ea.created_at))          as created_at,
              argMax(if(eb.severity != '' AND eb.severity != 'UNKNOWN', eb.severity, ''),
@@ -5844,11 +5909,39 @@ pub async fn get_all_ai_annotations(
          FROM {db}.evidence_annotations ea
          LEFT JOIN {db}.evidence_bundles eb ON ea.bundle_id = eb.id
          WHERE ea.tag = 'ai_analysis'{scf}
-         GROUP BY ea.community_id
-         ORDER BY max(ea.created_at) DESC
-         LIMIT 50",
-        db = db, scf = sensor_cid_filter
-    )).fetch_all::<(String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
+         GROUP BY ea.community_id",
+        db = db, scf = scf
+    )
+}
+
+/// (severity, count) for every analysis matching `q` — the caller sums them for a total.
+pub async fn count_ai_annotations(
+    &self,
+    tenant_id: &str,
+    sensor_ids: &[String],
+    q: &str,
+    hours: u32,
+) -> Vec<(String, u64)> {
+    let db = tenant_db(tenant_id);
+    let scf = Self::ai_sensor_cid_filter(&db, sensor_ids);
+    self.client.query(&Self::ai_annotations_count_query(&db, &scf, q, hours))
+        .fetch_all::<(String, u64)>().await.unwrap_or_default()
+}
+
+pub async fn get_ai_annotations_page(
+    &self,
+    tenant_id: &str,
+    sensor_ids: &[String],
+    severity: &str,
+    q: &str,
+    hours: u32,
+    limit: u32,
+    offset: u32,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let db = tenant_db(tenant_id);
+    let scf = Self::ai_sensor_cid_filter(&db, sensor_ids);
+    let rows = self.client.query(&Self::ai_annotations_query(&db, &scf, severity, q, hours, limit, offset))
+        .fetch_all::<(String,String,String,String,String,String,String,String)>().await.unwrap_or_default();
 
     // Bulk asset lookup for all unique IPs that appear in these analyses
     let unique_ips: Vec<String> = rows.iter()
@@ -6157,7 +6250,7 @@ pub async fn get_latest_critical_hit_for_aria(
         timestamp:    String,
     }
     let rows = self.client.query(&format!(
-        "SELECT community_id, src_ip, dst_ip, arrayElement(sigma_hits, 1) as rule_name, score,
+        "SELECT community_id, src_ip, dst_ip, arrayElement(sigma_hits, 1) as rule_name, toFloat64(score) AS score,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
          FROM {db}.ndr_hits
          WHERE severity = 'CRITICAL'{sf}
@@ -6290,7 +6383,7 @@ pub async fn fetch_aria_context(
         timestamp:    String,
     }
     if let Ok(hits) = self.client.query(&format!(
-        "SELECT community_id, src_ip, dst_ip, severity, score,
+        "SELECT community_id, src_ip, dst_ip, severity, toFloat64(score) AS score,
          arrayStringConcat(tags, ', ') as tags,
          arrayElement(sigma_hits, 1) as rule_name,
          formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
@@ -6318,7 +6411,7 @@ pub async fn fetch_aria_context(
     if let Some(cap) = ip_re.captures(&msg) {
         let ip = cap[1].to_string();
         if let Ok(ip_hits) = self.client.query(&format!(
-            "SELECT community_id, src_ip, dst_ip, severity, score,
+            "SELECT community_id, src_ip, dst_ip, severity, toFloat64(score) AS score,
              arrayStringConcat(tags, ', ') as tags,
              arrayElement(sigma_hits, 1) as rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
@@ -6345,7 +6438,7 @@ pub async fn fetch_aria_context(
     // ── Lateral movement ────────────────────────────────────────────────────
     if msg.contains("lateral") || msg.contains("spread") || msg.contains("movement") {
         if let Ok(lat) = self.client.query(&format!(
-            "SELECT community_id, src_ip, dst_ip, severity, score,
+            "SELECT community_id, src_ip, dst_ip, severity, toFloat64(score) AS score,
              arrayStringConcat(tags, ', ') as tags,
              arrayElement(sigma_hits, 1) as rule_name,
              formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
@@ -6419,10 +6512,10 @@ pub async fn fetch_aria_context(
     if msg.contains("critical") || msg.contains("high") || msg.contains("severe") {
         let sev = if msg.contains("critical") { "CRITICAL" } else { "HIGH" };
         if let Ok(sev_hits) = self.client.query(&format!(
-            "SELECT community_id, src_ip, dst_ip, severity, score,
+            "SELECT community_id, src_ip, dst_ip, severity, toFloat64(score) AS score,
              arrayStringConcat(tags, ', ') as tags,
              arrayElement(sigma_hits, 1) as rule_name,
-             formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as timestamp
+             formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') as ts
              FROM {db}.ndr_hits
              WHERE severity='{sev}' AND timestamp >= now() - INTERVAL 24 HOUR{sf}
              ORDER BY timestamp DESC LIMIT 10",
@@ -6442,7 +6535,68 @@ pub async fn fetch_aria_context(
         }
     }
 
+    // ── One session: when the message names a community id ──────────────────
+    if let Some(cid) = crate::ai::context::community_id_in(user_message) {
+        ctx.push_str(&self.session_context(&db, &sf, &cid).await);
+    }
+
     ctx
+}
+
+/// Everything held about one session (its alerts, AI analysis, AI verdict and case), for a chat
+/// question about it. Sensor-scoped users only get sessions their sensors saw.
+async fn session_context(&self, db: &str, sf: &str, cid: &str) -> String {
+    let c = sql_escape(cid);
+    let mut out = format!("=== SESSION {cid} ===\n");
+    let visible = self.client.query(&format!(
+        "SELECT count() FROM {db}.ndr_hits WHERE community_id = '{c}'{sf}"
+    )).fetch_one::<u64>().await.unwrap_or(0);
+    // A sensor-scoped user may only see sessions their sensors alerted on. An unscoped user may still
+    // see the stored analysis / verdict / case after the raw alerts have aged out.
+    if visible == 0 && !sf.is_empty() {
+        out.push_str("No alerts for this session ID in the sensors you can see.\n\n");
+        return out;
+    }
+    if visible == 0 {
+        out.push_str("The raw alerts for this session are no longer stored; only what was kept is shown.\n");
+    }
+    if let Ok(hits) = self.client.query(&format!(
+        "SELECT src_ip, dst_ip, severity, toUInt32(score), arrayStringConcat(tags, ', '), \
+         arrayElement(sigma_hits, 1), formatDateTime(toDateTime(timestamp), '%Y-%m-%dT%H:%i:%SZ') \
+         FROM {db}.ndr_hits WHERE community_id = '{c}'{sf} ORDER BY timestamp DESC LIMIT 10"
+    )).fetch_all::<(String, String, String, u32, String, String, String)>().await {
+        for h in &hits {
+            out.push_str(&format!("[{}] {} {} -> {} score={} tags={} rule={}\n", h.6, h.2, h.0, h.1, h.3, h.4, h.5));
+        }
+    }
+    let note: Option<String> = self.client.query(&format!(
+        "SELECT note FROM {db}.evidence_annotations WHERE community_id = '{c}' AND tag = 'ai_analysis' \
+         ORDER BY created_at DESC LIMIT 1"
+    )).fetch_one::<String>().await.ok();
+    if let Some(n) = note {
+        out.push_str(&format!("AI analysis: {}\n", n.chars().take(1200).collect::<String>()));
+    }
+    let verdict: Option<String> = self.client.query(&format!(
+        "SELECT note FROM {db}.evidence_annotations WHERE community_id = '{c}' AND tag = 'aria_verdict' \
+         ORDER BY created_at DESC LIMIT 1"
+    )).fetch_one::<String>().await.ok();
+    if let Some(v) = verdict.and_then(|v| serde_json::from_str::<serde_json::Value>(&v).ok()) {
+        out.push_str(&format!(
+            "AI verdict: {} (confidence {}%). Reasoning: {}\n",
+            v["verdict"].as_str().unwrap_or("?"), v["confidence"], v["reasoning"].as_str().unwrap_or("")
+        ));
+    }
+    if let Ok(cases) = self.client.query(&format!(
+        "SELECT case_number, title, status, severity FROM {db}.soar_cases FINAL \
+         WHERE community_id = '{c}' LIMIT 3"
+    )).fetch_all::<(String, String, String, String)>().await {
+        for k in &cases { out.push_str(&format!("Case {}: {} [{}, {}]\n", k.0, k.1, k.2, k.3)); }
+    }
+    if visible == 0 && out.lines().count() == 2 {
+        out.push_str("Nothing is stored for this session ID.\n");
+    }
+    out.push('\n');
+    out
 }
 
 /// Write a permanent IOC hit record — immutable, never updated or deleted.
@@ -8114,6 +8268,182 @@ mod tenant_column_migration_tests {
         assert_eq!(got, "C-1/P1");
         ch.client.query(&format!("SELECT source FROM {db}.sigma_rules")).fetch_all::<String>().await
             .expect("sigma_rules.source exists after the migration");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+    }
+}
+
+#[cfg(test)]
+mod ai_activity_paging_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway database that is dropped at the end):
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine ai_activity_paging -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn analyses_come_back_a_page_at_a_time_with_real_totals_and_filters() {
+        let ch = ClickhouseStorage::new();
+        let db = "ndr_zz_pagetest";
+        let run = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        run(format!("CREATE DATABASE {db}")).await;
+        run(format!("CREATE TABLE {db}.evidence_annotations (id String, bundle_id String, community_id String, tag String, \
+             note String, created_at DateTime) ENGINE = MergeTree ORDER BY (community_id, created_at)")).await;
+        run(format!("CREATE TABLE {db}.evidence_bundles (id String, severity String, src_ip String, dst_ip String) \
+             ENGINE = ReplacingMergeTree ORDER BY id")).await;
+
+        // 45 sessions: 5 CRITICAL, 10 HIGH, 30 MEDIUM; session 7 is analysed twice (must count once)
+        for i in 0..45u32 {
+            let sev = if i < 5 { "CRITICAL" } else if i < 15 { "HIGH" } else { "MEDIUM" };
+            run(format!("INSERT INTO {db}.evidence_bundles VALUES ('b{i}','{sev}','10.0.0.{i}','203.0.113.{i}')")).await;
+            run(format!("INSERT INTO {db}.evidence_annotations VALUES ('a{i}','b{i}','1:cid{i}','ai_analysis','note about host {i}', now() - {i})")).await;
+        }
+        run(format!("INSERT INTO {db}.evidence_annotations VALUES ('a7b','b7','1:cid7','ai_analysis','note about host 7 (newer)', now() + 1)")).await;
+
+        type Row = (String, String, String, String, String, String, String, String);
+        let page = |sev: &'static str, q: &'static str, limit: u32, offset: u32| {
+            let sql = ClickhouseStorage::ai_annotations_query(db, "", sev, q, 0, limit, offset);
+            let c = ch.client.clone();
+            async move { c.query(&sql).fetch_all::<Row>().await.unwrap() }
+        };
+
+        let p0 = page("", "", 20, 0).await;
+        let p1 = page("", "", 20, 20).await;
+        let p2 = page("", "", 20, 40).await;
+        assert_eq!((p0.len(), p1.len(), p2.len()), (20, 20, 5), "45 sessions = pages of 20, 20, 5");
+        let mut ids: Vec<String> = p0.iter().chain(&p1).chain(&p2).map(|r| r.2.clone()).collect();
+        let n = ids.len();
+        ids.sort(); ids.dedup();
+        assert_eq!(ids.len(), n, "no session appears on two pages");
+        assert_eq!(p0[0].2, "1:cid7", "newest analysis first (the re-analysed session)");
+        assert!(p0[0].3.contains("newer"), "one row per session: the newest analysis wins");
+
+        // totals per severity, without loading the rows
+        let counts: Vec<(String, u64)> = ch.client.query(&ClickhouseStorage::ai_annotations_count_query(db, "", "", 0)).fetch_all().await.unwrap();
+        let get = |s: &str| counts.iter().find(|c| c.0 == s).map(|c| c.1).unwrap_or(0);
+        assert_eq!((get("CRITICAL"), get("HIGH"), get("MEDIUM")), (5, 10, 30));
+
+        // server-side filters
+        assert_eq!(page("HIGH", "", 20, 0).await.len(), 10);
+        assert_eq!(page("high", "", 5, 5).await.len(), 5, "severity is case-insensitive and pages too");
+        let by_ip = page("", "10.0.0.33", 20, 0).await;
+        assert_eq!(by_ip.len(), 1);
+        assert_eq!(by_ip[0].2, "1:cid33");
+        assert_eq!(page("", "203.0.113.4", 20, 0).await.len(), 6, "substring match: sessions 4 and 40-44");
+        let q_counts: Vec<(String, u64)> = ch.client.query(&ClickhouseStorage::ai_annotations_count_query(db, "", "host 3", 0)).fetch_all().await.unwrap();
+        assert_eq!(q_counts.iter().map(|c| c.1).sum::<u64>(), 11, "'host 3' matches 3 and 30-39");
+        assert!(page("", "x'; DROP TABLE evidence_bundles; --", 20, 0).await.is_empty(), "q is escaped");
+
+        // time range: a session analysed 10 days ago drops out of "last 24 hours" but not out of "all"
+        run(format!("INSERT INTO {db}.evidence_bundles VALUES ('b99','LOW','10.0.0.99','203.0.113.99')")).await;
+        run(format!("INSERT INTO {db}.evidence_annotations VALUES ('a99','b99','1:cid99','ai_analysis','an old one', now() - INTERVAL 10 DAY)")).await;
+        let in_range = |hours: u32| {
+            let sql = ClickhouseStorage::ai_annotations_query(db, "", "", "", hours, 100, 0);
+            let c = ch.client.clone();
+            async move { c.query(&sql).fetch_all::<Row>().await.unwrap().len() }
+        };
+        assert_eq!(in_range(0).await, 46, "no range = everything");
+        assert_eq!(in_range(24).await, 45, "last 24 h leaves out the 10-day-old analysis");
+        assert_eq!(in_range(24 * 30).await, 46, "last 30 days includes it");
+        let ranged: Vec<(String, u64)> = ch.client.query(&ClickhouseStorage::ai_annotations_count_query(db, "", "", 24)).fetch_all().await.unwrap();
+        assert_eq!(ranged.iter().map(|c| c.1).sum::<u64>(), 45, "the counts follow the same range");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+    }
+}
+
+#[cfg(test)]
+mod aria_session_context_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway tenant database that is dropped at the end):
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine aria_session_context -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn a_chat_question_naming_a_session_gets_that_sessions_real_records_and_respects_sensor_scope() {
+        let ch = ClickhouseStorage::new();
+        let tenant = "zz_sessiontest";
+        let db = tenant_db(tenant);
+        let run = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        run(format!("CREATE DATABASE {db}")).await;
+        run(format!("CREATE TABLE {db}.ndr_hits (community_id String, src_ip String, dst_ip String, severity String, score Float32, \
+             tags Array(String), sigma_hits Array(String), sensor_id String, timestamp DateTime) ENGINE = MergeTree ORDER BY timestamp")).await;
+        run(format!("CREATE TABLE {db}.evidence_annotations (id String, bundle_id String, community_id String, tag String, note String, created_at DateTime) \
+             ENGINE = MergeTree ORDER BY created_at")).await;
+        run(format!("CREATE TABLE {db}.soar_cases (id String, case_number String, title String, status String, severity String, community_id String, \
+             updated_at DateTime DEFAULT now()) ENGINE = ReplacingMergeTree(updated_at) ORDER BY id")).await;
+
+        let mine = "1:9Rz1A0f/82grK2YyQ5xLwEd7hUs=";
+        let theirs = "1:zzzzzzzzzzzzzzzzzzzzzzzzzzz=";
+        run(format!("INSERT INTO {db}.ndr_hits VALUES ('{mine}','192.168.1.76','208.95.112.1','MEDIUM',55,['ids-alert'],['et-dns-odd'],'s1',now())")).await;
+        run(format!("INSERT INTO {db}.ndr_hits VALUES ('{theirs}','10.9.9.9','203.0.113.9','HIGH',80,[],['secret-rule'],'s2',now())")).await;
+        for cid in [mine, theirs] {
+            run(format!("INSERT INTO {db}.evidence_annotations VALUES ('a','b','{cid}','ai_analysis','THREAT: routine lookup for {cid}',now())")).await;
+        }
+        run(format!("INSERT INTO {db}.evidence_annotations VALUES ('v','b','{mine}','aria_verdict','{{\"verdict\":\"FALSE_POSITIVE\",\"confidence\":82,\"reasoning\":\"ISP resolver lookup\"}}',now())")).await;
+        run(format!("INSERT INTO {db}.soar_cases (id, case_number, title, status, severity, community_id) VALUES ('k','INC-1','DNS check','New','MEDIUM','{mine}')")).await;
+
+        // unscoped user, question names the session
+        let ctx = ch.fetch_aria_context(tenant, &format!("why was {mine} flagged?"), &[]).await;
+        assert!(ctx.contains(&format!("=== SESSION {mine} ===")), "{ctx}");
+        assert!(ctx.contains("et-dns-odd") && ctx.contains("192.168.1.76 -> 208.95.112.1"), "its alerts");
+        assert!(ctx.contains("AI analysis: THREAT: routine lookup"), "its AI analysis");
+        assert!(ctx.contains("AI verdict: FALSE_POSITIVE (confidence 82%). Reasoning: ISP resolver lookup"), "its stored verdict");
+        assert!(ctx.contains("Case INC-1: DNS check [New, MEDIUM]"), "its case");
+
+        // a user scoped to sensor s1 asking about a session only s2 saw gets nothing about it
+        let scoped = ch.fetch_aria_context(tenant, &format!("explain {theirs}"), &["s1".to_string()]).await;
+        assert!(scoped.contains("No alerts for this session ID in the sensors you can see."), "{scoped}");
+        assert!(!scoped.contains("secret-rule") && !scoped.contains("203.0.113.9") && !scoped.contains("routine lookup"),
+            "nothing about the other sensor's session may leak into the context: {scoped}");
+
+        // raw alerts aged out but the analysis was kept: an unscoped user still gets it, a scoped one does not
+        let aged = "1:agedoutagedoutagedoutagedout=";
+        run(format!("INSERT INTO {db}.evidence_annotations VALUES ('z','b','{aged}','ai_analysis','THREAT: kept analysis text',now())")).await;
+        let kept = ch.fetch_aria_context(tenant, &format!("what was {aged}?"), &[]).await;
+        assert!(kept.contains("no longer stored") && kept.contains("AI analysis: THREAT: kept analysis text"), "{kept}");
+        let hidden = ch.fetch_aria_context(tenant, &format!("what was {aged}?"), &["s1".to_string()]).await;
+        assert!(hidden.contains("No alerts for this session ID in the sensors you can see.") && !hidden.contains("kept analysis text"), "{hidden}");
+        let nothing = ch.fetch_aria_context(tenant, "what was 1:neverneverneverneverneverx=?", &[]).await;
+        assert!(nothing.contains("Nothing is stored for this session ID."), "{nothing}");
+
+        // no community id in the question: no session block at all
+        assert!(!ch.fetch_aria_context(tenant, "what is going on?", &[]).await.contains("=== SESSION"));
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+    }
+}
+
+#[cfg(test)]
+mod aria_real_schema_tests {
+    use super::*;
+
+    // The alert queries behind the ARIA chat, the ARIA status bar and the investigator must work on the
+    // REAL ndr_hits column types (score is Float32). They used to read it as f64, which failed silently
+    // and left the AI with no alerts at all.
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine aria_real_schema -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn aria_alert_context_reads_a_float32_score_column() {
+        let ch = ClickhouseStorage::new();
+        let tenant = "zz_ariaschema";
+        let db = tenant_db(tenant);
+        let run = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        run(format!("CREATE DATABASE {db}")).await;
+        run(format!("CREATE TABLE {db}.ndr_hits (community_id String, src_ip String, dst_ip String, severity LowCardinality(String), score Float32, \
+             tags Array(String), sigma_hits Array(String), sensor_id String, timestamp DateTime) ENGINE = MergeTree ORDER BY timestamp")).await;
+        for i in 0..3 {
+            run(format!("INSERT INTO {db}.ndr_hits VALUES ('c{i}','10.0.0.{i}','203.0.113.{i}','CRITICAL',{},['ids-alert'],['rule-{i}'],'s1',now() - {i})", 90 + i)).await;
+        }
+        let ctx = ch.fetch_aria_context(tenant, "show critical alerts for 10.0.0.1", &[]).await;
+        assert!(ctx.contains("=== RECENT ALERTS"), "recent alerts must be present: {ctx}");
+        assert_eq!(ctx.matches("rule=rule-").count() >= 3, true, "all three alerts are listed: {ctx}");
+        assert!(ctx.contains("score=91") && ctx.contains("=== ALERTS INVOLVING IP 10.0.0.1 ==="), "{ctx}");
+        assert!(ctx.contains("=== CRITICAL ALERTS (last 24h) ==="), "{ctx}");
+        let latest = ch.get_latest_critical_hit_for_aria(tenant, &[]).await.unwrap();
+        assert_eq!(latest.unwrap()["community_id"], "c0", "the status bar's latest critical alert loads too");
         let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }
 }

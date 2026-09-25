@@ -9666,30 +9666,78 @@ pub async fn create_manual_suppression(
 }
 
 /// GET /api/ai-activity
-/// Returns AI suppression decisions and AI evidence analysis annotations.
+/// AI suppression decisions and AI evidence analyses, one page at a time.
+/// Query: a_limit (default 50, max 200), a_offset, s_limit (default 100, max 200; 0 = skip),
+/// s_offset, severity, q, hours (only analyses from the last N hours). a_limit=0 skips the analyses and their counts. The reply carries the totals so the UI can show "20 of N".
 pub async fn get_ai_activity(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     let claims = match extract_claims(&headers) {
         Some(c) => c,
         None => return Json(json!({"error": "unauthorized"})),
     };
+    let num = |k: &str, default: u32, max: u32| -> u32 {
+        params.get(k).and_then(|v| v.parse::<u32>().ok()).unwrap_or(default).min(max)
+    };
+    let (a_limit, a_offset) = (num("a_limit", 50, 200), num("a_offset", 0, 1_000_000));
+    let (s_limit, s_offset) = (num("s_limit", 100, 200), num("s_offset", 0, 1_000_000));
+    let severity = params.get("severity").map(|s| s.trim().to_string()).unwrap_or_default();
+    let severity = if severity.eq_ignore_ascii_case("all") { String::new() } else { severity };
+    let q = params.get("q").map(|s| s.trim().chars().take(100).collect::<String>()).unwrap_or_default();
+    let hours = num("hours", 0, 24 * 365 * 5);
 
-    let suppressions = state.ch_storage
-        .list_ai_suppressions(&claims.tenant_id)
-        .await
-        .unwrap_or_default();
+    let (suppressions, analyses, by_sev, (supp_total, supp_active)) = tokio::join!(
+        state.ch_storage.list_ai_suppressions_page(&claims.tenant_id, s_limit, s_offset),
+        async {
+            if a_limit == 0 { Ok(Vec::new()) } else {
+                state.ch_storage.get_ai_annotations_page(&claims.tenant_id, &claims.sensor_ids, &severity, &q, hours, a_limit, a_offset).await
+            }
+        },
+        async {
+            if a_limit == 0 { Vec::new() } else { state.ch_storage.count_ai_annotations(&claims.tenant_id, &claims.sensor_ids, &q, hours).await }
+        },
+        state.ch_storage.count_ai_suppressions(&claims.tenant_id),
+    );
 
-    let analyses = state.ch_storage
-        .get_all_ai_annotations(&claims.tenant_id, &claims.sensor_ids)
-        .await
-        .unwrap_or_default();
+    let sev_count = |name: &str| -> u64 {
+        by_sev.iter().filter(|(s, _)| s.eq_ignore_ascii_case(name)).map(|(_, c)| *c).sum()
+    };
+    let all: u64 = by_sev.iter().map(|(_, c)| *c).sum();
+    let total = if severity.is_empty() { all } else { sev_count(&severity) };
 
     Json(json!({
-        "suppressions": suppressions,
-        "analyses": analyses
+        "suppressions": suppressions.unwrap_or_default(),
+        "analyses": analyses.unwrap_or_default(),
+        "analyses_total": total,
+        "analyses_by_severity": {
+            "total": all,
+            "critical": sev_count("CRITICAL"), "high": sev_count("HIGH"),
+            "medium": sev_count("MEDIUM"), "low": sev_count("LOW") + sev_count("INFO"),
+        },
+        "suppressions_total": supp_total,
+        "suppressions_active": supp_active,
     }))
+}
+
+/// GET /api/ai-activity/briefing?hours=24&refresh=1
+/// A short briefing built from this tenant's own alerts, cases and AI analyses (see ai::briefing).
+/// Always answers: with no AI provider (or AI switched off for the tenant) it returns the fact summary.
+pub async fn get_ai_briefing(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let hours = params.get("hours").and_then(|v| v.parse::<u32>().ok()).unwrap_or(24).clamp(1, 24 * 30);
+    let force = params.get("refresh").map(|v| v == "1").unwrap_or(false);
+    let ai_allowed = claims.role == "super_admin" || state.ch_storage.get_tenant_ai_enabled(&claims.tenant_id).await;
+    let b = crate::ai::briefing::briefing(&state.ch_storage, &claims.tenant_id, &claims.sensor_ids, hours, ai_allowed, force).await;
+    Json(json!(b))
 }
 
 /// PATCH /api/ai-suppressions/:id/deactivate
@@ -9739,17 +9787,21 @@ pub async fn get_ipam_subnets(
 
 // ── Threat Prediction Engine endpoints ───────────────────────────────────────
 
+/// GET /api/threat/predictions?limit=20&offset=0 (limit max 100); "total" is the number stored.
 pub async fn get_threat_predictions(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     let claims = match extract_claims(&headers) {
         Some(c) => c,
         None => return Json(json!({"error": "unauthorized"})),
     };
-    let limit = 20u32;
-    match crate::threat::get_predictions(&state.ch_storage, &claims.tenant_id, limit).await {
-        Ok(rows) => Json(json!({ "predictions": rows })),
+    let limit  = params.get("limit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(20).min(100);
+    let offset = params.get("offset").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0).min(1_000_000);
+    let total = crate::threat::count_predictions(&state.ch_storage, &claims.tenant_id).await;
+    match crate::threat::get_predictions_page(&state.ch_storage, &claims.tenant_id, limit, offset).await {
+        Ok(rows) => Json(json!({ "predictions": rows, "total": total })),
         Err(e)   => Json(json!({ "predictions": [], "error": e.to_string() })),
     }
 }
