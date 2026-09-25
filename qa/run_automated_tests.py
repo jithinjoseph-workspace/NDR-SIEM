@@ -1296,6 +1296,516 @@ def test_tc_135():
 
 
 
+def test_tc_136():
+    """Analyst - View SOAR Status"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/soar/status", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-136", "PASS", "Successfully retrieved SOAR status.")
+        else:
+            print_result("TC-136", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-136", "FAIL", str(e))
+
+def test_tc_137():
+    """Analyst - View SOAR Integrations"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/soar/integrations", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-137", "PASS", "Successfully retrieved SOAR integrations.")
+        else:
+            print_result("TC-137", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-137", "FAIL", str(e))
+
+def test_tc_138():
+    """Analyst - Create SOAR Case"""
+    try:
+        payload = {"title": "Suspicious Login"}
+        resp = requests.post(f"{BASE_URL}/api/soar/cases", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code in [200, 201]:
+            print_result("TC-138", "PASS", "Successfully created SOAR case.")
+        else:
+            print_result("TC-138", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-138", "FAIL", str(e))
+
+def test_tc_139(case_id="test-case-id"):
+    """Analyst - Update SOAR Case"""
+    try:
+        payload = {"description": "Updated investigation notes"}
+        resp = requests.put(f"{BASE_URL}/api/soar/cases/{case_id}", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-139", "PASS", "Successfully updated SOAR case.")
+        else:
+            print_result("TC-139", "FAIL", f"PUT failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-139", "FAIL", str(e))
+
+def test_tc_140(case_id="test-case-id"):
+    """Analyst - View SOAR Case Comments"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/soar/cases/{case_id}/comments", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-140", "PASS", "Successfully retrieved SOAR case comments.")
+        else:
+            print_result("TC-140", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-140", "FAIL", str(e))
+
+def test_tc_141(case_id="test-case-id"):
+    """Analyst - Add SOAR Case Comment"""
+    try:
+        payload = {"comment": "Investigating IP"}
+        resp = requests.post(f"{BASE_URL}/api/soar/cases/{case_id}/comments", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code in [200, 201]:
+            print_result("TC-141", "PASS", "Successfully added SOAR case comment.")
+        else:
+            print_result("TC-141", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-141", "FAIL", str(e))
+
+def test_tc_142(case_id="test-case-id"):
+    """Analyst - Update SOAR Case Status"""
+    try:
+        payload = {"status": "Closed"}
+        resp = requests.put(f"{BASE_URL}/api/soar/cases/{case_id}/status", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-142", "PASS", "Successfully updated SOAR case status.")
+        else:
+            print_result("TC-142", "FAIL", f"PUT failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-142", "FAIL", str(e))
+
+def test_tc_143():
+    """Analyst - View Native Playbooks"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/soar/native/playbooks", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-143", "PASS", "Successfully retrieved native playbooks.")
+        else:
+            print_result("TC-143", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-143", "FAIL", str(e))
+
+def test_tc_144():
+    """Analyst - Manually Block IP"""
+    try:
+        payload = {"src_ip": "1.1.1.1"}
+        resp = requests.post(f"{BASE_URL}/api/blocks/manual", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-144", "PASS", "Successfully added manual IP block.")
+        else:
+            print_result("TC-144", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-144", "FAIL", str(e))
+
+def test_tc_145(block_id="test-block-id"):
+    """Analyst - Revoke IP Block"""
+    try:
+        payload = {"id": block_id}
+        resp = requests.post(f"{BASE_URL}/api/blocks/revoke", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-145", "PASS", "Successfully revoked IP block.")
+        else:
+            print_result("TC-145", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-145", "FAIL", str(e))
+
+def test_tc_146():
+    """Analyst - Isolate Device"""
+    try:
+        payload = {"target_ip": "1.1.1.1"}
+        resp = requests.post(f"{BASE_URL}/api/isolate", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-146", "PASS", "Successfully isolated device.")
+        else:
+            print_result("TC-146", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-146", "FAIL", str(e))
+
+def test_tc_147(iso_id="test-iso-id"):
+    """Analyst - Unisolate Device"""
+    try:
+        payload = {"id": iso_id}
+        resp = requests.post(f"{BASE_URL}/api/unisolate", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-147", "PASS", "Successfully unisolated device.")
+        else:
+            print_result("TC-147", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-147", "FAIL", str(e))
+
+def test_tc_148():
+    """Analyst - View SIEM Dashboard"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/siem/dashboard", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-148", "PASS", "Successfully retrieved SIEM dashboard.")
+        else:
+            print_result("TC-148", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-148", "FAIL", str(e))
+
+def test_tc_149():
+    """Analyst - View Log Sources"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/siem/sources", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-149", "PASS", "Successfully retrieved log sources.")
+        else:
+            print_result("TC-149", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-149", "FAIL", str(e))
+
+def test_tc_150(rule_id="test-rule-id"):
+    """Analyst - Update SIEM Rule"""
+    try:
+        payload = {"enabled": False}
+        resp = requests.put(f"{BASE_URL}/api/siem/rules/{rule_id}", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-150", "PASS", "Successfully updated SIEM rule.")
+        else:
+            print_result("TC-150", "FAIL", f"PUT failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-150", "FAIL", str(e))
+
+
+def test_tc_151():
+    """Analyst - View Agent Status"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/agent-status", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-151", "PASS", "Successfully retrieved agent status.")
+        else:
+            print_result("TC-151", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-151", "FAIL", str(e))
+
+def test_tc_152():
+    """Analyst - View System Stats"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/stats", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-152", "PASS", "Successfully retrieved stats.")
+        else:
+            print_result("TC-152", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-152", "FAIL", str(e))
+
+def test_tc_153():
+    """Analyst - View Stats Timeline"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/stats/timeline", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-153", "PASS", "Successfully retrieved stats timeline.")
+        else:
+            print_result("TC-153", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-153", "FAIL", str(e))
+
+def test_tc_154():
+    """Analyst - View Top IPs"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/top-ips", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-154", "PASS", "Successfully retrieved top IPs.")
+        else:
+            print_result("TC-154", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-154", "FAIL", str(e))
+
+def test_tc_155():
+    """Analyst - View Protocols"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/protocols", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-155", "PASS", "Successfully retrieved protocols.")
+        else:
+            print_result("TC-155", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-155", "FAIL", str(e))
+
+def test_tc_156():
+    """Analyst - View Severity Stats"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/severity", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-156", "PASS", "Successfully retrieved severity stats.")
+        else:
+            print_result("TC-156", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-156", "FAIL", str(e))
+
+def test_tc_157():
+    """Analyst - View Hits"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/hits", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-157", "PASS", "Successfully retrieved hits.")
+        else:
+            print_result("TC-157", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-157", "FAIL", str(e))
+
+def test_tc_158():
+    """Analyst - Search Network Map"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/network-map/search?q=1.1.1.1", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-158", "PASS", "Successfully searched network map.")
+        else:
+            print_result("TC-158", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-158", "FAIL", str(e))
+
+def test_tc_159():
+    """Analyst - View Scale Status"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/scale-status", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-159", "PASS", "Successfully retrieved scale status.")
+        else:
+            print_result("TC-159", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-159", "FAIL", str(e))
+
+def test_tc_160():
+    """Analyst - View Rule Hit Counts"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/rules/hit-counts", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-160", "PASS", "Successfully retrieved rule hit counts.")
+        else:
+            print_result("TC-160", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-160", "FAIL", str(e))
+
+def test_tc_161():
+    """Analyst - View Threat Map"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/threat-map", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-161", "PASS", "Successfully retrieved threat map.")
+        else:
+            print_result("TC-161", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-161", "FAIL", str(e))
+
+def test_tc_162():
+    """Analyst - View Threat Intel Map"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/threat-intel-map", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-162", "PASS", "Successfully retrieved threat intel map.")
+        else:
+            print_result("TC-162", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-162", "FAIL", str(e))
+
+def test_tc_163():
+    """Analyst - Export Report"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/export", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-163", "PASS", "Successfully exported report.")
+        else:
+            print_result("TC-163", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-163", "FAIL", str(e))
+
+def test_tc_164():
+    """Analyst - Export Logs"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/export-logs", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-164", "PASS", "Successfully exported logs.")
+        else:
+            print_result("TC-164", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-164", "FAIL", str(e))
+
+def test_tc_165():
+    """Analyst - View Active Announcements"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/announcements/active", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-165", "PASS", "Successfully retrieved active announcements.")
+        else:
+            print_result("TC-165", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-165", "FAIL", str(e))
+
+
+def test_tc_166():
+    """Analyst - Update Gmail"""
+    try:
+        payload = {"gmail": "test@example.com"}
+        resp = requests.put(f"{BASE_URL}/api/auth/me/gmail", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-166", "PASS", "Successfully updated gmail.")
+        else:
+            print_result("TC-166", "FAIL", f"PUT failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-166", "FAIL", str(e))
+
+def test_tc_167():
+    """Analyst - Regenerate MFA Secret"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/auth/me/regenerate-secret", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-167", "PASS", "Successfully regenerated MFA secret.")
+        else:
+            print_result("TC-167", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-167", "FAIL", str(e))
+
+def test_tc_168():
+    """Analyst - View Announcements"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/announcements", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-168", "PASS", "Successfully retrieved announcements.")
+        else:
+            print_result("TC-168", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-168", "FAIL", str(e))
+
+def test_tc_169(announcement_id="1"):
+    """Analyst - Mark Announcement Read"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/announcements/{announcement_id}/read", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-169", "PASS", "Successfully marked announcement read.")
+        else:
+            print_result("TC-169", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-169", "FAIL", str(e))
+
+def test_tc_170():
+    """Analyst - View Watchlist IOCs"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/threat-intel/watchlist", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-170", "PASS", "Successfully retrieved watchlist.")
+        else:
+            print_result("TC-170", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-170", "FAIL", str(e))
+
+def test_tc_171():
+    """Analyst - Lookup IOC"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/threat-intel/1.1.1.1", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-171", "PASS", "Successfully looked up IOC.")
+        else:
+            print_result("TC-171", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-171", "FAIL", str(e))
+
+def test_tc_172():
+    """Analyst - Reload Rules"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/rules/reload", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-172", "PASS", "Successfully reloaded rules.")
+        else:
+            print_result("TC-172", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-172", "FAIL", str(e))
+
+def test_tc_173():
+    """Analyst - Sync Community Rules"""
+    try:
+        resp = requests.post(f"{BASE_URL}/api/rules/sync-community", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-173", "PASS", "Successfully synced community rules.")
+        else:
+            print_result("TC-173", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-173", "FAIL", str(e))
+
+def test_tc_174(rule_id="test-rule-id"):
+    """Analyst - Toggle Rule"""
+    try:
+        payload = {"enabled": True}
+        resp = requests.post(f"{BASE_URL}/api/rules/{rule_id}/toggle", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-174", "PASS", "Successfully toggled rule.")
+        else:
+            print_result("TC-174", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-174", "FAIL", str(e))
+
+def test_tc_175():
+    """Analyst - Fetch Jira Tickets"""
+    try:
+        payload = {"url": "", "email": "", "token": "", "project_key": ""}
+        resp = requests.post(f"{BASE_URL}/api/soar/jira/tickets", json=payload, headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-175", "PASS", "Successfully fetched Jira tickets.")
+        else:
+            print_result("TC-175", "FAIL", f"POST failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-175", "FAIL", str(e))
+
+def test_tc_176():
+    """Analyst - View Interfaces"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/interfaces", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-176", "PASS", "Successfully retrieved interfaces.")
+        else:
+            print_result("TC-176", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-176", "FAIL", str(e))
+
+def test_tc_177():
+    """Analyst - View Tenant Features"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/tenant/features", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-177", "PASS", "Successfully retrieved tenant features.")
+        else:
+            print_result("TC-177", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-177", "FAIL", str(e))
+
+def test_tc_178():
+    """Analyst - View License Public Key"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/license/public-key", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-178", "PASS", "Successfully retrieved license public key.")
+        else:
+            print_result("TC-178", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-178", "FAIL", str(e))
+
+def test_tc_179():
+    """Analyst - View SMTP Settings"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/settings/smtp", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-179", "PASS", "Successfully retrieved SMTP settings.")
+        else:
+            print_result("TC-179", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-179", "FAIL", str(e))
+
+def test_tc_180():
+    """Analyst - View Client Errors"""
+    try:
+        resp = requests.get(f"{BASE_URL}/api/admin/client-errors", headers=analyst_headers, verify=False)
+        if resp.status_code == 200:
+            print_result("TC-180", "PASS", "Successfully retrieved client errors.")
+        else:
+            print_result("TC-180", "FAIL", f"GET failed with {resp.status_code}")
+    except Exception as e:
+        print_result("TC-180", "FAIL", str(e))
+
+
 if __name__ == "__main__":
     print("Starting Automated Tests (TC-051 to TC-065)...")
     print("-" * 50)
@@ -1417,24 +1927,89 @@ if __name__ == "__main__":
     # test_tc_119()
     # test_tc_120()
 
-    print(f"Starting Analyst RBAC Negative Tests (TC-121 to TC-135)...")
+    # print(f"Starting Analyst RBAC Negative Tests (TC-121 to TC-135)...")
+    # print("-" * 50)
+    # 
+    # test_tc_121()
+    # test_tc_122()
+    # test_tc_123()
+    # test_tc_124()
+    # test_tc_125()
+    # test_tc_126()
+    # test_tc_127()
+    # test_tc_128()
+    # test_tc_129()
+    # test_tc_130()
+    # test_tc_131()
+    # test_tc_132()
+    # test_tc_133()
+    # test_tc_134()
+    # test_tc_135()
+
+    # print(f"Starting Additional Analyst Action Tests (TC-136 to TC-150)...")
+    # print("-" * 50)
+    # 
+    # test_case_id = "test-case-id"
+    # test_rule_id = "test-rule-id"
+    # test_block_id = "test-block-id"
+    # test_iso_id = "test-iso-id"
+    # # Execute the new tests
+    # test_tc_136()
+    # test_tc_137()
+    # test_tc_138()
+    # test_tc_139(test_case_id)
+    # test_tc_140(test_case_id)
+    # test_tc_141(test_case_id)
+    # test_tc_142(test_case_id)
+    # test_tc_143()
+    # test_tc_144()
+    # test_tc_145(test_block_id)
+    # test_tc_146()
+    # test_tc_147(test_iso_id)
+    # test_tc_148()
+    # test_tc_149()
+    # test_tc_150(test_rule_id)
+
+    # print(f"Starting Analyst View & Export Tests (TC-151 to TC-165)...")
+    # print("-" * 50)
+    # 
+    # test_tc_151()
+    # test_tc_152()
+    # test_tc_153()
+    # test_tc_154()
+    # test_tc_155()
+    # test_tc_156()
+    # test_tc_157()
+    # test_tc_158()
+    # test_tc_159()
+    # test_tc_160()
+    # test_tc_161()
+    # test_tc_162()
+    # test_tc_163()
+    # test_tc_164()
+    # test_tc_165()
+
+    print(f"Starting Analyst Profile, Rules & Integrations Tests (TC-166 to TC-180)...")
     print("-" * 50)
     
-    test_tc_121()
-    test_tc_122()
-    test_tc_123()
-    test_tc_124()
-    test_tc_125()
-    test_tc_126()
-    test_tc_127()
-    test_tc_128()
-    test_tc_129()
-    test_tc_130()
-    test_tc_131()
-    test_tc_132()
-    test_tc_133()
-    test_tc_134()
-    test_tc_135()
+    test_rule_id = "test-rule-id"
+    test_announcement_id = "1"
+    
+    test_tc_166()
+    test_tc_167()
+    test_tc_168()
+    test_tc_169(test_announcement_id)
+    test_tc_170()
+    test_tc_171()
+    test_tc_172()
+    test_tc_173()
+    test_tc_174(test_rule_id)
+    test_tc_175()
+    test_tc_176()
+    test_tc_177()
+    test_tc_178()
+    test_tc_179()
+    test_tc_180()
 
     print("-" * 50)
     print("Tests complete. Please record the results.")
