@@ -7,22 +7,12 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::AppState;
+use crate::jwt::extract_token;
 use provigil_common::validate_jwt;
 
-fn extract_token(headers: &HeaderMap) -> Option<String> {
-    let from_cookie = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| c.split(';').find_map(|p| {
-            p.trim().strip_prefix("ndr_token=").map(str::to_owned)
-        }));
-    if from_cookie.is_some() { return from_cookie; }
-    headers.get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-}
-
+// Deliberately lighter than crate::jwt::auth(): only checks the JWT signature
+// and expiry, no Valkey session-alive lookup, so it stays local rather than
+// reusing the shared auth().
 async fn auth_any(headers: &HeaderMap, state: &AppState)
     -> Result<provigil_common::Claims, (StatusCode, Json<Value>)>
 {

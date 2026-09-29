@@ -63,8 +63,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // Shared HTTP client for outbound webhook / integration calls.
 // reqwest::Client is internally Arc-based — cloning is cheap.
 // Standalone handlers that don't carry AppState use this module-level instance.
+//
+// reqwest::Client::new() has NO timeout by default, so a request to an
+// unreachable host hangs for however long the OS takes to give up on the TCP
+// connect (often 30s+ when the target silently drops packets instead of
+// sending RST - e.g. a cloud VM's security group, or a host.docker.internal
+// that doesn't resolve to anything on a remote-sensor deployment). Confirmed
+// live: /api/agent-status took ~30s per call on a cloud install with no
+// local capture agent, instead of failing fast. 10s covers this client's
+// slowest legitimate caller (the ip-api.com external geo lookup) with room
+// to spare, while turning agent-call hangs from ~30s into ~10s.
 static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
-    std::sync::LazyLock::new(reqwest::Client::new);
+    std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    });
 
 /// Batch geo-lookup for the threat/attack map widgets.
 ///
@@ -94,17 +109,31 @@ async fn geo_lookup_batch(state: &AppState, ips: &[String]) -> Vec<Value> {
         }
     }
 
-    if !unresolved.is_empty() {
-        let batch: Vec<Value> = unresolved.iter().map(|ip| json!({ "query": ip })).collect();
-        if let Ok(resp) = HTTP_CLIENT
+    // ip-api.com's batch endpoint hard-caps at 100 queries per request and
+    // returns 422 for anything larger - which failed silently here before:
+    // resp.json::<Vec<Value>>() errors on that response body (not an array),
+    // the `if let Ok(...)` just dropped it, and every unresolved IP ended up
+    // with no geo data and no log line explaining why. Confirmed live -
+    // batching exactly 100 succeeds, 101+ returns 422.
+    for chunk in unresolved.chunks(100) {
+        let batch: Vec<Value> = chunk.iter().map(|ip| json!({ "query": ip })).collect();
+        match HTTP_CLIENT
             .post("http://ip-api.com/batch?fields=query,country,countryCode,city,lat,lon,status")
             .json(&batch)
             .send()
             .await
         {
-            if let Ok(fallback) = resp.json::<Vec<Value>>().await {
-                results.extend(fallback);
+            Ok(resp) => {
+                let status = resp.status();
+                match resp.json::<Vec<Value>>().await {
+                    Ok(fallback) => results.extend(fallback),
+                    Err(e) => tracing::warn!(
+                        "geo_lookup_batch: ip-api.com returned {} for a {}-IP batch, body didn't parse: {}",
+                        status, chunk.len(), e
+                    ),
+                }
             }
+            Err(e) => tracing::warn!("geo_lookup_batch: ip-api.com request failed for a {}-IP batch: {}", chunk.len(), e),
         }
     }
 
@@ -430,6 +459,34 @@ fn announcement_targets_from_payload(payload: &Value) -> (String, Vec<String>, V
 }
 
 // Auth middleware
+/// The PCAP endpoints a sensor calls with its X-Sensor-Key (no user login). They were public
+/// (added 2026-06-21) until 40c9175 removed them on 2026-07-23; since then the login check
+/// answered every sensor pcap upload with 401 {"message":"Unauthorized"} before the handler
+/// could look at the sensor key. Each of these handlers validates the key itself
+/// (validate_sensor_key_cached). EXACT paths only: `/api/pcap/:session_id` (a user download)
+/// must keep requiring a login, and a prefix match would let a session id that starts with
+/// "upload" or "pending" past it.
+pub fn is_sensor_pcap_path(path: &str) -> bool {
+    matches!(path, "/api/pcap/upload" | "/api/pcap/upload-failed" | "/api/pcap/pending")
+}
+
+#[cfg(test)]
+mod pcap_public_path_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_three_sensor_endpoints_skip_the_login_check() {
+        for p in ["/api/pcap/upload", "/api/pcap/upload-failed", "/api/pcap/pending"] {
+            assert!(is_sensor_pcap_path(p), "{p} must be reachable with a sensor key");
+        }
+        // user-facing download and look-alikes keep requiring a login
+        for p in ["/api/pcap/abc123", "/api/pcap/uploadabc", "/api/pcap/pending/x", "/api/pcap/upload/x",
+                  "/api/pcap/", "/api/pcap", "/api/pcap/upload-failed2", "/api/evidence/pcap/upload"] {
+            assert!(!is_sensor_pcap_path(p), "{p} must stay protected");
+        }
+    }
+}
+
 pub async fn auth_middleware(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -444,7 +501,7 @@ pub async fn auth_middleware(
     // or with an expired/invalid token is exactly what needs reporting,
     // and gating it behind auth would silently drop those reports.
     let public = ["/api/health", "/ws", "/api/sensor", "/api/ingest", "/api/sensor/command", "/api/sensor/checkin", "/api/install-sensor.sh", "/api/uninstall-sensor.sh", "/api/client-errors"];
-    if public.iter().any(|p| path.starts_with(p)) {
+    if public.iter().any(|p| path.starts_with(p)) || is_sensor_pcap_path(&path) {
         return next.run(request).await;
     }
 
@@ -716,8 +773,10 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 .unwrap_or("-"),
         ),
     };
-    // Enrich
-    let enrichment = state.enrichment.enrich(src, dst);
+    // Enrich. This path used the built-in sensitive-country list (which includes IN) and ignored
+    // the tenant's own setting; homecountry::apply uses the tenant's list minus its home countries.
+    let mut enrichment = state.enrichment.enrich(src, dst);
+    crate::homecountry::apply(&state, &tenant_id, &mut enrichment).await;
 
     // Write permanent IOC hit records for any malicious IP match
     if enrichment.is_malicious {
@@ -914,8 +973,21 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     // is skipped internally for those, but threat-intel and log evidence still captures.
     let severity_str = risk.severity.as_str().to_string();
     let hit_is_malicious = enrichment.is_malicious;
-    if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM")
+    // A conversation is captured and analysed once per AUTOCAPTURE_REPEAT_SECS (default 1 h), not
+    // for every alert it raises: the repeats were duplicate bundles and duplicate AI analyses.
+    let capture_allowed = if matches!(severity_str.as_str(), "HIGH" | "CRITICAL" | "MEDIUM")
         && !hit.community_id.is_empty()
+    {
+        let mut rc = state.redis_mux.clone();
+        crate::ai::throttle::claim_once(
+            &mut rc,
+            &format!("ndr:autocap:{}:{}", tenant_id, hit.community_id),
+            crate::ai::throttle::capture_repeat_secs(),
+        ).await
+    } else {
+        false
+    };
+    if capture_allowed
     {
         let cid = hit.community_id.clone();
         let tenant = tenant_id.clone();
@@ -951,6 +1023,14 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
             "auto_captured_at": now_str
         });
 
+        // Facts about the two ends, for the AI (country / operator come from the local databases).
+        let dst_geo_c  = enrichment.dst_geo.clone();
+        let dst_asn_c  = enrichment.dst_asn.clone();
+        let src_geo_c  = enrichment.src_geo.clone();
+        let src_asn_c  = enrichment.src_asn.clone();
+        let dst_port_c = hit.agent_z.dest_port.or(hit.agent_s.dest_port);
+        let proto_c    = hit.agent_z.proto.clone().or_else(|| hit.agent_s.proto.clone());
+        let mut redis_c = state.redis_mux.clone();
         let ev_sem = evidence_semaphore();
         tokio::spawn(async move {
             // Acquire permit — at most 4 concurrent evidence+AI calls
@@ -1005,20 +1085,38 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     cid
                                 );
                             } else {
+                                // One AI analysis per source->destination pair per AI_ANALYSIS_REPEAT_SECS,
+                                // and a per-host hourly cap, so one chatty host cannot flood the list.
+                                let pair_key = format!("ndr:aiana:{}:{}:{}", tenant, src_ip_str, dst_ip_str);
+                                if !crate::ai::throttle::claim_once(&mut redis_c, &pair_key, crate::ai::throttle::pair_repeat_secs()).await {
+                                    tracing::info!("AI analysis skipped — {} -> {} was analysed recently (cid {})", src_ip_str, dst_ip_str, cid);
+                                    return;
+                                }
+                                let host_key = format!("ndr:aiana-host:{}:{}", tenant, src_ip_str);
+                                if !crate::ai::throttle::take_hourly_slot(&mut redis_c, &host_key, crate::ai::throttle::host_max_per_hour()).await {
+                                    crate::ai::throttle::release(&mut redis_c, &pair_key).await;
+                                    tracing::info!("AI analysis skipped — {} reached its hourly analysis limit (cid {})", src_ip_str, cid);
+                                    return;
+                                }
+
                                 let bundles = ch.get_bundles_for_cid(&tenant, &cid).await
                                     .unwrap_or_default();
 
-                                // Check if source host has confirmed C2/threat-intel history
-                                let host_compromised = ch.host_has_threat_intel_hit(&tenant, &src_ip_str).await;
-                                let host_context = if host_compromised {
-                                    format!(
-                                        "HOST THREAT HISTORY: {} has confirmed threat-intel C2 hit(s) \
-                                         in the last 24h — treat this host as compromised.\n",
-                                        src_ip_str
-                                    )
-                                } else {
-                                    String::new()
-                                };
+                                // Threat-intel history of the source host, as facts (not a verdict)
+                                let (ti_matches, ti_peers) = ch.host_threat_intel_summary(&tenant, &src_ip_str).await;
+                                let host_context = crate::ai::context::host_history_text(&src_ip_str, ti_matches, &ti_peers);
+
+                                // Who and what the two ends are: country, operator, names seen in DNS, service
+                                let dst_names = ch.passive_dns_names_for_ip(&dst_ip_str, 3).await;
+                                let src_names = ch.passive_dns_names_for_ip(&src_ip_str, 3).await;
+                                let ip_context = format!(
+                                    "{}{}{}",
+                                    crate::ai::context::ip_facts("SOURCE", &src_ip_str, crate::enrichment::is_private_ip(&src_ip_str),
+                                        src_geo_c.as_ref(), src_asn_c.as_ref(), &src_names),
+                                    crate::ai::context::ip_facts("DESTINATION", &dst_ip_str, crate::enrichment::is_private_ip(&dst_ip_str),
+                                        dst_geo_c.as_ref(), dst_asn_c.as_ref(), &dst_names),
+                                    crate::ai::context::connection_line(dst_port_c, proto_c.as_deref()),
+                                );
 
                                 // Look up asset info for src and dst IPs from the asset inventory
                                 let asset_context = {
@@ -1063,19 +1161,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     let sev = b["severity"].as_str().unwrap_or("UNKNOWN").to_string();
                                     let src  = b["src_ip"].as_str().unwrap_or("?");
                                     let dst  = b["dst_ip"].as_str().unwrap_or("?");
-                                    let mut entry = format!("  {}→{}", src, dst);
-                                    if !rule_name_str.is_empty() {
-                                        entry.push_str(&format!("\n    sig=\"{}\"", rule_name_str));
-                                    }
-                                    if !suricata_category_str.is_empty() {
-                                        entry.push_str(&format!("  category=\"{}\"", suricata_category_str));
-                                    }
-                                    if !app_proto_str.is_empty() {
-                                        entry.push_str(&format!("\n    proto={}", app_proto_str));
-                                    }
-                                    if !dns_query_str.is_empty() {
-                                        entry.push_str(&format!("  dns_query={}", dns_query_str));
-                                    }
+                                    let entry = format!("  {}→{}", src, dst);
                                     by_sev.entry(sev).or_default().push(entry);
                                 }
 
@@ -1091,6 +1177,15 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     }
                                 }
 
+                                // The details of the alert that triggered this analysis, stated once (they used to be
+                                // repeated on every bundle line even though they belong to this alert only).
+                                let mut latest = Vec::new();
+                                if !rule_name_str.is_empty()         { latest.push(format!("sig=\"{}\"", rule_name_str)); }
+                                if !suricata_category_str.is_empty() { latest.push(format!("category=\"{}\"", suricata_category_str)); }
+                                if !app_proto_str.is_empty()         { latest.push(format!("proto={}", app_proto_str)); }
+                                if !dns_query_str.is_empty()         { latest.push(format!("dns_query={}", dns_query_str)); }
+                                let latest_line = if latest.is_empty() { String::new() } else { format!("Latest alert: {}\n", latest.join("  ")) };
+
                                 let system_prompt = "You are a senior NDR (Network Detection & Response) \
                                     security analyst. You are given ALL alerts captured for a single \
                                     network session grouped by severity. Analyse the full picture and \
@@ -1099,20 +1194,26 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                                     RISK: combined impact across all severity levels (1-2 sentences)\n\
                                     ACTION: recommended immediate response steps (2-3 bullet points)\n\
                                     Be concise and actionable. No markdown headers.\n\
-                                    IMPORTANT: If HOST THREAT HISTORY shows a confirmed C2 hit, treat \
-                                    all alerts from that host as high-priority regardless of individual \
-                                    alert severity. DNS queries to ngrok, pagekite, or other tunneling \
-                                    domains from a compromised host indicate active C2 beaconing.\n\
-                                    Traffic to known cloud providers (Google, AWS, Microsoft, Cloudflare) \
-                                    is normal UNLESS the host is flagged as compromised OR a tunneling \
-                                    domain is in the dns_query field.";
+                                    Base your analysis ONLY on the facts given. Use the SOURCE and DESTINATION \
+                                    lines to say who the other side is (operator, country, service) and \
+                                    name it in THREAT. Traffic to a DNS server (port 53/853), NTP, a package \
+                                    mirror or the host's own internet provider is normally routine: say so, \
+                                    and do not raise the risk because of the destination country alone.\n\
+                                    A threat-intelligence match in HOST THREAT-INTEL MATCHES is a lead, not \
+                                    proof: weigh it against this session and say how sure you are. DNS \
+                                    queries to ngrok, pagekite or other tunneling domains are suspicious \
+                                    and can indicate C2 beaconing. Traffic to well-known cloud providers \
+                                    (Google, AWS, Microsoft, Cloudflare) is normal unless other evidence \
+                                    says otherwise.";
 
                                 let question = format!(
                                     "Session community_id: {cid}\n\
+                                     {ip_context}\
                                      {host_context}\
                                      {asset_context}\
                                      All captured alerts grouped by severity:\n\
-                                     {grouped}\n\
+                                     {grouped}\
+                                     {latest_line}\n\
                                      Tenant: {tenant}\n\
                                      Provide your comprehensive threat analysis.",
                                 );
@@ -1973,8 +2074,21 @@ for integration in &integrations {
 
 pub async fn health(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<Value> {
     let claims = extract_claims(&headers);
-    let tenant_id = claims.as_ref().map(|c| c.tenant_id.clone()).unwrap_or_else(|| "default".to_string());
-    let sensor_ids = claims.map(|c| c.sensor_ids).unwrap_or_default();
+
+    // This route is intentionally public (see the `public` allowlist in
+    // auth_middleware) — Docker's own healthchecks (docker-compose.yml) curl
+    // it with no Authorization header, and other services' startup depends
+    // on that succeeding. But it used to return full platform-wide metrics
+    // (event/hit counts, sigma rule count, per-service up/down) to that same
+    // unauthenticated request. Docker only needs a 2xx; an anonymous caller
+    // gets a bare status now, and the detailed metrics are reserved for
+    // authenticated users (already tenant-scoped below).
+    let Some(claims) = claims else {
+        return Json(json!({ "status": "ok" }));
+    };
+
+    let tenant_id = claims.tenant_id.clone();
+    let sensor_ids = claims.sensor_ids;
     let ch_stats = state.ch_storage.get_stats_by_tenant(&tenant_id, &sensor_ids).await.unwrap_or(json!({}));
     let clickhouse_status = if state.ch_storage.health_check().await {
         "running"
@@ -2511,8 +2625,16 @@ pub async fn get_rules(
     let total = result.len();
     let active_total = result.iter().filter(|r| r["enabled"] == json!(true)).count();
 
+    // order=desc: newest first. The list is community rules followed by the
+    // tenant's own custom rules, so reversing puts a just-created custom rule
+    // on page 1. Applied before pagination so it holds across pages - without
+    // it a new rule would sit at the very end of a 1,000+ rule list.
+    if params.get("order").map(|v| v == "desc").unwrap_or(false) {
+        result.reverse();
+    }
+
     // Optional pagination — callers that don't pass limit/offset (e.g. the
-    // admin rules page) get the full search-filtered set exactly as before.
+    // retrospective and overview pages) get the full search-filtered set.
     if let Some(limit) = params.get("limit").and_then(|v| v.parse::<usize>().ok()) {
         let offset = params.get("offset").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
         result = result.into_iter().skip(offset).take(limit).collect();
@@ -6108,10 +6230,22 @@ pub async fn revoke_sensor_key_api(
         Some(c) => c,
         None => return Json(json!({"status": "error", "message": "Unauthorized"})),
     };
+    // TC-070: a tenant_admin can create a sensor key for their own tenant but
+    // previously had no way to revoke one — strictly super_admin-only, no
+    // exception for a key that actually belongs to their own tenant. Now
+    // allowed for their own tenant's keys only; cross-tenant still forbidden.
     if claims.role != "super_admin" {
-        return Json(json!({"status": "error", "message": "Forbidden: Only super_admin can revoke sensor keys"}));
+        if claims.role != "tenant_admin" {
+            return Json(json!({"status": "error", "message": "Forbidden: Only super_admin or tenant_admin can revoke sensor keys"}));
+        }
+        match state.ch_storage.get_sensor_key_tenant_by_id(&id).await {
+            Ok(Some(owner_tenant)) if owner_tenant == claims.tenant_id => {}
+            Ok(Some(_)) => return Json(json!({"status": "error", "message": "Forbidden: cannot revoke another tenant's sensor key"})),
+            Ok(None) => return Json(json!({"status": "error", "message": "Sensor key not found"})),
+            Err(e) => return Json(json!({"status": "error", "message": e.to_string()})),
+        }
     }
-    
+
     match state.ch_storage.revoke_sensor_key(&id).await {
         Ok(_) => {
             // Immediately evict from shared Redis cache so ALL engine
@@ -6143,10 +6277,17 @@ pub async fn reactivate_sensor_key_api(
     }
     
     match state.ch_storage.reactivate_sensor_key(&id).await {
-        Ok(_) => Json(json!({
-            "status": "ok",
-            "message": "Sensor key reactivated"
-        })),
+        Ok(_) => {
+            // A revoked key is cached as such for a short while; clear it so the
+            // reactivated key works immediately.
+            if let Ok(Some(prefix)) = state.ch_storage.get_sensor_key_prefix_by_id(&id).await {
+                state.sensor_key_cache.invalidate_by_prefix(&prefix).await;
+            }
+            Json(json!({
+                "status": "ok",
+                "message": "Sensor key reactivated"
+            }))
+        },
         Err(e) => Json(json!({
             "status": "error",
             "message": e.to_string()
@@ -6351,7 +6492,68 @@ async fn handle_linux_endpoint_event(state: &AppState, raw: Value, tenant_id: &s
     }
 }
 
+/// Marker on the "bad key" reply so the wrappers below can tell it apart from
+/// other errors and check whether the key was revoked (rather than unknown).
+const INVALID_KEY_CODE: &str = "invalid_sensor_key";
+
+/// A sensor holding a key that an admin revoked gets HTTP 401 + `sensor_revoked`
+/// instead of the old HTTP 200 + error body. With 200, Vector counted every
+/// batch as delivered and kept shipping forever, and the agent never found out.
+/// Only someone who holds the real (bcrypt-verified) key can see this answer, so
+/// it tells an attacker nothing about which keys exist.
+async fn revoked_response(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Option<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let key = headers.get("X-Sensor-Key")?.to_str().ok()?;
+    if !crate::auth::sensor_cache::is_revoked(&state.sensor_key_cache, &state.ch_storage, key).await {
+        return None;
+    }
+    Some((
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "status": "revoked",
+            "code": "sensor_revoked",
+            "message": "This sensor key was revoked",
+            "command": "uninstall",
+        })),
+    ).into_response())
+}
+
 pub async fn ingest_events(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let out = ingest_events_inner(State(state.clone()), headers.clone(), body).await;
+    if out.0.get("code").and_then(|c| c.as_str()) == Some(INVALID_KEY_CODE) {
+        if let Some(r) = revoked_response(&state, &headers).await { return r; }
+    }
+    // Only when an INGEST_RATE_LIMIT cap is set and exceeded: answer with a real 429
+    // (Vector retries it) instead of HTTP 200, which Vector counts as delivered.
+    if out.0.get("code").and_then(|c| c.as_u64()) == Some(429) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            out,
+        ).into_response();
+    }
+    // The engine's queue was full and some events were NOT queued. Answering HTTP 200 made
+    // Vector treat the whole batch as delivered, so those events were lost silently. A 503 makes
+    // Vector retry the batch (events already queued are de-duplicated downstream).
+    if ingest_reply_is_overloaded(&out.0) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::RETRY_AFTER, "2")],
+            out,
+        ).into_response();
+    }
+    out.into_response()
+}
+
+async fn ingest_events_inner(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     body: String,
@@ -6363,6 +6565,7 @@ pub async fn ingest_events(
         Some(tid) => tid,
         None => return Json(json!({
             "status": "error",
+            "code": INVALID_KEY_CODE,
             "message": "Invalid or missing X-Sensor-Key"
         })),
     };
@@ -6409,6 +6612,7 @@ pub async fn ingest_events(
 
     let mut published = 0u64;
     let mut failed = 0u64;
+    let mut queue_full = 0u64;
 
     // The sensor key prefix identifies which sensor sent these events.
     let key_prefix = extract_sensor_key_prefix(&headers).unwrap_or_default();
@@ -6463,17 +6667,24 @@ pub async fn ingest_events(
                 published += 1;
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                // Channel full — system overloaded; Vector's disk buffer absorbs.
-                tracing::warn!("Ingest channel full — dropping event for tenant {}", tenant_id);
+                // Queue full: the caller gets HTTP 503 (see ingest_events) and retries the batch.
+                queue_full += 1;
                 failed += 1;
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 tracing::error!("Ingest channel closed — drain task died");
+                queue_full += 1;
                 failed += 1;
             }
         }
     }
 
+    if queue_full > 0 {
+        tracing::warn!(
+            "Ingest queue full: {} of {} events not queued for tenant {} - answering 503 so the sensor retries",
+            queue_full, events_arr.len(), tenant_id
+        );
+    }
     tracing::info!(
         "Ingest: queued={} failed={} tenant={}",
         published, failed, tenant_id
@@ -6483,6 +6694,7 @@ pub async fn ingest_events(
         "status": "ok",
         "published": published,
         "failed": failed,
+        "queue_full": queue_full,
         "tenant_id": tenant_id
     }))
 }
@@ -6547,18 +6759,38 @@ pub async fn sensor_checkin(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CheckinRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let out = sensor_checkin_inner(State(state.clone()), headers.clone(), Json(payload)).await;
+    if out.0.get("code").and_then(|c| c.as_str()) == Some(INVALID_KEY_CODE) {
+        if let Some(r) = revoked_response(&state, &headers).await { return r; }
+    }
+    out.into_response()
+}
+
+async fn sensor_checkin_inner(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<CheckinRequest>,
 ) -> Json<Value> {
     let tenant_id = match validate_sensor_key_cached(
         &headers, &state.ch_storage, Some(&state.sensor_key_cache)
     ).await {
         Some(t) => t,
-        None => return Json(json!({"status": "error", "message": "invalid sensor key"})),
+        None => return Json(json!({"status": "error", "code": INVALID_KEY_CODE, "message": "invalid sensor key"})),
     };
 
     let sensor_id = match extract_sensor_key_prefix(&headers) {
         Some(p) => p,
         None => return Json(json!({"status": "error", "message": "invalid sensor key prefix"})),
     };
+
+    // Remember which public address this sensor checks in from: the countries of a tenant's own
+    // sensors are never counted as "sensitive countries" (see homecountry.rs).
+    if let Some(ip) = crate::homecountry::client_ip(&headers) {
+        let mut rc = state.redis_mux.clone();
+        crate::homecountry::record_sensor_ip(&mut rc, &tenant_id, &sensor_id, ip).await;
+    }
 
     // ── 1. Heartbeat / status update (throttled via Redis) ───────────────
     // Only write to ClickHouse when status changes or every 5 minutes —
@@ -9370,12 +9602,13 @@ pub async fn list_ai_suppressions(
     let rows: Vec<SupRow> = state.ch_storage.client
         .query(&format!(
             "SELECT suppress_ip, signature_name, community_id, suppress_scope \
-             FROM ndr.ai_suppressions FINAL \
+             FROM {src} \
              WHERE active = 1 \
                AND (expires_at IS NULL OR expires_at > now()) \
                AND (tenant_id = '{tid}' OR tenant_id = '') \
              ORDER BY rowNumberInAllBlocks() DESC \
-             LIMIT 200"
+             LIMIT 200",
+            src = crate::storage::clickhouse::suppressions_source(&claims.tenant_id),
         ))
         .fetch_all::<SupRow>().await.unwrap_or_default();
 
@@ -9801,6 +10034,19 @@ pub async fn add_trusted_domain(
     let domain   = body.domain.trim().to_lowercase();
     let category = body.category.as_deref().unwrap_or("dns_beacon").to_string();
     let note     = body.note.as_deref().unwrap_or("").to_string();
+
+    // TC-089: this previously accepted an empty domain and an unbounded-length
+    // note with no validation at all. 253 is the real DNS max hostname length;
+    // 500 is a sane cap for a free-text note field.
+    if domain.is_empty() {
+        return Json(json!({"error": "Domain is required"}));
+    }
+    if domain.chars().count() > 253 {
+        return Json(json!({"error": "Domain is too long (max 253 characters)"}));
+    }
+    if note.chars().count() > 500 {
+        return Json(json!({"error": "Note is too long (max 500 characters)"}));
+    }
 
     // super_admin can create global (tenant_id='') or any tenant; others are scoped to their tenant
     let tenant_id = if claims.role == "super_admin" {
@@ -10515,14 +10761,24 @@ pub async fn force_logout_user(
     let mut mux = state.redis_mux.clone();
     let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, target_username);
     let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+    // auth-service checks its own provigil:session:{jti} key, not ndr:session:{jti} —
+    // deleting only the ndr: copy left the session alive there, so a "revoked" token
+    // kept working on /api/auth/me and could even be renewed via /api/auth/refresh.
+    // Both namespaces are written together at login (login.rs), so the same jti list
+    // deletes both.
+    let provigil_user_set_key   = format!("provigil:user_sessions:{}:{}", tenant_id, target_username);
+    let provigil_tenant_set_key = format!("provigil:tenant_sessions:{}", tenant_id);
 
     let jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
     let count = jtis.len();
     for jti in &jtis {
         let _: redis::RedisResult<i64> = mux.del(format!("ndr:session:{}", jti)).await;
         let _: redis::RedisResult<i64> = mux.srem(&tenant_set_key, jti).await;
+        let _: redis::RedisResult<i64> = mux.del(format!("provigil:session:{}", jti)).await;
+        let _: redis::RedisResult<i64> = mux.srem(&provigil_tenant_set_key, jti).await;
     }
     let _: redis::RedisResult<i64> = mux.del(&user_set_key).await;
+    let _: redis::RedisResult<i64> = mux.del(&provigil_user_set_key).await;
 
     // Push force_logout WS message — Angular filters by target_username
     let msg = serde_json::to_string(&json!({
@@ -10562,6 +10818,10 @@ pub async fn force_logout_device(
     let mut mux = state.redis_mux.clone();
     let user_set_key   = format!("ndr:user_sessions:{}:{}", tenant_id, target_username);
     let tenant_set_key = format!("ndr:tenant_sessions:{}", tenant_id);
+    // Same fix as force_logout_user: also clear the provigil: copy auth-service
+    // actually checks, or the session (and a refresh off it) keeps working there.
+    let provigil_user_set_key   = format!("provigil:user_sessions:{}:{}", tenant_id, target_username);
+    let provigil_tenant_set_key = format!("provigil:tenant_sessions:{}", tenant_id);
 
     let jtis: Vec<String> = mux.smembers(&user_set_key).await.unwrap_or_default();
     let mut count = 0usize;
@@ -10573,6 +10833,9 @@ pub async fn force_logout_device(
             let _: redis::RedisResult<i64> = mux.del(&session_key).await;
             let _: redis::RedisResult<i64> = mux.srem(&user_set_key, jti).await;
             let _: redis::RedisResult<i64> = mux.srem(&tenant_set_key, jti).await;
+            let _: redis::RedisResult<i64> = mux.del(format!("provigil:session:{}", jti)).await;
+            let _: redis::RedisResult<i64> = mux.srem(&provigil_user_set_key, jti).await;
+            let _: redis::RedisResult<i64> = mux.srem(&provigil_tenant_set_key, jti).await;
             count += 1;
         }
     }
@@ -11000,5 +11263,27 @@ pub async fn get_retrospective_scan(
                       Json(json!({"status":"error","message":"Scan not found"}))),
             }
         }
+    }
+}
+
+
+/// True when the ingest reply says some events could not be queued because the queue was full.
+fn ingest_reply_is_overloaded(reply: &Value) -> bool {
+    reply.get("queue_full").and_then(|n| n.as_u64()).unwrap_or(0) > 0
+}
+
+#[cfg(test)]
+mod ingest_reply_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_full_queue_makes_the_reply_a_retryable_503() {
+        assert!(ingest_reply_is_overloaded(&json!({"status":"ok","published":990,"failed":10,"queue_full":10})));
+        // a batch that was fully queued: normal 200
+        assert!(!ingest_reply_is_overloaded(&json!({"status":"ok","published":1000,"failed":0,"queue_full":0})));
+        // events that cannot be serialized are counted as failed but must NOT be retried forever
+        assert!(!ingest_reply_is_overloaded(&json!({"status":"ok","published":990,"failed":10,"queue_full":0})));
+        // replies from other paths (bad key, rate cap) carry no queue_full field
+        assert!(!ingest_reply_is_overloaded(&json!({"status":"error","code":"invalid_sensor_key"})));
     }
 }

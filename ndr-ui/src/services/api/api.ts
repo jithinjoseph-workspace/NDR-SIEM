@@ -216,9 +216,10 @@ export class Api {
   // pull the entire (1000+ row) rule set on every load. X-Total-Count /
   // X-Active-Count let the caller show accurate summary stats even though
   // only one page of rows actually came back.
-  getRulesPage(limit: number, offset: number, q?: string): Observable<{ rules: any[]; total: number; activeTotal: number }> {
+  getRulesPage(limit: number, offset: number, q?: string, order?: 'desc'): Observable<{ rules: any[]; total: number; activeTotal: number }> {
     let url = `${this.baseUrl}/rules?limit=${limit}&offset=${offset}`;
     if (q) url += `&q=${encodeURIComponent(q)}`;
+    if (order) url += `&order=${order}`;
     return this.http.get<any[]>(url, { observe: 'response' }).pipe(
       map(resp => ({
         rules: resp.body || [],
@@ -392,10 +393,21 @@ export class Api {
   }
 
   suppressAlert(srcIp: string, dstIp: string, communityId: string, tag: string, durationHours = 24): Observable<any> {
-    return this.http.post(`${this.baseUrl}/ai-suppressions`, {
+    return this.http.post<any>(`${this.baseUrl}/ai-suppressions`, {
       src_ip: srcIp, dst_ip: dstIp, community_id: communityId, tag, duration_hours: durationHours
-    });
+    }).pipe(map(res => {
+      // The engine reports a failed save as HTTP 200 with {"error": ...}; without this the
+      // caller would treat it as saved and the alert would come back on the next refresh.
+      if (!res || res.error || res.ok !== true) throw new Error(res?.error || 'Suppression was not saved');
+      return res;
+    }));
   }
+
+  // Alert triage (new): rule + AI review that produces recommendations only.
+  getTriage(): Observable<any>            { return this.http.get(`${this.baseUrl}/triage`); }
+  runTriage(): Observable<any>            { return this.http.post(`${this.baseUrl}/triage/run`, {}); }
+  applyTriage(id: string, hours = 24): Observable<any> { return this.http.post(`${this.baseUrl}/triage/${id}/apply`, { hours }); }
+  dismissTriage(id: string): Observable<any> { return this.http.post(`${this.baseUrl}/triage/${id}/dismiss`, {}); }
 
   getActiveSuppressions(): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/ai-suppressions`);

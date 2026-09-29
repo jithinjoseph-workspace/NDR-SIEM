@@ -61,11 +61,14 @@ const SUP_PROTO_MISUSE:   Duration = Duration::from_secs(1800);
 const SUP_LARGE_EXFIL:    Duration = Duration::from_secs(3600);
 
 // In-memory suppression cache: key = (pattern, tenant, identifier), value = Instant of last emit.
-// Shared across all Tier 1/2 and Tier 3 runs inside the same tokio task via passed &mut.
+// Wrapped in a Mutex (instead of a plain &mut passed around) because tenants are now
+// scanned concurrently within a Tier 1/2 or Tier 3 cycle and all share this one map.
 type SuppressMap = HashMap<(String, String, String), Instant>;
+type SharedSuppressMap = Arc<tokio::sync::Mutex<SuppressMap>>;
 
-fn is_suppressed(map: &mut SuppressMap, pattern: &str, tenant: &str, key: &str, window: Duration) -> bool {
+async fn is_suppressed(map: &SharedSuppressMap, pattern: &str, tenant: &str, key: &str, window: Duration) -> bool {
     let k = (pattern.to_string(), tenant.to_string(), key.to_string());
+    let mut map = map.lock().await;
     if let Some(last) = map.get(&k) {
         if last.elapsed() < window {
             return true;
@@ -76,8 +79,8 @@ fn is_suppressed(map: &mut SuppressMap, pattern: &str, tenant: &str, key: &str, 
 }
 
 // Evict entries older than 24 h to prevent unbounded memory growth.
-fn evict_old(map: &mut SuppressMap) {
-    map.retain(|_, v| v.elapsed() < Duration::from_secs(86400));
+async fn evict_old(map: &SharedSuppressMap) {
+    map.lock().await.retain(|_, v| v.elapsed() < Duration::from_secs(86400));
 }
 
 // Issues 7 & 8 fix: load recent multiflow hits from ClickHouse into the SuppressMap.
@@ -231,13 +234,13 @@ pub fn spawn(ch: Arc<ClickhouseStorage>, election: Arc<LeaderElection>) {
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
             // Issues 7 & 8 fix: seed from DB so recent suppressions survive restarts.
-            let mut sup: SuppressMap = load_suppressions_from_db(&ch).await;
+            let sup: SharedSuppressMap = Arc::new(tokio::sync::Mutex::new(load_suppressions_from_db(&ch).await));
             let mut evict_tick = 0u32;
             loop {
                 if el.is_leader() {
-                    run_tier12(&ch, &mut sup).await;
+                    run_tier12(&ch, &sup).await;
                     evict_tick += 1;
-                    if evict_tick % 60 == 0 { evict_old(&mut sup); }
+                    if evict_tick % 60 == 0 { evict_old(&sup).await; }
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             }
@@ -263,11 +266,11 @@ pub fn spawn(ch: Arc<ClickhouseStorage>, election: Arc<LeaderElection>) {
         let el = election.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
-            let mut sup: SuppressMap = load_suppressions_from_db(&ch).await;
+            let sup: SharedSuppressMap = Arc::new(tokio::sync::Mutex::new(load_suppressions_from_db(&ch).await));
             loop {
                 if el.is_leader() {
-                    run_tier3(&ch, &mut sup).await;
-                    evict_old(&mut sup);
+                    run_tier3(&ch, &sup).await;
+                    evict_old(&sup).await;
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
             }
@@ -357,44 +360,65 @@ async fn emit(
 // Covers IPv4 RFC-1918, IPv4 loopback, IPv6 ULA (fc00::/7), IPv6 link-local (fe80::/10),
 // and IPv6 loopback (::1) so multiflow detectors work correctly on dual-stack networks.
 fn is_private(col: &str) -> String {
+    // ClickHouse evaluates isIPAddressInRange over the whole column block before
+    // combining with other WHERE conditions (no short-circuit on `dst_ip != ''`
+    // guards elsewhere in the query), so a single empty-string row throws
+    // CANNOT_PARSE_TEXT and aborts the whole query. Guard the argument itself.
+    let safe = format!("if({c} = '', '0.0.0.0', {c})", c = col);
     format!(
-        "(isIPAddressInRange({c},'10.0.0.0/8') \
-          OR isIPAddressInRange({c},'192.168.0.0/16') \
-          OR isIPAddressInRange({c},'172.16.0.0/12') \
-          OR isIPAddressInRange({c},'127.0.0.0/8') \
-          OR isIPAddressInRange({c},'fc00::/7') \
-          OR isIPAddressInRange({c},'fe80::/10') \
+        "(isIPAddressInRange({safe},'10.0.0.0/8') \
+          OR isIPAddressInRange({safe},'192.168.0.0/16') \
+          OR isIPAddressInRange({safe},'172.16.0.0/12') \
+          OR isIPAddressInRange({safe},'127.0.0.0/8') \
+          OR isIPAddressInRange({safe},'fc00::/7') \
+          OR isIPAddressInRange({safe},'fe80::/10') \
+          OR isIPAddressInRange({safe},'ff00::/8') \
+          OR isIPAddressInRange({safe},'224.0.0.0/4') \
+          OR isIPAddressInRange({safe},'169.254.0.0/16') \
           OR {c} = '::1')",
+        safe = safe,
         c = col
     )
 }
 
 // ── Tier 1 + 2: short / medium window ─────────────────────────────────────────
 
-async fn run_tier12(ch: &ClickhouseStorage, sup: &mut SuppressMap) {
+async fn run_tier12(ch: &ClickhouseStorage, sup: &SharedSuppressMap) {
     let tenants = match ch.get_all_tenants().await {
         Ok(t) => t,
         Err(e) => { tracing::warn!("multiflow: get_all_tenants: {}", e); return; }
     };
-    for tenant in &tenants {
-        detect_port_scan(ch, tenant, sup).await;
-        detect_credential_stuffing(ch, tenant, sup).await;
-        detect_lateral_movement(ch, tenant, sup).await;
-        detect_dns_beaconing(ch, tenant, sup).await;
-        detect_slow_scan(ch, tenant, sup).await;
-        detect_internal_recon(ch, tenant, sup).await;
-        detect_data_staging(ch, tenant, sup).await;
-        detect_icmp_flood(ch, tenant, sup).await;
-        detect_nxdomain_flood(ch, tenant, sup).await;
-        detect_dns_tunneling(ch, tenant, sup).await;
-        detect_tls_cert_anomaly(ch, tenant, sup).await;
-        detect_protocol_misuse(ch, tenant, sup).await;
-        detect_large_volume_exfil(ch, tenant, sup).await;
+    // Bounded concurrency across tenants — this cycle runs every 60s, so a fully
+    // sequential loop of 13 detectors x N tenants can fall behind at real tenant
+    // counts. Each tenant's own 13 detectors still run sequentially within its task.
+    let sem = Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+    let mut handles = Vec::with_capacity(tenants.len());
+    for tenant in tenants {
+        let ch2  = ch.clone();
+        let sup2 = Arc::clone(sup);
+        let sem2 = Arc::clone(&sem);
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            detect_port_scan(&ch2, &tenant, &sup2).await;
+            detect_credential_stuffing(&ch2, &tenant, &sup2).await;
+            detect_lateral_movement(&ch2, &tenant, &sup2).await;
+            detect_dns_beaconing(&ch2, &tenant, &sup2).await;
+            detect_slow_scan(&ch2, &tenant, &sup2).await;
+            detect_internal_recon(&ch2, &tenant, &sup2).await;
+            detect_data_staging(&ch2, &tenant, &sup2).await;
+            detect_icmp_flood(&ch2, &tenant, &sup2).await;
+            detect_nxdomain_flood(&ch2, &tenant, &sup2).await;
+            detect_dns_tunneling(&ch2, &tenant, &sup2).await;
+            detect_tls_cert_anomaly(&ch2, &tenant, &sup2).await;
+            detect_protocol_misuse(&ch2, &tenant, &sup2).await;
+            detect_large_volume_exfil(&ch2, &tenant, &sup2).await;
+        }));
     }
+    futures_util::future::join_all(handles).await;
 }
 
 // Port scan: >15 distinct ports OR >20 distinct hosts from one src in 5 min
-async fn detect_port_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_port_scan(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
     let q = format!(
@@ -410,7 +434,7 @@ async fn detect_port_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppre
     );
     let rows: Vec<TwoCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "portscan", tenant, &r.src_ip, SUP_PORT_SCAN) { continue; }
+        if is_suppressed(sup, "portscan", tenant, &r.src_ip, SUP_PORT_SCAN).await { continue; }
         tracing::info!("multiflow[port-scan] {}/{}: {} ports {} targets",
             tenant, r.src_ip, r.cnt_a, r.cnt_b);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -429,7 +453,7 @@ async fn detect_port_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppre
 //   5. Zeek conn.log connections to auth ports (22, 389, 445, 636, 3389, 5985, 5986)
 //      — covers RDP, LDAP, SMB, WinRM and SSH on non-standard ports where
 //        Zeek doesn't decode auth results but high connection rate is the signal
-async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
     let q = format!(
@@ -449,7 +473,7 @@ async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &
     );
     let rows: Vec<OneCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "credstuff", tenant, &r.src_ip, SUP_CRED_STUFF) { continue; }
+        if is_suppressed(sup, "credstuff", tenant, &r.src_ip, SUP_CRED_STUFF).await { continue; }
         tracing::info!("multiflow[cred-stuffing] {}/{}: {} alert flows",
             tenant, r.src_ip, r.cnt);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -469,7 +493,7 @@ async fn detect_credential_stuffing(ch: &ClickhouseStorage, tenant: &str, sup: &
 // Excludes port 53/5353 (DNS) — internal resolvers query dozens of hosts per minute
 // and would flood this detector. Excludes ports 80/443 — developers deploy to many
 // hosts over HTTP, not a lateral movement signal.
-async fn detect_lateral_movement(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_lateral_movement(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db      = db_for(tenant);
     let t       = esc(tenant);
     let prv_src = is_private("src_ip");
@@ -488,7 +512,7 @@ async fn detect_lateral_movement(ch: &ClickhouseStorage, tenant: &str, sup: &mut
     );
     let rows: Vec<OneCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "lateral", tenant, &r.src_ip, SUP_LATERAL) { continue; }
+        if is_suppressed(sup, "lateral", tenant, &r.src_ip, SUP_LATERAL).await { continue; }
         tracing::info!("multiflow[lateral] {}/{}: {} internal targets",
             tenant, r.src_ip, r.cnt);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -500,7 +524,7 @@ async fn detect_lateral_movement(ch: &ClickhouseStorage, tenant: &str, sup: &mut
 
 // DNS beaconing: >150 DNS queries for the same domain in 30 min, grouped by queried domain.
 // Trusted domains are loaded per-run from ndr.trusted_domains (global shared + tenant-specific).
-async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
 
@@ -540,7 +564,7 @@ async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &mut Su
         if trusted.iter().any(|t| d == *t || d.ends_with(&format!(".{}", t))) { continue; }
 
         let key = format!("{}_{}", r.src_ip, r.domain);
-        if is_suppressed(sup, "dnsbeacon", tenant, &key, SUP_DNS_BEACON) { continue; }
+        if is_suppressed(sup, "dnsbeacon", tenant, &key, SUP_DNS_BEACON).await { continue; }
         tracing::info!("multiflow[dns-beacon] {}/{}: {} queries/{}s for {}",
             tenant, r.src_ip, r.cnt, r.span, r.domain);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -552,7 +576,7 @@ async fn detect_dns_beaconing(ch: &ClickhouseStorage, tenant: &str, sup: &mut Su
 
 // Slow scan: >100 distinct ports AND >50 distinct hosts over 24 hours (AND prevents false positives
 // from normal hosts that simply talk to many ports over a day, or DNS resolvers with many targets)
-async fn detect_slow_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_slow_scan(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db   = db_for(tenant);
     let t    = esc(tenant);
     let excl = host_exclusion_clause();
@@ -569,7 +593,7 @@ async fn detect_slow_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppre
     );
     let rows: Vec<TwoCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "slowscan", tenant, &r.src_ip, SUP_SLOW_SCAN) { continue; }
+        if is_suppressed(sup, "slowscan", tenant, &r.src_ip, SUP_SLOW_SCAN).await { continue; }
         tracing::info!("multiflow[slow-scan] {}/{}: {} ports {} targets/24h",
             tenant, r.src_ip, r.cnt_a, r.cnt_b);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -580,7 +604,7 @@ async fn detect_slow_scan(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppre
 }
 
 // Internal recon: private src hitting >30 distinct internal hosts in 2 hours
-async fn detect_internal_recon(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_internal_recon(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db      = db_for(tenant);
     let t       = esc(tenant);
     let prv_src = is_private("src_ip");
@@ -595,7 +619,7 @@ async fn detect_internal_recon(ch: &ClickhouseStorage, tenant: &str, sup: &mut S
     );
     let rows: Vec<OneCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "recon", tenant, &r.src_ip, SUP_RECON) { continue; }
+        if is_suppressed(sup, "recon", tenant, &r.src_ip, SUP_RECON).await { continue; }
         tracing::info!("multiflow[internal-recon] {}/{}: {} targets/2h",
             tenant, r.src_ip, r.cnt);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -608,7 +632,7 @@ async fn detect_internal_recon(ch: &ClickhouseStorage, tenant: &str, sup: &mut S
 // Data staging + exfil: src with >100MB to internal destinations AND >50MB to
 // external destinations in same 30-min window. Uses actual byte volume from
 // Zeek orig_bytes (conn.log); events without byte field contribute 0.
-async fn detect_data_staging(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_data_staging(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db      = db_for(tenant);
     let t       = esc(tenant);
     let prv_dst = is_private("dst_ip");
@@ -636,7 +660,7 @@ async fn detect_data_staging(ch: &ClickhouseStorage, tenant: &str, sup: &mut Sup
     );
     let rows: Vec<TwoCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "staging", tenant, &r.src_ip, SUP_STAGING) { continue; }
+        if is_suppressed(sup, "staging", tenant, &r.src_ip, SUP_STAGING).await { continue; }
         tracing::info!("multiflow[data-staging] {}/{}: {} ext events after internal burst",
             tenant, r.src_ip, r.cnt_a);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -847,55 +871,68 @@ async fn baseline_compute(
 
 // ── Tier 3b: anomaly detection against baselines ──────────────────────────────
 
-async fn run_tier3(ch: &ClickhouseStorage, sup: &mut SuppressMap) {
+async fn run_tier3(ch: &ClickhouseStorage, sup: &SharedSuppressMap) {
     let tenants = match ch.get_all_tenants().await {
         Ok(t) => t,
         Err(e) => { tracing::warn!("multiflow tier3: get_all_tenants: {}", e); return; }
     };
-    for tenant in &tenants {
-        let db = db_for(tenant);
-        let t  = esc(tenant);
-        // Skip Tier 3 for tenants with no baseline yet — avoids alert storms on
-        // day-zero deployments where every connection looks "new" or "anomalous".
-        let baseline_rows: u64 = ch.client
-            .query(&format!(
-                "SELECT count() FROM {db}.ndr_baselines WHERE tenant_id = '{t}'"
-            ))
-            .fetch_one::<u64>().await.unwrap_or(0);
-        if baseline_rows == 0 {
-            let has_events: u64 = ch.client
+    let sem = Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+    let mut handles = Vec::with_capacity(tenants.len());
+    for tenant in tenants {
+        let ch2  = ch.clone();
+        let sup2 = Arc::clone(sup);
+        let sem2 = Arc::clone(&sem);
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            let db = db_for(&tenant);
+            let t  = esc(&tenant);
+            // Skip Tier 3 for tenants with no baseline yet — avoids alert storms on
+            // day-zero deployments where every connection looks "new" or "anomalous".
+            let baseline_rows: u64 = ch2.client
                 .query(&format!(
-                    "SELECT count() FROM {db}.ndr_events \
-                     WHERE tenant_id = '{t}' AND timestamp >= now() - INTERVAL 24 HOUR"
+                    "SELECT count() FROM {db}.ndr_baselines WHERE tenant_id = '{t}'"
                 ))
                 .fetch_one::<u64>().await.unwrap_or(0);
-            if has_events > 0 {
-                tracing::info!("multiflow tier3: no baselines for {} — triggering bootstrap", tenant);
-                let ch_cl = ch.clone();
-                let t_cl  = tenant.clone();
-                tokio::spawn(async move { bootstrap_baselines(ch_cl, t_cl).await; });
-            } else {
-                tracing::debug!("multiflow tier3: skipping {} — no events yet", tenant);
+            if baseline_rows == 0 {
+                let has_events: u64 = ch2.client
+                    .query(&format!(
+                        "SELECT count() FROM {db}.ndr_events \
+                         WHERE tenant_id = '{t}' AND timestamp >= now() - INTERVAL 24 HOUR"
+                    ))
+                    .fetch_one::<u64>().await.unwrap_or(0);
+                if has_events > 0 {
+                    tracing::info!("multiflow tier3: no baselines for {} — triggering bootstrap", tenant);
+                    let ch_cl = ch2.clone();
+                    let t_cl  = tenant.clone();
+                    tokio::spawn(async move { bootstrap_baselines(ch_cl, t_cl).await; });
+                } else {
+                    tracing::debug!("multiflow tier3: skipping {} — no events yet", tenant);
+                }
+                return;
             }
-            continue;
-        }
-        detect_volume_anomaly(ch, tenant, sup).await;
-        detect_new_external_contact(ch, tenant, sup).await;
-        detect_abnormal_hours(ch, tenant, sup).await;
+            detect_volume_anomaly(&ch2, &tenant, &sup2).await;
+            detect_new_external_contact(&ch2, &tenant, &sup2).await;
+            detect_abnormal_hours(&ch2, &tenant, &sup2).await;
+        }));
     }
+    futures_util::future::join_all(handles).await;
 }
 
-// Volume anomaly: last-hour event count > 3× 7-day hourly average
-async fn detect_volume_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
-    let db = db_for(tenant);
-    let t  = esc(tenant);
-    let q = format!(
+// Volume anomaly: last-hour event count far above the host's own 7-day hourly average.
+//
+// It counts log EVENTS, not bytes, so it says nothing about data leaving the network. It used to fire
+// at HIGH (75) as "t:exfiltration" on any 3x jump against an average of just over 10 events an hour,
+// with no minimum history: a fresh sensor's first apt upgrade or download produced a HIGH
+// "exfiltration" alert with no destination. Now: at least 3 days of baseline, at least 5x the
+// average, at least 300 events, and LOW without the exfiltration tag.
+pub(crate) fn volume_anomaly_query(db: &str, t: &str) -> String {
+    format!(
         "SELECT e.src_ip, \
                 toUInt64(count()) AS today_cnt, \
                 avg(b.value_f / 24.0) AS avg_hourly \
          FROM {db}.ndr_events e \
          LEFT JOIN ( \
-             SELECT src_ip, avg(value_f) AS value_f \
+             SELECT src_ip, avg(value_f) AS value_f, count() AS n_windows \
              FROM {db}.ndr_baselines \
              WHERE metric = 'event_count' \
                AND window_ts >= now() - INTERVAL 7 DAY \
@@ -905,23 +942,30 @@ async fn detect_volume_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &mut S
          WHERE e.timestamp > now() - INTERVAL 1 HOUR \
            AND e.tenant_id = '{t}' AND e.src_ip != '' \
          GROUP BY e.src_ip \
-         HAVING today_cnt > 3 * avg_hourly AND avg_hourly > 10"
-    );
+         HAVING today_cnt > 5 * avg_hourly AND avg_hourly > 10 AND today_cnt >= 300 \
+                AND max(b.n_windows) >= 3"
+    )
+}
+
+async fn detect_volume_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
+    let db = db_for(tenant);
+    let t  = esc(tenant);
+    let q = volume_anomaly_query(&db, &t);
     let rows: Vec<VolAnomaly> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "volanom", tenant, &r.src_ip, SUP_VOL_ANOMALY) { continue; }
+        if is_suppressed(sup, "volanom", tenant, &r.src_ip, SUP_VOL_ANOMALY).await { continue; }
         tracing::info!("multiflow[vol-anomaly] {}/{}: {} events vs avg {:.1}/hr",
             tenant, r.src_ip, r.today_cnt, r.avg_hourly);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
         emit(ch, tenant, &make_cid("volanom", tenant, &r.src_ip),
-            &r.src_ip, "", 75.0,
-            vec!["volume-anomaly".into(), "t:exfiltration".into()], &sid).await;
+            &r.src_ip, "", 40.0,
+            vec!["volume-anomaly".into()], &sid).await;
     }
 }
 
 // New external contact: (src_ip, dst_ip) pair seen in last hour
 // that has NO entry in the 30-day ext_contact baseline
-async fn detect_new_external_contact(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_new_external_contact(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db  = db_for(tenant);
     let t   = esc(tenant);
     let prv = is_private("e.dst_ip");
@@ -943,19 +987,25 @@ async fn detect_new_external_contact(ch: &ClickhouseStorage, tenant: &str, sup: 
     let rows: Vec<NewContact> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
         let key = format!("{}_{}", r.src_ip, r.dst_ip);
-        if is_suppressed(sup, "newcontact", tenant, &key, SUP_NEW_CONTACT) { continue; }
+        if is_suppressed(sup, "newcontact", tenant, &key, SUP_NEW_CONTACT).await { continue; }
         tracing::info!("multiflow[new-contact] {}/{} → {} (first seen in 30d)",
             tenant, r.src_ip, r.dst_ip);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
+        // A first-seen destination is context, not evidence: laptops and servers
+        // reach new update mirrors, CDNs and SaaS hosts every day. This used to
+        // score 65 (MEDIUM) and carry "t:command-and-control", which also made
+        // each one count as stage 6 of an attack chain (threat/patterns.rs).
+        // Now LOW and untagged as C2; real C2 still raises its own alerts
+        // (dns-beaconing, dga, doh-evasion, threat intel) that carry that tag.
         emit(ch, tenant, &make_cid("newcontact", tenant, &key),
-            &r.src_ip, &r.dst_ip, 65.0,
-            vec!["new-external-contact".into(), "t:command-and-control".into()], &sid).await;
+            &r.src_ip, &r.dst_ip, 25.0,
+            vec!["new-external-contact".into()], &sid).await;
     }
 }
 
 // ICMP flood: >500 ICMP events from one source in 5 min
 // Covers ping floods, ICMP tunneling probe bursts, and smurf-style amplification attempts.
-async fn detect_icmp_flood(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_icmp_flood(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
     let q = format!(
@@ -969,7 +1019,7 @@ async fn detect_icmp_flood(ch: &ClickhouseStorage, tenant: &str, sup: &mut Suppr
     );
     let rows: Vec<OneCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "icmpflood", tenant, &r.src_ip, SUP_ICMP_FLOOD) { continue; }
+        if is_suppressed(sup, "icmpflood", tenant, &r.src_ip, SUP_ICMP_FLOOD).await { continue; }
         tracing::info!("multiflow[icmp-flood] {}/{}: {} ICMP events/5min",
             tenant, r.src_ip, r.cnt);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -988,7 +1038,7 @@ struct TlsCertRow {
     validation_status: String,
 }
 
-async fn detect_tls_cert_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_tls_cert_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
     let q = format!(
@@ -1009,7 +1059,7 @@ async fn detect_tls_cert_anomaly(ch: &ClickhouseStorage, tenant: &str, sup: &mut
     let rows: Vec<TlsCertRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
         let key = format!("{}-{}", r.src_ip, r.dst_ip);
-        if is_suppressed(sup, "tlscert", tenant, &key, SUP_TLS_CERT) { continue; }
+        if is_suppressed(sup, "tlscert", tenant, &key, SUP_TLS_CERT).await { continue; }
         tracing::info!("multiflow[tls-cert] {}/{}->{}: {} ({} events/10min)",
             tenant, r.src_ip, r.dst_ip, r.validation_status, r.cnt);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -1029,7 +1079,7 @@ struct ProtoMisuseRow {
     cnt:      u64,
 }
 
-async fn detect_protocol_misuse(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_protocol_misuse(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
     let q = format!(
@@ -1048,7 +1098,7 @@ async fn detect_protocol_misuse(ch: &ClickhouseStorage, tenant: &str, sup: &mut 
     let rows: Vec<ProtoMisuseRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
         let key = format!("{}-{}", r.src_ip, r.dst_port);
-        if is_suppressed(sup, "protomisuse", tenant, &key, SUP_PROTO_MISUSE) { continue; }
+        if is_suppressed(sup, "protomisuse", tenant, &key, SUP_PROTO_MISUSE).await { continue; }
         let desc = if r.dst_port == 80 { "TLS-on-port-80" } else { "HTTP-on-port-443" };
         tracing::info!("multiflow[proto-misuse] {}/{}->{}: {} ({} events/10min)",
             tenant, r.src_ip, r.dst_ip, desc, r.cnt);
@@ -1068,7 +1118,7 @@ struct LargeExfilRow {
     bytes:  u64,
 }
 
-async fn detect_large_volume_exfil(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_large_volume_exfil(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db      = db_for(tenant);
     let t       = esc(tenant);
     let prv_dst = is_private("dst_ip");
@@ -1084,7 +1134,7 @@ async fn detect_large_volume_exfil(ch: &ClickhouseStorage, tenant: &str, sup: &m
     );
     let rows: Vec<LargeExfilRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "largeexfil", tenant, &r.src_ip, SUP_LARGE_EXFIL) { continue; }
+        if is_suppressed(sup, "largeexfil", tenant, &r.src_ip, SUP_LARGE_EXFIL).await { continue; }
         tracing::info!("multiflow[large-exfil] {}/{}: {:.1} GB to external in 30min",
             tenant, r.src_ip, r.bytes as f64 / 1_073_741_824.0);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -1103,7 +1153,7 @@ struct OffHoursRow {
     avg_baseline: f64,
 }
 
-async fn detect_abnormal_hours(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_abnormal_hours(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let hour = chrono::Utc::now().hour();
     // Only fire during off-hours (23:00–04:59 UTC)
     if hour >= 5 && hour < 23 { return; }
@@ -1132,7 +1182,7 @@ async fn detect_abnormal_hours(ch: &ClickhouseStorage, tenant: &str, sup: &mut S
     );
     let rows: Vec<OffHoursRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "abnormalhours", tenant, &r.src_ip, SUP_ABNORMAL_HOURS) { continue; }
+        if is_suppressed(sup, "abnormalhours", tenant, &r.src_ip, SUP_ABNORMAL_HOURS).await { continue; }
         tracing::info!("multiflow[abnormal-hours] {}/{}: {} events vs avg {:.1} off-hours baseline",
             tenant, r.src_ip, r.current_cnt, r.avg_baseline);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -1144,7 +1194,7 @@ async fn detect_abnormal_hours(ch: &ClickhouseStorage, tenant: &str, sup: &mut S
 
 // NXDOMAIN flood: >50 NXDOMAIN responses to one src in 5 min.
 // Indicates automated C2 domain generation (DGA) or failed fast-flux resolution.
-async fn detect_nxdomain_flood(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_nxdomain_flood(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
     let q = format!(
@@ -1159,7 +1209,7 @@ async fn detect_nxdomain_flood(ch: &ClickhouseStorage, tenant: &str, sup: &mut S
     );
     let rows: Vec<OneCount> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "nxdomain", tenant, &r.src_ip, SUP_NXDOMAIN) { continue; }
+        if is_suppressed(sup, "nxdomain", tenant, &r.src_ip, SUP_NXDOMAIN).await { continue; }
         tracing::info!("multiflow[nxdomain-flood] {}/{}: {} NXDOMAIN/5min",
             tenant, r.src_ip, r.cnt);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
@@ -1179,7 +1229,7 @@ struct DnsTunnelRow {
     avg_qlen: f64,
 }
 
-async fn detect_dns_tunneling(ch: &ClickhouseStorage, tenant: &str, sup: &mut SuppressMap) {
+async fn detect_dns_tunneling(ch: &ClickhouseStorage, tenant: &str, sup: &SharedSuppressMap) {
     let db = db_for(tenant);
     let t  = esc(tenant);
     let q = format!(
@@ -1196,12 +1246,53 @@ async fn detect_dns_tunneling(ch: &ClickhouseStorage, tenant: &str, sup: &mut Su
     );
     let rows: Vec<DnsTunnelRow> = ch.client.query(&q).fetch_all().await.unwrap_or_default();
     for r in rows {
-        if is_suppressed(sup, "dnstunnel", tenant, &r.src_ip, SUP_DNS_TUNNEL) { continue; }
+        if is_suppressed(sup, "dnstunnel", tenant, &r.src_ip, SUP_DNS_TUNNEL).await { continue; }
         tracing::info!("multiflow[dns-tunnel] {}/{}: {} queries avg {:.0} chars/10min",
             tenant, r.src_ip, r.cnt, r.avg_qlen);
         let sid = sensor_for(ch, &db, tenant, &r.src_ip).await;
         emit(ch, tenant, &make_cid("dnstunnel", tenant, &r.src_ip),
             &r.src_ip, "", 80.0,
             vec!["dns-tunneling".into(), "t:exfiltration".into(), "t:command-and-control".into()], &sid).await;
+    }
+}
+
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway database, dropped at the end):
+    //   cargo test -p ndr-engine volume_anomaly -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn only_a_real_spike_against_a_mature_baseline_is_reported() {
+        let ch = ClickhouseStorage::new();
+        let db = "ndr_zz_voltest";
+        let x = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        x(format!("CREATE DATABASE {db}")).await;
+        x(format!("CREATE TABLE {db}.ndr_events (tenant_id String, src_ip String, timestamp DateTime) ENGINE = MergeTree ORDER BY timestamp")).await;
+        x(format!("CREATE TABLE {db}.ndr_baselines (tenant_id String, src_ip String, metric String, window_ts DateTime, value_f Float64, value_s String) ENGINE = MergeTree ORDER BY window_ts")).await;
+
+        // baseline: value_f is a DAILY count (the query divides by 24): 480/day = 20 events an hour
+        let baseline = |ip: &'static str, days: u32| { let x = &x; async move {
+            for d in 1..=days { x(format!("INSERT INTO {db}.ndr_baselines VALUES ('t','{ip}','event_count', now() - INTERVAL {d} DAY, 480, '')")).await; }
+        } };
+        let events = |ip: &'static str, n: u32| { let x = &x; async move {
+            x(format!("INSERT INTO {db}.ndr_events SELECT 't', '{ip}', now() - number FROM numbers({n})")).await;
+        } };
+        // 10.0.0.1: mature baseline, 2000 events this hour (100x)                -> reported
+        baseline("10.0.0.1", 5).await; events("10.0.0.1", 2000).await;
+        // 10.0.0.2: brand-new host, 1 day of baseline, same 2000 events          -> NOT reported (the bug)
+        baseline("10.0.0.2", 1).await; events("10.0.0.2", 2000).await;
+        // 10.0.0.3: mature baseline but only 3.5x (70 events)                    -> NOT reported
+        baseline("10.0.0.3", 5).await; events("10.0.0.3", 70).await;
+        // 10.0.0.4: mature baseline, 6x but only 120 events (below the floor)    -> NOT reported
+        baseline("10.0.0.4", 5).await; events("10.0.0.4", 120).await;
+
+        let rows: Vec<(String, u64, f64)> = ch.client.query(&volume_anomaly_query(db, "t")).fetch_all().await.unwrap();
+        let ips: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(ips, vec!["10.0.0.1"], "only the mature-baseline 100x spike: {rows:?}");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }
 }

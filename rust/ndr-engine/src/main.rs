@@ -6,6 +6,7 @@ mod api;
 mod auth;
 mod license;
 mod ratelimit;
+mod role;
 mod siem;
 mod consumer;
 mod correlator;
@@ -16,10 +17,12 @@ mod scoring;
 mod storage;
 mod evidence;
 mod ai;
+mod homecountry;
 #[cfg(feature = "soar")]
 pub mod soar;
 mod monitor;
 mod threat;
+mod triage;
 mod leader;
 
 use api::{websocket::ws_handler, AppState};
@@ -100,6 +103,13 @@ async fn main() {
         .init();
 
     info!("NDR Engine starting");
+
+    // What this process is for: all (default) | ingest | process | ui - see role.rs
+    let role = role::EngineRole::from_env();
+    info!(
+        "Engine role: {} (kafka consumer: {}, leader jobs: {}, full platform: {})",
+        role.as_str(), role.consumer(), role.leader_jobs(), role.full_platform()
+    );
 
     // ── Production credential warnings ────────────────────────────────────
     // Fail fast if JWT_SECRET is absent — every auth call would panic otherwise.
@@ -189,17 +199,60 @@ async fn main() {
         auth::sensor_cache::SensorKeyCache::new(Arc::new(redis_client.clone()))
     );
 
-    // ── Async ingest channel (50k event headroom before backpressure) ─────
+    // ── Async ingest channel: events wait here until the drain task hands them to Kafka ─────
+    // Capacity is how many events can be waiting at once (it is NOT a per-second rate; that is
+    // set by how fast the drain below can publish). When it is full /api/ingest answers 503 so
+    // the sensor retries, instead of dropping events. Memory is about 1 KB per queued event.
+    // Override: INGEST_QUEUE_CAPACITY (default 200,000, minimum 1,000).
     let (ingest_tx, mut ingest_rx) =
-        tokio::sync::mpsc::channel::<(String, String)>(50_000);
+        tokio::sync::mpsc::channel::<(String, String)>(ingest_queue_capacity());
+    let drain_batch = ingest_drain_batch();
 
     // Background drain: flushes channel to Kafka in micro-batches of ≤200
     // events every 100ms. /api/ingest returns immediately without waiting.
+    //
+    // The "batch" used to only describe how many events get COLLECTED before
+    // flushing - the actual flush itself called producer.send(...).await
+    // (the blocking variant, up to a 5s wait) sequentially, one event at a
+    // time, on this single task shared by the whole engine instance across
+    // every tenant. At real ingest volume this is a hard global throughput
+    // ceiling regardless of tenant count or Kafka partitions. Fixed with
+    // send_result() - librdkafka's actual non-blocking enqueue, returns a
+    // DeliveryFuture immediately instead of awaiting the broker round-trip -
+    // so all events in a batch get handed to librdkafka right away (which
+    // does its own real wire-level batching), and delivery confirmation for
+    // the whole batch is awaited concurrently instead of one at a time.
     {
         use rdkafka::producer::FutureRecord;
         let producer = kafka_producer.clone();
+
+        async fn flush_batch(
+            producer: &rdkafka::producer::FutureProducer,
+            batch: &mut Vec<(String, String)>,
+        ) {
+            let futures: Vec<_> = batch.drain(..).filter_map(|(_, payload)| {
+                let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
+                    .payload(&payload);
+                match producer.send_result(rec) {
+                    Ok(delivery) => Some(delivery),
+                    Err((e, _)) => {
+                        tracing::error!("Kafka enqueue error: {}", e);
+                        None
+                    }
+                }
+            }).collect();
+
+            for result in futures_util::future::join_all(futures).await {
+                match result {
+                    Ok(Ok(_)) => {}
+                    Ok(Err((e, _))) => tracing::error!("Kafka publish error: {}", e),
+                    Err(_) => tracing::error!("Kafka delivery future cancelled"),
+                }
+            }
+        }
+
         tokio::spawn(async move {
-            let mut batch: Vec<(String, String)> = Vec::with_capacity(200);
+            let mut batch: Vec<(String, String)> = Vec::with_capacity(drain_batch);
             let mut ticker = tokio::time::interval(
                 std::time::Duration::from_millis(100)
             );
@@ -209,17 +262,8 @@ async fn main() {
                         match maybe {
                             Some(ev) => {
                                 batch.push(ev);
-                                if batch.len() >= 200 {
-                                    for (_, payload) in batch.drain(..) {
-                                        let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
-                                            .payload(&payload);
-                                        if let Err((e, _)) = producer
-                                            .send(rec, std::time::Duration::from_secs(5))
-                                            .await
-                                        {
-                                            tracing::error!("Kafka publish error: {}", e);
-                                        }
-                                    }
+                                if batch.len() >= drain_batch {
+                                    flush_batch(&producer, &mut batch).await;
                                 }
                             }
                             None => break,
@@ -227,16 +271,7 @@ async fn main() {
                     }
                     _ = ticker.tick() => {
                         if !batch.is_empty() {
-                            for (_, payload) in batch.drain(..) {
-                                let rec = FutureRecord::<str, str>::to(provigil_common::kafka::TOPIC_NDR_EVENTS)
-                                    .payload(&payload);
-                                if let Err((e, _)) = producer
-                                    .send(rec, std::time::Duration::from_secs(5))
-                                    .await
-                                {
-                                    tracing::error!("Kafka publish error: {}", e);
-                                }
-                            }
+                            flush_batch(&producer, &mut batch).await;
                         }
                     }
                 }
@@ -330,22 +365,28 @@ async fn main() {
     }
 
     // ── SIEM syslog forwarder (optional, set SIEM_SYSLOG_HOST to enable) ────
+    // env::var() returns Ok("") for a var that's *set but empty* - which is
+    // exactly how every installer's default .env ships this (SIEM_SYSLOG_HOST=
+    // with no value), not just "unset". That previously fell into the "try to
+    // connect" branch and warned on every single startup with no SIEM
+    // configured at all - the normal/default case, not an error.
     let siem: Option<Arc<crate::siem::SiemForwarder>> =
-        if let Ok(host) = std::env::var("SIEM_SYSLOG_HOST") {
-            let port: u16 = std::env::var("SIEM_SYSLOG_PORT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(514);
-            match crate::siem::SiemForwarder::new(&host, port).await {
-                Ok(f) => {
-                    tracing::info!("SIEM syslog forwarder enabled → {}:{}", host, port);
-                    Some(Arc::new(f))
-                }
-                Err(e) => {
-                    tracing::warn!("SIEM forwarder init failed (disabling): {}", e);
-                    None
+        match std::env::var("SIEM_SYSLOG_HOST") {
+            Ok(host) if !host.trim().is_empty() => {
+                let port: u16 = std::env::var("SIEM_SYSLOG_PORT")
+                    .ok().and_then(|v| v.parse().ok()).unwrap_or(514);
+                match crate::siem::SiemForwarder::new(&host, port).await {
+                    Ok(f) => {
+                        tracing::info!("SIEM syslog forwarder enabled → {}:{}", host, port);
+                        Some(Arc::new(f))
+                    }
+                    Err(e) => {
+                        tracing::warn!("SIEM forwarder init failed (disabling): {}", e);
+                        None
+                    }
                 }
             }
-        } else {
-            None
+            _ => None,
         };
 
     // ── Seed in-memory threat-intel from persisted IOC watchlist ─────────
@@ -379,6 +420,8 @@ async fn main() {
         entity_cache.clone(),
         redis_mux.clone(),
         tx.clone(),
+        role.full_platform(),
+        role.leader_jobs(),
     );
 
     // Start sensor key cache refresh loop (after ch_storage is ready)
@@ -525,10 +568,12 @@ async fn main() {
     }
 
     // ── Background: OUI vendor database auto-updater ─────────────────────
-    state.enrichment.asset_id.clone().spawn_auto_updater();
+    if role.full_platform() {
+        state.enrichment.asset_id.clone().spawn_auto_updater();
+    }
 
     // ── Background: session reaper (every 30s) ────────────────────────────
-    {
+    if role.full_platform() {
         let eng = state.correlator.clone();
         tokio::spawn(async move {
             loop {
@@ -541,7 +586,7 @@ async fn main() {
 
     // ── Background: threat intel refresh (every 60 min) ───────────────────
     // Fix background refresh — refresh NOW then every 60 min
-{
+if role.full_platform() {
     let ti = ti_ref.clone();
     let ch_storage = ch_storage_arc.clone();
     tokio::spawn(async move {
@@ -564,7 +609,7 @@ async fn main() {
     // On startup: seed Redis SET with all existing Unknown-vendor assets.
     // Worker: SPOP one item, OUI lookup, write DB. Sleeps 1s when set empty.
     // SADD in consumer ensures no duplicates; SPOP is atomic across instances.
-    {
+    if role.full_platform() {
         let ch_seed = state.ch_storage.clone();
         let mut redis_seed = state.redis_mux.clone();
         tokio::spawn(async move {
@@ -584,7 +629,7 @@ async fn main() {
             }
         });
     }
-    {
+    if role.full_platform() {
         let ch = state.ch_storage.clone();
         let asset_id = state.enrichment.asset_id.clone();
         let redis_client_vb = redis_client.clone();
@@ -628,7 +673,7 @@ async fn main() {
     }
 
     // ── Kafka consumer — auto-restarts on panic or error ─────────────────
-    {
+    if role.consumer() {
         let consumer_state = state.clone();
         tokio::spawn(async move {
             loop {
@@ -749,7 +794,7 @@ async fn main() {
 
     // ── Weekly SigmaHQ community rules auto-updater ────────────────────────
     // Remove any blocked rules that slipped into the DB (e.g. before blocklist existed)
-    {
+    if role.full_platform() {
         let ch_bl = ch_storage_arc.clone();
         tokio::spawn(async move {
             for &id in detection::updater::GLOBAL_RULE_BLOCKLIST {
@@ -758,17 +803,21 @@ async fn main() {
         });
     }
 
-    detection::spawn_sigma_updater(
-        rules_dir.clone(),
-        redis_url.clone(),
-        state.detection.clone(),
-        state.ch_storage.clone(),
-    );
+    if role.full_platform() {
+        detection::spawn_sigma_updater(
+            rules_dir.clone(),
+            redis_url.clone(),
+            state.detection.clone(),
+            state.ch_storage.clone(),
+        );
+    }
 
     // ── Multi-flow correlator (Tier 1/2/3 cross-flow detection) ───────────
     // Runs only on the elected leader — same election as threat tasks
     // so all singleton background work stays on one instance.
-    detection::multiflow::spawn(ch_storage_arc.clone(), election.clone());
+    if role.leader_jobs() {
+        detection::multiflow::spawn(ch_storage_arc.clone(), election.clone());
+    }
 
 
 
@@ -854,6 +903,10 @@ async fn main() {
         .route("/api/settings/trusted-cloud", get(api::get_trusted_cloud_settings).put(api::update_trusted_cloud_settings))
         .route("/api/settings/trusted-cloud/suggestions/approve", post(api::approve_trusted_cloud_suggestion))
         .route("/api/settings/trusted-cloud/suggestions/reject",  post(api::reject_trusted_cloud_suggestion))
+        .route("/api/triage",                     get(triage::get_triage))
+        .route("/api/triage/run",                 post(triage::run_now))
+        .route("/api/triage/:id/apply",           post(triage::apply))
+        .route("/api/triage/:id/dismiss",         post(triage::dismiss))
         .route("/api/trusted-domains",            get(api::list_trusted_domains).post(api::add_trusted_domain))
         .route("/api/trusted-domains/delete",     post(api::delete_trusted_domain))
         .route("/api/trusted-domains/ai-suggest", post(api::ai_suggest_trusted_domains))
@@ -983,7 +1036,7 @@ async fn main() {
             .unwrap_or_else(|_| provigil_common::kafka::DEFAULT_KAFKA_BROKERS.to_string()));
 
 // ── Background: agent status monitor ─────────────────────────────────
-    {
+    if role.full_platform() {
         let tx = tx.clone();
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -1009,7 +1062,7 @@ async fn main() {
     }
 
     // ── Background: Arkime → pcap_sessions sync — leader only ───────────────
-    {
+    if role.leader_jobs() {
         let arkime_state = state.clone();
         let election_arkime = election.clone();
         tokio::spawn(async move {
@@ -1021,7 +1074,7 @@ async fn main() {
     }
 
     // ── Background: daily PCAP file cleanup — leader only ────────────────────
-    {
+    if role.leader_jobs() {
         let ch_cleanup = state.ch_storage.clone();
         let election_pcap = election.clone();
         tokio::spawn(async move {
@@ -1059,7 +1112,7 @@ async fn main() {
     }
 
     // ── Background: version update checker (on-prem only, every 6h) ─────
-    {
+    if role.full_platform() {
         let update_status = state.update_status.clone();
         let http = state.http_client.clone();
         let current = env!("CARGO_PKG_VERSION").to_string();
@@ -1166,3 +1219,24 @@ async fn cleanup_expired_pcaps(ch: &storage::clickhouse::ClickhouseStorage) {
 
 
 
+
+
+/// Events the ingest queue can hold. See the comment where the channel is created.
+fn ingest_queue_capacity() -> usize {
+    std::env::var("INGEST_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 1_000)
+        .unwrap_or(200_000)
+}
+
+/// Events handed to Kafka per flush by the drain task. Delivery of a whole flush is awaited
+/// together, so larger flushes mean fewer waits per event, i.e. a higher publish rate.
+/// Override: INGEST_DRAIN_BATCH (default 1000, minimum 50).
+fn ingest_drain_batch() -> usize {
+    std::env::var("INGEST_DRAIN_BATCH")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 50)
+        .unwrap_or(1000)
+}

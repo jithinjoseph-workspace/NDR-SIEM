@@ -400,13 +400,18 @@ pub fn check_blocklist(fp: &str) -> Option<&'static str> {
 /// Spawn the JARM background task.
 /// Runs on a 6-hour cycle. Queries active TLS servers from network_logs for each
 /// tenant and fingerprints any server not yet observed. C2 matches create alerts.
-pub fn spawn_jarm_scanner(ch: std::sync::Arc<crate::storage::ClickhouseStorage>) {
+pub fn spawn_jarm_scanner(
+    ch: std::sync::Arc<crate::storage::ClickhouseStorage>,
+    is_leader: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     tokio::spawn(async move {
         // Stagger against other tasks
         tokio::time::sleep(Duration::from_secs(90)).await;
 
         loop {
-            run_jarm_cycle(&ch).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                run_jarm_cycle(&ch).await;
+            }
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });
@@ -416,10 +421,28 @@ async fn run_jarm_cycle(ch: &crate::storage::ClickhouseStorage) {
     let tenants = ch.get_all_tenant_ids_with_ndr().await;
     if tenants.is_empty() { return; }
 
-    for tenant_id in &tenants {
+    // Each fingerprint() probe can take up to CONNECT_TIMEOUT+READ_TIMEOUT (~7s) per
+    // server, so a fully sequential tenant loop can badly overrun the 6h cycle once
+    // there are many tenants with unreachable/firewalled TLS servers. Bound concurrency
+    // instead; each tenant's own server list still runs sequentially within its task.
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+    let mut handles = Vec::with_capacity(tenants.len());
+    for tenant_id in tenants {
+        let ch2  = ch.clone();
+        let sem2 = std::sync::Arc::clone(&sem);
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            run_jarm_cycle_for_tenant(&ch2, &tenant_id).await;
+        }));
+    }
+    futures_util::future::join_all(handles).await;
+}
+
+async fn run_jarm_cycle_for_tenant(ch: &crate::storage::ClickhouseStorage, tenant_id: &str) {
+    {
         let servers = match ch.get_active_tls_servers(tenant_id).await {
             Ok(s) => s,
-            Err(e) => { tracing::warn!("JARM: failed to load servers for {tenant_id}: {e}"); continue; }
+            Err(e) => { tracing::warn!("JARM: failed to load servers for {tenant_id}: {e}"); return; }
         };
 
         for (ip, port) in servers {

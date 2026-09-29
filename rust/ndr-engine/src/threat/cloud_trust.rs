@@ -90,10 +90,22 @@ fn cidr_to_range(cidr: &str) -> Option<(u32, u32)> {
 
 // ── Background updater ────────────────────────────────────────────────────────
 
-/// Spawn a leader-only background task that keeps `trusted` up to date.
+/// Spawn a background task that keeps `trusted` up to date on THIS instance.
 /// Downloads official cloud IP range JSON files at startup then every 24h.
-/// Uses Redis only for a heartbeat timestamp — no cross-engine locking needed
-/// because this task is already leader-only (spawned from spawn_threat_tasks).
+///
+/// Deliberately NOT leader-gated, unlike the other 11 threat background
+/// tasks: `trusted` backs the synchronous per-event trusted-cloud check on
+/// the live Kafka ingestion path (api/mod.rs), which every instance runs
+/// regardless of leadership. This task only reads public data (AWS/Google/
+/// Cloudflare/Fastly IP-range JSON, a domain-suffix setting) into a purely
+/// local cache - there's no shared-write duplication to avoid by gating it,
+/// unlike entity_scorer's ClickHouse upsert. The old doc comment claimed
+/// gating was safe "because this task is already leader-only" - circular
+/// reasoning, not an actual reason; it left every non-leader instance's
+/// `trusted` cache permanently empty (TrustedRanges::default()) for its
+/// entire lifetime, silently disabling trusted-cloud suppression for
+/// whatever share of live traffic that instance's own Kafka partitions
+/// happened to be processing.
 pub fn spawn_trust_updater(
     trusted: Arc<RwLock<TrustedRanges>>,
     redis:   Arc<redis::Client>,

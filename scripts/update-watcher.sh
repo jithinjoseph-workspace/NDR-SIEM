@@ -1,8 +1,8 @@
 #!/bin/bash
 # Host-side watcher: picks up .update-requested flag written by the engine container
 # and pulls new Docker images then restarts the engine containers.
-FLAG="/media/sf_NDRSiem/scripts/.update-requested"
-INSTALL_DIR_="/media/sf_NDRSiem"
+FLAG="/home/user/Music/NDR/NDR-Demo/scripts/.update-requested"
+INSTALL_DIR_="/home/user/Music/NDR/NDR-Demo"
 
 logger -t ndr-updater "NDR update watcher started — watching $FLAG"
 

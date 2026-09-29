@@ -55,6 +55,7 @@ run() {
 }
 
 # ── Resolve tenant list ───────────────────────────────
+TENANTS=()
 if [ -n "$TENANT_ID" ]; then
     TENANTS=("$TENANT_ID")
     info "Targeting single tenant: $TENANT_ID"
@@ -119,13 +120,22 @@ echo ""
 # ══════════════════════════════════════════════════════
 log "Step 1: Stopping all NDR sensor services..."
 
+# Stop and disable every service unconditionally, and do it BEFORE killing any
+# process. The old version only stopped a service if `systemctl list-unit-files
+# | grep -q` found it; when that check missed (it can, under `pipefail`), the
+# later `pkill -9 agent.py` was followed by systemd restarting the agent
+# (Restart=always), and the unit file was then deleted while it ran, leaving
+# a running "not-found" service that nothing stopped.
 for SVC in ndr-agent ndr-vector ndr-sensor-agent ndr-sensor-vector arkime-capture arkime-viewer; do
-    if systemctl list-unit-files --no-pager | grep -q "^${SVC}.service"; then
-        run "systemctl stop $SVC"
-        run "systemctl disable $SVC"
+    WAS_ACTIVE=false
+    systemctl is-active --quiet "$SVC" 2>/dev/null && WAS_ACTIVE=true
+    run "systemctl stop $SVC"
+    run "systemctl disable $SVC"
+    run "systemctl reset-failed $SVC"
+    if $WAS_ACTIVE; then
         log "  ✅ Stopped & disabled: $SVC"
     else
-        info "  $SVC not found (skip)"
+        info "  $SVC was not running"
     fi
 done
 
@@ -134,6 +144,7 @@ run "pkill -9 -f agent.py"
 run "pkill -9 -f suricata"
 run "pkill -9 -f zeek"
 run "pkill -9 -f pcap-uploader"
+run "pkill -9 -f arkime-capture"
 run "pkill -9 -f 'vector --config'"
 run "pkill -9 -f '/usr/local/bin/vector'"
 run "pkill -9 -f '/usr/bin/vector'"
@@ -157,15 +168,13 @@ run "docker rm   opensearch-arkime"
 # ══════════════════════════════════════════════════════
 log "Step 2: Checking for legacy ndr-agent service..."
 
-if systemctl list-unit-files --no-pager | grep -q "^ndr-agent.service"; then
-    warn "  Found legacy ndr-agent.service — this was overwritten by old tenant install."
-    run "systemctl stop ndr-agent"
-    run "systemctl disable ndr-agent"
-    run "rm -f /etc/systemd/system/ndr-agent.service"
-    log "  ✅ Legacy ndr-agent.service removed"
-else
-    info "  No legacy ndr-agent.service found (clean)"
+run "systemctl stop ndr-agent"
+run "systemctl disable ndr-agent"
+if [ -f /etc/systemd/system/ndr-agent.service ]; then
+    warn "  Found ndr-agent.service unit file"
 fi
+run "rm -f /etc/systemd/system/ndr-agent.service"
+log "  ✅ ndr-agent service stopped and its unit file removed"
 
 # ══════════════════════════════════════════════════════
 # STEP 3 — Kill Zeek and Suricata processes owned by sensor
@@ -220,6 +229,11 @@ for UNIT_FILE in \
         run "rm -f $UNIT_FILE"
         log "  ✅ Removed: $UNIT_FILE"
     fi
+done
+
+# leftover enable-links for removed units (a dangling link keeps the name around)
+for LINK in /etc/systemd/system/multi-user.target.wants/{ndr-agent,ndr-vector,ndr-sensor-agent,ndr-sensor-vector,arkime-capture,arkime-viewer}.service; do
+    [ -L "$LINK" ] && run "rm -f $LINK"
 done
 
 run "systemctl daemon-reload"
@@ -322,6 +336,39 @@ if $PURGE_PACKAGES; then
     fi
 else
     info "Step 8: Skipping package removal (use --purge-packages to remove zeek/suricata/vector)"
+fi
+
+# ══════════════════════════════════════════════════════
+# STEP 9 — Verify nothing is left running
+# ══════════════════════════════════════════════════════
+log "Step 9: Verifying nothing is left running..."
+if ! $DRY_RUN; then
+    LEFT=""
+    for PAT in 'agent\.py' 'pcap-uploader' 'zeek' 'suricata' 'arkime-capture' 'vector --config' '/usr/local/bin/vector'; do
+        pgrep -f "$PAT" > /dev/null 2>&1 && LEFT="$LEFT $PAT"
+    done
+    if [ -n "$LEFT" ]; then
+        warn "  Still running:$LEFT - killing again..."
+        systemctl stop ndr-agent 2>/dev/null || true
+        for PAT in 'agent\.py' 'pcap-uploader' 'zeek' 'suricata' 'arkime-capture' 'vector --config' '/usr/local/bin/vector'; do
+            pkill -9 -f "$PAT" 2>/dev/null || true
+        done
+        sleep 2
+        STILL=""
+        for PAT in 'agent\.py' 'zeek' 'suricata' 'arkime-capture' 'vector --config'; do
+            pgrep -f "$PAT" > /dev/null 2>&1 && STILL="$STILL $PAT"
+        done
+        if [ -n "$STILL" ]; then
+            warn "  ⚠️  Could not stop:$STILL - check with: pgrep -af 'agent.py|zeek|suricata|vector'"
+        else
+            log "  ✅ Everything stopped"
+        fi
+    else
+        log "  ✅ No sensor processes running"
+    fi
+    if systemctl is-active --quiet ndr-agent 2>/dev/null; then
+        warn "  ⚠️  ndr-agent service is still active - run: sudo systemctl stop ndr-agent"
+    fi
 fi
 
 # ══════════════════════════════════════════════════════

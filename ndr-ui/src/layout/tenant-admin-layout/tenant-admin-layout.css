@@ -197,36 +197,6 @@ body:has(.crm-sidebar) .crm-sidebar {
   color: #38bdf8;
 }
 
-/* Sidebar Footer */
-.crm-sidebar-footer {
-  padding: 16px 22px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.crm-footer-link {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-  color: #64748b;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-
-.crm-footer-link:hover {
-  color: #cbd5e1;
-}
-
-.crm-footer-pdf {
-  font-family: var(--font-mono, monospace);
-  font-size: 8px;
-  font-weight: 800;
-  padding: 1px 4px;
-  background: #ef4444;
-  color: #ffffff;
-  border-radius: 3px;
-}
-
 /* ── Main Shell ──────────────────────────────────────────────────── */
 .crm-main-shell {
   min-height: calc(100vh + 240px);

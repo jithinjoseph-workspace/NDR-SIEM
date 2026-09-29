@@ -190,7 +190,7 @@ output.elasticsearch:
 
   deleteSource(id: string) {
     if (!confirm('Delete this source?')) return;
-    this.http.delete(`/api/siem/sources/${id}`).subscribe({ next: () => this.load() });
+    this.http.delete(`/api/siem/sources/${id}`).subscribe({ next: () => this.load(), error: () => {} });
   }
 
   statusIcon(s: string) {

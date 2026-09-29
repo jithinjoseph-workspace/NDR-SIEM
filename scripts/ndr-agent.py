@@ -1006,13 +1006,28 @@ def unisolate_device(target_ip: str) -> dict:
     return {"status": "unisolated", "ip": target_ip}
 
 
+def _clickhouse_password():
+    """ClickHouse password for the local stack: env var first, then the install's .env.
+    Never hardcoded - returns "" if unavailable (the sync loop just retries)."""
+    pw = os.environ.get("CLICKHOUSE_PASSWORD", "")
+    if pw:
+        return pw
+    try:
+        for line in (INSTALL_DIR / ".env").read_text().splitlines():
+            if line.startswith("CLICKHOUSE_PASSWORD="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def suppression_sync_loop():
     """Poll ClickHouse directly every 5 min for pending suppress_sid commands.
     ClickHouse uses network_mode: host so localhost:8123 is always reachable.
     No sensor key needed — this runs on the same machine as the NDR stack."""
     import urllib.request, urllib.parse, base64
     ch_url   = 'http://localhost:8123/'
-    ch_auth  = base64.b64encode(b'ndr:ndr123').decode()
+    ch_auth  = base64.b64encode(f'ndr:{_clickhouse_password()}'.encode()).decode()
     headers  = {'Authorization': f'Basic {ch_auth}'}
 
     sid  = SENSOR_ID.replace("'", "''")

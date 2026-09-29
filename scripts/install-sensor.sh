@@ -290,7 +290,7 @@ step "Capture Utilities"
 log "Checking packet capture tools..."
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-  software-properties-common zstd > /dev/null 2>&1 || true
+  software-properties-common zstd tcpdump > /dev/null 2>&1 || true
 
 # Helper: returns tshark major.minor as integers
 tshark_ver_ok() {
@@ -571,6 +571,9 @@ IFACE=${IFACE}
 KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
 NDR_AGENT_SECRET=${NDR_AGENT_SECRET}
 INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Optional: this sensor ignores its own traffic to the platform so it doesn't raise alerts about itself.
+# EXCLUDE_CLOUD_TRAFFIC=0
+# EXCLUDE_CLOUD_IPS=203.0.113.10,203.0.113.11
 EOF
 
 # ── Search Backend ────────────────────────────────
@@ -785,7 +788,14 @@ EOF
         [ -f "$d/$alt.zeek" ] || [ -f "$d/$alt" ] && { echo "@load $alt"; return; }
       done
     fi
-    warn "  Agent-Z: skipping missing script: $s"
+    # >&2 is required: zeek_load runs inside $(...) in the local.zeek heredoc
+    # below, which captures stdout into the file. warn() prints ANSI-colored
+    # text to stdout, so without this the escape codes (\x1b) land in
+    # local.zeek in place of an @load line and Zeek fails to parse it,
+    # crash-looping forever (seen live: "local.zeek, line 8: unrecognized
+    # character: '\x1b'" when misc/detect-traceroute is missing on the
+    # installed Zeek version). install.sh's copy already used plain stderr.
+    warn "  Agent-Z: skipping missing script: $s" >&2
   }
 
   tee "$ZEEK_SITE/local.zeek" > /dev/null << ZEEKCONF
@@ -1393,22 +1403,36 @@ method = "post"
 encoding.codec = "json"
 framing.method = "newline_delimited"
 
-[sinks.cloud_http.batch]
-max_events = 100
-timeout_secs = 1
+# Fewer, larger requests: at thousands of sensors one request per second per
+# sensor (100 events / 1 s) is thousands of requests and TLS records a second on
+# the platform. 1000 events or 5 s (whichever first) is ~5x fewer requests, and
+# gzip cuts the bytes sent (the platform decompresses request bodies).
+compression = "gzip"
 
+[sinks.cloud_http.batch]
+max_events = 1000
+max_bytes = 5000000
+timeout_secs = 5
+
+# Never give up on a batch because the platform is briefly down, restarting or answering
+# 429/503: with 5 attempts / 30 s a deploy or a burst silently threw batches away.
+# Backoff grows to at most 5 minutes so hundreds of sensors do not retry in lockstep.
+# A revoked key (401) is still not retried. 30 s per request: a 1000-event gzip batch over a
+# slow link can exceed 10 s, and a timeout only causes a retry (duplicate) of the same batch.
 [sinks.cloud_http.request]
-retry_attempts = 5
+retry_attempts = 1000000
 retry_initial_backoff_secs = 1
-retry_max_duration_secs = 30
-timeout_secs = 10
+retry_max_duration_secs = 300
+timeout_secs = 30
 headers.X-Sensor-Key = "${API_KEY}"
 headers.Content-Type = "application/x-ndjson"
 
+# "block" instead of "drop_newest": when the buffer is full Vector stops reading the log
+# files (their checkpoints keep the position) and resumes later, instead of dropping events.
 [sinks.cloud_http.buffer]
 type = "disk"
-max_size = 536870912
-when_full = "drop_newest"
+max_size = 1073741824
+when_full = "block"
 EOF
 
 # ── Sensor Agent ──────────────────────────────────
@@ -1417,7 +1441,7 @@ log "Creating sensor agent..."
 cat > /opt/ndr-sensor/agent.py << 'AGENT'
 #!/usr/bin/env python3
 """NDR Sensor Agent v2 — monitors and restarts all services"""
-import os, time, subprocess, threading, requests, json, hashlib, re
+import os, time, subprocess, threading, requests, json, hashlib, re, socket, ipaddress
 from datetime import datetime
 
 config = {}
@@ -1431,6 +1455,28 @@ CLOUD_URL = config.get('CLOUD_URL', '').rstrip('/')
 TENANT_ID = config.get('TENANT_ID', '')
 API_KEY   = config.get('API_KEY', '')
 IFACE     = config.get('IFACE', 'eth0')
+
+# ── Don't alert on this sensor's own reporting traffic ───────────────────────
+# The sensor ships its logs to the platform (CLOUD_URL) over the same interface
+# Zeek and Suricata are watching, so that traffic is analysed and can raise
+# alerts about the monitoring system itself (measured on one tenant: 115 of 129
+# alerts). A narrow capture filter drops just that conversation: packets between
+# THIS sensor's own addresses and the platform's addresses on the platform's
+# port, in both directions (dropping only one direction would leave Zeek half a
+# connection and it would alert on that instead). Everything else - other hosts,
+# other ports, other destinations, other hosts talking to the platform - is
+# still analysed. Arkime's packet capture and Vector's log shipping are not
+# affected. Optional sensor.conf keys:
+#   EXCLUDE_CLOUD_TRAFFIC=0         turn the filter off
+#   EXCLUDE_CLOUD_IPS=1.2.3.4,...   extra platform addresses (CLOUD_URL behind a proxy, etc.)
+EXCLUDE_ENABLED      = config.get('EXCLUDE_CLOUD_TRAFFIC', '1').strip() != '0'
+EXCLUDE_EXTRA_IPS    = [x.strip() for x in config.get('EXCLUDE_CLOUD_IPS', '').split(',') if x.strip()]
+EXCLUDE_BPF_FILE     = '/etc/ndr/exclude.bpf'
+EXCLUDE_RECHECK_SECS = 300
+CURRENT_EXCLUDE_BPF  = ''      # the filter Zeek/Suricata were last started with
+_exclude_checked_at  = 0.0
+_exclude_failed      = {'zeek': False, 'suricata': False}   # a tool that won't run with the filter
+_down_with_filter    = {'zeek': 0, 'suricata': 0}
 
 # Prevents check_and_restart from undoing an intentional stop command
 MANUALLY_STOPPED = False
@@ -1462,18 +1508,146 @@ def is_port_open(port):
 def is_capture_running():
     return is_running('arkime/bin/capture')
 
+# ── Exclusion filter (see the comment block near the top) ────────────────────
+
+def _valid_ip(s):
+    try:
+        return str(ipaddress.ip_address(str(s).strip().split('%')[0]))
+    except ValueError:
+        return None
+
+def cloud_endpoint():
+    """(host, port) of CLOUD_URL; port defaults from the scheme."""
+    from urllib.parse import urlparse
+    u = urlparse(CLOUD_URL)
+    return u.hostname or '', (u.port or (443 if u.scheme == 'https' else 80))
+
+def resolve_cloud_ips(host):
+    """Every address the platform's hostname resolves to (A and AAAA). Empty on failure."""
+    ip = _valid_ip(host)
+    if ip:
+        return {ip}
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return set()
+    return {a for a in (_valid_ip(i[4][0]) for i in infos) if a}
+
+def own_ips(iface):
+    """This machine's addresses on the capture interface."""
+    try:
+        out = subprocess.run(['ip', '-o', 'addr', 'show', 'dev', iface],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    ips = set()
+    for line in out.splitlines():
+        p = line.split()
+        if len(p) >= 4 and p[2] in ('inet', 'inet6'):
+            ip = _valid_ip(p[3].split('/')[0])
+            if ip:
+                ips.add(ip)
+    return ips
+
+def build_exclude_bpf(own, cloud, port, cap=16):
+    """BPF that drops traffic between this sensor and the platform on `port`,
+    both directions. '' when either side is unknown (then nothing is excluded)."""
+    own   = sorted({a for a in (_valid_ip(x) for x in own) if a})[:cap]
+    cloud = sorted({a for a in (_valid_ip(x) for x in cloud) if a})[:cap]
+    if not own or not cloud or not isinstance(port, int) or not (0 < port < 65536):
+        return ''
+    o = ' or '.join('host ' + a for a in own)
+    c = ' or '.join('host ' + a for a in cloud)
+    return 'not ((%s) and (%s) and port %d)' % (o, c, port)
+
+def bpf_ok(expr):
+    """True if libpcap accepts the filter. Without tcpdump we can't ask; the expression is
+    built only from validated addresses and an integer port, so it is well-formed anyway."""
+    try:
+        return subprocess.run(['tcpdump', '-d', expr], capture_output=True, timeout=10).returncode == 0
+    except FileNotFoundError:
+        return True
+    except subprocess.SubprocessError:
+        return False
+
+def desired_exclude_bpf():
+    """The filter the running tools should use, '' for none, or None to keep what is in
+    place (name resolution failed - a DNS blip must not drop the exclusion and restart)."""
+    if not EXCLUDE_ENABLED:
+        return ''
+    host, port = cloud_endpoint()
+    cloud = resolve_cloud_ips(host) | {i for i in map(_valid_ip, EXCLUDE_EXTRA_IPS) if i}
+    if not cloud:
+        return None
+    own = own_ips(IFACE)
+    if own & cloud:
+        return ''   # sensor runs on the platform's own machine: nothing to exclude
+    bpf = build_exclude_bpf(own, cloud, port)
+    if bpf and not bpf_ok(bpf):
+        print("[NDR] Exclusion filter rejected by libpcap, not using it: " + bpf)
+        return ''
+    return bpf
+
+def apply_exclusion(restart):
+    """Recompute the filter. If it changed: remember it, write it for Suricata, and
+    (when `restart`) restart Zeek and Suricata so it takes effect."""
+    global CURRENT_EXCLUDE_BPF
+    want = desired_exclude_bpf()
+    if want is None or want == CURRENT_EXCLUDE_BPF:
+        return
+    try:
+        with open(EXCLUDE_BPF_FILE, 'w') as f:
+            f.write(want + '\n')
+    except OSError as e:
+        print("[NDR] Could not write %s: %s" % (EXCLUDE_BPF_FILE, e))
+        return
+    print("[NDR] Exclusion filter %s: %s" % ('set' if want else 'cleared', want or '(none)'))
+    CURRENT_EXCLUDE_BPF = want
+    _exclude_failed['zeek'] = _exclude_failed['suricata'] = False   # new filter, new chance
+    if restart and not MANUALLY_STOPPED:
+        start_zeek()
+        start_suricata()
+
+def refresh_exclusion():
+    """Called every check-in; re-resolves the platform address every few minutes."""
+    global _exclude_checked_at
+    if time.time() - _exclude_checked_at < EXCLUDE_RECHECK_SECS:
+        return
+    _exclude_checked_at = time.time()
+    apply_exclusion(restart=True)
+
+def _note_down(name):
+    """A tool that keeps dying while it runs with the filter: stop using the filter for it."""
+    if CURRENT_EXCLUDE_BPF and not _exclude_failed[name]:
+        _down_with_filter[name] += 1
+        if _down_with_filter[name] >= 3:
+            _exclude_failed[name] = True
+            print("[NDR] %s keeps stopping with the exclusion filter - running it without the filter" % name)
+
+def _launch_zeek(use_filter):
+    cmd = ["/opt/zeek/bin/zeek", "-i", IFACE]
+    if use_filter:
+        cmd += ["-f", CURRENT_EXCLUDE_BPF]
+    cmd += ["local", "Log::default_logdir=/var/log/ndr/zeek"]
+    subprocess.Popen(cmd,
+        stdout=open("/var/log/ndr/zeek/startup.log", "w"),
+        stderr=subprocess.STDOUT
+    )
+
 def start_zeek():
     try:
         subprocess.run(['pkill', '-9', '-f', 'zeek'],
             capture_output=True)
         time.sleep(2)
-        subprocess.Popen(
-            ["/opt/zeek/bin/zeek", "-i", IFACE,
-             "local",
-             "Log::default_logdir=/var/log/ndr/zeek"],
-            stdout=open("/var/log/ndr/zeek/startup.log", "w"),
-            stderr=subprocess.STDOUT
-        )
+        use_filter = bool(CURRENT_EXCLUDE_BPF) and not _exclude_failed['zeek']
+        _launch_zeek(use_filter)
+        if use_filter:
+            # A bad option makes Zeek exit straight away; never leave the sensor without Zeek.
+            time.sleep(4)
+            if not is_running('zeek'):
+                print("[NDR] Zeek did not start with the exclusion filter - starting it without")
+                _exclude_failed['zeek'] = True
+                _launch_zeek(False)
         print("[NDR] ✅ Zeek started")
         return True
     except Exception as e:
@@ -1496,6 +1670,7 @@ def start_suricata():
             ["suricata",
              "-c", "/etc/suricata/suricata.yaml",
              "-i", IFACE,
+             *(["-F", EXCLUDE_BPF_FILE] if CURRENT_EXCLUDE_BPF and not _exclude_failed['suricata'] else []),
              "-l", "/var/log/ndr/suricata",
              "-D",
              "--pidfile", "/tmp/suricata.pid",
@@ -1723,16 +1898,20 @@ def check_and_restart():
 
     if not is_running('zeek'):
         print("[NDR] Zeek down — restarting")
+        _note_down('zeek')
         start_zeek()
         statuses['agent-z'] = 'restarting'
     else:
+        _down_with_filter['zeek'] = 0
         statuses['agent-z'] = 'running'
 
     if not is_running('suricata'):
         print("[NDR] Suricata down — restarting")
+        _note_down('suricata')
         start_suricata()
         statuses['agent-s'] = 'restarting'
     else:
+        _down_with_filter['suricata'] = 0
         statuses['agent-s'] = 'running'
 
     if not is_running('vector'):
@@ -1987,6 +2166,67 @@ def check_and_execute_command():
     except Exception as e:
         print(f"[NDR] Command poll error: {e}")
 
+# ── Key revoked by an admin: stop shipping and remove this sensor ────────────
+# The platform answers HTTP 401 {"status":"revoked"} to a key that was revoked
+# (and only to someone holding that exact key). Two answers in a row are
+# required so a single odd reply can never wipe a sensor. Optional sensor.conf
+# key UNINSTALL_ON_REVOKE=0 keeps the software installed and only stops it.
+UNINSTALL_ON_REVOKE  = config.get('UNINSTALL_ON_REVOKE', '1').strip() != '0'
+REVOKED_CONFIRMS     = 2
+_revoked_seen        = 0
+_removal_started     = False
+REMOVAL_SCRIPT       = '/tmp/ndr-remove-sensor.sh'
+
+def _is_revoked_reply(resp):
+    if resp.status_code != 401:
+        return False
+    try:
+        return resp.json().get('status') == 'revoked'
+    except Exception:
+        return False
+
+def handle_revoked():
+    """Called after the platform confirmed twice that this sensor's key is revoked."""
+    global MANUALLY_STOPPED, _removal_started
+    MANUALLY_STOPPED = True
+    print("[NDR] *** This sensor's key was REVOKED - stopping all services ***")
+    execute_command('stop')          # log shipping stops right away
+    if not UNINSTALL_ON_REVOKE:
+        print("[NDR] UNINSTALL_ON_REVOKE=0 - services stopped, software left in place")
+        return
+    if _removal_started:
+        return
+    try:
+        r = requests.get(f'{CLOUD_URL}/api/uninstall-sensor.sh', timeout=15)
+        body = r.text
+        # sanity: only run what really is the uninstall script
+        if r.status_code != 200 or not body.startswith('#!') or 'NDR Sensor Uninstall' not in body:
+            raise RuntimeError(f"unexpected uninstall script (HTTP {r.status_code})")
+        with open(REMOVAL_SCRIPT, 'w') as f:
+            f.write(body)
+        os.chmod(REMOVAL_SCRIPT, 0o700)
+    except Exception as e:
+        # services are stopped; try again on the next check-in
+        print(f"[NDR] Could not fetch the uninstall script ({e}) - will retry")
+        return
+    # The script stops ndr-agent (this process), so it must run OUTSIDE the
+    # agent's systemd cgroup or it would be killed part-way. A transient unit does that.
+    log_path = '/var/log/ndr-sensor-removal.log'
+    try:
+        if subprocess.run(['which', 'systemd-run'], capture_output=True).returncode == 0:
+            cmd = ['systemd-run', '--unit=ndr-sensor-removal', '--collect',
+                   f'--property=StandardOutput=file:{log_path}',
+                   f'--property=StandardError=file:{log_path}',
+                   'bash', REMOVAL_SCRIPT]
+            subprocess.run(cmd, capture_output=True, timeout=20, check=True)
+        else:
+            subprocess.Popen(['bash', REMOVAL_SCRIPT], stdout=open(log_path, 'a'),
+                             stderr=subprocess.STDOUT, start_new_session=True)
+        _removal_started = True
+        print(f"[NDR] Uninstall started (log: {log_path})")
+    except Exception as e:
+        print(f"[NDR] Could not start the uninstall ({e}) - services stay stopped, will retry")
+
 def do_checkin():
     """Single combined check-in — replaces the old 3 separate polls
     (heartbeat, command, pcap pending) with one request.
@@ -2018,6 +2258,15 @@ def do_checkin():
             headers={'X-Sensor-Key': API_KEY},
             timeout=10
         )
+        global _revoked_seen
+        if _is_revoked_reply(resp):
+            _revoked_seen += 1
+            print(f"[NDR] Platform says this sensor key is revoked ({_revoked_seen}/{REVOKED_CONFIRMS})")
+            if _revoked_seen >= REVOKED_CONFIRMS:
+                handle_revoked()
+            return 10
+        _revoked_seen = 0
+
         if resp.status_code != 200:
             print(f"[NDR] Checkin HTTP {resp.status_code}")
             return 30
@@ -2220,6 +2469,7 @@ if __name__ == '__main__':
     print("[NDR] Starting all services...")
     discover_subnets()
     bootstrap_from_arp_cache()
+    apply_exclusion(restart=False)   # before the first start so no restart is needed
     start_zeek()
     start_suricata()
     start_vector()
@@ -2232,6 +2482,7 @@ if __name__ == '__main__':
     checkin_interval = 30  # server will update this on first response
     while True:
         checkin_interval = do_checkin() or checkin_interval
+        refresh_exclusion()
         time.sleep(checkin_interval)
 AGENT
 chmod +x /opt/ndr-sensor/agent.py
@@ -2508,16 +2759,23 @@ def extract_with_tcpdump(pcap_files, meta, output):
             decompressed.append(d)
     if not decompressed:
         return False
-    # BPF: match both directions of the flow
-    bpf = (f"(host {src_ip} and host {dst_ip} "
-           f"and port {src_port} and port {dst_port})")
+    # BPF: match both directions of the flow. A port that is missing or 0 in the session
+    # metadata must not be part of the filter ("port 0" matches nothing).
+    clauses = [f"host {src_ip}", f"host {dst_ip}"]
+    for port in (src_port, dst_port):
+        if str(port).strip() not in ('', '0', 'None'):
+            clauses.append(f"port {port}")
+    bpf = "(" + " and ".join(clauses) + ")"
     try:
         cmd = ['tcpdump', '-r', decompressed[0],
                '-w', output, bpf]
         result = subprocess.run(
             cmd, capture_output=True, timeout=60)
+        # A pcap with no packets is exactly 24 bytes (the file header). That used to count as
+        # success, so nothing else was tried and an EMPTY capture was uploaded. A useful
+        # capture holds at least one packet: 24-byte header + 16-byte record header + data.
         if (os.path.exists(output) and
-                os.path.getsize(output) >= 24):
+                os.path.getsize(output) > 40):
             sz = os.path.getsize(output)
             src_sz = os.path.getsize(decompressed[0])
             # Same sanity check: if output ≈ full file,

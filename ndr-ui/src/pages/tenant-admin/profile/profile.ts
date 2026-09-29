@@ -83,7 +83,8 @@ export class Profile implements OnInit {
           this.showSecretCode = true;
           this.showMessage('New secret code generated — save it somewhere safe!', 'success');
           this.auth.refreshUser().subscribe({
-            next: () => { this.currentUser.set(this.auth.getUser() || {}); this.cdr.markForCheck(); }
+            next: () => { this.currentUser.set(this.auth.getUser() || {}); this.cdr.markForCheck(); },
+            error: () => {},
           });
         } else {
           this.showMessage(res.message || 'Failed to generate code', 'error');
@@ -122,7 +123,8 @@ export class Profile implements OnInit {
             next: () => {
               this.currentUser.set(this.auth.getUser() || {});
               this.cdr.markForCheck();
-            }
+            },
+            error: () => {},
           });
         } else {
           this.showMessage(res.message || 'Failed to update email', 'error');

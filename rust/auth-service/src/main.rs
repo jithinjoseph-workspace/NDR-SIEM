@@ -22,6 +22,9 @@ pub struct AppState {
     pub token_ttl:   usize,
     /// Refresh token TTL in seconds.  Default: 604800 (7 days).
     pub refresh_ttl: usize,
+    /// Max simultaneous sessions per user; the oldest is evicted on login past
+    /// this. Default: 5. 0 disables the cap.
+    pub max_sessions: usize,
     /// Verified license claims from LICENSE_TOKEN — None means DB-based feature lookup.
     pub verified_license: Option<Arc<license::LicenseClaims>>,
 }
@@ -96,6 +99,8 @@ async fn main() -> anyhow::Result<()> {
                         .ok().and_then(|v| v.parse().ok()).unwrap_or(3600),
         refresh_ttl: std::env::var("REFRESH_TTL_SECS")
                         .ok().and_then(|v| v.parse().ok()).unwrap_or(604_800),
+        max_sessions: std::env::var("MAX_CONCURRENT_SESSIONS")
+                        .ok().and_then(|v| v.parse().ok()).unwrap_or(5),
         verified_license,
     };
 

@@ -8,7 +8,11 @@ EXPORT_DIR="/home/user/ch-export"
 mkdir -p "$EXPORT_DIR"
 
 CH_USER="ndr"
-CH_PASS="ndr123"
+# Password comes from the environment or the install's .env - never hardcoded.
+# (Migrating from an OLD host ClickHouse that still uses a different password?
+#  run:  CLICKHOUSE_PASSWORD='that-password' ./scripts/ch-export.sh)
+CH_PASS="${CLICKHOUSE_PASSWORD:-$(grep '^CLICKHOUSE_PASSWORD=' "$(dirname "$0")/../.env" 2>/dev/null | cut -d= -f2-)}"
+[ -n "$CH_PASS" ] || { echo "ERROR: CLICKHOUSE_PASSWORD not set and not found in .env" >&2; exit 1; }
 CH_DEFAULT_USER="default"
 
 log()  { echo -e "\033[0;32m[EXPORT]\033[0m $1"; }

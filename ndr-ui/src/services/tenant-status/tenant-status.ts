@@ -15,6 +15,16 @@ import { AuthService } from '../auth/auth';
 @Injectable({ providedIn: 'root' })
 export class TenantStatusService {
   readonly status = signal<'OPERATIONAL' | 'DEGRADED' | 'CHECKING...'>('CHECKING...');
+  /** Raw sensor-keys response from the shared poll, already tenant-scoped by
+   *  the backend. Other components (e.g. the tenant-admin Users page) should
+   *  read this reactively instead of calling getSensorKeys() themselves -
+   *  that used to happen in parallel with this poll's own call, a genuinely
+   *  redundant fetch on every page load. */
+  readonly sensorKeys = signal<any[]>([]);
+  /** True once the first fetch completes (success or error) - lets consumers
+   *  tell "not fetched yet" apart from "fetched, tenant genuinely has zero
+   *  sensors", since sensorKeys() alone reads as [] in both cases. */
+  readonly sensorKeysLoaded = signal(false);
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -43,6 +53,8 @@ export class TenantStatusService {
   private refresh() {
     this.api.getSensorKeys().subscribe({
       next: (sensors: any[]) => {
+        this.sensorKeys.set(sensors);
+        this.sensorKeysLoaded.set(true);
         const user = this.auth.getUser();
         const mySensorIds = user?.sensor_ids || [];
         // Backend already scopes sensors to the tenant. If the user is a
@@ -72,7 +84,10 @@ export class TenantStatusService {
           error: () => this.status.set('DEGRADED'),
         });
       },
-      error: () => this.status.set('DEGRADED'),
+      error: () => {
+        this.status.set('DEGRADED');
+        this.sensorKeysLoaded.set(true);
+      },
     });
   }
 }

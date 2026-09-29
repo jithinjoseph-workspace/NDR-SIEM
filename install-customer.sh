@@ -308,7 +308,7 @@ OPENAI_API_KEY=
 GROQ_API_KEY=
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
-INGEST_RATE_LIMIT=50000
+INGEST_RATE_LIMIT=0
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
@@ -491,7 +491,7 @@ step "Analytics Database  (ClickHouse)"
 
 if [ "$DEPLOY_MODE" = "local" ]; then
     log "ClickHouse — Docker container cluster (2 nodes, bridge network)"
-    log "  Credentials:  ndr / ndr123"
+    log "  Credentials:  user ndr, random password stored in $INSTALL_DIR/.env"
     log "  Endpoint:     http://localhost:8123  (node 1, localhost-only)"
 
     CH_NEEDS_IMPORT=false
@@ -558,7 +558,14 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     CLICKHOUSE_URL="http://localhost:8123"
     CLICKHOUSE_URL_SECONDARY="http://localhost:8123"
     CLOUD_CH_USER="ndr"
-    CLOUD_CH_PASS="ndr123"
+    # Use the random password already written to .env earlier in this run. It was
+    # previously forced to a hardcoded "ndr123" here, giving every install the same
+    # database credential. ClickHouse reads it from CLICKHOUSE_PASSWORD at start-up,
+    # so a re-run simply rotates it consistently across the stack.
+    CLOUD_CH_PASS=$(grep '^CLICKHOUSE_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    if [ -z "$CLOUD_CH_PASS" ]; then
+        CLOUD_CH_PASS=$(openssl rand -hex 16 2>/dev/null || echo "$(date +%s%N | sha256sum | head -c 32)")
+    fi
     CLOUD_KAFKA="kafka1:9092,kafka2:9092,kafka3:9092"
 else
     log "Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
@@ -820,7 +827,7 @@ OPENAI_API_KEY=$OPENAI_API_KEY
 GROQ_API_KEY=
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
-INGEST_RATE_LIMIT=50000
+INGEST_RATE_LIMIT=0
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 LICENSE_PUBLIC_KEY=$LICENSE_PUBLIC_KEY
@@ -969,113 +976,9 @@ else
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Write customer nginx.conf — same as default but adds location / → ndr-ui
-log "Writing customer nginx config..."
-mkdir -p "$INSTALL_DIR/config/nginx"
-cat > "$INSTALL_DIR/config/nginx/nginx.conf" << 'NGINXEOF'
-events {
-    worker_connections 1024;
-}
-
-http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-
-    resolver 127.0.0.11 valid=5s ipv6=off;
-    resolver_timeout 5s;
-
-    upstream clickhouse_pool {
-        least_conn;
-        server clickhouse1:8123 max_fails=2 fail_timeout=10s;
-        server clickhouse2:8123 max_fails=2 fail_timeout=10s backup;
-    }
-
-    server {
-        listen 8123;
-        location / {
-            proxy_pass         http://clickhouse_pool;
-            proxy_set_header   Host $host;
-            proxy_set_header   X-Real-IP $remote_addr;
-            proxy_connect_timeout 3s;
-            proxy_read_timeout    60s;
-            proxy_next_upstream   error timeout http_502 http_503;
-        }
-    }
-
-    upstream ndr_engines {
-        least_conn;
-        server ndr-engine-1:3000 max_fails=3 fail_timeout=30s;
-        server ndr-engine-2:3000 max_fails=3 fail_timeout=30s;
-        server ndr-engine-3:3000 max_fails=3 fail_timeout=30s;
-        # ENGINES_MARKER
-    }
-
-    upstream ws_engines {
-        ip_hash;
-        server ndr-engine-1:3000;
-        server ndr-engine-2:3000;
-        server ndr-engine-3:3000;
-        # WS_ENGINES_MARKER
-    }
-
-    server {
-        listen 80;
-        server_name _;
-        return 301 https://$host$request_uri;
-    }
-
-    server {
-        listen 443 ssl;
-        client_max_body_size 100m;
-
-        ssl_certificate     /etc/nginx/ssl/ndr.crt;
-        ssl_certificate_key /etc/nginx/ssl/ndr.key;
-
-        ssl_protocols       TLSv1.2 TLSv1.3;
-        ssl_ciphers         HIGH:!aNULL:!MD5;
-        ssl_session_cache   shared:SSL:10m;
-        ssl_session_timeout 10m;
-
-        add_header X-Frame-Options        "SAMEORIGIN"  always;
-        add_header X-Content-Type-Options "nosniff"     always;
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws: https:; worker-src 'self' blob:;" always;
-
-        location /ws {
-            proxy_pass         http://ws_engines;
-            proxy_http_version 1.1;
-            proxy_set_header   Upgrade $http_upgrade;
-            proxy_set_header   Connection "upgrade";
-            proxy_set_header   Host $host;
-            proxy_read_timeout 3600s;
-        }
-
-        location /api {
-            proxy_pass         http://ndr_engines;
-            proxy_set_header   Host $host;
-            proxy_set_header   X-Real-IP $remote_addr;
-            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header   X-Forwarded-Proto $scheme;
-        }
-
-        location /health {
-            proxy_pass http://ndr_engines;
-        }
-
-        # UI — served by the ndr-ui container (nginx + Angular SPA)
-        location / {
-            proxy_pass         http://ndr-ui:80;
-            proxy_http_version 1.1;
-            proxy_set_header   Host $host;
-            proxy_set_header   X-Real-IP $remote_addr;
-            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header   X-Forwarded-Proto $scheme;
-            proxy_read_timeout 60s;
-        }
-    }
-}
-NGINXEOF
-log "Customer nginx config written"
+# nginx: the config/nginx/nginx.conf downloaded above with the rest of config/ is used as-is.
+# (An embedded older copy used to be written here, overwriting the repo's file.)
+log "Using config/nginx/nginx.conf"
 
 sudo docker compose --profile onpremise down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true

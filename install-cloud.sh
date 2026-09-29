@@ -15,11 +15,12 @@ if [ ! -f "$(dirname "$0")/docker-compose.yml" ]; then
     echo ""
     echo "  NDR Cloud Installer — downloading required files..."
     echo ""
-    read -rp "  GitHub token (provided by Proma Secure): " GH_TOKEN
+    read -rp "  GitHub token (optional, press Enter to skip): " GH_TOKEN
     INSTALL_DIR="${1:-/opt/ndr}"
     echo "  Installing to: $INSTALL_DIR"
     sudo mkdir -p "$INSTALL_DIR"
-    sudo chmod 755 "$INSTALL_DIR"
+    sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"
+    chmod 755 "$INSTALL_DIR"
 
     echo "  Downloading config files via GitHub API..."
     GH_TOKEN="$GH_TOKEN" INSTALL_DIR="$INSTALL_DIR" python3 - << 'PYEOF'
@@ -27,8 +28,10 @@ import urllib.request, json, os, base64, sys
 
 token    = os.environ["GH_TOKEN"]
 dest     = os.environ["INSTALL_DIR"]
-api_base = "https://api.github.com/repos/jithinjoseph-workspace/NDR-Demo"
-headers  = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+api_base = "https://api.github.com/repos/jithinjoseph-workspace/NDR-SIEM"
+headers  = {"Accept": "application/vnd.github.v3+json"}
+if token:
+    headers["Authorization"] = f"token {token}"
 
 def gh_get(url):
     req = urllib.request.Request(url, headers=headers)
@@ -40,20 +43,37 @@ def gh_get(url):
         sys.exit(1)
 
 def download_file(repo_path, local_path):
-    meta = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
-    content = base64.b64decode(meta["content"].replace("\n", ""))
+    meta = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=auth/service"))
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    with open(local_path, "wb") as f:
-        f.write(content)
+    # GitHub's Contents API only inlines base64 `content` for files under 1MB -
+    # for anything larger it's present but empty, with a `download_url`
+    # (raw.githubusercontent.com) instead. Silently writing an empty file here
+    # was a real, undetected bug for any file over that size (e.g. the 65MB
+    # GeoLite2-City.mmdb).
+    if meta.get("content"):
+        content = base64.b64decode(meta["content"].replace("\n", ""))
+        with open(local_path, "wb") as f:
+            f.write(content)
+    elif meta.get("download_url"):
+        req = urllib.request.Request(meta["download_url"], headers=headers)
+        with urllib.request.urlopen(req) as r, open(local_path, "wb") as f:
+            f.write(r.read())
+    else:
+        print(f"  ERROR: {repo_path} has neither inline content nor a download_url")
+        sys.exit(1)
+    on_disk = os.path.getsize(local_path)
+    if on_disk != meta.get("size", on_disk):
+        print(f"  ERROR: {repo_path} downloaded as {on_disk} bytes, expected {meta.get('size')}")
+        sys.exit(1)
     print(f"    {repo_path}")
 
 def download_dir(repo_path, local_path):
     os.makedirs(local_path, exist_ok=True)
-    items = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=arkime"))
+    items = json.loads(gh_get(f"{api_base}/contents/{repo_path}?ref=auth/service"))
     for item in items:
         target = os.path.join(local_path, item["name"])
         if item["type"] == "file":
-            meta = json.loads(gh_get(f"{api_base}/contents/{item['path']}?ref=arkime"))
+            meta = json.loads(gh_get(f"{api_base}/contents/{item['path']}?ref=auth/service"))
             content = base64.b64decode(meta["content"].replace("\n", ""))
             with open(target, "wb") as f:
                 f.write(content)
@@ -63,15 +83,44 @@ def download_dir(repo_path, local_path):
 
 download_file("docker-compose.yml",  f"{dest}/docker-compose.yml")
 download_file("install-cloud.sh",    f"{dest}/install-cloud.sh")
-download_file("start.sh",            f"{dest}/start.sh")
-download_file("stop.sh",             f"{dest}/stop.sh")
-download_file("status.sh",           f"{dest}/status.sh")
-download_dir("config",               f"{dest}/config")
+# NOT start.sh/stop.sh/status.sh here - those are install.sh/install-customer.sh's
+# on-prem scripts (PRODUCT_MODE, --profile onpremise, systemd Agent-Z/Agent-S,
+# PRODUCT_MODE nginx variants). Cloud mode writes its own
+# versions later, once docker-compose.cloud.yml actually exists to reference.
+
+# Only the config files cloud mode's docker-compose.yml actually mounts -
+# not the whole config/ tree (which also has ClickHouse
+# files it does not use, a Dockerfile+xml unused by the pre-built clickhouse image, a
+# Vector config cloud mode never runs, and a stale dev-machine ndr.crt/
+# ndr.key that would block generating a real cert for this install).
+for f in [
+    "config/clickhouse/init.sql",
+    "config/clickhouse/cluster/keeper-config.xml",
+    "config/clickhouse/cluster/ch1-config.xml",
+    "config/clickhouse/cluster/ch2-config.xml",
+    "config/clickhouse/cluster/z-ndr-listen.xml",
+    "config/clickhouse/cluster/users.xml",
+    "config/nginx/nginx.conf",
+]:
+    download_file(f, f"{dest}/{f}")
+
 download_dir("scripts",              f"{dest}/scripts")
 download_dir("rust/ndr-engine/rules",f"{dest}/rust/ndr-engine/rules")
+
+# Real, licensed MaxMind GeoLite2 databases - already committed to the repo
+# and baked into the ndr-engine image at build time (rust/Dockerfile copies
+# the whole ndr-engine/ tree in), but docker-compose.yml also bind-mounts
+# $INSTALL_DIR/rust/ndr-engine/data over that same in-image path. Without
+# downloading them here too, that mount source was an empty host directory
+# that silently shadowed the image's real data with nothing - the actual
+# cause of every geo-lookup returning empty, not a missing download step.
+for f in [
+    "rust/ndr-engine/data/GeoLite2-City.mmdb",
+    "rust/ndr-engine/data/GeoLite2-ASN.mmdb",
+]:
+    download_file(f, f"{dest}/{f}")
 PYEOF
     chmod +x "$INSTALL_DIR/install-cloud.sh"
-    chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
     echo ""
     exec bash "$INSTALL_DIR/install-cloud.sh" "$INSTALL_DIR"
 fi
@@ -139,6 +188,32 @@ PUBLIC_IP=$(curl -s --max-time 10 ifconfig.me 2>/dev/null || \
             curl -s --max-time 10 api.ipify.org 2>/dev/null || \
             hostname -I | awk '{print $1}')
 log "✅ Public IP: $PUBLIC_IP"
+
+# ── Public URL (optional) ─────────────────────
+# The auto-detected IP is only correct when this machine is directly reachable
+# on it. Behind a domain, reverse proxy or tunnel (ngrok, Cloudflare Tunnel...)
+# customers use a different address, and the API must allow that origin (CORS).
+# Set PUBLIC_URL in the environment, or enter it when asked. Leave it empty to
+# keep the default (the detected IP).
+PUBLIC_URL="${PUBLIC_URL:-}"
+if [ -z "$PUBLIC_URL" ] && [ -t 0 ]; then
+    read -rp "  Public URL sensors/users will use, e.g. https://ndr.example.com (Enter = use $PUBLIC_IP): " PUBLIC_URL
+fi
+PUBLIC_URL="${PUBLIC_URL%/}"
+if [ -n "$PUBLIC_URL" ] && ! echo "$PUBLIC_URL" | grep -qE '^https?://[^/[:space:]]+$'; then
+    case "$PUBLIC_URL" in
+        http://*|https://*) err "PUBLIC_URL must be just scheme://host[:port] (no path): got '$PUBLIC_URL'" ;;
+        *)                  PUBLIC_URL="https://$PUBLIC_URL" ;;
+    esac
+fi
+if [ -n "$PUBLIC_URL" ]; then
+    SENSOR_URL="$PUBLIC_URL"
+    CORS_VALUE="$PUBLIC_URL,http://$PUBLIC_IP,https://$PUBLIC_IP"
+    log "✅ Public URL: $PUBLIC_URL"
+else
+    SENSOR_URL="https://$PUBLIC_IP"
+    CORS_VALUE="http://$PUBLIC_IP"
+fi
 
 USERNAME=$(whoami)
 HOME_DIR=$HOME
@@ -308,24 +383,39 @@ sudo chmod -R 755 /opt/ndr
 sudo chown -R "$USERNAME:$USERNAME" /opt/ndr
 log "✅ Created /opt/ndr/pcap and /opt/ndr/evidence"
 
-# ── SSL directory setup ───────────────────────
-sudo mkdir -p /etc/ssl/ndr
-sudo chmod 750 /etc/ssl/ndr
-log "✅ SSL directory created at /etc/ssl/ndr"
-info "  Place your certificates here:"
-info "    /etc/ssl/ndr/cert.pem   (TLS certificate)"
-info "    /etc/ssl/ndr/key.pem    (TLS private key)"
-info "  Use certbot: certbot certonly --standalone -d your.domain.com"
+# ── TLS certificate for Nginx ──────────────────
+# nginx.conf (downloaded from the repo above) has SSL active by default and
+# reads from config/nginx/ssl/, which docker-compose.yml mounts into the
+# container at /etc/nginx/ssl/. Generate a self-signed cert there now so
+# nginx has something valid to start with; skipped if a real CA-signed one
+# has already been placed at the same path.
+SSL_DIR="$INSTALL_DIR/config/nginx/ssl"
+if [ ! -f "$SSL_DIR/ndr.crt" ] || [ ! -f "$SSL_DIR/ndr.key" ]; then
+    log "Generating self-signed TLS certificate for $PUBLIC_IP..."
+    mkdir -p "$SSL_DIR"
+    openssl req -x509 -nodes -days 730 -newkey rsa:2048 \
+        -keyout "$SSL_DIR/ndr.key" \
+        -out    "$SSL_DIR/ndr.crt" \
+        -subj   "/CN=$PUBLIC_IP" \
+        -addext "subjectAltName=IP:$PUBLIC_IP,IP:127.0.0.1,DNS:localhost" \
+        2>/dev/null
+    chmod 600 "$SSL_DIR/ndr.key"
+    log "✅ TLS certificate generated → $SSL_DIR"
+else
+    log "TLS certificate already exists — skipping generation"
+fi
+info "  For a real domain, use certbot then replace $SSL_DIR/ndr.crt + ndr.key,"
+info "  then: docker restart ndr-nginx"
 
 # ── Step 3: Configure ClickHouse ─────────────
 step "Configuring ClickHouse"
 
 # ClickHouse runs as a Docker container — started in Step 6 via docker compose up.
-# User (ndr/ndr123) is created via CREATE USER in init.sql on first start.
+# The ndr user takes its password from CLICKHOUSE_PASSWORD (random per install, see .env).
 # Schema (ndr database + all tables) is created by config/clickhouse/init.sql
 # on the first container start via /docker-entrypoint-initdb.d/.
 log "ClickHouse will start as a Docker container with the stack"
-log "  User:   ndr / ndr123  (via init.sql)"
+log "  User:   ndr  (random password stored in $INSTALL_DIR/.env)"
 log "  Ports:  8123/8124 (HTTP), 9000/9001 (native) — 2-node cluster"
 log "  Schema: auto-created on first start via init.sql"
 log "✅ ClickHouse configured"
@@ -343,6 +433,12 @@ if [ -f "$INSTALL_DIR/.env" ] && grep -q "^NDR_AGENT_SECRET=." "$INSTALL_DIR/.en
     NDR_AGENT_SECRET=$(grep "^NDR_AGENT_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
 else
     NDR_AGENT_SECRET=$(openssl rand -hex 32)
+fi
+
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^DEPLOY_WEBHOOK_SECRET=." "$INSTALL_DIR/.env"; then
+    DEPLOY_WEBHOOK_SECRET=$(grep "^DEPLOY_WEBHOOK_SECRET=" "$INSTALL_DIR/.env" | cut -d= -f2-)
+else
+    DEPLOY_WEBHOOK_SECRET=$(openssl rand -hex 32)
 fi
 
 # Random per-install ClickHouse password — was previously hardcoded to
@@ -397,7 +493,8 @@ CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 JWT_SECRET=$JWT_SECRET
 NDR_AGENT_SECRET=$NDR_AGENT_SECRET
-CORS_ORIGIN=http://$PUBLIC_IP
+DEPLOY_WEBHOOK_SECRET=$DEPLOY_WEBHOOK_SECRET
+CORS_ORIGIN=$CORS_VALUE
 OPENSEARCH_URL=
 ARKIME_URL=
 ARKIME_PASS=
@@ -405,7 +502,22 @@ OPENAI_API_KEY=
 GROQ_API_KEY=$GROQ_API_KEY
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
-INGEST_RATE_LIMIT=50000
+INGEST_RATE_LIMIT=0
+# How many tenants ndr-engine's background analysis tasks (entity scoring,
+# correlation, pattern matching, etc.) process at once, instead of one at a
+# time. Higher = faster full-tenant-set cycles but more concurrent load on
+# ClickHouse and any configured AI provider; size against your actual
+# hardware and tenant count. Default (10) is reasonable for a modest
+# tenant count - raise it for hundreds-to-thousands of tenants.
+TENANT_SCAN_CONCURRENCY=10
+# How many tenants' event batches the Kafka consumer's 100ms flush loop
+# writes to ClickHouse concurrently, instead of one at a time. Different
+# knob from TENANT_SCAN_CONCURRENCY above - this runs every 100ms in the
+# live ingestion path, not every few minutes-to-hours in background
+# analysis, so it needs its own value. Default (20) is reasonable for a
+# modest number of simultaneously-active tenants - raise it if many
+# tenants are pushing high event volume at the same time.
+INGEST_FLUSH_CONCURRENCY=20
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
@@ -423,93 +535,28 @@ else
     warn "  AI: No Groq key set — add a provider in Settings > AI Providers after install."
 fi
 
-# ── Step 5: Cloud nginx config ────────────────
-step "Writing cloud nginx configuration"
+# ── Step 5: Nginx config ──────────────────────
+# Already the correct file — downloaded from config/nginx/ (repo source of
+# truth, has the real auth_service upstream + /api/auth/* routing) by the
+# bootstrap step above. Nothing to write here; a separate embedded copy used
+# to overwrite it with a stale version missing auth_service entirely, which
+# silently broke login (and everything else under /api/auth/*) on every
+# cloud install — removed rather than kept in sync by hand.
+log "✅ Using downloaded nginx.conf (auth_service routing included)"
 
-mkdir -p "$INSTALL_DIR/config/nginx"
-cat > "$INSTALL_DIR/config/nginx/nginx.conf" << 'NGINXEOF'
-events { worker_connections 1024; }
-
-http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-
-    upstream ndr_engines {
-        least_conn;
-        server ndr-engine-1:3000 max_fails=3 fail_timeout=30s;
-        server ndr-engine-2:3000 max_fails=3 fail_timeout=30s;
-        server ndr-engine-3:3000 max_fails=3 fail_timeout=30s;
-    }
-
-    upstream ws_engines {
-        ip_hash;
-        server ndr-engine-1:3000;
-        server ndr-engine-2:3000;
-        server ndr-engine-3:3000;
-    }
-
-    # Redirect HTTP → HTTPS (enable after placing certs)
-    # server {
-    #     listen 80;
-    #     server_name _;
-    #     return 301 https://$host$request_uri;
-    # }
-
-    server {
-        listen 80;
-
-        # SSL (uncomment after placing certs at /etc/ssl/ndr/)
-        # listen 443 ssl;
-        # ssl_certificate     /etc/ssl/ndr/cert.pem;
-        # ssl_certificate_key /etc/ssl/ndr/key.pem;
-        # ssl_protocols       TLSv1.2 TLSv1.3;
-
-        client_max_body_size 500m;
-
-        location /ws {
-            proxy_pass         http://ws_engines;
-            proxy_http_version 1.1;
-            proxy_set_header   Upgrade    $http_upgrade;
-            proxy_set_header   Connection "upgrade";
-            proxy_set_header   Host       $host;
-            proxy_read_timeout 3600s;
-        }
-
-        location /api {
-            proxy_pass         http://ndr_engines;
-            proxy_http_version 1.1;
-            proxy_set_header   Host              $host;
-            proxy_set_header   X-Real-IP         $remote_addr;
-            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-            proxy_set_header   X-Forwarded-Proto $scheme;
-            proxy_read_timeout 120s;
-        }
-
-        location /health {
-            proxy_pass http://ndr_engines;
-        }
-
-        location / {
-            proxy_pass         http://ndr-ui:80;
-            proxy_http_version 1.1;
-            proxy_set_header   Host              $host;
-            proxy_set_header   X-Real-IP         $remote_addr;
-            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-            proxy_set_header   X-Forwarded-Proto $scheme;
-            proxy_read_timeout 60s;
-        }
-    }
-}
-NGINXEOF
-log "✅ Cloud nginx config written"
-info "  SSL: uncomment the ssl_* lines after placing certs at /etc/ssl/ndr/"
+# GeoIP/ASN: the real MaxMind GeoLite2-City.mmdb + GeoLite2-ASN.mmdb are
+# downloaded above in the bootstrap step, straight from the repo where
+# they're already committed (rust/ndr-engine/data/) - same files baked into
+# the ndr-engine image, now also populating the host side of
+# docker-compose.yml's data/ bind mount so they're not shadowed by an empty
+# directory. Nothing further to do here.
 
 # ── Step 6: Start Docker stack ────────────────
 step "Starting Docker stack (cloud profile)"
 
 info "  ℹ️  Cloud mode starts: kafka (internal), redis, ndr-engine x3, nginx, ndr-ui"
 info "  ℹ️  Skipped (onpremise profile only): opensearch, vector"
-info "  ℹ️  Sensors send data via HTTP POST to https://$PUBLIC_IP/api/ingest"
+info "  ℹ️  Sensors send data via HTTP POST to $SENSOR_URL/api/ingest"
 info "  ℹ️  Kafka runs internally only — not exposed to sensors"
 info ""
 
@@ -527,6 +574,8 @@ sudo docker pull "${REGISTRY}/ndr-engine:latest" 2>/tmp/ndr_cloud_err \
   || err "Could not pull ${REGISTRY}/ndr-engine:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
 sudo docker pull "${REGISTRY}/ndr-ui:latest" 2>/tmp/ndr_cloud_err \
   || err "Could not pull ${REGISTRY}/ndr-ui:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
+sudo docker pull "${REGISTRY}/provigil-auth:latest" 2>/tmp/ndr_cloud_err \
+  || err "Could not pull ${REGISTRY}/provigil-auth:latest ($(cat /tmp/ndr_cloud_err 2>/dev/null)) — check the registry token and network access, then re-run."
 rm -f /tmp/ndr_cloud_err
 
 # ── Write compose override (pre-built images, no build:) ─────────────
@@ -541,7 +590,90 @@ services:
   ndr-ui:
     image: ${REGISTRY}/ndr-ui:latest
     build: !reset null
+  provigil-auth:
+    image: ${REGISTRY}/provigil-auth:latest
+    build: !reset null
 OVERRIDE
+
+# ── Write cloud-specific start/stop/status scripts ────────────────────
+# Not install.sh/install-customer.sh's on-prem start.sh/stop.sh/status.sh -
+# those assume PRODUCT_MODE, --profile onpremise, systemd Agent-Z/Agent-S,
+# and used to copy per-mode nginx files over nginx.conf, none of
+# which apply here and would silently break the auth_service nginx routing
+# fixed above. These reference the actual cloud compose files instead.
+cat > "$INSTALL_DIR/start.sh" << 'STARTEOF'
+#!/bin/bash
+INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$INSTALL_DIR"
+echo ""
+echo "  Starting NDR Cloud Stack..."
+echo ""
+sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d
+echo ""
+echo "  Docker stack started:"
+sudo docker ps --format "    {{.Names}}\t{{.Status}}"
+echo ""
+STARTEOF
+
+cat > "$INSTALL_DIR/stop.sh" << 'STOPEOF'
+#!/bin/bash
+INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$INSTALL_DIR"
+echo ""
+echo "  Stopping NDR Cloud Stack..."
+echo ""
+sudo docker compose -f docker-compose.yml -f docker-compose.cloud.yml down
+echo ""
+echo "  Docker stack stopped"
+echo ""
+STOPEOF
+
+cat > "$INSTALL_DIR/status.sh" << 'STATUSEOF'
+#!/bin/bash
+INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$INSTALL_DIR/.env" ]; then
+    source "$INSTALL_DIR/.env"
+fi
+
+echo ""
+echo "  NDR Cloud Stack Status"
+echo "  ──────────────────────────────────────────────────"
+echo ""
+
+echo "  Docker containers:"
+sudo docker ps --format "    {{.Names}}\t{{.Status}}" 2>/dev/null || echo "    Docker not running"
+echo ""
+
+echo "  ClickHouse:"
+echo "    node1 : $(curl -s --max-time 3 http://localhost:8123/ping 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  Kafka topics:"
+sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server localhost:9092 --list 2>/dev/null \
+    | sed 's/^/    /' || echo "    not ready"
+echo ""
+
+echo "  Valkey:"
+echo "    ping  : $(sudo docker exec ndr-valkey valkey-cli ping 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  Auth (provigil-auth):"
+echo "    health: $(curl -s --max-time 3 "http://localhost:3001/api/auth/check-username?username=ping" 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  NDR Engine:"
+echo "    health: $(curl -sk --max-time 3 "https://localhost/api/health" 2>/dev/null || echo 'not responding')"
+echo ""
+
+echo "  Access:"
+echo "    API (HTTP)  : http://${HOST_IP:-localhost}"
+echo "    API (HTTPS) : https://${HOST_IP:-localhost}"
+echo ""
+STATUSEOF
+
+chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/status.sh"
+log "✅ Cloud start.sh/stop.sh/status.sh written"
 
 cd "$INSTALL_DIR"
 sudo docker compose down 2>/dev/null || true
@@ -554,7 +686,16 @@ log "✅ Docker stack started with pre-built images"
 # before returning, so ch1 and ch2 are guaranteed healthy at this point.
 
 # ── Step 7: Create Kafka topic ───────────────
-step "Creating Kafka topics (3 partitions, replication-factor 3)"
+# Partition count was a fixed 3 regardless of expected scale - Kafka's real
+# parallelism ceiling IS its partition count (at most N things can consume
+# in parallel, no matter how many ndr-engine replicas you run), so this
+# needs to be sized to your actual tenant/sensor volume, not left at a
+# fixed demo-scale default. Override with KAFKA_PARTITIONS=N before running
+# this script if you know your expected scale; can only be *increased*
+# later (kafka-topics.sh --alter --partitions N), never decreased, so it's
+# safer to size a bit generously up front than to under-provision.
+KAFKA_PARTITIONS="${KAFKA_PARTITIONS:-3}"
+step "Creating Kafka topics (${KAFKA_PARTITIONS} partitions, replication-factor 3)"
 
 log "Waiting for Kafka to be ready..."
 sleep 20
@@ -575,13 +716,13 @@ if sudo docker exec kafka1 \
     --bootstrap-server localhost:9092 \
     --create --if-not-exists \
     --topic ndr-events \
-    --partitions 3 \
+    --partitions "$KAFKA_PARTITIONS" \
     --replication-factor 3 \
     2>/tmp/ndr_cloud_err; then
-  log "✅ Kafka topic ndr-events created with 3 partitions, replication-factor 3"
+  log "✅ Kafka topic ndr-events created with ${KAFKA_PARTITIONS} partitions, replication-factor 3"
 else
   record_error "Kafka" "topic creation failed ($(cat /tmp/ndr_cloud_err 2>/dev/null))" \
-    "Run manually once Kafka is confirmed healthy: sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic ndr-events --partitions 3 --replication-factor 3"
+    "Run manually once Kafka is confirmed healthy: sudo docker exec kafka1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic ndr-events --partitions $KAFKA_PARTITIONS --replication-factor 3"
 fi
 
 if sudo docker exec kafka1 \
@@ -632,6 +773,143 @@ if command -v ufw &>/dev/null; then
 else
     warn "ufw not found — skipping firewall setup"
 fi
+
+# ── Step 8b: Auto-update watcher with health-check rollback ──────────
+# Host-side loop (survives container restarts) watching for an update
+# request, either from the in-app "Apply Update" button (writes this same
+# flag file from inside ndr-engine, mounted through to this path) or
+# triggered remotely - e.g. your CI running
+# `ssh <user>@<this-host> "touch $INSTALL_DIR/scripts/.update-requested"`
+# right after pushing new images. Before pulling, snapshots the current
+# :latest as :latest-previous locally (no extra registry pull needed to
+# roll back); after restarting on the new images, polls each service's
+# Docker healthcheck. If they don't all report healthy within the
+# timeout, retags :latest-previous back onto :latest and restarts again -
+# verified live (tag-swap + restart correctly reverts a broken container
+# to the last known-good image).
+step "Installing auto-update watcher (with rollback on failed health check)"
+
+cat > "$INSTALL_DIR/scripts/update-watcher.sh" << WATCHEREOF
+#!/bin/bash
+REGISTRY="${REGISTRY}"
+INSTALL_DIR="$INSTALL_DIR"
+FLAG="\$INSTALL_DIR/scripts/.update-requested"
+IMAGES="ndr-engine ndr-ui provigil-auth"
+SERVICES="ndr-engine-1 ndr-engine-2 ndr-engine-3 ndr-ui provigil-auth"
+HEALTH_TIMEOUT=180
+
+wait_healthy() {
+    local deadline=\$(( \$(date +%s) + HEALTH_TIMEOUT ))
+    while [ "\$(date +%s)" -lt "\$deadline" ]; do
+        local all_healthy=true
+        for svc in \$SERVICES; do
+            status=\$(docker inspect --format='{{.State.Health.Status}}' "\$svc" 2>/dev/null || echo "missing")
+            [ "\$status" = "healthy" ] || { all_healthy=false; break; }
+        done
+        [ "\$all_healthy" = true ] && return 0
+        sleep 3
+    done
+    return 1
+}
+
+logger -t ndr-updater "NDR update watcher started — watching \$FLAG"
+while true; do
+    if [ -f "\$FLAG" ]; then
+        rm -f "\$FLAG"
+        logger -t ndr-updater "Update triggered"
+        cd "\$INSTALL_DIR" || exit 1
+
+        for img in \$IMAGES; do
+            docker tag "\${REGISTRY}/\${img}:latest" "\${REGISTRY}/\${img}:latest-previous" 2>/dev/null || true
+        done
+
+        for img in \$IMAGES; do
+            docker pull "\${REGISTRY}/\${img}:latest" 2>&1 | logger -t ndr-updater
+        done
+        docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d 2>&1 | logger -t ndr-updater
+
+        logger -t ndr-updater "Waiting up to \${HEALTH_TIMEOUT}s for services to report healthy..."
+        if wait_healthy; then
+            logger -t ndr-updater "Update successful — all services healthy"
+        else
+            logger -t ndr-updater "Update FAILED health check — rolling back to previous images"
+            for img in \$IMAGES; do
+                docker tag "\${REGISTRY}/\${img}:latest-previous" "\${REGISTRY}/\${img}:latest" 2>/dev/null || true
+            done
+            docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d 2>&1 | logger -t ndr-updater
+            if wait_healthy; then
+                logger -t ndr-updater "Rollback successful — previous version restored"
+            else
+                logger -t ndr-updater "CRITICAL: rollback also failed health check — manual intervention required"
+            fi
+        fi
+    fi
+    sleep 30
+done
+WATCHEREOF
+chmod +x "$INSTALL_DIR/scripts/update-watcher.sh"
+
+sudo tee /etc/systemd/system/ndr-updater.service > /dev/null << EOF
+[Unit]
+Description=NDR Cloud Update Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/scripts/update-watcher.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if sudo systemctl daemon-reload 2>/tmp/ndr_cloud_watcher_err && \
+   sudo systemctl enable --now ndr-updater.service 2>>/tmp/ndr_cloud_watcher_err; then
+    log "✅ Update watcher installed and running (ndr-updater.service)"
+else
+    warn "ndr-updater.service could not be started ($(cat /tmp/ndr_cloud_watcher_err 2>/dev/null)) — platform runs fine without it, just won't auto-update. Check: sudo systemctl status ndr-updater"
+fi
+rm -f /tmp/ndr_cloud_watcher_err
+
+# ── Step 8c: Deploy webhook — lets CI trigger the watcher over HTTPS ──
+# scripts/deploy-webhook.py (downloaded by the bootstrap step above, part of
+# scripts/) checks X-Deploy-Secret and, if it matches, touches the same flag
+# update-watcher.sh already polls. Runs on the host (needs no container
+# access itself), reached through nginx's /deploy-webhook location - the
+# secret is the only auth, so nginx rate-limits it hard (2r/m) and it's
+# never exposed on its own port outside the Docker bridge.
+step "Installing deploy webhook (CI trigger)"
+
+sudo tee /etc/systemd/system/ndr-deploy-webhook.service > /dev/null << EOF
+[Unit]
+Description=NDR Deploy Webhook
+After=network.target
+
+[Service]
+Type=simple
+Environment=DEPLOY_WEBHOOK_SECRET=$DEPLOY_WEBHOOK_SECRET
+Environment=UPDATE_FLAG_PATH=$INSTALL_DIR/scripts/.update-requested
+Environment=DEPLOY_WEBHOOK_PORT=8099
+ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/deploy-webhook.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if sudo systemctl daemon-reload 2>/tmp/ndr_cloud_webhook_err && \
+   sudo systemctl enable --now ndr-deploy-webhook.service 2>>/tmp/ndr_cloud_webhook_err; then
+    log "✅ Deploy webhook installed and running (ndr-deploy-webhook.service)"
+    info "  Trigger a deploy from CI right after release.sh pushes new images:"
+    info "    curl -X POST https://$PUBLIC_IP/deploy-webhook -H \"X-Deploy-Secret: $DEPLOY_WEBHOOK_SECRET\""
+    info "  (secret also saved in $INSTALL_DIR/.env as DEPLOY_WEBHOOK_SECRET)"
+else
+    warn "ndr-deploy-webhook.service could not be started ($(cat /tmp/ndr_cloud_webhook_err 2>/dev/null)) — you can still trigger updates via: touch $INSTALL_DIR/scripts/.update-requested"
+fi
+rm -f /tmp/ndr_cloud_webhook_err
 
 # ── Step 9: Health checks ────────────────────
 step "Running health checks"
@@ -751,19 +1029,21 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${BLUE}  Public IP   :${NC} $PUBLIC_IP"
 echo -e "${BLUE}  API (HTTP)  :${NC} http://$PUBLIC_IP (port 80)"
-echo -e "${BLUE}  API (HTTPS) :${NC} https://$PUBLIC_IP (port 443, after cert setup)"
+echo -e "${BLUE}  API (HTTPS) :${NC} https://$PUBLIC_IP (port 443, self-signed cert)"
+[ -n "$PUBLIC_URL" ] && echo -e "${BLUE}  Public URL  :${NC} $PUBLIC_URL"
 echo -e "${BLUE}  ClickHouse  :${NC} internal only (clickhouse1:8123, clickhouse2:8123)"
 echo -e "${BLUE}  Kafka       :${NC} internal only (sensors use HTTP POST to /api/ingest)"
 echo -e "${BLUE}  Redis       :${NC} internal only (ndr-redis:6379)"
-echo -e "${BLUE}  SSL certs   :${NC} /etc/ssl/ndr/cert.pem + key.pem"
+echo -e "${BLUE}  SSL certs   :${NC} $INSTALL_DIR/config/nginx/ssl/ndr.crt + ndr.key (self-signed, already active)"
 echo ""
 echo -e "${YELLOW}  Next steps:${NC}"
-echo "   1. Point your domain DNS → $PUBLIC_IP"
-echo "   2. Run: certbot certonly --standalone -d your.domain.com"
-echo "   3. Copy certs to /etc/ssl/ndr/"
-echo "   4. Edit $INSTALL_DIR/config/nginx/nginx.conf — uncomment SSL lines"
-echo "   5. Restart nginx: docker restart ndr-nginx"
-echo "   6. On sensors: set CLOUD_URL=https://$PUBLIC_IP in /opt/ndr-sensor/.env"
+echo "   1. (Optional, for a real domain instead of the self-signed cert)"
+echo "      Point your domain DNS → $PUBLIC_IP"
+echo "   2. sudo docker stop ndr-nginx"
+echo "   3. certbot certonly --standalone -d your.domain.com"
+echo "   4. Copy the resulting cert/key to $INSTALL_DIR/config/nginx/ssl/ndr.crt + ndr.key"
+echo "   5. sudo docker start ndr-nginx"
+echo "   6. On sensors: set CLOUD_URL=$SENSOR_URL in /opt/ndr-sensor/.env"
 echo ""
 echo -e "${GREEN}  Install log: $INSTALL_DIR/install-cloud.log${NC}"
 echo ""

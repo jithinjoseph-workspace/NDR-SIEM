@@ -419,15 +419,22 @@
         <div class="empty-orb">
           <lucide-icon [name]="GavelIcon" class="w-8 h-8"></lucide-icon>
         </div>
-        <ng-container *ngIf="dbSearchActive; else notSearching">
+        <ng-container *ngIf="loadError">
+          <span>Couldn't load rules</span>
+          <p>The request failed (often a temporary rate limit or connection problem).</p>
+          <button class="rules-load-more" type="button" (click)="loadRules()">Try again</button>
+        </ng-container>
+        <ng-container *ngIf="!loadError && dbSearchActive; else notSearching">
           <span>No rule matching "{{ searchTerm }}" exists</span>
           <p>Checked the full rule set — it's not just outside the loaded pages, it doesn't exist.</p>
         </ng-container>
         <ng-template #notSearching>
+          <ng-container *ngIf="!loadError">
           <span *ngIf="rulesTotal + agentSRules.length === 0">No SIGMA rules loaded</span>
           <span *ngIf="rulesTotal + agentSRules.length > 0">No rules match filters</span>
           <p *ngIf="rulesTotal + agentSRules.length === 0">Click "New Rule" to create one, or sync community rules.</p>
           <p *ngIf="rulesTotal + agentSRules.length > 0">Try adjusting the category, severity, or search.</p>
+          </ng-container>
         </ng-template>
       </div>
 

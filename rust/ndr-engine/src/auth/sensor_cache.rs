@@ -7,7 +7,7 @@
 //! Schema note: ndr.sensor_keys stores key_hash (bcrypt) + key_prefix, NOT
 //! plain api_keys. So the cache can't be bulk-preloaded from DB. It is
 //! populated on first use (bcrypt verify + DB lookup), then cached in Redis
-//! with a 90s TTL. Revocation is immediate via invalidate().
+//! with a TTL (default 900s). Revocation is immediate via invalidate().
 
 use redis::AsyncCommands;
 use std::sync::Arc;
@@ -15,7 +15,24 @@ use std::sync::Arc;
 const CACHE_PREFIX: &str = "sensorkey:";
 // TTL slightly longer than the 60s refresh interval so entries don't
 // expire between refresh cycles under normal operation.
-const CACHE_TTL_SECS: usize = 90;
+//
+// The TTL is long on purpose: every miss costs a ClickHouse lookup plus a bcrypt
+// verify (~50 ms of CPU). At 3000 sensors a 90 s TTL meant ~33 verifies/s
+// (about 2 cores) forever. Revocation does not wait for the TTL:
+// invalidate_by_prefix() clears the entry immediately, so a longer TTL only
+// changes how often a healthy key is re-verified. Override: SENSOR_KEY_CACHE_TTL_SECS.
+const DEFAULT_CACHE_TTL_SECS: usize = 900;
+
+fn cache_ttl_secs() -> usize {
+    static TTL: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *TTL.get_or_init(|| {
+        std::env::var("SENSOR_KEY_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v >= 10)
+            .unwrap_or(DEFAULT_CACHE_TTL_SECS)
+    })
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SensorKeyInfo {
@@ -59,7 +76,7 @@ impl SensorKeyCache {
 
         let redis_key = format!("{}{}", CACHE_PREFIX, api_key);
         let Ok(json) = serde_json::to_string(info) else { return; };
-        let _: Result<(), _> = conn.set_ex(&redis_key, json, CACHE_TTL_SECS).await;
+        let _: Result<(), _> = conn.set_ex(&redis_key, json, cache_ttl_secs()).await;
     }
 
     /// Immediately remove a key from the shared Redis cache.
@@ -129,11 +146,15 @@ impl SensorKeyCache {
         );
     }
 
-    /// Returns `true` if a heartbeat DB write is needed for this sensor.
+    /// Returns `true` if a heartbeat DB write (`last_seen` and the service statuses) is needed.
     ///
-    /// Writes are triggered when status changes OR every 5 minutes (cache TTL
-    /// expiry), so `last_seen` stays accurate within 5 minutes even under
-    /// stable conditions — without a ClickHouse write on every checkin.
+    /// A write happens when the status changed, on a sensor's first check-in, and again once
+    /// the last write is SENSOR_HEARTBEAT_WRITE_SECS old (default 120 s), so `last_seen` stays
+    /// fresh without a ClickHouse write on every 30 s check-in.
+    ///
+    /// The window is NOT extended by unchanged check-ins. It used to be: every check-in reset
+    /// the 5-minute expiry, so a healthy sensor with a stable status was never written again
+    /// and the UI (online = seen in the last few minutes) showed it as offline.
     pub async fn needs_heartbeat_write(&self, sensor_id: &str, status_sig: &str) -> bool {
         let mut conn = match self.redis
             .get_multiplexed_async_connection()
@@ -149,13 +170,25 @@ impl SensorKeyCache {
             .await
             .unwrap_or(None);
 
-        // Refresh TTL: if status stays the same, cache expires in 5 min and
-        // the next checkin after expiry writes to DB — keeping last_seen fresh.
-        let _: Result<(), _> = conn.set_ex(&key, status_sig, 300usize).await;
+        if cached.as_deref() == Some(status_sig) {
+            return false; // same status, written less than one window ago
+        }
 
-        // Write if first time seen OR status changed
-        cached.as_deref() != Some(status_sig)
+        // Status changed, first check-in, or the window ran out: write now, start a new window.
+        let _: Result<(), _> = conn.set_ex(&key, status_sig, heartbeat_write_secs()).await;
+        true
     }
+}
+
+fn heartbeat_write_secs() -> usize {
+    static SECS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *SECS.get_or_init(|| {
+        std::env::var("SENSOR_HEARTBEAT_WRITE_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v >= 30)
+            .unwrap_or(120)
+    })
 }
 
 /// Spawn a background health-check loop that logs DB active key count
@@ -247,4 +280,62 @@ pub async fn resolve_tenant(
         &api_key[..api_key.len().min(16)]
     );
     Some(tenant_id)
+}
+
+/// True when `api_key` is a real key that an admin has revoked (the bcrypt hash
+/// matches an inactive row). An unknown or malformed key is NOT "revoked".
+/// The verdict is cached (as an inactive entry) so a sensor that keeps
+/// retrying costs one Redis read, not a DB query plus bcrypt, per request.
+pub async fn is_revoked(
+    cache: &SensorKeyCache,
+    ch: &crate::storage::ClickhouseStorage,
+    api_key: &str,
+) -> bool {
+    if api_key.len() < 16 {
+        return false;
+    }
+    if let Some(info) = cache.get(api_key).await {
+        return !info.active;
+    }
+    if !ch.is_revoked_sensor_key(api_key).await.unwrap_or(false) {
+        return false;
+    }
+    let info = SensorKeyInfo {
+        tenant_id: String::new(),
+        key_prefix: api_key.chars().take(16).collect(),
+        active: false,
+    };
+    cache.insert(api_key, &info).await;
+    true
+}
+
+#[cfg(test)]
+mod heartbeat_tests {
+    use super::*;
+
+    // Needs a real Redis: TEST_REDIS_URL (default: a throwaway DB 5 on localhost).
+    // Run with: cargo test -p ndr-engine heartbeat -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn last_seen_is_written_on_a_schedule_not_only_when_status_changes() {
+        let url = std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/5".into());
+        let client = std::sync::Arc::new(redis::Client::open(url).unwrap());
+        let cache = SensorKeyCache::new(client.clone());
+        let id = format!("hbtest-{}", std::process::id());
+        let key = format!("sensor_hb:{}", id);
+        let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+        let _: Result<i64, _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
+
+        assert!(cache.needs_heartbeat_write(&id, "up|up|up|up").await, "first check-in writes");
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let before: i64 = redis::cmd("TTL").arg(&key).query_async(&mut conn).await.unwrap();
+        assert!(!cache.needs_heartbeat_write(&id, "up|up|up|up").await, "same status right after: no write");
+        let after: i64 = redis::cmd("TTL").arg(&key).query_async(&mut conn).await.unwrap();
+        // The throttle window must keep counting down. When every check-in reset it, a sensor
+        // whose status never changes (check-in every 30 s) was never written again and the UI
+        // showed a healthy sensor as offline.
+        assert!(after <= before, "a check-in reset the throttle window: {before}s -> {after}s");
+        assert!(cache.needs_heartbeat_write(&id, "up|down|up|up").await, "a status change writes at once");
+        let _: Result<i64, _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
+    }
 }

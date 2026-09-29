@@ -5,8 +5,8 @@ import { AuthService } from '../../../services/auth/auth';
 import { ConfigService } from '../../../services/config/config.service';
 import { Websocket } from '../../../services/websocket/websocket';
 import { ChartDataService } from '../../../services/chart-data/chart-data';
-import { Subscription, interval } from 'rxjs';
-import { startWith, switchMap } from 'rxjs/operators';
+import { Subscription, interval, of } from 'rxjs';
+import { startWith, switchMap, catchError } from 'rxjs/operators';
 import { toSignal } from '@angular/core/rxjs-interop';
 import {
   LucideAngularModule,
@@ -143,8 +143,15 @@ export class Dashboard implements OnInit, OnDestroy {
     // Unified KPI strip — poll every 30s when both features active
     if (this.hasNdr && this.hasSiem) {
       this.subs.push(
-        interval(30_000).pipe(startWith(0), switchMap(() => this.api.getUnifiedStats()))
-          .subscribe({ next: (r: any) => {
+        interval(30_000).pipe(
+          startWith(0),
+          // catchError inside switchMap's inner observable (not just an error:
+          // callback on subscribe) - without it, a single failed poll (401,
+          // network blip) terminates this whole subscription and the KPI strip
+          // silently stops refreshing for the rest of the page session.
+          switchMap(() => this.api.getUnifiedStats().pipe(catchError(() => of(null))))
+        ).subscribe({ next: (r: any) => {
+            if (!r) return;
             this.uNdrEvents.set(r.ndr_events_today  ?? 0);
             this.uSiemLogs.set(r.siem_logs_today    ?? 0);
             this.uSiemEps.set(r.siem_eps            ?? 0);

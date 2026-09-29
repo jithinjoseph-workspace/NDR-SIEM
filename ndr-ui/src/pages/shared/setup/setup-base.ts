@@ -1,4 +1,4 @@
-import { Directive, OnDestroy, OnInit, ChangeDetectorRef, signal, computed } from '@angular/core';
+import { Directive, HostListener, OnDestroy, OnInit, ChangeDetectorRef, signal, computed } from '@angular/core';
 import { Router } from '@angular/router';
 import {
   Activity,
@@ -20,6 +20,7 @@ import {
   WifiOff,
   Clock,
   X,
+  Ban,
 } from 'lucide-angular';
 import { Subscription, timer } from 'rxjs';
 import { filter } from 'rxjs/operators';
@@ -56,6 +57,11 @@ export abstract class SetupBase implements OnInit, OnDestroy {
   externalError = '';
   externalActionMessage = '';
   pendingExternalCommand: { sensorId: string; command: SensorControlCommand } | null = null;
+  // Signals, not plain fields: this app has no zone.js, so a plain field changed
+  // inside an HTTP callback does not redraw the view on its own - the dialog
+  // sat on "Revoking..." until an unrelated click happened to trigger a redraw.
+  revokingSensorId = signal<string | null>(null);
+  pendingRevokeSensor = signal<ExternalSensorCard | null>(null);
   showAddSensorModal = false;
   newSensorName = '';
   creatingSensor = false;
@@ -97,6 +103,7 @@ export abstract class SetupBase implements OnInit, OnDestroy {
   WifiOffIcon = WifiOff;
   ClockIcon = Clock;
   XIcon = X;
+  BanIcon = Ban;
 
   constructor(
     protected api: Api,
@@ -296,6 +303,59 @@ export abstract class SetupBase implements OnInit, OnDestroy {
         this.externalError =
           error?.error?.message || `Unable to ${command} ${sensorName}.`;
         this.pendingExternalCommand = null;
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  /** Deactivates the sensor's key. Unlike start/stop/restart this does not need
+   *  the sensor to be online - it is the way to cut off a sensor that is stuck,
+   *  offline, or misbehaving. The backend only lets tenant_admin/super_admin do
+   *  this, and a tenant_admin only for their own tenant's keys. */
+  askRevokeExternalSensor(sensor: ExternalSensorCard) {
+    if (!this.canViewExternalSensors || this.revokingSensorId()) {
+      return;
+    }
+    this.pendingRevokeSensor.set(sensor);
+  }
+
+  @HostListener('document:keydown.escape')
+  cancelRevokeExternalSensor() {
+    // Ignored while the request is in flight so the dialog can't vanish mid-revoke.
+    if (this.revokingSensorId()) {
+      return;
+    }
+    this.pendingRevokeSensor.set(null);
+  }
+
+  confirmRevokeExternalSensor() {
+    const sensor = this.pendingRevokeSensor();
+    if (!sensor || this.revokingSensorId()) {
+      return;
+    }
+    const sensorName = this.getSensorDisplayName(sensor);
+
+    this.revokingSensorId.set(sensor.id);
+    this.externalActionMessage = '';
+    this.externalError = '';
+
+    this.api.revokeSensorKey(sensor.id).subscribe({
+      next: response => {
+        this.revokingSensorId.set(null);
+        this.pendingRevokeSensor.set(null);
+        if (response?.status === 'ok') {
+          this.externalActionMessage = `${sensorName} revoked.`;
+          this.loadExternalSensors(true);
+        } else {
+          // The API reports refusals (forbidden, not found) as HTTP 200 with status "error".
+          this.externalError = response?.message || `Unable to revoke ${sensorName}.`;
+        }
+        this.cdr.detectChanges();
+      },
+      error: error => {
+        this.revokingSensorId.set(null);
+        this.pendingRevokeSensor.set(null);
+        this.externalError = error?.error?.message || `Unable to revoke ${sensorName}.`;
         this.cdr.detectChanges();
       },
     });
@@ -595,7 +655,9 @@ export abstract class SetupBase implements OnInit, OnDestroy {
       return false;
     }
 
-    return Date.now() - timestamp.getTime() <= 120000;
+    // 5 min: the engine records last_seen about every 2 min for a healthy sensor (it does not
+    // write on every 30 s check-in), so a 2 min window showed running sensors as offline.
+    return Date.now() - timestamp.getTime() <= 300000;
   }
 
   private parseDate(value: string): Date | null {

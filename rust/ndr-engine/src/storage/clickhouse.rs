@@ -275,8 +275,22 @@ pub struct ClickhouseStorage {
     pub(crate) client: Client,
 }
 
+/// Columns added to tenant tables after their first release. The startup migration replays
+/// init.sql per tenant, but `CREATE TABLE IF NOT EXISTS` skips tables that already exist, so an
+/// existing tenant database never got them (creating a SOAR case failed with "No such column
+/// case_number in table ndr_<tenant>.soar_cases"). `{db}` is the tenant database.
+const TENANT_COLUMN_MIGRATIONS: &[&str] = &[
+    "ALTER TABLE {db}.soar_cases ADD COLUMN IF NOT EXISTS case_number String DEFAULT ''",
+    "ALTER TABLE {db}.soar_cases ADD COLUMN IF NOT EXISTS priority String DEFAULT 'P2'",
+    "ALTER TABLE {db}.sigma_rules ADD COLUMN IF NOT EXISTS source String DEFAULT 'custom'",
+];
+
 pub(crate) fn sql_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('\'', "\\'")
+    // The clickhouse crate (0.11) treats EVERY `?` in the query text as a bind placeholder and
+    // panics ("unbound query argument") when none is bound; there is no `??` escape. A value
+    // such as a URL with a query string, a hostname or a rule text therefore killed the task
+    // running the query. `\x3F` is ClickHouse's own escape for `?` inside a string literal.
+    value.replace('\\', "\\\\").replace('\'', "\\'").replace('?', "\\x3F")
 }
 
 fn sql_array_literal(values: &[String]) -> String {
@@ -302,6 +316,32 @@ fn tenant_db(tenant_id: &str) -> String {
 
 pub fn tenant_db_pub(tenant_id: &str) -> String {
     tenant_db(tenant_id)
+}
+
+/// Every suppression that applies to `tenant_id`, as a subquery to put in a FROM.
+///
+/// save_ai_suppression() writes a tenant's suppressions to that tenant's own
+/// database (`ndr_<tenant>.ai_suppressions`), but the alert list, the
+/// suppression list endpoint and the report counts all read the global
+/// `ndr.ai_suppressions` instead. For every tenant except `default` (whose
+/// database IS `ndr`) the row was saved and then never found, so a suppressed
+/// alert reappeared on the next page load - the click only hid it in the
+/// browser. Reading the tenant's table (plus any global rows with an empty
+/// tenant_id, which apply to everyone) fixes that. Columns are listed
+/// explicitly so the UNION does not depend on column order across tables.
+/// FINAL is applied inside, so callers must not add it again.
+pub fn suppressions_source(tenant_id: &str) -> String {
+    let db = tenant_db(tenant_id);
+    const COLS: &str = "suppress_ip, signature_name, community_id, suppress_scope, active, expires_at, tenant_id";
+    if db == "ndr" {
+        format!("(SELECT {COLS} FROM ndr.ai_suppressions FINAL)")
+    } else {
+        format!(
+            "(SELECT {COLS} FROM {db}.ai_suppressions FINAL \
+              UNION ALL \
+              SELECT {COLS} FROM ndr.ai_suppressions FINAL WHERE tenant_id = '')"
+        )
+    }
 }
 
 pub fn sql_escape_pub(value: &str) -> String {
@@ -631,7 +671,7 @@ pub async fn set_user_password(
     password_hash: &str,
 ) -> anyhow::Result<()> {
     self.client
-        .query("ALTER TABLE ndr.users UPDATE password_hash = ? WHERE id = ?")
+        .query("ALTER TABLE ndr.users UPDATE password_hash = ? WHERE id = ? SETTINGS mutations_sync=1")
         .bind(password_hash)
         .bind(id)
         .execute()
@@ -644,7 +684,7 @@ pub async fn delete_user(
     &self, id: &str
 ) -> anyhow::Result<()> {
     self.client
-        .query("ALTER TABLE ndr.users DELETE WHERE id = ?")
+        .query("ALTER TABLE ndr.users DELETE WHERE id = ? SETTINGS mutations_sync=1")
         .bind(id)
         .execute()
         .await?;
@@ -1414,6 +1454,9 @@ pub async fn delete_announcement(
                                 tracing::debug!("Auto-migrate statement skipped for {}: {}", db_name, e);
                             }
                         }
+                        // CREATE TABLE IF NOT EXISTS above does nothing for tables that already exist,
+                        // so columns added to init.sql later never reached existing tenants.
+                        self.migrate_tenant_columns(&db_name).await;
                     }
                 }
             }
@@ -1428,6 +1471,16 @@ pub async fn delete_announcement(
 
 
 
+
+    /// Adds the columns in TENANT_COLUMN_MIGRATIONS to one tenant database (idempotent).
+    pub async fn migrate_tenant_columns(&self, db_name: &str) {
+        for template in TENANT_COLUMN_MIGRATIONS {
+            let stmt = template.replace("{db}", db_name);
+            if let Err(e) = self.client.query(&stmt).execute().await {
+                tracing::warn!("Tenant column migration failed for {}: {} ({})", db_name, stmt, e);
+            }
+        }
+    }
 
     pub async fn get_threat_intel_hits_by_tenant(&self, tenant_id: &str, sensor_ids: &[String]) -> anyhow::Result<Vec<serde_json::Value>> {
     let db_name = tenant_db(tenant_id);
@@ -1717,8 +1770,12 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
 
     pub async fn remove_sensor_assignment(&self, user_id: &str, sensor_id: &str, tenant_id: &str) -> anyhow::Result<()> {
+        // mutations_sync=1: block until applied, so the API's "removed" response
+        // is only sent once a follow-up list call would actually reflect it
+        // (found via TC-065: the async default left a brief window where a
+        // freshly "removed" assignment still showed up).
         self.client
-            .query("ALTER TABLE ndr.user_sensor_assignments DELETE WHERE user_id = ? AND sensor_id = ? AND tenant_id = ?")
+            .query("ALTER TABLE ndr.user_sensor_assignments DELETE WHERE user_id = ? AND sensor_id = ? AND tenant_id = ? SETTINGS mutations_sync=1")
             .bind(user_id)
             .bind(sensor_id)
             .bind(tenant_id)
@@ -1772,7 +1829,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
 
     pub async fn delete_rule_state(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
         self.client
-            .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ? AND tenant_id = ?")
+            .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ? AND tenant_id = ? SETTINGS mutations_sync=1")
             .bind(id)
             .bind(tenant_id)
             .execute()
@@ -1889,7 +1946,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     pub async fn delete_sigma_rule(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         self.client
-            .query(&format!("ALTER TABLE {}.sigma_rules DELETE WHERE id = ?", db))
+            .query(&format!("ALTER TABLE {}.sigma_rules DELETE WHERE id = ? SETTINGS mutations_sync=1", db))
             .bind(id)
             .execute()
             .await?;
@@ -2488,7 +2545,7 @@ pub async fn save_ai_provider(
 /// Hard-delete a provider by name.
 pub async fn delete_ai_provider(&self, name: &str) -> anyhow::Result<()> {
     self.client.query(&format!(
-        "ALTER TABLE ndr.ai_providers DELETE WHERE name = '{}'", Self::_esc_ai(name)
+        "ALTER TABLE ndr.ai_providers DELETE WHERE name = '{}' SETTINGS mutations_sync=1", Self::_esc_ai(name)
     )).execute().await?;
     Ok(())
 }
@@ -2724,10 +2781,24 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
     /// why this loops instead of a single cross-database query).
     pub async fn get_stats_all_tenants(&self) -> anyhow::Result<serde_json::Value> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        // Bounded concurrency (crate::threat::tenant_scan_concurrency) instead
+        // of one tenant at a time - this backs a super_admin dashboard widget
+        // polled every 10s; at real tenant counts, sequential per-tenant
+        // queries here would take far longer than the poll interval itself.
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_stats_by_tenant(&tid, &[]).await.ok()
+            }));
+        }
         let (mut events_total, mut hits_total, mut events_1h, mut hits_1h) = (0u64, 0u64, 0u64, 0u64);
         let (mut agent_z, mut agent_s) = (0u64, 0u64);
-        for tid in &tenant_ids {
-            if let Ok(s) = self.get_stats_by_tenant(tid, &[]).await {
+        for handle in futures_util::future::join_all(handles).await {
+            if let Ok(Some(s)) = handle {
                 events_total += s["events_total"].as_u64().unwrap_or(0);
                 hits_total   += s["hits_total"].as_u64().unwrap_or(0);
                 events_1h    += s["events_1h"].as_u64().unwrap_or(0);
@@ -2926,9 +2997,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_protocols_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_protocols_by_tenant(50, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_top_protocols_by_tenant(50, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let proto = row["proto"].as_str().unwrap_or("").to_string();
                 let cnt   = row["count"].as_u64().unwrap_or(0);
                 if proto.is_empty() { continue; }
@@ -2943,9 +3025,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_src_ips_by_tenant(100, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_top_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let ip  = row["ip"].as_str().unwrap_or("").to_string();
                 let cnt = row["count"].as_u64().unwrap_or(0);
                 if ip.is_empty() { continue; }
@@ -2960,9 +3053,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_dst_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_dst_ips_by_tenant(100, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_top_dst_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let ip  = row["ip"].as_str().unwrap_or("").to_string();
                 let cnt = row["count"].as_u64().unwrap_or(0);
                 if ip.is_empty() { continue; }
@@ -2977,9 +3081,20 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_top_external_src_ips_all_tenants(&self, limit: u64) -> anyhow::Result<Vec<(String, u64)>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_top_external_src_ips_by_tenant(100, &tid, &[]).await.unwrap_or_default()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for (ip, cnt) in self.get_top_external_src_ips_by_tenant(100, tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for (ip, cnt) in rows {
                 *totals.entry(ip).or_insert(0) += cnt;
             }
         }
@@ -2991,9 +3106,19 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_country_attack_tags_all_tenants(&self) -> anyhow::Result<std::collections::HashMap<String, Vec<(String, u64)>>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_country_attack_tags(&tid, &[]).await.ok()
+            }));
+        }
         let mut totals: std::collections::HashMap<String, std::collections::HashMap<String, u64>> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            if let Ok(per_country) = self.get_country_attack_tags(tid, &[]).await {
+        for handle in futures_util::future::join_all(handles).await {
+            if let Ok(Some(per_country)) = handle {
                 for (code, tags) in per_country {
                     let entry = totals.entry(code).or_default();
                     for (tag, cnt) in tags {
@@ -3011,10 +3136,21 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
 
     pub async fn get_threat_intel_hits_all_tenants(&self) -> anyhow::Result<Vec<serde_json::Value>> {
         let tenant_ids = self.get_all_tenants().await.unwrap_or_default();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::threat::tenant_scan_concurrency()));
+        let mut handles = Vec::with_capacity(tenant_ids.len());
+        for tid in tenant_ids {
+            let this = self.clone();
+            let sem2 = std::sync::Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let _permit = sem2.acquire().await;
+                this.get_threat_intel_hits_by_tenant(&tid, &[]).await.unwrap_or_default()
+            }));
+        }
         // Keyed by (src_ip, dst_ip): sum hits, keep the latest last_seen.
         let mut totals: std::collections::HashMap<(String, String), (u64, String)> = std::collections::HashMap::new();
-        for tid in &tenant_ids {
-            for row in self.get_threat_intel_hits_by_tenant(tid, &[]).await.unwrap_or_default() {
+        for handle in futures_util::future::join_all(handles).await {
+            let Ok(rows) = handle else { continue };
+            for row in rows {
                 let src = row["src_ip"].as_str().unwrap_or("").to_string();
                 let dst = row["dst_ip"].as_str().unwrap_or("").to_string();
                 let hits = row["hits"].as_u64().unwrap_or(0);
@@ -3084,7 +3220,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                     countIf(ioc_type = 'domain' AND ioc_value != '') AS domain_rows, \
                     countIf(ioc_type = 'ip' AND ioc_value != '' AND NOT match(ioc_value, '^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.|127\\.|169\\.254\\.)')) AS public_ip_rows, \
                     count() AS total_rows, \
-                    formatDateTime(max(collected_at), '%Y-%m-%d %H:%M UTC') AS last_refresh \
+                    formatDateTime(max(collected_at), '%Y-%m-%d %H:%i UTC') AS last_refresh \
                  FROM ndr.threat_intel \
                  WHERE expires_at > now()"
             )
@@ -3218,10 +3354,11 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
         struct GroupSup { suppress_ip: String, signature_name: String }
         let group_sups: Vec<GroupSup> = self.client.query(&format!(
             "SELECT suppress_ip, signature_name \
-             FROM ndr.ai_suppressions FINAL \
+             FROM {src} \
              WHERE active = 1 AND community_id = '' AND suppress_ip != '' \
                AND (expires_at IS NULL OR expires_at > now()) \
                AND (tenant_id = '{tid}' OR tenant_id = '')",
+            src = suppressions_source(tenant_id),
             tid = sql_escape(tenant_id)
         )).fetch_all::<GroupSup>().await.unwrap_or_default();
 
@@ -3256,7 +3393,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
                {sf} \
                {ipf} \
                AND community_id NOT IN ( \
-                 SELECT community_id FROM ndr.ai_suppressions FINAL \
+                 SELECT community_id FROM {src} \
                  WHERE active = 1 AND community_id != '' \
                    AND (expires_at IS NULL OR expires_at > now()) \
                    AND (tenant_id = '{tid}' OR tenant_id = '') \
@@ -3267,6 +3404,7 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             tf  = time_filter,
             sf  = sensor_filter,
             ipf = ip_filter_sql,
+            src = suppressions_source(tenant_id),
             tid = sql_escape(tenant_id),
             gf  = group_filter,
             lim = limit))
@@ -3449,11 +3587,12 @@ pub async fn get_network_map(&self) -> anyhow::Result<serde_json::Value> {
             let tf = format!("AND timestamp > now() - INTERVAL {} HOUR", hours);
             let sf_sup = format!(
                 "AND community_id NOT IN ( \
-                   SELECT community_id FROM ndr.ai_suppressions FINAL \
+                   SELECT community_id FROM {src} \
                    WHERE active = 1 AND community_id != '' \
                      AND (expires_at IS NULL OR expires_at > now()) \
                      AND (tenant_id = '{tid}' OR tenant_id = '') \
                  )",
+                src = suppressions_source(tenant_id),
                 tid = sql_escape(tenant_id)
             );
             (format!("{db}.ndr_hits FINAL", db = db_name), tf, sf_sup)
@@ -3928,11 +4067,36 @@ pub async fn validate_sensor_key(
         .await?;
 
     if let Some((hash, tenant_id, _)) = result.first() {
-        if bcrypt::verify(key, hash).unwrap_or(false) {
+        // bcrypt is ~50 ms of pure CPU: run it on the blocking pool so it can
+        // never stall the async worker threads that serve every other request.
+        let (k, h) = (key.to_string(), hash.clone());
+        let ok = tokio::task::spawn_blocking(move || bcrypt::verify(k, &h).unwrap_or(false))
+            .await
+            .unwrap_or(false);
+        if ok {
             return Ok(Some(tenant_id.clone()));
         }
     }
     Ok(None)
+}
+
+/// True when `key` matches (bcrypt) a sensor key that has been revoked.
+pub async fn is_revoked_sensor_key(&self, key: &str) -> anyhow::Result<bool> {
+    if key.len() < 16 { return Ok(false); }
+    let prefix = &key[..16];
+    let rows = self.client
+        .query(&format!(
+            "SELECT key_hash FROM ndr.sensor_keys FINAL \
+             WHERE key_prefix = '{}' AND active = 0 LIMIT 1",
+            sql_escape(prefix)
+        ))
+        .fetch_all::<String>()
+        .await?;
+    let Some(hash) = rows.first().cloned() else { return Ok(false) };
+    let k = key.to_string();
+    Ok(tokio::task::spawn_blocking(move || bcrypt::verify(k, &hash).unwrap_or(false))
+        .await
+        .unwrap_or(false))
 }
 
 pub async fn get_sensor_keys(
@@ -4367,11 +4531,14 @@ pub async fn revoke_sensor_key(
     &self,
     id: &str,
 ) -> anyhow::Result<()> {
+    // mutations_sync=1: block until applied - found via TC-070 re-test that
+    // a revoke reported success while a follow-up list call still showed
+    // active=true for a few moments after.
     self.client
         .query(&format!(
             "ALTER TABLE ndr.sensor_keys \
              UPDATE active = 0 \
-             WHERE id = '{}'", sql_escape(id)
+             WHERE id = '{}' SETTINGS mutations_sync=1", sql_escape(id)
         ))
         .execute().await?;
     Ok(())
@@ -4397,6 +4564,28 @@ pub async fn get_sensor_key_prefix_by_id(
         .await?;
 
     Ok(rows.into_iter().next().map(|r| r.key_prefix))
+}
+
+/// Owning tenant of a sensor key by its UUID id — lets a caller confirm a
+/// tenant_admin only ever acts on their own tenant's key (TC-070: revoking
+/// used to be super_admin-only with no creator/tenant exception at all).
+pub async fn get_sensor_key_tenant_by_id(
+    &self,
+    id: &str,
+) -> anyhow::Result<Option<String>> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row { tenant_id: String }
+
+    let rows = self.client
+        .query(&format!(
+            "SELECT tenant_id FROM ndr.sensor_keys FINAL \
+             WHERE id = '{}' LIMIT 1",
+            sql_escape(id)
+        ))
+        .fetch_all::<Row>()
+        .await?;
+
+    Ok(rows.into_iter().next().map(|r| r.tenant_id))
 }
 
 pub async fn reactivate_sensor_key(
@@ -4508,6 +4697,40 @@ pub async fn clear_sensor_command(
     /// Returns true if src_ip has ANY confirmed threat-intel hit in the last 24h.
     /// Used to hard-block suppression for compromised hosts — code enforcement,
     /// not AI prompt rules which LLMs can silently ignore.
+    /// How many alerts in the last 24 h involving `ip` matched a threat-intelligence feed, and up to
+    /// five of the peer addresses, so the AI can be given the facts instead of a verdict.
+    pub async fn host_threat_intel_summary(&self, tenant_id: &str, ip: &str) -> (u64, Vec<String>) {
+        let db = tenant_db(tenant_id);
+        let safe_ip = sql_escape(ip);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct TiRow { n: u64, peers: Vec<String> }
+        self.client
+            .query(&format!(
+                "SELECT count() AS n, groupUniqArray(5)(if(src_ip = '{ip}', dst_ip, src_ip)) AS peers \
+                 FROM {db}.ndr_hits FINAL \
+                 WHERE (src_ip = '{ip}' OR dst_ip = '{ip}') \
+                 AND threat_intel = 1 \
+                 AND timestamp > now() - INTERVAL 24 HOUR",
+                db = db, ip = safe_ip
+            ))
+            .fetch_one::<TiRow>()
+            .await
+            .map(|r| (r.n, r.peers))
+            .unwrap_or((0, Vec::new()))
+    }
+
+    /// Names an address was seen under in DNS traffic (newest first).
+    pub async fn passive_dns_names_for_ip(&self, ip: &str, limit: usize) -> Vec<String> {
+        self.client
+            .query(&format!(
+                "SELECT domain FROM ndr.passive_dns FINAL WHERE ip = '{}' ORDER BY last_seen DESC LIMIT {}",
+                sql_escape(ip), limit
+            ))
+            .fetch_all::<String>()
+            .await
+            .unwrap_or_default()
+    }
+
     pub async fn host_has_threat_intel_hit(&self, tenant_id: &str, ip: &str) -> bool {
         let db = tenant_db(tenant_id);
         let safe_ip = sql_escape(ip);
@@ -4572,7 +4795,7 @@ pub async fn clear_sensor_command(
         )).execute().await?;
         // Force immediate deduplication so FINAL queries see the new row without
         // waiting for the background merge (table is tiny so this is cheap).
-        let _ = self.client.query("OPTIMIZE TABLE ndr.ai_suppressions FINAL")
+        let _ = self.client.query(&format!("OPTIMIZE TABLE {db}.ai_suppressions FINAL"))
             .execute().await;
         Ok(())
     }
@@ -4628,7 +4851,7 @@ pub async fn clear_sensor_command(
         let db = tenant_db(tenant_id);
         self.client.query(&format!(
             "ALTER TABLE {}.ai_suppressions UPDATE active = 0 \
-             WHERE id = '{}' AND tenant_id = '{}'",
+             WHERE id = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(id), sql_escape(tenant_id)
         )).execute().await?;
         Ok(())
@@ -4638,7 +4861,7 @@ pub async fn clear_sensor_command(
         let db = tenant_db(tenant_id);
         self.client.query(&format!(
             "ALTER TABLE {}.ai_suppressions DELETE \
-             WHERE id = '{}' AND tenant_id = '{}'",
+             WHERE id = '{}' AND tenant_id = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(id), sql_escape(tenant_id)
         )).execute().await?;
         Ok(())
@@ -5696,7 +5919,7 @@ pub async fn delete_ai_annotations_for_cid(
     let db = tenant_db(tenant_id);
     self.client.query(&format!(
         "ALTER TABLE {}.evidence_annotations DELETE
-         WHERE community_id = '{}' AND tag = 'ai_analysis'",
+         WHERE community_id = '{}' AND tag = 'ai_analysis' SETTINGS mutations_sync=1",
         db, sql_escape(community_id)
     )).execute().await?;
     Ok(())
@@ -6319,7 +6542,7 @@ pub async fn get_ioc_hits(
     pub async fn update_asset_os(&self, ip: &str, os_name: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         let query = format!(
-            "ALTER TABLE {}.assets UPDATE os_guess = '{}' WHERE tenant_id = '{}' AND ip = '{}'",
+            "ALTER TABLE {}.assets UPDATE os_guess = '{}' WHERE tenant_id = '{}' AND ip = '{}' SETTINGS mutations_sync=1",
             db, sql_escape(os_name), sql_escape(tenant_id), sql_escape(ip)
         );
         self.client.query(&query).execute().await?;
@@ -6770,7 +6993,7 @@ pub async fn get_ioc_hits(
             format!("id = '{}' AND tenant_id = '{}'", sql_escape(id), sql_escape(tenant_id))
         };
         let q = format!(
-            "ALTER TABLE ndr.active_blocks UPDATE status = 'revoked' WHERE {}",
+            "ALTER TABLE ndr.active_blocks UPDATE status = 'revoked' WHERE {} SETTINGS mutations_sync=1",
             where_clause
         );
         self.client.query(&q).execute().await?;
@@ -7223,15 +7446,18 @@ pub async fn get_ioc_hits(
                             admin_user.trim(), tenant_id, permissions
                         );
 
-                        // Permanently delete seed accounts — known credentials from init.sql
+                        // Permanently delete seed accounts — known credentials from init.sql.
+                        // mutations_sync=1: these are known/public default credentials being
+                        // removed for security — must be gone immediately, not eventually.
                         let _ = self.client.query(
                             "ALTER TABLE ndr.users DELETE \
-                             WHERE username IN ('admin', 'tenant-admin') AND tenant_id = 'default'"
+                             WHERE username IN ('admin', 'tenant-admin') AND tenant_id = 'default' \
+                             SETTINGS mutations_sync=1"
                         ).execute().await;
 
                         // Delete the 'default' tenant row — not needed on licensed installs
                         let _ = self.client.query(
-                            "ALTER TABLE ndr.tenants DELETE WHERE id = 'default'"
+                            "ALTER TABLE ndr.tenants DELETE WHERE id = 'default' SETTINGS mutations_sync=1"
                         ).execute().await;
 
                         // Clear plaintext password from .env after use
@@ -7340,7 +7566,7 @@ pub async fn get_ioc_hits(
     pub async fn delete_license(&self, id: &str) -> anyhow::Result<()> {
         self.client
             .query(&format!(
-                "ALTER TABLE ndr.licenses DELETE WHERE id = '{}'",
+                "ALTER TABLE ndr.licenses DELETE WHERE id = '{}' SETTINGS mutations_sync=1",
                 sql_escape(id)
             ))
             .execute()
@@ -7813,5 +8039,83 @@ impl ClickhouseStorage {
         }
 
         Ok(saved)
+    }
+}
+
+
+#[cfg(test)]
+mod sql_escape_tests {
+    use super::*;
+
+    #[test]
+    fn question_marks_never_reach_the_query_text() {
+        assert_eq!(sql_escape("http://x/a?b=1"), "http://x/a\\x3Fb=1");
+        assert!(!sql_escape("what?? ?fields").contains('?'));
+        assert_eq!(sql_escape("it's"), "it\\'s");
+        assert_eq!(sql_escape("a\\b"), "a\\\\b");
+    }
+
+    // Against a real ClickHouse: the escaped value must come back exactly as it went in.
+    // Run: CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //      cargo test -p ndr-engine sql_escape -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn escaped_value_round_trips_through_a_real_clickhouse() {
+        let client = clickhouse::Client::default()
+            .with_url(std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://127.0.0.1:8123".into()))
+            .with_user(std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".into()))
+            .with_password(std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default());
+        for original in ["http://evil.example/a?b=1&c=?", "plain", "it's a ? and a \\ and ?fields", "??"] {
+            let got: String = client
+                .query(&format!("SELECT '{}'", sql_escape(original)))
+                .fetch_one()
+                .await
+                .expect("query must not panic or fail");
+            assert_eq!(got, original);
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod tenant_column_migration_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway database that is dropped at the end):
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine tenant_column -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn an_old_tenant_table_gets_the_missing_columns_and_accepts_a_case() {
+        let ch = ClickhouseStorage::new();
+        let db = "ndr_zz_migtest";
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        ch.client.query(&format!("CREATE DATABASE {db}")).execute().await.unwrap();
+        // the OLD shapes: no case_number / priority / source
+        ch.client.query(&format!(
+            "CREATE TABLE {db}.soar_cases (id String, title String, updated_at DateTime DEFAULT now()) \
+             ENGINE = ReplacingMergeTree(updated_at) ORDER BY id")).execute().await.unwrap();
+        ch.client.query(&format!(
+            "CREATE TABLE {db}.sigma_rules (id String, name String, updated_at DateTime DEFAULT now()) \
+             ENGINE = ReplacingMergeTree(updated_at) ORDER BY id")).execute().await.unwrap();
+
+        // what the SOAR code does today fails on an old table
+        let before = ch.client.query(&format!(
+            "INSERT INTO {db}.soar_cases (id, case_number, title) VALUES ('a', 'C-1', 't')")).execute().await;
+        assert!(before.is_err(), "an old table must reject case_number (this is the reported bug)");
+
+        ch.migrate_tenant_columns(db).await;
+        ch.migrate_tenant_columns(db).await; // idempotent
+
+        ch.client.query(&format!(
+            "INSERT INTO {db}.soar_cases (id, case_number, title, priority) VALUES ('a', 'C-1', 't', 'P1')"))
+            .execute().await.expect("the case insert works after the migration");
+        let got: String = ch.client
+            .query(&format!("SELECT concat(case_number, '/', priority) FROM {db}.soar_cases WHERE id = 'a'"))
+            .fetch_one().await.unwrap();
+        assert_eq!(got, "C-1/P1");
+        ch.client.query(&format!("SELECT source FROM {db}.sigma_rules")).fetch_all::<String>().await
+            .expect("sigma_rules.source exists after the migration");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }
 }

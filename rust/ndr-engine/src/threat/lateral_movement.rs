@@ -14,12 +14,14 @@ use crate::storage::ClickhouseStorage;
 const SCAN_INTERVAL_SECS: u64 = 300; // every 5 minutes
 const CHAIN_WINDOW_MINS:  u32  = 60;  // max gap between hops
 
-pub fn spawn_lateral_movement_detector(ch: Arc<ClickhouseStorage>) {
+pub fn spawn_lateral_movement_detector(ch: Arc<ClickhouseStorage>, is_leader: Arc<std::sync::atomic::AtomicBool>) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(120)).await;
         loop {
-            if let Err(e) = run_scan(&ch).await {
-                warn!("lateral_movement: scan error — {}", e);
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Err(e) = run_scan(&ch).await {
+                    warn!("lateral_movement: scan error — {}", e);
+                }
             }
             tokio::time::sleep(std::time::Duration::from_secs(SCAN_INTERVAL_SECS)).await;
         }
@@ -29,11 +31,22 @@ pub fn spawn_lateral_movement_detector(ch: Arc<ClickhouseStorage>) {
 async fn run_scan(ch: &Arc<ClickhouseStorage>) -> anyhow::Result<()> {
     let tenants = ch.get_all_tenants().await
         .unwrap_or_else(|_| vec!["default".to_string()]);
-    for tenant in &tenants {
-        if let Err(e) = scan_tenant(ch, tenant).await {
-            warn!("lateral_movement: tenant {} failed — {}", tenant, e);
-        }
+    // Bounded concurrency (TENANT_SCAN_CONCURRENCY) instead of one tenant at
+    // a time - at real tenant counts, sequential scanning can push this well
+    // past its own 5-min cadence (SCAN_INTERVAL_SECS).
+    let sem = Arc::new(tokio::sync::Semaphore::new(super::tenant_scan_concurrency()));
+    let mut handles = Vec::with_capacity(tenants.len());
+    for tenant in tenants {
+        let ch2  = Arc::clone(ch);
+        let sem2 = Arc::clone(&sem);
+        handles.push(tokio::spawn(async move {
+            let _permit = sem2.acquire().await;
+            if let Err(e) = scan_tenant(&ch2, &tenant).await {
+                warn!("lateral_movement: tenant {} failed — {}", tenant, e);
+            }
+        }));
     }
+    futures_util::future::join_all(handles).await;
     Ok(())
 }
 

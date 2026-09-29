@@ -245,13 +245,16 @@ fn unauthorized() -> Json<Value> {
     Json(json!({ "status": "error", "message": "Unauthorized" }))
 }
 
-async fn view(ch: &ClickhouseStorage, tenant: &str, st: &TriageState, extra: Value) -> Json<Value> {
+async fn view(ch: &ClickhouseStorage, tenant: &str, st: &TriageState, allowed: &[String], extra: Value) -> Json<Value> {
     let now_hour = unix_now() / 3600;
     let limit = ai_limit_per_hour();
     let ai_enabled = ch.get_tenant_ai_enabled(tenant).await;
 
-    let count = |verdict: Verdict| st.recs.iter().filter(|r| r.status == "pending" && r.verdict == verdict).count();
-    let pending: Vec<&Recommendation> = st.recs.iter().filter(|r| r.status == "pending").collect();
+    // A user restricted to some sensors only sees (and is only counted) the groups made entirely of
+    // their own sensors' alerts. Unrestricted users (empty `allowed`) see everything, as before.
+    let mine: Vec<&Recommendation> = st.recs.iter().filter(|r| visible_to(&r.sensors, allowed)).collect();
+    let count = |verdict: Verdict| mine.iter().filter(|r| r.status == "pending" && r.verdict == verdict).count();
+    let pending: Vec<&Recommendation> = mine.iter().copied().filter(|r| r.status == "pending").collect();
     let alerts_in_pending: u32 = pending.iter().map(|r| r.alert_count).sum();
     let alerts_benign: u32 = pending.iter().filter(|r| r.verdict == Verdict::Benign).map(|r| r.alert_count).sum();
 
@@ -273,8 +276,8 @@ async fn view(ch: &ClickhouseStorage, tenant: &str, st: &TriageState, extra: Val
             "suspicious": count(Verdict::Suspicious),
             "unknown": count(Verdict::Unknown),
             "alerts_likely_benign": alerts_benign,
-            "applied": st.recs.iter().filter(|r| r.status == "applied").count(),
-            "dismissed": st.recs.iter().filter(|r| r.status == "dismissed").count(),
+            "applied": mine.iter().filter(|r| r.status == "applied").count(),
+            "dismissed": mine.iter().filter(|r| r.status == "dismissed").count(),
         },
         "recommendations": pending,
         "info": extra,
@@ -286,7 +289,7 @@ pub async fn get_triage(State(state): State<AppState>, headers: HeaderMap) -> Js
     let Some(claims) = extract_claims(&headers) else { return unauthorized() };
     note_host(&state.ch_storage, &headers, &claims.role).await;
     let st = load_state(&state.ch_storage, &claims.tenant_id).await;
-    view(&state.ch_storage, &claims.tenant_id, &st, Value::Null).await
+    view(&state.ch_storage, &claims.tenant_id, &st, &claims.sensor_ids, Value::Null).await
 }
 
 /// POST /api/triage/run - rules + cached answers only, instant, no AI call.
@@ -295,10 +298,10 @@ pub async fn run_now(State(state): State<AppState>, headers: HeaderMap) -> Json<
     note_host(&state.ch_storage, &headers, &claims.role).await;
     let st = load_state(&state.ch_storage, &claims.tenant_id).await;
     if unix_now().saturating_sub(st.last_run) < MIN_MANUAL_RUN_GAP_SECS {
-        return view(&state.ch_storage, &claims.tenant_id, &st, json!({ "throttled": true })).await;
+        return view(&state.ch_storage, &claims.tenant_id, &st, &claims.sensor_ids, json!({ "throttled": true })).await;
     }
     match run_for_tenant(&state.ch_storage, &claims.tenant_id, false).await {
-        Ok(st)  => view(&state.ch_storage, &claims.tenant_id, &st, Value::Null).await,
+        Ok(st)  => view(&state.ch_storage, &claims.tenant_id, &st, &claims.sensor_ids, Value::Null).await,
         Err(e)  => Json(json!({ "status": "error", "message": e.to_string() })),
     }
 }
@@ -314,7 +317,8 @@ pub async fn apply(
 ) -> Json<Value> {
     let Some(claims) = extract_claims(&headers) else { return unauthorized() };
     let mut st = load_state(&state.ch_storage, &claims.tenant_id).await;
-    let Some(rec) = st.recs.iter().find(|r| r.id == id).cloned() else {
+    // A group the user cannot see is answered exactly like one that does not exist.
+    let Some(rec) = st.recs.iter().find(|r| r.id == id && visible_to(&r.sensors, &claims.sensor_ids)).cloned() else {
         return Json(json!({ "status": "error", "message": "Recommendation not found" }));
     };
     if rec.status != "pending" {
@@ -330,6 +334,14 @@ pub async fn apply(
     let covered: Vec<String> = st.recs.iter()
         .filter(|r| r.status == "pending" && r.src_ip == rec.src_ip && r.tag == rec.tag)
         .map(|r| r.id.clone()).collect();
+    // The suppression is tenant-wide for this source and tag. A restricted analyst may not use it
+    // when it would also hide the same alerts on sensors outside their assignment.
+    if st.recs.iter().any(|r| covered.contains(&r.id) && !visible_to(&r.sensors, &claims.sensor_ids)) {
+        return Json(json!({
+            "status": "error",
+            "message": "The same source and alert also occur on sensors that are not assigned to you, so it can't be hidden from here. Ask a tenant admin."
+        }));
+    }
     if st.recs.iter().any(|r| covered.contains(&r.id) && r.verdict == Verdict::Suspicious) {
         return Json(json!({
             "status": "error",
@@ -363,7 +375,7 @@ pub async fn apply(
         if r.id != id { also += 1; }
     }
     let _ = save_state(&state.ch_storage, &claims.tenant_id, &st).await;
-    view(&state.ch_storage, &claims.tenant_id, &st,
+    view(&state.ch_storage, &claims.tenant_id, &st, &claims.sensor_ids,
          json!({ "applied_hours": hours, "also_covered_groups": also })).await
 }
 
@@ -372,10 +384,11 @@ pub async fn dismiss(State(state): State<AppState>, headers: HeaderMap, Path(id)
     let Some(claims) = extract_claims(&headers) else { return unauthorized() };
     let mut st = load_state(&state.ch_storage, &claims.tenant_id).await;
     let now = unix_now();
-    match st.recs.iter_mut().find(|r| r.id == id && r.status == "pending") {
+    let allowed = claims.sensor_ids.clone();
+    match st.recs.iter_mut().find(|r| r.id == id && r.status == "pending" && visible_to(&r.sensors, &allowed)) {
         Some(r) => { r.status = "dismissed".into(); r.updated_at = now; }
         None => return Json(json!({ "status": "error", "message": "Recommendation not found" })),
     }
     let _ = save_state(&state.ch_storage, &claims.tenant_id, &st).await;
-    view(&state.ch_storage, &claims.tenant_id, &st, Value::Null).await
+    view(&state.ch_storage, &claims.tenant_id, &st, &claims.sensor_ids, Value::Null).await
 }

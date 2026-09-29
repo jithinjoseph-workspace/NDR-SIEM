@@ -333,7 +333,7 @@ OPENAI_API_KEY=
 GROQ_API_KEY=
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
-INGEST_RATE_LIMIT=50000
+INGEST_RATE_LIMIT=0
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
@@ -581,7 +581,7 @@ step "Analytics Database  (ClickHouse)"
 
 if [ "$DEPLOY_MODE" = "local" ]; then
     log "ClickHouse — Docker container cluster (2 nodes, bridge network)"
-    log "  Credentials:  ndr / ndr123"
+    log "  Credentials:  user ndr, random password stored in $INSTALL_DIR/.env"
     log "  Endpoint:     http://localhost:8123  (node 1, localhost-only)"
 
     CH_NEEDS_IMPORT=false
@@ -648,7 +648,14 @@ if [ "$DEPLOY_MODE" = "local" ]; then
     CLICKHOUSE_URL="http://localhost:8123"
     CLICKHOUSE_URL_SECONDARY="http://localhost:8123"
     CLOUD_CH_USER="ndr"
-    CLOUD_CH_PASS="ndr123"
+    # Use the random password already written to .env earlier in this run. It was
+    # previously forced to a hardcoded "ndr123" here, giving every install the same
+    # database credential. ClickHouse reads it from CLICKHOUSE_PASSWORD at start-up,
+    # so a re-run simply rotates it consistently across the stack.
+    CLOUD_CH_PASS=$(grep '^CLICKHOUSE_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    if [ -z "$CLOUD_CH_PASS" ]; then
+        CLOUD_CH_PASS=$(openssl rand -hex 16 2>/dev/null || echo "$(date +%s%N | sha256sum | head -c 32)")
+    fi
     CLOUD_KAFKA="kafka1:9092,kafka2:9092,kafka3:9092"
 else
     log "Using cloud ClickHouse: $CLOUD_CLICKHOUSE"
@@ -1051,7 +1058,7 @@ OPENAI_API_KEY=$OPENAI_API_KEY
 GROQ_API_KEY=
 GROQ_MODEL=llama-3.3-70b-versatile
 BEACON_WINDOW_HOURS=1
-INGEST_RATE_LIMIT=50000
+INGEST_RATE_LIMIT=0
 SIEM_SYSLOG_HOST=
 SIEM_SYSLOG_PORT=514
 TRUSTED_SOURCE_CIDRS=
@@ -1387,19 +1394,8 @@ log "✅ Update watcher service installed and started"
 sudo docker compose --profile onpremise --profile siem down 2>/dev/null || true
 sudo docker rm -f vector 2>/dev/null || true
 
-# ── Select nginx config for this product mode ─────────────────────────────────
-# Each mode has its own config so nginx never tries to resolve upstreams
-# that aren't running (e.g. ndr-engine-1 in SIEM-only mode).
-if [ "$PRODUCT_MODE" = "siem" ]; then
-    cp "$INSTALL_DIR/config/nginx/nginx-siem.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-    log "nginx: SIEM-only config selected"
-elif [ "$PRODUCT_MODE" = "both" ]; then
-    cp "$INSTALL_DIR/config/nginx/nginx-both.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-    log "nginx: NDR+SIEM config selected"
-else
-    cp "$INSTALL_DIR/config/nginx/nginx-ndr.conf" "$INSTALL_DIR/config/nginx/nginx.conf"
-    log "nginx: NDR-only config selected"
-fi
+# nginx: config/nginx/nginx.conf is the only nginx config and is used as-is
+# (the old per-mode nginx-*.conf copies were removed).
 
 log "Starting Docker stack — product: ${PRODUCT_MODE}, mode: ${DEPLOY_MODE}"
 

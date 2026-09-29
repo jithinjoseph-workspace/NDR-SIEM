@@ -3,18 +3,53 @@ use serde_json::{json, Value};
 use crate::api::AppState;
 
 pub async fn kafka_status(_state: State<AppState>) -> Json<Value> {
-    // ── Topic describe ────────────────────────────────────────────────
-    let topic_out = std::process::Command::new("docker")
-        .args(["exec", "kafka1", "/opt/kafka/bin/kafka-topics.sh",
-               "--bootstrap-server", "localhost:9092",
-               "--describe", "--topic", "ndr-events"])
-        .output();
+    // Each of these shells out to a JVM-based Kafka CLI tool via `docker exec`
+    // (real cold-start cost, often 1-3s+ per call) - run sequentially and
+    // synchronously (std::process::Command, not tokio::process) this used to
+    // take ~12s total and, because it blocked the async runtime instead of
+    // yielding, could stall unrelated concurrent requests on the same
+    // ndr-engine instance for that whole window. spawn_blocking moves each
+    // call onto Tokio's dedicated blocking thread pool, and running all 5
+    // concurrently cuts wall time to whichever single call is slowest
+    // instead of their sum.
+    let topics_task = tokio::task::spawn_blocking(|| {
+        std::process::Command::new("docker")
+            .args(["exec", "kafka1", "/opt/kafka/bin/kafka-topics.sh",
+                   "--bootstrap-server", "localhost:9092",
+                   "--describe", "--topic", "ndr-events"])
+            .output()
+    });
 
+    let groups_task = tokio::task::spawn_blocking(|| {
+        std::process::Command::new("docker")
+            .args(["exec", "kafka1", "/opt/kafka/bin/kafka-consumer-groups.sh",
+                   "--bootstrap-server", "localhost:9092",
+                   "--describe", "--group", "ndr-engine-group"])
+            .output()
+    });
+
+    let broker_list = [("kafka1", 1u32), ("kafka2", 2u32), ("kafka3", 3u32)];
+    let mut broker_tasks = Vec::with_capacity(broker_list.len());
+    for (host, id) in broker_list {
+        broker_tasks.push(tokio::task::spawn_blocking(move || {
+            let healthy = std::process::Command::new("docker")
+                .args(["exec", host, "/opt/kafka/bin/kafka-broker-api-versions.sh",
+                       "--bootstrap-server", "localhost:9092"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            (host, id, healthy)
+        }));
+    }
+
+    let (topics_result, groups_result) = tokio::join!(topics_task, groups_task);
+
+    // ── Topic describe ────────────────────────────────────────────────
     let mut partitions: Vec<Value> = Vec::new();
     let mut replication_factor = 0u32;
     let mut partition_count    = 0u32;
 
-    if let Ok(out) = &topic_out {
+    if let Ok(Ok(out)) = topics_result {
         let text = String::from_utf8_lossy(&out.stdout);
         for line in text.lines() {
             if line.contains("PartitionCount:") {
@@ -51,16 +86,10 @@ pub async fn kafka_status(_state: State<AppState>) -> Json<Value> {
     }
 
     // ── Consumer group lag ────────────────────────────────────────────
-    let group_out = std::process::Command::new("docker")
-        .args(["exec", "kafka1", "/opt/kafka/bin/kafka-consumer-groups.sh",
-               "--bootstrap-server", "localhost:9092",
-               "--describe", "--group", "ndr-engine-group"])
-        .output();
-
     let mut consumers: Vec<Value> = Vec::new();
     let mut total_lag: i64 = 0;
 
-    if let Ok(out) = &group_out {
+    if let Ok(Ok(out)) = groups_result {
         let text = String::from_utf8_lossy(&out.stdout);
         for line in text.lines() {
             // GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID
@@ -82,20 +111,15 @@ pub async fn kafka_status(_state: State<AppState>) -> Json<Value> {
     }
 
     // ── Broker health ─────────────────────────────────────────────────
-    let broker_list = [("kafka1", 1), ("kafka2", 2), ("kafka3", 3)];
-    let mut brokers: Vec<Value> = Vec::new();
-    for (host, id) in broker_list {
-        let healthy = std::process::Command::new("docker")
-            .args(["exec", host, "/opt/kafka/bin/kafka-broker-api-versions.sh",
-                   "--bootstrap-server", "localhost:9092"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        brokers.push(json!({
-            "id":     id,
-            "host":   host,
-            "status": if healthy { "healthy" } else { "unreachable" },
-        }));
+    let mut brokers: Vec<Value> = Vec::with_capacity(broker_tasks.len());
+    for task in broker_tasks {
+        if let Ok((host, id, healthy)) = task.await {
+            brokers.push(json!({
+                "id":     id,
+                "host":   host,
+                "status": if healthy { "healthy" } else { "unreachable" },
+            }));
+        }
     }
 
     Json(json!({

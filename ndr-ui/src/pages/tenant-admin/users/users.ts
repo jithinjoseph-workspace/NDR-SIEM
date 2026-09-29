@@ -1,6 +1,6 @@
 import {
   Component, Input, OnInit, OnDestroy, AfterViewInit, ChangeDetectionStrategy,
-  signal, computed, ViewEncapsulation, ElementRef, ViewChild
+  signal, computed, effect, ViewEncapsulation, ElementRef, ViewChild
 } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -15,6 +15,7 @@ import {
 } from 'lucide-angular';
 import { Api, SensorKey, SensorAssignment } from '../../../services/api/api';
 import { AuthService } from '../../../services/auth/auth';
+import { TenantStatusService } from '../../../services/tenant-status/tenant-status';
 import { Subscription } from 'rxjs';
 import { BaseChartDirective } from 'ng2-charts';
 import * as THREE from 'three';
@@ -52,14 +53,6 @@ export class UsersSection implements OnInit, OnDestroy, AfterViewInit {
   @Input() tenantId = '';
   @Input() tenantName = 'Organization';
   @Input() set tenantFeatures(v: string[]) { if (v?.length) this._tenantFeatures.set(v); }
-  /** Sensor keys forwarded from the parent shell (already fetched in the status poll).
-   *  When provided, loadSensorData() skips its own getSensorKeys() call. */
-  @Input() set parentSensorKeys(keys: any[]) {
-    if (keys?.length) {
-      const tid = this.tenantId;
-      this.sensorKeys.set(keys.filter((k: any) => k.tenant_id === tid && k.active !== false));
-    }
-  }
   private readonly _tenantFeatures = signal<string[]>([]);
 
   UsersIcon        = UsersLucide;
@@ -529,7 +522,21 @@ export class UsersSection implements OnInit, OnDestroy, AfterViewInit {
   trackByUserId(_: number, user: TenantUser) { return user.id; }
   trackByIndex(i: number)                    { return i; }
 
-  constructor(private api: Api, private auth: AuthService) {}
+  constructor(private api: Api, private auth: AuthService, private tenantStatus: TenantStatusService) {
+    // Mirrors the shared poll's sensor-keys signal instead of this component
+    // calling getSensorKeys() itself - that used to fire in parallel with
+    // this same poll on every page load, a genuinely redundant fetch.
+    // startPolling() is idempotent (main.ts's tenant-status.ts guards it),
+    // so calling it here too is safe whether or not a parent already did.
+    effect(() => {
+      const keys = this.tenantStatus.sensorKeys();
+      if (!this.tenantStatus.sensorKeysLoaded()) return;
+      const tid = this.tenantId;
+      this.sensorKeys.set(keys.filter((k: any) => k.tenant_id === tid && k.active !== false));
+      this.sensorsLoaded = true;
+      this.maybeInitTopology();
+    });
+  }
 
   ngOnInit() {
     if (!this.tenantId) {
@@ -921,6 +928,23 @@ export class UsersSection implements OnInit, OnDestroy, AfterViewInit {
       renderer.domElement.style.display = 'block';
       host.appendChild(renderer.domElement);
       this.threeRenderer = renderer;
+
+      // WebGL contexts can be lost at any time (GPU driver reset, memory
+      // pressure, or our own disposeThreeCyberTopology() calling
+      // forceContextLoss() on navigation away from this page) - without
+      // listening for it, the rAF loop below keeps calling render() on a
+      // dead context forever (wasted CPU, frozen visual, never recovers).
+      // preventDefault() is required for the browser to attempt automatic
+      // restoration; only rebuild on restore, not on loss itself, so this
+      // doesn't fight with the intentional forceContextLoss() cleanup path.
+      renderer.domElement.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        if (this.threeAnimId) { cancelAnimationFrame(this.threeAnimId); this.threeAnimId = undefined; }
+      }, false);
+      renderer.domElement.addEventListener('webglcontextrestored', () => {
+        this.disposeThreeCyberTopology();
+        this.initThreeCyberTopology();
+      }, false);
 
       // 0. Distant starfield backdrop — added to the scene, not the
       // rotating group, so it stays fixed behind everything for depth.
@@ -1408,26 +1432,12 @@ export class UsersSection implements OnInit, OnDestroy, AfterViewInit {
 
   loadSensorData() {
     this.sensorAssignLoading.set(true);
-    const tid = this.tenantId;
 
-    // Skip the getSensorKeys request if the parent shell already provided them
-    // via @Input() parentSensorKeys (populated during its status poll forkJoin).
-    if (!this.sensorKeys().length) {
-      this.api.getSensorKeys().subscribe({
-        next: (keys) => {
-          this.sensorKeys.set(keys.filter(k => k.tenant_id === tid && k.active !== false));
-          this.sensorsLoaded = true;
-          this.maybeInitTopology();
-        },
-        error: () => {
-          this.sensorsLoaded = true;
-          this.maybeInitTopology();
-        }
-      });
-    } else {
-      this.sensorsLoaded = true;
-      this.maybeInitTopology();
-    }
+    // Sensor keys come from the shared TenantStatusService poll (see the
+    // effect() wired up in the constructor) rather than a call here - this
+    // used to fetch getSensorKeys() independently, in parallel with that
+    // same shared poll's own identical call, on every page load.
+    this.tenantStatus.startPolling();
 
     this.api.getSensorAssignments().subscribe({
       next: (res) => {

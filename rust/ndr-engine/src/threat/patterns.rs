@@ -6,14 +6,19 @@ pub fn spawn_pattern_sync(
     ch: Arc<crate::storage::ClickhouseStorage>,
     chain_trigger: Arc<Notify>,
     redis: Arc<redis::Client>,
+    is_leader: Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
-        sync_mitre_attack(&ch, &redis).await;
-        chain_trigger.notify_one();
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(7 * 24 * 3600)).await;
+        if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
             sync_mitre_attack(&ch, &redis).await;
             chain_trigger.notify_one();
+        }
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(7 * 24 * 3600)).await;
+            if is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                sync_mitre_attack(&ch, &redis).await;
+                chain_trigger.notify_one();
+            }
         }
     });
 }
@@ -137,10 +142,12 @@ async fn build_attack_chains(ch: &crate::storage::ClickhouseStorage, redis: &red
         }
     }
 
-    // Delete old builtin chains and rebuild
-    let _ = ch.client.query("ALTER TABLE ndr.attack_chains DELETE WHERE source = 'builtin'")
+    // Delete old builtin chains and rebuild. mutations_sync=1 replaces a fixed
+    // 2s sleep that was standing in for "wait until the async delete is
+    // actually applied" - a guess, not a guarantee, and slower than necessary
+    // whenever the mutation finishes sooner.
+    let _ = ch.client.query("ALTER TABLE ndr.attack_chains DELETE WHERE source = 'builtin' SETTINGS mutations_sync=1")
         .execute().await;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let chains: &[(&str, &str, &str, &str, u8, &str, serde_json::Value)] = &[
         (
@@ -259,11 +266,11 @@ async fn build_dynamic_chains_from_mitre(
         }
     }
 
-    // Delete stale dynamic chains before rebuilding
+    // Delete stale dynamic chains before rebuilding. mutations_sync=1 replaces
+    // the same fixed-sleep-as-a-guess pattern as the builtin-chains delete above.
     let _ = ch.client
-        .query("ALTER TABLE ndr.attack_chains DELETE WHERE source = 'mitre_cti'")
+        .query("ALTER TABLE ndr.attack_chains DELETE WHERE source = 'mitre_cti' SETTINGS mutations_sync=1")
         .execute().await;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Map: STIX ID (attack-pattern) → T-number (e.g. "T1071")
     let mut stix_to_technique: std::collections::HashMap<String, String> = Default::default();
