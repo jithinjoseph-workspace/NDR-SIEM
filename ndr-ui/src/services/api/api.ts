@@ -966,21 +966,5 @@ export class Api {
     return this.http.get(`${this.baseUrl}/retrospective/scans/${encodeURIComponent(id)}`);
   }
 
-  // ── Triage ─────────────────────────────────────────────
 
-  getTriage(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/triage`);
-  }
-
-  runTriage(): Observable<any> {
-    return this.http.post(`${this.baseUrl}/triage/run`, {});
-  }
-
-  applyTriage(id: string, hours: number): Observable<any> {
-    return this.http.post(`${this.baseUrl}/triage/apply`, { id, hours });
-  }
-
-  dismissTriage(id: string): Observable<any> {
-    return this.http.post(`${this.baseUrl}/triage/dismiss`, { id });
-  }
 }
