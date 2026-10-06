@@ -558,9 +558,10 @@ export class Alerts implements OnInit, OnDestroy {
       community_id: alert.community_id,
       tags:        alert.tags || [],
       assigned_to: analyst,
+      dedupe_by_flow: true,
     }).subscribe({
       next: (res: any) => {
-        this.showToast(`Incident created — ${title}`);
+        this.showToast(res?.deduplicated ? 'Existing incident opened for this flow' : `Incident created — ${title}`);
         this.router.navigate(['/analyst/soar']);
       },
       error: () => this.showToast(`Failed to create incident`),
@@ -599,9 +600,10 @@ export class Alerts implements OnInit, OnDestroy {
       community_id: g.alerts[0]?.community_id || '',
       tags:        allTags,
       assigned_to: analyst,
+      dedupe_by_flow: true,
     }).subscribe({
-      next: () => {
-        this.showToast(`Incident created — ${g.count} alerts bundled`);
+      next: (res: any) => {
+        this.showToast(res?.deduplicated ? 'Existing incident opened for this flow' : `Incident created — ${g.count} alerts bundled`);
         this.router.navigate(['/analyst/soar']);
       },
       error: () => this.showToast(`Failed to create incident`),

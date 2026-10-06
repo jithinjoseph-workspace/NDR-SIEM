@@ -44,6 +44,15 @@ fn primary_incident_tag(tags: &[String]) -> String {
         .unwrap_or_else(|| "alert".to_string())
 }
 
+/// Return a direction-independent representation of a network flow.
+///
+/// One alert can describe the request while another describes the reply. Those
+/// are still one incident, so SOAR de-duplication must not create a distinct
+/// key simply because source and destination were reversed.
+fn canonical_endpoint_pair<'a>(first: &'a str, second: &'a str) -> (&'a str, &'a str) {
+    if first <= second { (first, second) } else { (second, first) }
+}
+
 pub fn incident_key_for_hit(
     tenant_id: &str,
     hit: &CorrelationHit,
@@ -60,8 +69,9 @@ pub fn incident_key_for_hit(
         ),
     };
 
+    let (endpoint_a, endpoint_b) = canonical_endpoint_pair(&src, &dst);
     let tag = primary_incident_tag(&risk.tags);
-    format!("soar:{}:{}:{}:{}", tenant_id, src, dst, tag)
+    format!("soar:{}:{}:{}:{}", tenant_id, endpoint_a, endpoint_b, tag)
 }
 
 pub fn should_fire_soar_for_incident(state: &AppState, incident_key: &str) -> bool {
@@ -228,6 +238,58 @@ mod tests {
         };
 
         assert_eq!(incident_key_for_hit("tenant", &hit, &risk_a), incident_key_for_hit("tenant", &hit, &risk_b));
+    }
+
+    #[test]
+    fn incident_key_stays_stable_when_flow_direction_reverses() {
+        let event = |source: EventSource, src: &str, dst: &str| NormalizedEvent {
+            source_ip: Some(src.into()),
+            source_port: None,
+            dest_ip: Some(dst.into()),
+            dest_port: None,
+            proto: None,
+            network_protocol: None,
+            community_id: None,
+            event_source: source,
+            log_source: None,
+            timestamp: 0,
+            uid: None,
+            conn_state: None,
+            event_type: None,
+            alert: None,
+            raw: json!({}),
+            is_malicious: false,
+            src_country_code: String::new(),
+            dst_country_code: String::new(),
+            src_asn_org: String::new(),
+            dst_asn_org: String::new(),
+            direction: String::new(),
+        };
+        let forward = CorrelationHit {
+            community_id: "cid-forward".into(),
+            agent_z: event(EventSource::Zeek, "172.25.86.150", "162.243.103.246"),
+            agent_s: event(EventSource::Suricata, "172.25.86.150", "162.243.103.246"),
+            hit_time: 0,
+            source: "agent-z+agent-s".into(),
+        };
+        let reverse = CorrelationHit {
+            community_id: "cid-reverse".into(),
+            agent_z: event(EventSource::Zeek, "162.243.103.246", "172.25.86.150"),
+            agent_s: event(EventSource::Suricata, "162.243.103.246", "172.25.86.150"),
+            hit_time: 0,
+            source: "agent-z+agent-s".into(),
+        };
+        let risk = RiskResult {
+            score: 80.0,
+            severity: crate::scoring::Severity::High,
+            tags: vec!["threat-intel".into()],
+            reasons: vec![],
+        };
+
+        assert_eq!(
+            incident_key_for_hit("tenant", &forward, &risk),
+            incident_key_for_hit("tenant", &reverse, &risk),
+        );
     }
 
     #[test]

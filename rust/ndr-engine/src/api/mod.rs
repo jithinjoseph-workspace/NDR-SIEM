@@ -6913,6 +6913,21 @@ async fn get_tenant_arkime_creds(
     Ok((url, pass))
 }
 
+/// When no Arkime session is indexed for a flow, check whether a real packet capture is
+/// sitting in an evidence bundle instead (bundles capture PCAP from the sensor at alert
+/// time, independently of Arkime indexing) and offer that instead of a flat "nothing here".
+/// `None` in, `None` out; only a real, non-empty `.pcap` entry counts as a fallback.
+async fn pcap_evidence_bundle_fallback(
+    state: &AppState,
+    tenant_id: &str,
+    community_id: Option<&str>,
+) -> Option<Value> {
+    let cid = community_id.filter(|c| !c.is_empty())?;
+    let (bundle_id, file_path) = state.ch_storage.latest_bundle_file_for_cid(tenant_id, cid).await?;
+    let size = crate::evidence::pcap_entry_in_bundle_zip(&file_path).await.filter(|&s| s > 0)?;
+    Some(json!({ "bundle_id": bundle_id, "pcap_size_bytes": size }))
+}
+
 pub async fn arkime_sessions(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -7084,12 +7099,18 @@ pub async fn arkime_sessions(
                         "arkime_url":   &arkime_url,
                         "file_path":    ""
                     })
-                }).collect();
+                }).collect::<Vec<_>>();
+                let evidence_bundle_fallback = if sessions.is_empty() {
+                    pcap_evidence_bundle_fallback(&state, &claims.tenant_id, community_id.as_deref()).await
+                } else {
+                    None
+                };
                 return axum::Json(json!({
                     "status":  "ok",
                     "sessions": sessions,
                     "source":  "opensearch",
-                    "total":   data["hits"]["total"]["value"].as_u64().unwrap_or(0)
+                    "total":   data["hits"]["total"]["value"].as_u64().unwrap_or(0),
+                    "evidence_bundle_fallback": evidence_bundle_fallback
                 })).into_response();
             }
             Err(e) => {
@@ -7115,10 +7136,19 @@ pub async fn arkime_sessions(
         .await
         .unwrap_or_default();
 
+    // Scoped to a single-session lookup (a cid was given) — not worth the file read on a
+    // broad, unfiltered listing.
+    let evidence_bundle_fallback = if sessions.is_empty() {
+        pcap_evidence_bundle_fallback(&state, &claims.tenant_id, community_id.as_deref()).await
+    } else {
+        None
+    };
+
     axum::Json(json!({
         "status":   "ok",
         "sessions": sessions,
-        "source":   "clickhouse"
+        "source":   "clickhouse",
+        "evidence_bundle_fallback": evidence_bundle_fallback
     })).into_response()
 }
 
@@ -7239,6 +7269,16 @@ pub async fn pcap_upload(
             "message": "Unauthorized: invalid sensor key"
         })),
     };
+    // The client-reported hostname is useful for diagnostics but is not an
+    // authorization identity. Store the authenticated sensor-key prefix so
+    // analysts assigned to this sensor can later retrieve its PCAP sessions.
+    let sensor_id = match extract_sensor_key_prefix(&headers) {
+        Some(id) => id,
+        None => return axum::Json(json!({
+            "status": "error",
+            "message": "Unauthorized: invalid sensor key prefix"
+        })),
+    };
 
     let mut pcap_bytes: Vec<u8> = Vec::new();
     let mut pcap_filename = String::new();
@@ -7248,7 +7288,6 @@ pub async fn pcap_upload(
     let mut src_port: u16 = 0;
     let mut dst_port: u16 = 0;
     let mut proto = String::new();
-    let mut sensor_host = String::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
@@ -7278,7 +7317,9 @@ pub async fn pcap_upload(
                     .parse().unwrap_or(0);
             }
             "proto" => { proto = field.text().await.unwrap_or_default(); }
-            "sensor_host" => { sensor_host = field.text().await.unwrap_or_default(); }
+            // Do not use the client-supplied hostname as an authorization or
+            // ownership field. The authenticated sensor ID above is stored.
+            "sensor_host" => { let _ = field.text().await; }
             _ => { let _ = field.bytes().await; }
         }
     }
@@ -7367,7 +7408,7 @@ pub async fn pcap_upload(
     if let Err(e) = state.ch_storage.save_pcap_session(
         &tenant_id, &session_id, &community_id,
         &src_ip, &dst_ip, src_port, dst_port, &proto,
-        bytes_count, "", &file_path, &sensor_host,
+        bytes_count, "", &file_path, &sensor_id,
     ).await {
         tracing::warn!("pcap_upload: failed to index session: {}", e);
     }
@@ -8228,6 +8269,24 @@ pub async fn create_soar_case(
         .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default();
 
+    // Alert-originated cases opt in to flow de-duplication. Manual cases still
+    // remain available for analysts who deliberately need a separate case.
+    let dedupe_by_flow = payload.get("dedupe_by_flow").and_then(|v| v.as_bool()).unwrap_or(false);
+    if dedupe_by_flow && !src_ip.is_empty() && !dst_ip.is_empty() {
+        if let Some((existing_id, existing_number, _, _)) = state.ch_storage
+            .find_open_case_by_src_dst(&src_ip, &dst_ip, &claims.tenant_id)
+            .await
+        {
+            return Json(json!({
+                "status": "success",
+                "id": existing_id,
+                "case_number": existing_number,
+                "deduplicated": true,
+                "message": "Existing open case reused for this network flow"
+            }));
+        }
+    }
+
     match state.ch_storage.insert_soar_case(
         &id, &case_number, &title, &description, &severity, &priority,
         "New", &assigned_to, &src_ip, &dst_ip, &community_id, &tags, &claims.tenant_id,
@@ -8664,6 +8723,7 @@ pub async fn get_bundle_contents(
 
     if let Some(file_path) = bundle["file_path"].as_str().filter(|p| !p.is_empty()) {
         if let Ok(zip_bytes) = tokio::fs::read(file_path).await {
+            pcap_size = crate::evidence::pcap_entry_size_in_zip_bytes(&zip_bytes).unwrap_or(0);
             let cursor = std::io::Cursor::new(&zip_bytes);
             if let Ok(mut archive) = zip::ZipArchive::new(cursor) {
                 for i in 0..archive.len() {
@@ -8682,8 +8742,6 @@ pub async fn get_bundle_contents(
                         use std::io::Read;
                         let _ = file.read_to_string(&mut text);
                         alert_from_zip = serde_json::from_str(&text).unwrap_or(json!({}));
-                    } else if name.ends_with(".pcap") {
-                        pcap_size = file.size();
                     }
                 }
             }

@@ -4341,7 +4341,17 @@ pub async fn get_pcap_sessions(
     }
     if !sensor_ids.is_empty() {
         let list = sensor_ids.iter().map(|s| format!("'{}'", sql_escape(s))).collect::<Vec<_>>().join(",");
-        conditions.push_str(&format!(" AND sensor_host IN ({})", list));
+        // New uploads persist the authenticated sensor key prefix in
+        // sensor_host. The CID fallback keeps already-uploaded PCAPs visible:
+        // older uploaders stored a Linux hostname here, while ndr_hits records
+        // the actual sensor ID that access control assigns to the analyst.
+        conditions.push_str(&format!(
+            " AND (sensor_host IN ({list}) OR community_id IN \
+             (SELECT DISTINCT community_id FROM {db}.ndr_hits FINAL \
+              WHERE sensor_id IN ({list})))",
+            list = list,
+            db = db,
+        ));
     }
     let query = format!(
         "SELECT session_id, any(community_id), any(src_ip), any(dst_ip), \
@@ -4360,6 +4370,7 @@ pub async fn get_pcap_sessions(
         .fetch_all::<PcapSessionRow>()
         .await?;
     Ok(rows.iter().map(|r| json!({
+        "id":           r.session_id,
         "session_id":   r.session_id,
         "community_id": r.community_id,
         "src_ip":       r.src_ip,
@@ -5222,7 +5233,11 @@ pub async fn clear_sensor_command(
         format!("INC-{}-{:04}", year, count)
     }
 
-    /// Find an existing open case for the same src/dst pair (within last 7 days).
+    /// Find an existing open case for the same network pair (within last 7 days).
+    ///
+    /// Network telemetry can reverse source and destination for response
+    /// packets. Treat both directions as one incident while retaining the
+    /// original direction on the case that was created first.
     /// Returns (id, case_number, severity, priority) if one exists.
     pub async fn find_open_case_by_src_dst(
         &self,
@@ -5240,7 +5255,8 @@ pub async fn clear_sensor_command(
         }
         let query = format!(
             "SELECT id, case_number, severity, priority FROM {db}.soar_cases FINAL \
-             WHERE src_ip = '{src}' AND dst_ip = '{dst}' \
+             WHERE ((src_ip = '{src}' AND dst_ip = '{dst}') \
+                 OR (src_ip = '{dst}' AND dst_ip = '{src}')) \
              AND status NOT IN ('Closed', 'Resolved', 'False Positive') \
              AND created_at >= now() - INTERVAL 7 DAY \
              ORDER BY created_at DESC LIMIT 1",
@@ -6039,6 +6055,23 @@ pub async fn get_bundles_for_cid(
         "id": r.0, "severity": r.1, "src_ip": r.2,
         "dst_ip": r.3, "alert_id": r.4, "captured_at": r.5
     })).collect())
+}
+
+/// (bundle_id, file_path) of the newest evidence bundle stored for a session, if any.
+/// Cheap existence check — no file I/O, used to offer a PCAP fallback when no Arkime
+/// session is indexed for the flow yet (see `evidence::pcap_entry_in_bundle_zip`).
+pub async fn latest_bundle_file_for_cid(
+    &self,
+    tenant_id: &str,
+    community_id: &str,
+) -> Option<(String, String)> {
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "SELECT id, file_path FROM {}.evidence_bundles FINAL \
+         WHERE community_id = '{}' AND file_path != '' \
+         ORDER BY captured_at DESC LIMIT 1",
+        db, sql_escape(community_id)
+    )).fetch_one::<(String, String)>().await.ok()
 }
 
 /// Deletes old ai_analysis annotations for a community_id before saving a fresh one.
@@ -8542,6 +8575,51 @@ mod evidence_bundle_identity_tests {
             "an analysis pointing at a never-stored id is repaired by joining on the session");
         let g = by("1:nobundlenobundlenobundle=");
         assert_eq!((g["severity"].as_str(), g["bundle_id"].as_str()), (Some(""), Some("")), "no bundle, no link");
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+    }
+}
+
+#[cfg(test)]
+mod latest_bundle_file_tests {
+    use super::*;
+
+    // Against a real ClickHouse (a throwaway tenant database that is dropped at the end):
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine latest_bundle_file -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn latest_bundle_file_for_cid_picks_the_newest_bundle_with_a_file() {
+        let ch = ClickhouseStorage::new();
+        let tenant = "zz_bundlefiletest";
+        let db = tenant_db(tenant);
+        let run = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        run(format!("CREATE DATABASE {db}")).await;
+        run(format!("CREATE TABLE {db}.evidence_bundles (id String, community_id String, file_path String DEFAULT '', \
+             src_ip String DEFAULT '', dst_ip String DEFAULT '', severity String DEFAULT '', alert_id String DEFAULT '', \
+             captured_at DateTime DEFAULT now()) ENGINE = ReplacingMergeTree ORDER BY id")).await;
+
+        assert_eq!(ch.latest_bundle_file_for_cid(tenant, "1:nope=").await, None, "no row at all");
+
+        run(format!("INSERT INTO {db}.evidence_bundles (id, community_id, file_path, captured_at) \
+             VALUES ('older','1:cid=','/opt/ndr/evidence/t/older.zip', now() - 60)")).await;
+        assert_eq!(ch.latest_bundle_file_for_cid(tenant, "1:cid=").await, Some(("older".into(), "/opt/ndr/evidence/t/older.zip".into())));
+
+        // a newer bundle for the same session must win
+        run(format!("INSERT INTO {db}.evidence_bundles (id, community_id, file_path, captured_at) \
+             VALUES ('newer','1:cid=','/opt/ndr/evidence/t/newer.zip', now())")).await;
+        assert_eq!(ch.latest_bundle_file_for_cid(tenant, "1:cid=").await, Some(("newer".into(), "/opt/ndr/evidence/t/newer.zip".into())));
+
+        // a bundle row that was never written to disk (no file_path) must never be offered
+        run(format!("INSERT INTO {db}.evidence_bundles (id, community_id, file_path, captured_at) \
+             VALUES ('nopath','1:nofile=','', now())")).await;
+        assert_eq!(ch.latest_bundle_file_for_cid(tenant, "1:nofile=").await, None, "a bundle with no file_path is not a usable fallback");
+
+        // a different session's bundle must never leak into this one's answer
+        run(format!("INSERT INTO {db}.evidence_bundles (id, community_id, file_path, captured_at) \
+             VALUES ('other','1:othersession=','/opt/ndr/evidence/t/other.zip', now())")).await;
+        assert_eq!(ch.latest_bundle_file_for_cid(tenant, "1:cid=").await, Some(("newer".into(), "/opt/ndr/evidence/t/newer.zip".into())));
+
         let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }
 }

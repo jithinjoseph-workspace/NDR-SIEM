@@ -1530,6 +1530,28 @@ async fn build_evidence_bundle_inner(
     Ok((buf, bundle_sha256, manifest))
 }
 
+/// Size in bytes of the `.pcap` entry already-read zip bytes contain, or `None` when there
+/// isn't one (a bundle auto-captured before a sensor uploaded one has no packet capture yet).
+/// The one place that answers "does this bundle actually have packet capture data" — used
+/// both by the Evidence page (bundle contents) and by the SOAR PCAP-sessions fallback.
+pub fn pcap_entry_size_in_zip_bytes(zip_bytes: &[u8]) -> Option<u64> {
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    for i in 0..archive.len() {
+        let Ok(file) = archive.by_index(i) else { continue };
+        if file.name().ends_with(".pcap") {
+            return Some(file.size());
+        }
+    }
+    None
+}
+
+/// Same, reading the zip from disk first — for a caller that has only the file path.
+pub async fn pcap_entry_in_bundle_zip(file_path: &str) -> Option<u64> {
+    let zip_bytes = tokio::fs::read(file_path).await.ok()?;
+    pcap_entry_size_in_zip_bytes(&zip_bytes)
+}
+
 /// Verify a stored evidence bundle against its logged SHA256.
 #[allow(dead_code)]
 pub async fn verify_bundle_integrity(
@@ -1543,5 +1565,64 @@ pub async fn verify_bundle_integrity(
             (matches, computed)
         }
         Err(e) => (false, format!("file_read_error: {}", e))
+    }
+}
+
+#[cfg(test)]
+mod pcap_entry_tests {
+    use super::*;
+
+    fn zip_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut w = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = FileOptions::default();
+            for (name, data) in entries {
+                w.start_file(*name, opts).unwrap();
+                w.write_all(data).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn finds_the_real_pcap_entry_and_its_real_size() {
+        let pcap_bytes = vec![0xAB; 28_376_384]; // same order of magnitude as a real capture
+        let zip = zip_with(&[("manifest.json", b"{}"), ("session.pcap", &pcap_bytes), ("alert.json", b"{}")]);
+        assert_eq!(pcap_entry_size_in_zip_bytes(&zip), Some(28_376_384));
+    }
+
+    #[test]
+    fn a_bundle_captured_before_the_sensor_uploaded_has_no_pcap_entry() {
+        let zip = zip_with(&[("manifest.json", b"{}"), ("alert.json", b"{}"), ("zeek_conn.json", b"[]")]);
+        assert_eq!(pcap_entry_size_in_zip_bytes(&zip), None);
+    }
+
+    #[test]
+    fn garbage_or_empty_bytes_are_handled_without_panicking() {
+        assert_eq!(pcap_entry_size_in_zip_bytes(b"not a zip file at all"), None);
+        assert_eq!(pcap_entry_size_in_zip_bytes(b""), None);
+    }
+
+    #[test]
+    fn an_empty_pcap_entry_is_still_reported_as_present() {
+        // size is what decides "is there real capture data"; the caller filters out zero itself
+        let zip = zip_with(&[("session.pcap", b"")]);
+        assert_eq!(pcap_entry_size_in_zip_bytes(&zip), Some(0));
+    }
+
+    // Reads a real file from disk, proving the full path (not just the in-memory bytes path).
+    #[tokio::test]
+    async fn pcap_entry_in_bundle_zip_reads_a_real_file_from_disk() {
+        let pcap_bytes = vec![0x11; 4096];
+        let zip = zip_with(&[("manifest.json", b"{}"), ("session.pcap", &pcap_bytes)]);
+        let path = std::env::temp_dir().join(format!("ndr-test-bundle-{}.zip", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, &zip).await.unwrap();
+
+        assert_eq!(pcap_entry_in_bundle_zip(path.to_str().unwrap()).await, Some(4096));
+        assert_eq!(pcap_entry_in_bundle_zip("/no/such/file/at/all.zip").await, None, "a missing file is a clean None, not a panic");
+
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }
