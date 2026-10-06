@@ -9648,6 +9648,39 @@ pub async fn aria_get_verdict(
     }
 }
 
+/// GET /api/aria/similar?cid=...  or  ?q=<free text>&limit=5
+/// Past investigations (this tenant's own, RAG-retrieved) whose circumstances were closest to
+/// this one — or, with `q` instead of `cid`, closest to any free text (used when drafting a new
+/// SOAR case, before a community_id-scoped investigation exists). Respects sensor scope.
+/// Empty, never an error, when nothing is indexed yet or no embeddings provider is configured.
+pub async fn aria_similar_incidents(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    let cid = params.get("cid").map(|s| s.trim().to_string()).unwrap_or_default();
+    let explicit_q = params.get("q").map(|s| s.trim().chars().take(500).collect::<String>()).filter(|s| !s.is_empty());
+    let limit = params.get("limit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(5).clamp(1, 20);
+
+    let query_text = match explicit_q {
+        Some(q) => Some(q),
+        None if !cid.is_empty() => crate::ai::investigator::similarity_query_text(&state.ch_storage, &claims.tenant_id, &cid).await,
+        None => None,
+    };
+    let Some(query_text) = query_text else {
+        return Json(json!({"status": "ok", "incidents": []}));
+    };
+
+    let hits = crate::ai::rag::search_similar(
+        &state.ch_storage.client, &claims.tenant_id, &query_text, &claims.sensor_ids, &cid, limit,
+    ).await;
+    Json(json!({"status": "ok", "incidents": hits}))
+}
+
 /// GET /api/ai-suppressions — list active suppressions (used by UI to filter WS hits)
 pub async fn list_ai_suppressions(
     State(state): State<AppState>,

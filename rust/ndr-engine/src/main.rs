@@ -992,6 +992,7 @@ if role.full_platform() {
 .route("/api/aria/status",      get(api::aria_status))
 .route("/api/aria/investigate", post(api::aria_investigate))
 .route("/api/aria/verdict",     get(api::aria_get_verdict))
+.route("/api/aria/similar",     get(api::aria_similar_incidents))
 .route("/api/ai-activity", get(api::get_ai_activity))
 .route("/api/ai-activity/briefing", get(api::get_ai_briefing))
 .route("/api/ai-activity/suppression-preview", get(ai::suppression::preview))

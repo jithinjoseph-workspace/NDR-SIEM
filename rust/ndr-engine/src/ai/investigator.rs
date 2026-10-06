@@ -134,7 +134,66 @@ Base your reasoning ONLY on the provided evidence. Never invent IPs, domains, or
 
     let v = guard(verdict_from_reply(&raw, community_id)?, &evidence);
     info!("aria_investigate: verdict={} confidence={} for community_id={}", v.verdict, v.confidence, community_id);
+
+    // Fire-and-forget: the embedding call (~1-2s) and Qdrant upsert are never a reason to make
+    // the analyst wait longer for their verdict. Indexing is best-effort either way (see
+    // index_for_similarity's doc comment), so there is nothing the caller needs to await here.
+    let (ch_bg, tenant_bg, cid_bg, v_bg) = (ch.clone(), tenant_id.to_string(), community_id.to_string(), v.clone());
+    tokio::spawn(async move {
+        if let Err(e) = index_for_similarity(&ch_bg, &tenant_bg, &cid_bg, &v_bg).await {
+            warn!("aria_investigate: similarity indexing skipped for {}: {}", cid_bg, e);
+        }
+    });
+
     Ok(v)
+}
+
+/// Embeds this verdict and stores it in this tenant's RAG collection, so a future
+/// investigation can be told "this looked like these N past cases, here's how those went".
+async fn index_for_similarity(
+    ch: &ClickhouseStorage,
+    tenant_id: &str,
+    community_id: &str,
+    v: &AriaVerdict,
+) -> anyhow::Result<()> {
+    let rows = ch.session_alert_rows(tenant_id, &[], community_id).await;
+    let top = rows.iter()
+        .max_by(|a, b| a["score"].as_f64().unwrap_or(0.0).partial_cmp(&b["score"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+    let inv = crate::ai::rag::IndexedInvestigation {
+        community_id: community_id.to_string(),
+        verdict:      v.verdict.clone(),
+        confidence:   v.confidence,
+        severity:     top.and_then(|r| r["severity"].as_str()).unwrap_or("").to_string(),
+        src_ip:       top.and_then(|r| r["src_ip"].as_str()).unwrap_or("").to_string(),
+        dst_ip:       top.and_then(|r| r["dst_ip"].as_str()).unwrap_or("").to_string(),
+        reasoning:    v.reasoning.clone(),
+        sensor_id:    top.and_then(|r| r["sensor_id"].as_str()).unwrap_or("").to_string(),
+        generated_at: v.generated_at.clone(),
+    };
+    crate::ai::rag::index_investigation(&ch.client, tenant_id, &inv).await
+}
+
+/// What to search the RAG index with for "incidents similar to this one": the stored verdict's
+/// own reasoning when this session already has one (richest signal), otherwise a short
+/// description built from its stored alerts. `None` only when nothing at all is stored for the
+/// session — callers treat that as "nothing to compare, no similar incidents to show".
+pub async fn similarity_query_text(ch: &ClickhouseStorage, tenant_id: &str, community_id: &str) -> Option<String> {
+    if let Some(v) = ch.get_aria_verdict(tenant_id, community_id).await {
+        let verdict = v["verdict"].as_str().unwrap_or("");
+        let reasoning = v["reasoning"].as_str().unwrap_or("");
+        if !reasoning.is_empty() {
+            return Some(format!("{community_id} verdict={verdict} — {reasoning}"));
+        }
+    }
+    let rows = ch.session_alert_rows(tenant_id, &[], community_id).await;
+    let top = rows.iter()
+        .max_by(|a, b| a["score"].as_f64().unwrap_or(0.0).partial_cmp(&b["score"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal))?;
+    let tags = top["tags"].as_array().map(|a| a.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    Some(format!(
+        "{} -> {} severity={} tags={}",
+        top["src_ip"].as_str().unwrap_or(""), top["dst_ip"].as_str().unwrap_or(""),
+        top["severity"].as_str().unwrap_or(""), tags
+    ))
 }
 
 /// Collect all ClickHouse evidence for this community_id into a text block.
