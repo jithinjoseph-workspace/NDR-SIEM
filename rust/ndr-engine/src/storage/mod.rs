@@ -3,6 +3,7 @@
 
 pub mod sqlite;
 pub mod clickhouse;
+pub mod guardian;
 
 pub use sqlite::SqliteStorage;
 pub use clickhouse::ClickhouseStorage;

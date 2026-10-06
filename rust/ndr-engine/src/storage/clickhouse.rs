@@ -5430,6 +5430,42 @@ pub async fn clear_sensor_command(
     }
 
 #[cfg(feature = "soar")]
+    /// Records what a case turned out to be, from its community id. A case with no community id
+    /// (a manually created one, say) has nothing to compare against and records nothing.
+    pub async fn record_case_outcome(&self, tenant_id: &str, case_id: &str, outcome: &str, reason: &str, by: &str) -> anyhow::Result<bool> {
+        let db = tenant_db(tenant_id);
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct CidRow { community_id: String }
+        let cid = self.client
+            .query(&format!("SELECT community_id FROM {db}.soar_cases FINAL WHERE id = '{}' LIMIT 1", sql_escape(case_id)))
+            .fetch_one::<CidRow>().await.map(|r| r.community_id).unwrap_or_default();
+        if cid.is_empty() { return Ok(false); }
+        self.client.query(&format!(
+            "INSERT INTO {db}.incident_outcomes (tenant_id, case_id, community_id, outcome, reason, recorded_by) \
+             VALUES ('{t}', '{c}', '{cid}', '{o}', '{r}', '{b}')",
+            t = sql_escape(tenant_id), c = sql_escape(case_id), cid = sql_escape(&cid),
+            o = sql_escape(outcome), r = sql_escape(reason), b = sql_escape(by),
+        )).execute().await?;
+        Ok(true)
+    }
+
+    /// The most recent recorded outcome per community id, for the ids given.
+    pub async fn latest_outcomes(&self, tenant_id: &str, community_ids: &[String]) -> std::collections::HashMap<String, (String, String)> {
+        let mut out = std::collections::HashMap::new();
+        if community_ids.is_empty() { return out; }
+        let db = tenant_db(tenant_id);
+        let list = community_ids.iter().map(|c| format!("'{}'", sql_escape(c))).collect::<Vec<_>>().join(",");
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct R { community_id: String, last_outcome: String, last_at: String }
+        let rows = self.client.query(&format!(
+            "SELECT community_id, argMax(outcome, recorded_at) AS last_outcome, toString(max(recorded_at)) AS last_at \
+             FROM {db}.incident_outcomes WHERE tenant_id = '{t}' AND community_id IN ({list}) GROUP BY community_id",
+            t = sql_escape(tenant_id),
+        )).fetch_all::<R>().await.unwrap_or_default();
+        for r in rows { out.insert(r.community_id, (r.last_outcome, r.last_at)); }
+        out
+    }
+
     pub async fn update_soar_case_status(&self, id: &str, status: &str, tenant_id: &str) -> anyhow::Result<()> {
         let db = tenant_db(tenant_id);
         // INSERT SELECT: ReplacingMergeTree(updated_at) forbids ALTER TABLE UPDATE on the version key.
@@ -8619,6 +8655,53 @@ mod latest_bundle_file_tests {
         run(format!("INSERT INTO {db}.evidence_bundles (id, community_id, file_path, captured_at) \
              VALUES ('other','1:othersession=','/opt/ndr/evidence/t/other.zip', now())")).await;
         assert_eq!(ch.latest_bundle_file_for_cid(tenant, "1:cid=").await, Some(("newer".into(), "/opt/ndr/evidence/t/newer.zip".into())));
+
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+    }
+}
+
+#[cfg(test)]
+mod incident_outcome_tests {
+    use super::*;
+
+    // Against a real ClickHouse (throwaway tenant, dropped at the end):
+    //   CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=... \
+    //   cargo test -p ndr-engine incident_outcomes -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn outcomes_are_recorded_per_tenant_and_the_latest_one_wins() {
+        let ch = ClickhouseStorage::new();
+        let tenant = "zz_outcomes";
+        let db = tenant_db(tenant);
+        let run = |q: String| { let c = ch.client.clone(); async move { c.query(&q).execute().await.unwrap() } };
+        let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
+        run(format!("CREATE DATABASE {db}")).await;
+        run(format!("CREATE TABLE {db}.soar_cases (id String, community_id String, status String, tenant_id String, \
+             created_at DateTime DEFAULT now(), updated_at DateTime DEFAULT now(), closed_at Nullable(DateTime)) \
+             ENGINE = ReplacingMergeTree(updated_at) ORDER BY id")).await;
+        run(format!("CREATE TABLE {db}.incident_outcomes (id String DEFAULT toString(generateUUIDv4()), tenant_id String DEFAULT 'default', \
+             case_id String, community_id String, outcome LowCardinality(String), reason String DEFAULT '', \
+             recorded_by String DEFAULT '', recorded_at DateTime DEFAULT now()) \
+             ENGINE = MergeTree ORDER BY (tenant_id, community_id, recorded_at)")).await;
+        run(format!("INSERT INTO {db}.soar_cases (id, community_id, status, tenant_id) VALUES ('c1','1:cidA=','Resolved','{tenant}'), \
+             ('c2','','Closed','{tenant}')")).await;
+
+        assert!(ch.record_case_outcome(tenant, "c1", "true_positive", "", "analyst").await.unwrap(), "a case with a community id records");
+        assert!(!ch.record_case_outcome(tenant, "c2", "closed_unknown", "", "analyst").await.unwrap(), "a case with no community id records nothing");
+
+        let got = ch.latest_outcomes(tenant, &["1:cidA=".to_string(), "1:nothere=".to_string()]).await;
+        assert_eq!(got.get("1:cidA=").map(|o| o.0.as_str()), Some("true_positive"));
+        assert!(!got.contains_key("1:nothere="), "no invented outcome for an unknown session");
+
+        // a later, different outcome for the same session wins
+        run(format!("INSERT INTO {db}.incident_outcomes (tenant_id, case_id, community_id, outcome, recorded_at) \
+             VALUES ('{tenant}','c1','1:cidA=','false_positive', now() + 60)")).await;
+        let later = ch.latest_outcomes(tenant, &["1:cidA=".to_string()]).await;
+        assert_eq!(later.get("1:cidA=").map(|o| o.0.as_str()), Some("false_positive"));
+
+        // another tenant never sees this tenant's outcome for the same session id
+        let other = ch.latest_outcomes("zz_outcomes_other", &["1:cidA=".to_string()]).await;
+        assert!(other.is_empty(), "a different tenant must see nothing: {other:?}");
 
         let _ = ch.client.query(&format!("DROP DATABASE IF EXISTS {db}")).execute().await;
     }

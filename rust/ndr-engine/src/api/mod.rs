@@ -8240,7 +8240,16 @@ pub async fn update_soar_case_status(
         return Json(json!({"status": "error", "message": "Status cannot be empty"}));
     }
     match state.ch_storage.update_soar_case_status(&id, status, &claims.tenant_id).await {
-        Ok(_) => Json(json!({"status": "success", "message": "Status updated"})),
+        Ok(_) => {
+            // A deliberate close is what the investigation turned out to be: keep it for the
+            // similar-incidents list. Best-effort — a failed record never fails the status change.
+            if let Some(outcome) = crate::ai::rag::outcome_for_status(status) {
+                if let Err(e) = state.ch_storage.record_case_outcome(&claims.tenant_id, &id, outcome, "", &claims.sub).await {
+                    tracing::warn!("case outcome not recorded for {id}: {e}");
+                }
+            }
+            Json(json!({"status": "success", "message": "Status updated"}))
+        }
         Err(e) => Json(json!({"status": "error", "message": e.to_string()}))
     }
 }
@@ -9678,7 +9687,60 @@ pub async fn aria_similar_incidents(
     let hits = crate::ai::rag::search_similar(
         &state.ch_storage.client, &claims.tenant_id, &query_text, &claims.sensor_ids, &cid, limit,
     ).await;
-    Json(json!({"status": "ok", "incidents": hits}))
+    // How each comparable investigation actually ended, where it was closed.
+    let ids: Vec<String> = hits.iter().map(|h| h.investigation.community_id.clone()).collect();
+    let outcomes = state.ch_storage.latest_outcomes(&claims.tenant_id, &ids).await;
+    let incidents: Vec<Value> = hits.iter().map(|h| {
+        let (outcome, at) = outcomes.get(&h.investigation.community_id)
+            .map(|(o, t)| (Some(o.clone()), Some(t.clone())))
+            .unwrap_or((None, None));
+        let mut v = json!(h);
+        v["outcome"] = json!(outcome);
+        v["outcome_at"] = json!(at);
+        v
+    }).collect();
+    Json(json!({"status": "ok", "incidents": incidents}))
+}
+
+/// POST /api/aria/ask-history  {"question": "..."}
+/// Answers a question from this tenant's own past investigations and how they ended. The
+/// answer is checked against the records it was given (see ai::history); with no comparable
+/// records no AI call is made at all.
+pub async fn aria_ask_history(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let claims = match extract_claims(&headers) {
+        Some(c) => c,
+        None => return Json(json!({"error": "unauthorized"})),
+    };
+    if claims.role != "super_admin" && !state.ch_storage.get_tenant_ai_enabled(&claims.tenant_id).await {
+        return Json(json!({"error": "AI features are not enabled for your tenant. Contact your administrator."}));
+    }
+    let question = crate::ai::history::clean_question(payload["question"].as_str().unwrap_or(""));
+    if question.is_empty() {
+        return Json(json!({"error": "question required"}));
+    }
+    let hits = crate::ai::rag::search_similar(
+        &state.ch_storage.client, &claims.tenant_id, &question, &claims.sensor_ids, "",
+        crate::ai::history::MAX_RECORDS as u32,
+    ).await;
+    let ids: Vec<String> = hits.iter().map(|h| h.investigation.community_id.clone()).collect();
+    let outcomes = state.ch_storage.latest_outcomes(&claims.tenant_id, &ids).await;
+    let sources = crate::ai::history::sources_from(&hits, &outcomes);
+
+    let (reply, ai_state) = if sources.is_empty() {
+        (String::new(), "")
+    } else {
+        let providers = crate::ai::history::providers(&state.ch_storage.client).await;
+        if providers.is_empty() {
+            (String::new(), "not_configured")
+        } else {
+            (crate::ai::history::ask(&providers, &question, &sources).await, "")
+        }
+    };
+    Json(json!(crate::ai::history::compose(&question, sources, &reply, ai_state)))
 }
 
 /// GET /api/ai-suppressions — list active suppressions (used by UI to filter WS hits)

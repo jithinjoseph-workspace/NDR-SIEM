@@ -546,6 +546,22 @@ ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/soar_case_comments'
 ORDER BY (tenant_id, case_id, created_at)
 TTL created_at + INTERVAL 730 DAY;
 
+-- What an investigation turned out to be, recorded when its case is closed. Feeds the
+-- "similar past incidents" list so a new analysis can say how comparable ones actually ended.
+CREATE TABLE IF NOT EXISTS ndr.incident_outcomes ON CLUSTER ndr_cluster
+(
+    id           String DEFAULT toString(generateUUIDv4()),
+    tenant_id    String DEFAULT 'default',
+    case_id      String,
+    community_id String,
+    outcome      LowCardinality(String),
+    reason       String DEFAULT '',
+    recorded_by  String DEFAULT '',
+    recorded_at  DateTime DEFAULT now()
+)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/ndr/incident_outcomes', '{replica}')
+ORDER BY (tenant_id, community_id, recorded_at);
+
 CREATE TABLE IF NOT EXISTS ndr.soar_native_playbooks ON CLUSTER ndr_cluster
 (
     id           String DEFAULT toString(generateUUIDv4()),

@@ -320,6 +320,47 @@ export class AiActivity implements OnInit, OnDestroy {
     });
   }
 
+  // ── Ask your history: a question answered only from this tenant's past investigations ──
+  askText = signal<string>('');
+  askLoading = signal<boolean>(false);
+  askResult = signal<any | null>(null);
+  askError = signal<string>('');
+
+  askHistory() {
+    const q = this.askText().trim();
+    if (!q || this.askLoading()) return;
+    this.askLoading.set(true);
+    this.askError.set('');
+    this.askResult.set(null);
+    this.evidence.askHistory(q).subscribe({
+      next: (r: any) => {
+        if (r?.error) this.askError.set(r.error); else this.askResult.set(r);
+        this.askLoading.set(false);
+      },
+      error: () => { this.askError.set('The question could not be answered right now.'); this.askLoading.set(false); },
+    });
+  }
+
+  askReasonText(reason: string): string {
+    switch (reason) {
+      case 'no_records': return 'Nothing comparable in your history yet.';
+      case 'not_configured': return 'No AI provider is configured, so these are the records themselves.';
+      case 'no_ai_answer': return 'The AI did not answer, so these are the records themselves.';
+      case 'rejected': return 'The AI answer cited something outside these records, so it was not shown.';
+      default: return '';
+    }
+  }
+
+  /** How a comparable past investigation actually ended, once its case was closed. */
+  outcomeLabel(outcome: string | null | undefined): { text: string; cls: string } {
+    switch (outcome) {
+      case 'true_positive':  return { text: 'Confirmed attack', cls: 'outcome-tp' };
+      case 'false_positive': return { text: 'False positive', cls: 'outcome-fp' };
+      case 'closed_unknown': return { text: 'Closed, no verdict', cls: 'outcome-unk' };
+      default:               return { text: 'No outcome yet', cls: 'outcome-none' };
+    }
+  }
+
   similarPct(score: number): number {
     return Math.round((score || 0) * 100);
   }

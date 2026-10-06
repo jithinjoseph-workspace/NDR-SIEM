@@ -993,6 +993,9 @@ if role.full_platform() {
 .route("/api/aria/investigate", post(api::aria_investigate))
 .route("/api/aria/verdict",     get(api::aria_get_verdict))
 .route("/api/aria/similar",     get(api::aria_similar_incidents))
+.route("/api/aria/ask-history",   post(api::aria_ask_history))
+.route("/api/storage/status",     get(storage::guardian::status_handler))
+.route("/api/storage/mode",       post(storage::guardian::set_mode_handler))
 .route("/api/ai-activity", get(api::get_ai_activity))
 .route("/api/ai-activity/briefing", get(api::get_ai_briefing))
 .route("/api/ai-activity/suppression-preview", get(ai::suppression::preview))
@@ -1073,6 +1076,29 @@ if role.full_platform() {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             if election_arkime.is_leader() {
                 api::sync_arkime_sessions(arkime_state).await;
+            }
+        });
+    }
+
+    // ── Background: storage guardian — leader only, every 10 min ───────────────
+    // Measures ClickHouse disk use and, per storage::guardian's levels, compresses / shortens
+    // retention / removes expired evidence files. Defaults to dry-run (see its module docs).
+    if role.leader_jobs() {
+        let ch_guard = state.ch_storage.clone();
+        let election_guard = election.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            loop {
+                if election_guard.is_leader() {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    if let Some(r) = storage::guardian::run_once(&ch_guard, &now).await {
+                        tracing::info!(
+                            "storage guardian: {:.1}% used, level {:?}, mode {:?}, {} action(s), {} error(s)",
+                            r.used_pct, r.level, r.mode, r.actions.len(), r.errors.len()
+                        );
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
             }
         });
     }

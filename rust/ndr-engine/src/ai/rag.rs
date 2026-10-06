@@ -146,6 +146,17 @@ pub async fn search_similar(
         .collect()
 }
 
+/// What a case status means for the investigation it came from. `None` for statuses that are not
+/// an outcome (New, Assigned, In Progress, ...), so only a deliberate close is ever recorded.
+pub fn outcome_for_status(status: &str) -> Option<&'static str> {
+    match status {
+        "False Positive" => Some("false_positive"),
+        "Resolved" => Some("true_positive"),
+        "Closed" => Some("closed_unknown"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +243,15 @@ mod tests {
         assert!(other_tenant_hits.is_empty(), "a different tenant's unrelated, non-existent collection must return nothing, never this tenant's data");
 
         let _ = http().delete(&format!("{}/collections/{}", qdrant_url(), collection_name(tenant))).send().await;
+    }
+
+    #[test]
+    fn only_deliberate_closes_record_an_outcome() {
+        assert_eq!(outcome_for_status("False Positive"), Some("false_positive"));
+        assert_eq!(outcome_for_status("Resolved"), Some("true_positive"));
+        assert_eq!(outcome_for_status("Closed"), Some("closed_unknown"));
+        for working in ["New", "Assigned", "In Progress", "Pending", "Under Review", "Evidence Collected", ""] {
+            assert_eq!(outcome_for_status(working), None, "{working:?} is not an outcome");
+        }
     }
 }

@@ -78,4 +78,9 @@ export class EvidenceService {
   getSimilarIncidents(communityId: string, limit = 5): Observable<any> {
     return this.http.get(`/api/aria/similar?cid=${encodeURIComponent(communityId)}&limit=${limit}`);
   }
+
+  /** Answers a question from this tenant's own past investigations and how they ended. */
+  askHistory(question: string): Observable<any> {
+    return this.http.post('/api/aria/ask-history', { question });
+  }
 }

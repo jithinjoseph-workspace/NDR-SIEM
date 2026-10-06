@@ -731,6 +731,30 @@
       </div>
     </div>
 
+    <!-- Ask your history: answered only from this tenant's own past investigations -->
+    <div class="ask-history">
+      <div class="ask-row">
+        <input class="ask-input" type="text" placeholder="Ask your history, e.g. have we seen DNS tunneling from the finance VLAN before?"
+               [ngModel]="askText()" (ngModelChange)="askText.set($event)" (keydown.enter)="askHistory()" maxlength="300" />
+        <button class="btn-dossier-secondary" (click)="askHistory()" [disabled]="askLoading() || !askText().trim()">
+          <span>{{ askLoading() ? 'Searching…' : 'Ask' }}</span>
+        </button>
+      </div>
+      <p class="section-text verdict-error" *ngIf="askError()">{{ askError() }}</p>
+      <div class="ask-result" *ngIf="askResult() as r">
+        <p class="ask-answer">{{ r.answer }}</p>
+        <p class="ask-reason" *ngIf="r.reason">{{ askReasonText(r.reason) }}</p>
+        <div class="similar-row" *ngFor="let s of r.sources" (click)="openSimilarIncident(s.community_id)">
+          <span class="verdict-badge sm" [ngClass]="verdictClass(s.verdict)">{{ verdictLabel(s.verdict) }}</span>
+          <div class="similar-main">
+            <span class="similar-flow">{{ s.src_ip }} ➔ {{ s.dst_ip }} · sensor {{ s.sensor_id }}</span>
+            <span class="similar-reason">{{ s.reasoning }}</span>
+          </div>
+          <span class="outcome-chip" [ngClass]="outcomeLabel(s.outcome).cls">{{ outcomeLabel(s.outcome).text }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Analyses Cards Grid -->
     <div class="analyses-cards-grid">
       <div
@@ -1001,6 +1025,7 @@
               <div class="similar-main">
                 <span class="similar-flow">{{ s.src_ip }} ➔ {{ s.dst_ip }}</span>
                 <span class="similar-reason">{{ s.reasoning }}</span>
+                <span class="outcome-chip" [ngClass]="outcomeLabel(s.outcome).cls">{{ outcomeLabel(s.outcome).text }}</span>
               </div>
               <span class="similar-score" [title]="similarPct(s.score) + '% similar'">{{ similarPct(s.score) }}%</span>
             </div>
