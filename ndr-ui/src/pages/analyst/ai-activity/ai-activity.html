@@ -987,6 +987,28 @@
               <span class="mitre-tag" *ngFor="let t of v.mitre">{{ t }}</span>
             </div>
           </ng-container>
+
+          <!-- Similar past incidents: this tenant's own earlier investigations, retrieved by -->
+          <!-- meaning (RAG), not by matching IPs or tags. Never fed back into the verdict text above. -->
+          <div class="similar-incidents" *ngIf="similarLoading() || (similarIncidents()?.length ?? 0) > 0">
+            <div class="similar-head">
+              <lucide-icon [name]="LayersIcon" class="w-3.5 h-3.5"></lucide-icon>
+              <span>Similar past incidents</span>
+            </div>
+            <p class="section-text" *ngIf="similarLoading()">Looking for similar past incidents…</p>
+            <div class="similar-row" *ngFor="let s of similarIncidents()" (click)="openSimilarIncident(s.community_id)">
+              <span class="verdict-badge sm" [ngClass]="verdictClass(s.verdict)">{{ verdictLabel(s.verdict) }}</span>
+              <div class="similar-main">
+                <span class="similar-flow">{{ s.src_ip }} ➔ {{ s.dst_ip }}</span>
+                <span class="similar-reason">{{ s.reasoning }}</span>
+              </div>
+              <span class="similar-score" [title]="similarPct(s.score) + '% similar'">{{ similarPct(s.score) }}%</span>
+            </div>
+          </div>
+          <p class="section-text similar-empty" *ngIf="!similarLoading() && verdict() && similarIncidents()?.length === 0">
+            No similar past incidents found yet.
+          </p>
+
           <p class="section-text" *ngIf="!verdict() && verdictState() === 'loading'">Checking for an earlier verdict…</p>
           <p class="section-text" *ngIf="!verdict() && verdictState() === 'idle' && !verdictError()">No AI verdict for this session yet.</p>
           <p class="section-text verdict-error" *ngIf="verdictError()">{{ verdictError() }}</p>

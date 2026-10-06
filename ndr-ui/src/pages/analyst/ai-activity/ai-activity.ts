@@ -280,12 +280,14 @@ export class AiActivity implements OnInit, OnDestroy {
     this.verdict.set(null);
     this.verdictError.set('');
     this.actionNote.set('');
+    this.similarIncidents.set(null);
     if (!cid) { this.verdictState.set('idle'); return; }
     this.verdictState.set('loading');
     this.evidence.getVerdict(cid).subscribe({
       next: (r: any) => { this.setVerdict(r?.verdict); this.verdictState.set('idle'); },
       error: () => this.verdictState.set('idle'),
     });
+    this.loadSimilarIncidents(cid);
   }
 
   investigate() {
@@ -297,9 +299,40 @@ export class AiActivity implements OnInit, OnDestroy {
       next: (r: any) => {
         if (r?.error) this.verdictError.set(r.error); else this.setVerdict(r);
         this.verdictState.set('idle');
+        // A fresh investigation is indexed for similarity in the background on the server,
+        // not necessarily ready the instant this response arrives — a short delay gives it
+        // time to land, so "similar incidents" has a real chance of including this one later.
+        setTimeout(() => this.loadSimilarIncidents(cid), 3000);
       },
       error: () => { this.verdictError.set('The investigation request failed.'); this.verdictState.set('idle'); },
     });
+  }
+
+  // ── Similar past incidents (RAG: this tenant's own past investigations) ──
+  similarIncidents = signal<any[] | null>(null);
+  similarLoading = signal<boolean>(false);
+
+  private loadSimilarIncidents(cid: string) {
+    this.similarLoading.set(true);
+    this.evidence.getSimilarIncidents(cid, 5).subscribe({
+      next: (r: any) => { this.similarIncidents.set(r?.incidents || []); this.similarLoading.set(false); },
+      error: () => { this.similarIncidents.set([]); this.similarLoading.set(false); },
+    });
+  }
+
+  similarPct(score: number): number {
+    return Math.round((score || 0) * 100);
+  }
+
+  /** Opens the dossier for a past incident surfaced as "similar", if it's still in the loaded list. */
+  openSimilarIncident(communityId: string) {
+    const a = this.analyses().find((x: any) => x.community_id === communityId)
+      || this.analysesPage().find((x: any) => x.community_id === communityId);
+    if (a) { this.inspectAnalysis(a); return; }
+    // Not in the currently loaded page — searching for it is the closest thing to "go there".
+    this.searchQuery.set(communityId);
+    this.analysesPage.set([]);
+    this.activeTab = 'analyses';
   }
 
   verdictClass(v: string) {

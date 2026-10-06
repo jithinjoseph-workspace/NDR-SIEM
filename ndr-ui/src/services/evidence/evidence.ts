@@ -73,4 +73,9 @@ export class EvidenceService {
   getVerdict(communityId: string): Observable<any> {
     return this.http.get(`/api/aria/verdict?cid=${encodeURIComponent(communityId)}`);
   }
+
+  /** Past AI investigations (this tenant's own) whose circumstances were closest to this one. */
+  getSimilarIncidents(communityId: string, limit = 5): Observable<any> {
+    return this.http.get(`/api/aria/similar?cid=${encodeURIComponent(communityId)}&limit=${limit}`);
+  }
 }

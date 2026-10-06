@@ -1959,3 +1959,28 @@
 .hide-option.blocked .hide-detail { opacity: 0.7; }
 .hide-option .btn-dossier-secondary { align-self: flex-start; margin-top: 4px; }
 .hide-option .btn-dossier-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Similar past incidents (RAG) */
+.similar-incidents { margin: 10px 0; padding-top: 8px; border-top: 1px dashed rgba(30, 58, 95, 0.8); }
+.similar-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  font-family: var(--font-mono, monospace); font-size: 0.68rem; font-weight: 700;
+  letter-spacing: 0.04em; color: #94a3b8; text-transform: uppercase;
+}
+.similar-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px;
+  cursor: pointer; transition: background 0.15s;
+}
+.similar-row:hover { background: rgba(0, 229, 255, 0.06); }
+.similar-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.similar-flow { font-family: var(--font-mono, monospace); font-size: 0.72rem; color: #e2e8f0; }
+.similar-reason {
+  font-size: 0.7rem; color: #64748b; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 100%;
+}
+.similar-score {
+  font-family: var(--font-mono, monospace); font-size: 0.68rem; font-weight: 700;
+  color: #00e5ff; flex-shrink: 0;
+}
+.verdict-badge.sm { font-size: 0.6rem; padding: 2px 7px; flex-shrink: 0; }
+.similar-empty { color: #475569; font-size: 0.7rem; }
