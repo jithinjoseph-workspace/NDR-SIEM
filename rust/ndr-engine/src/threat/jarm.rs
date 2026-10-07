@@ -486,6 +486,7 @@ async fn run_jarm_cycle_for_tenant(ch: &crate::storage::ClickhouseStorage, tenan
                     agent_s_category:   "c2-detection".to_string(),
                     updated_at:         now,
                     sensor_id:          String::new(),
+                    reasons:            vec![format!("TLS JARM fingerprint {fp} matches the known C2 framework {c2_name}")],
                 };
                 if let Err(e) = ch.insert_hit_for_tenant(hit, tenant_id).await {
                     tracing::warn!("JARM: failed to insert alert for {ip}:{port}: {e}");

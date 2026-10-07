@@ -43,6 +43,9 @@ pub struct NdrHit {
     pub agent_s_category:   String,
     pub updated_at:         u32,
     pub sensor_id:          String,
+    /// Why this hit was scored and classified as it was, in plain words — kept so a question like
+    /// "why is this HIGH" can be answered from what was actually computed, not reconstructed after.
+    pub reasons:            Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -273,6 +276,64 @@ fn support_message_to_json(row: SupportMessageRow) -> serde_json::Value {
 #[derive(Clone)]
 pub struct ClickhouseStorage {
     pub(crate) client: Client,
+    /// Shared case numbers (Valkey); see `get_next_case_number`.
+    pub(crate) case_numbers: CaseNumbers,
+    /// Which hit keys were stored recently; see `HitWindow`.
+    pub(crate) hit_window: std::sync::Arc<HitWindow>,
+}
+
+/// The Valkey connection that numbers cases for every engine at once. `None` when Valkey is not
+/// configured, in which case numbers come from the highest number in ClickHouse.
+#[derive(Clone, Default)]
+pub struct CaseNumbers {
+    pub(crate) client: Option<redis::Client>,
+}
+
+/// How long one stored hit stands in for the repeats of the same match. A persistent match (one
+/// source to one destination with the same tags) is one thing to look at, not a row per flow.
+pub const HIT_WINDOW_SECS: u64 = 300;
+
+/// Keeps the first hit of each (tenant, source, destination, tags) match in each window and drops
+/// the repeats. Per engine: each engine keeps its own window.
+#[derive(Default)]
+pub struct HitWindow {
+    seen: dashmap::DashMap<String, std::time::Instant>,
+}
+
+impl HitWindow {
+    /// True when this match should be stored now: it has not been stored in the last window.
+    pub fn admit(&self, key: String, now: std::time::Instant) -> bool {
+        let window = std::time::Duration::from_secs(HIT_WINDOW_SECS);
+        if let Some(mut last) = self.seen.get_mut(&key) {
+            if now.duration_since(*last) < window {
+                return false;
+            }
+            *last = now;
+            return true;
+        }
+        if self.seen.len() > 200_000 {
+            self.seen.retain(|_, t| now.duration_since(*t) < window);
+        }
+        self.seen.insert(key, now);
+        true
+    }
+}
+
+#[cfg(test)]
+mod hit_window_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn repeats_of_one_match_are_stored_once_per_window() {
+        let w = HitWindow::default();
+        let t0 = Instant::now();
+        assert!(w.admit("k".into(), t0));
+        assert!(!w.admit("k".into(), t0 + Duration::from_secs(1)), "a repeat in the window is dropped");
+        assert!(!w.admit("k".into(), t0 + Duration::from_secs(HIT_WINDOW_SECS - 1)));
+        assert!(w.admit("k".into(), t0 + Duration::from_secs(HIT_WINDOW_SECS)), "the next window stores again");
+        assert!(w.admit("other".into(), t0), "a different match is stored");
+    }
 }
 
 /// Columns added to tenant tables after their first release. The startup migration replays
@@ -283,6 +344,7 @@ const TENANT_COLUMN_MIGRATIONS: &[&str] = &[
     "ALTER TABLE {db}.soar_cases ADD COLUMN IF NOT EXISTS case_number String DEFAULT ''",
     "ALTER TABLE {db}.soar_cases ADD COLUMN IF NOT EXISTS priority String DEFAULT 'P2'",
     "ALTER TABLE {db}.sigma_rules ADD COLUMN IF NOT EXISTS source String DEFAULT 'custom'",
+    "ALTER TABLE {db}.ndr_hits ADD COLUMN IF NOT EXISTS reasons Array(String) DEFAULT []",
 ];
 
 pub(crate) fn sql_escape(value: &str) -> String {
@@ -1275,7 +1337,14 @@ pub async fn delete_announcement(
 }
     pub fn new() -> Self {
         let cfg = provigil_common::clickhouse::ClickHouseConfig::from_env();
-        Self { client: cfg.build_client() }
+        Self {
+            client: cfg.build_client(),
+            hit_window: std::sync::Arc::new(HitWindow::default()),
+            case_numbers: CaseNumbers {
+                client: std::env::var("VALKEY_URL").or_else(|_| std::env::var("REDIS_URL")).ok()
+                    .and_then(|url| redis::Client::open(url).ok()),
+            },
+        }
     }
 
     pub async fn health_check(&self) -> bool {
@@ -1381,6 +1450,7 @@ pub async fn delete_announcement(
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS agent_s_category String DEFAULT ''",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS updated_at DateTime DEFAULT now()",
                 "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
+                "ALTER TABLE ndr.ndr_hits ADD COLUMN IF NOT EXISTS reasons Array(String) DEFAULT []",
                 "ALTER TABLE ndr.ndr_events ADD COLUMN IF NOT EXISTS sensor_id String DEFAULT ''",
                 "CREATE TABLE IF NOT EXISTS ndr.user_sensor_assignments (user_id String, sensor_id String, tenant_id String, created_at DateTime DEFAULT now()) ENGINE = ReplacingMergeTree(created_at) ORDER BY (tenant_id, user_id, sensor_id)",
                 "ALTER TABLE ndr.soar_integrations ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT 'default'",
@@ -1430,6 +1500,7 @@ pub async fn delete_announcement(
             }
             tracing::info!("✅ tenant_id columns verified");
 
+            self.migrate_soar_cases_sort_key("ndr").await;
             // --- AUTO-MIGRATE EXISTING TENANTS ---
             if let Ok(sql) = std::fs::read_to_string(sql_path) {
                 if let Ok(tenant_ids) = self.get_all_tenants().await {
@@ -1474,6 +1545,7 @@ pub async fn delete_announcement(
                         // CREATE TABLE IF NOT EXISTS above does nothing for tables that already exist,
                         // so columns added to init.sql later never reached existing tenants.
                         self.migrate_tenant_columns(&db_name).await;
+                        self.migrate_soar_cases_sort_key(&db_name).await;
                     }
                 }
             }
@@ -1495,6 +1567,64 @@ pub async fn delete_announcement(
             let stmt = template.replace("{db}", db_name);
             if let Err(e) = self.client.query(&stmt).execute().await {
                 tracing::warn!("Tenant column migration failed for {}: {} ({})", db_name, stmt, e);
+            }
+        }
+    }
+
+    /// Moves `{db}.soar_cases` from the creation-second sort key to the case id (see init.sql).
+    ///
+    /// Safe to run on every start:
+    /// - A table already on the id key is left alone.
+    /// - The old table is renamed to `soar_cases_pre_key_fix` and kept. Nothing is dropped.
+    /// - Cases the new table lacks are copied from that kept table; cases already there are not touched.
+    ///
+    /// Writes made in the moment between the two renames fail with an error, rather than being lost.
+    pub async fn migrate_soar_cases_sort_key(&self, db: &str) {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct TableDef { sorting_key: String, create_table_query: String }
+        let def = match self.client
+            .query(&format!(
+                "SELECT sorting_key, create_table_query FROM system.tables WHERE database = '{db}' AND name = 'soar_cases'"
+            ))
+            .fetch_one::<TableDef>()
+            .await
+        {
+            Ok(d) => d,
+            Err(_) => return, // this database has no soar_cases
+        };
+
+        if def.sorting_key.replace(' ', "") == SOAR_CASES_OLD_KEY.replace(' ', "") {
+            let Some(ddl) = soar_cases_rekeyed_ddl(db, &def.create_table_query) else {
+                tracing::warn!("soar_cases in {db} has an unexpected definition; not rekeyed");
+                return;
+            };
+            if let Err(e) = self.client.query(&ddl).execute().await {
+                tracing::warn!("soar_cases rekey: creating the new table failed in {db}: {e}");
+                return;
+            }
+            let swap = format!(
+                "RENAME TABLE {db}.soar_cases TO {db}.soar_cases_pre_key_fix, \
+                 {db}.soar_cases_key_fix TO {db}.soar_cases ON CLUSTER ndr_cluster"
+            );
+            if let Err(e) = self.client.query(&swap).execute().await {
+                tracing::warn!("soar_cases rekey: swapping the tables failed in {db}: {e}");
+                return;
+            }
+            tracing::info!("soar_cases in {db} rekeyed by case id; the old table is kept as soar_cases_pre_key_fix");
+        }
+
+        let kept = self.client
+            .query(&format!("SELECT count() FROM system.tables WHERE database = '{db}' AND name = 'soar_cases_pre_key_fix'"))
+            .fetch_one::<u64>()
+            .await
+            .unwrap_or(0);
+        if kept > 0 {
+            let copy = format!(
+                "INSERT INTO {db}.soar_cases SELECT * FROM {db}.soar_cases_pre_key_fix FINAL \
+                 WHERE id NOT IN (SELECT id FROM {db}.soar_cases FINAL)"
+            );
+            if let Err(e) = self.client.query(&copy).execute().await {
+                tracing::warn!("soar_cases rekey: copying cases into {db} failed: {e}");
             }
         }
     }
@@ -1585,6 +1715,16 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
                 }
             }
         }
+        // Critical hits are always stored. Other hits: the first of a repeating match is stored, the repeats
+        // within the window are not (they still reach SOAR through the caller).
+        if hit.score < 90.0 {
+            let mut tags = hit.tags.clone();
+            tags.sort();
+            let key = format!("{tenant_id}|{}|{}|{}", hit.src_ip, hit.dst_ip, tags.join(","));
+            if !self.hit_window.admit(key, std::time::Instant::now()) {
+                return Ok(());
+            }
+        }
         let db_name = tenant_db(tenant_id);
         let table_name = format!("{}.ndr_hits", db_name);
         let mut insert = self.client.insert(&table_name)?;
@@ -1613,6 +1753,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         agent_s_details:  &str,
         agent_s_rule_id:  &str,
         agent_s_category: &str,
+        reasons:          Vec<String>,
     ) -> anyhow::Result<()> {
         let now = chrono::Utc::now().timestamp() as u32;
         let hit = NdrHit {
@@ -1633,6 +1774,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
             agent_s_details:    agent_s_details.to_string(),
             corroborated_at:    now,
             agent_s_rule_id:    agent_s_rule_id.to_string(),
+            reasons,
             agent_s_category:   agent_s_category.to_string(),
             updated_at:         now,
             sensor_id:          String::new(),
@@ -5222,27 +5364,53 @@ pub async fn clear_sensor_command(
     pub async fn get_next_case_number(&self, tenant_id: &str) -> String {
         let db = tenant_db(tenant_id);
         let year = chrono::Utc::now().format("%Y").to_string().parse::<u32>().unwrap_or(2026);
-        let count = self.client
+        // The highest number used this year, not a row count: a count goes down when rows are
+        // replaced, and then a number that is still in use gets handed out again.
+        let number_from = format!("INC-{}-", year).len() + 1; // ClickHouse substring is 1-based
+        let highest = match self.client
             .query(&format!(
-                "SELECT count() + 1 FROM {}.soar_cases FINAL WHERE toYear(created_at) = {}",
-                db, year
+                "SELECT max(toUInt32OrZero(substring(case_number, {number_from}))) FROM {db}.soar_cases FINAL \
+                 WHERE toYear(created_at) = {year} AND startsWith(case_number, 'INC-{year}-')"
             ))
-            .fetch_one::<u64>()
+            .fetch_one::<u32>()
             .await
-            .unwrap_or(1);
-        format!("INC-{}-{:04}", year, count)
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("case number lookup failed for {}: {}", db, e);
+                0
+            }
+        };
+        // Shared across engines: Valkey INCR is atomic, so two engines cannot take the same number. The
+        // ClickHouse highest number only seeds the sequence the first time, and is the fallback without Valkey.
+        if let Some(client) = &self.case_numbers.client {
+            if let Ok(mut con) = client.get_multiplexed_async_connection().await {
+                let key = format!("soar_case_seq:{}:{}", db, year);
+                let _: Result<Option<String>, _> = redis::cmd("SET").arg(&key).arg(highest).arg("NX")
+                    .query_async(&mut con).await;
+                let next: Result<u32, _> = redis::cmd("INCR").arg(&key).query_async(&mut con).await;
+                if let Ok(n) = next {
+                    let n = if n > highest { n } else {
+                        // The sequence was behind the stored numbers (for example, cases made without Valkey).
+                        let _: Result<(), _> = redis::cmd("SET").arg(&key).arg(highest + 1).query_async(&mut con).await;
+                        highest + 1
+                    };
+                    return format!("INC-{}-{:04}", year, n);
+                }
+            }
+            tracing::warn!("case number: Valkey unavailable for {}; using the ClickHouse highest number", db);
+        }
+        format!("INC-{}-{:04}", year, highest + 1)
     }
 
-    /// Find an existing open case for the same network pair (within last 7 days).
-    ///
-    /// Network telemetry can reverse source and destination for response
-    /// packets. Treat both directions as one incident while retaining the
-    /// original direction on the case that was created first.
+    /// Find an open case this alert may join, for the flow (either direction) and the grouping given:
+    /// the same kind of alert within 7 days, or any alert on the flow within 10 minutes (critical).
     /// Returns (id, case_number, severity, priority) if one exists.
     pub async fn find_open_case_by_src_dst(
         &self,
         src_ip: &str,
         dst_ip: &str,
+        group: &provigil_common::soar::FlowGroup,
         tenant_id: &str,
     ) -> Option<(String, String, String, String)> {
         let db = tenant_db(tenant_id);
@@ -5253,16 +5421,23 @@ pub async fn clear_sensor_command(
             severity: String,
             priority: String,
         }
+        let (kind_filter, window) = match group {
+            provigil_common::soar::FlowGroup::SameKind(tag) => (format!("AND has(tags, '{}')", sql_escape(tag)), "7 DAY"),
+            provigil_common::soar::FlowGroup::SameFlow => (String::new(), "10 MINUTE"),
+        };
         let query = format!(
             "SELECT id, case_number, severity, priority FROM {db}.soar_cases FINAL \
              WHERE ((src_ip = '{src}' AND dst_ip = '{dst}') \
                  OR (src_ip = '{dst}' AND dst_ip = '{src}')) \
+             {kind_filter} \
              AND status NOT IN ('Closed', 'Resolved', 'False Positive') \
-             AND created_at >= now() - INTERVAL 7 DAY \
+             AND created_at >= now() - INTERVAL {window} \
              ORDER BY created_at DESC LIMIT 1",
             db = db,
             src = sql_escape(src_ip),
             dst = sql_escape(dst_ip),
+            kind_filter = kind_filter,
+            window = window,
         );
         self.client.query(&query).fetch_one::<OpenCaseRow>().await.ok()
             .map(|r| (r.id, r.case_number, r.severity, r.priority))
@@ -6170,6 +6345,28 @@ pub async fn check_shared_ioc(
 }
 
 
+
+/// Why a hit was scored and classified as it was, as it was actually computed, for SOC GPT's
+/// "why that score" questions. `None` when the session has no stored hit (for example, a case created
+/// manually, with no underlying detection).
+pub async fn get_hit_explanation(&self, tenant_id: &str, community_id: &str) -> Option<crate::ai::history::HitDetail> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Row {
+        score: f32,
+        severity: String,
+        tags: Vec<String>,
+        sigma_hits: Vec<String>,
+        reasons: Vec<String>,
+    }
+    let db = tenant_db(tenant_id);
+    self.client.query(&format!(
+        "SELECT score, severity, tags, sigma_hits, reasons FROM {}.ndr_hits FINAL \
+         WHERE community_id = '{}' ORDER BY timestamp DESC LIMIT 1",
+        db, sql_escape(community_id)
+    )).fetch_one::<Row>().await.ok().map(|r| crate::ai::history::HitDetail {
+        score: r.score, severity: r.severity, tags: r.tags, sigma_hits: r.sigma_hits, reasons: r.reasons,
+    })
+}
 
 pub async fn get_hit_by_community_id(
     &self,
@@ -8193,8 +8390,8 @@ impl SoarStore for ClickhouseStorage {
         self.get_integrations_by_tenant(tenant_id).await.unwrap_or_default()
     }
 
-    async fn soar_find_open_case(&self, src: &str, dst: &str, tenant_id: &str) -> Option<(String, String, String, String)> {
-        self.find_open_case_by_src_dst(src, dst, tenant_id).await
+    async fn soar_find_open_case(&self, src: &str, dst: &str, group: &provigil_common::soar::FlowGroup, tenant_id: &str) -> Option<(String, String, String, String)> {
+        self.find_open_case_by_src_dst(src, dst, group, tenant_id).await
     }
 
     async fn soar_add_comment(&self, case_id: &str, author: &str, comment: &str, tenant_id: &str) {
@@ -8219,6 +8416,23 @@ impl SoarStore for ClickhouseStorage {
 
     async fn soar_get_pcap_sessions(&self, tenant_id: &str, cid: &str, limit: usize) -> Vec<serde_json::Value> {
         self.get_pcap_sessions(tenant_id, Some(cid), None, limit as u32, &[]).await.unwrap_or_default()
+    }
+
+    async fn soar_save_evidence_bundle(
+        &self, tenant_id: &str, community_id: &str, content: &[u8],
+        src_ip: &str, dst_ip: &str, severity: &str,
+    ) -> anyhow::Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let dir = format!("/opt/ndr/evidence/{}/{}", tenant_id, date);
+        tokio::fs::create_dir_all(&dir).await?;
+        let file_path = format!("{}/{}.json", dir, id);
+        tokio::fs::write(&file_path, content).await?;
+        let sha256 = crate::evidence::sha256_of(content);
+        self.save_evidence_bundle(
+            tenant_id, &id, community_id, &file_path, &sha256, content.len() as u64,
+            1, 90, src_ip, dst_ip, severity, "",
+        ).await
     }
 
     async fn soar_get_events(&self, community_id: &str, tenant_id: &str) -> serde_json::Value {
@@ -8337,6 +8551,58 @@ mod sql_escape_tests {
     }
 }
 
+
+/// The sort key before the fix: rows were identified by creation second, so two cases created in the
+/// same second replaced each other. The key is now `(tenant_id, id)`.
+const SOAR_CASES_OLD_KEY: &str = "tenant_id, created_at";
+const SOAR_CASES_NEW_KEY: &str = "tenant_id, id";
+
+/// The CREATE TABLE for the rekeyed copy of `{db}.soar_cases`, built from the table's stored
+/// definition so its columns, engine and replication path match. `None` when the table is not on
+/// the old key, so there is nothing to rekey.
+pub fn soar_cases_rekeyed_ddl(db: &str, create_sql: &str) -> Option<String> {
+    let old_name = format!("CREATE TABLE {db}.soar_cases");
+    let old_order = format!("ORDER BY ({SOAR_CASES_OLD_KEY})");
+    if !create_sql.contains(&old_name) || !create_sql.contains(&old_order) {
+        return None;
+    }
+    Some(
+        create_sql
+            .replacen(&old_name, &format!("CREATE TABLE IF NOT EXISTS {db}.soar_cases_key_fix ON CLUSTER ndr_cluster"), 1)
+            .replace("/soar_cases'", "/soar_cases_key_fix'")
+            .replace(&old_order, &format!("ORDER BY ({SOAR_CASES_NEW_KEY})")),
+    )
+}
+
+#[cfg(test)]
+mod soar_case_key_tests {
+    use super::*;
+
+    const OLD_DDL: &str = "CREATE TABLE ndr_acme.soar_cases\n(\n    `id` String,\n    `created_at` DateTime\n)\n\
+        ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr_acme/soar_cases', '{replica}', updated_at)\n\
+        ORDER BY (tenant_id, created_at)\nSETTINGS index_granularity = 8192";
+
+    #[test]
+    fn the_rekeyed_copy_has_the_id_key_its_own_name_and_its_own_replication_path() {
+        let ddl = soar_cases_rekeyed_ddl("ndr_acme", OLD_DDL).expect("old key is rekeyed");
+        assert!(ddl.starts_with("CREATE TABLE IF NOT EXISTS ndr_acme.soar_cases_key_fix ON CLUSTER ndr_cluster"));
+        assert!(ddl.contains("ORDER BY (tenant_id, id)") && !ddl.contains("created_at)\n"));
+        assert!(ddl.contains("'/clickhouse/tables/{shard}/ndr_acme/soar_cases_key_fix'"),
+            "two tables must not share one replication path");
+        assert!(ddl.contains("`created_at` DateTime"), "the columns are kept");
+    }
+
+    #[test]
+    fn a_table_already_on_the_id_key_is_not_rekeyed_again() {
+        let already = OLD_DDL.replace("ORDER BY (tenant_id, created_at)", "ORDER BY (tenant_id, id)");
+        assert_eq!(soar_cases_rekeyed_ddl("ndr_acme", &already), None);
+    }
+
+    #[test]
+    fn an_unexpected_definition_is_left_alone() {
+        assert_eq!(soar_cases_rekeyed_ddl("ndr_acme", "CREATE TABLE ndr_acme.other (x Int32) ENGINE = Memory"), None);
+    }
+}
 
 #[cfg(test)]
 mod tenant_column_migration_tests {

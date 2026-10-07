@@ -805,16 +805,17 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
     let dst_ip_str = hit.agent_z.dest_ip.as_deref().unwrap_or("").to_string();
     let sni_str    = hit.agent_z.raw.get("server_name")
         .and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let is_trusted_cloud = {
+    // A trusted provider on either end of the flow. A threat-feed match whose addresses are all inside
+    // trusted provider ranges is weak evidence, not a confirmed threat (see scoring::feed_match_is_weak).
+    let (is_trusted_cloud, feed_only_trusted) = {
         let tr = state.trusted.read().await;
-        if tr.is_trusted_ip(&dst_ip_str) || tr.is_trusted_domain(&sni_str) {
-            true
-        } else if let Some(asn) = enrichment.dst_asn.as_ref() {
-            tr.is_trusted_asn(&asn.org)
-        } else {
-            false
-        }
+        let ti = &state.enrichment.threat_intel;
+        let feed: Vec<&str> = [src, dst_ip_str.as_str()].into_iter().filter(|ip| ti.is_malicious_ip(ip)).collect();
+        let trusted = tr.is_trusted_ip(src) || tr.is_trusted_ip(&dst_ip_str) || tr.is_trusted_domain(&sni_str)
+            || enrichment.dst_asn.as_ref().map(|a| tr.is_trusted_asn(&a.org)).unwrap_or(false);
+        (trusted, enrichment.is_malicious && crate::scoring::feed_match_is_weak(&feed, |ip| tr.is_trusted_ip(ip)))
     };
+    enrichment.is_malicious = enrichment.is_malicious && !feed_only_trusted;
 
     // TAP mode: sensor is a passive probe — ALL traffic from sensor IP is noise.
     // Agent mode: sensor IS the monitored host — don't suppress its traffic.
@@ -868,6 +869,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
                 corroborated_at:    0,
                 agent_s_rule_id:    String::new(),
                 agent_s_category:   "Honeypot Access".to_string(),
+                reasons:            vec!["Source or destination address is inside a configured honeypot range".to_string()],
                 updated_at:         now_ts,
                 sensor_id:          hit.agent_z.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             };
@@ -898,7 +900,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         .get(&format!("{}:{}", tenant_id, src))
         .map(|v| *v)
         .unwrap_or(0.0);
-    let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, enrichment.sensitive_country, is_trusted_cloud, entity_score);
+    let raw_risk = state.scorer.score(&hit, enrichment.is_malicious, feed_only_trusted, enrichment.sensitive_country, is_trusted_cloud, entity_score);
 
     // Trusted-asset check: src is trusted if it matches a CIDR in trusted_source_cidrs OR
     // is manually marked trusted in the assets table (5-min cache).
@@ -1389,6 +1391,7 @@ pub async fn process_correlation_hit(state: &AppState, hit: CorrelationHit) {
         agent_s_category:   agent_s_category,
         updated_at:         now_ts,
         sensor_id:          hit.agent_z.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        reasons:            risk.reasons.clone(),
     };
     tokio::spawn(async move {
         if let Err(e) = ch.insert_hit_for_tenant(ch_hit, &tenant_id_clone).await {
@@ -6488,6 +6491,7 @@ async fn handle_linux_endpoint_event(state: &AppState, raw: Value, tenant_id: &s
         agent_s_category:   "endpoint".to_string(),
         updated_at:         now,
         sensor_id:          host.clone(),
+        reasons:            detections.iter().map(|d| format!("Sigma: {}", d.title)).collect(),
     };
 
     if let Err(e) = state.ch_storage.insert_hit_for_tenant(hit, tenant_id).await {
@@ -7215,7 +7219,9 @@ pub async fn arkime_status(
             let body = resp.text().await.unwrap_or_default();
             (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
         }
-        Err(e) => axum::Json(json!({
+        Err(e) => {
+            tracing::warn!("Arkime status check failed: url={} connect_err={} err={}", target, e.is_connect(), e);
+            axum::Json(json!({
             "status": "error",
             "message": if e.is_connect() {
                 "Arkime is not running on this sensor".to_string()
@@ -7223,6 +7229,7 @@ pub async fn arkime_status(
                 "Arkime unreachable".to_string()
             }
         })).into_response()
+        }
     }
 }
 
@@ -8281,11 +8288,14 @@ pub async fn create_soar_case(
     // Alert-originated cases opt in to flow de-duplication. Manual cases still
     // remain available for analysts who deliberately need a separate case.
     let dedupe_by_flow = payload.get("dedupe_by_flow").and_then(|v| v.as_bool()).unwrap_or(false);
+    // Joins only an open case the grouping rules allow (see provigil_common::soar::group_for).
+    let group = provigil_common::soar::group_for(&severity, false, &tags);
     if dedupe_by_flow && !src_ip.is_empty() && !dst_ip.is_empty() {
-        if let Some((existing_id, existing_number, _, _)) = state.ch_storage
-            .find_open_case_by_src_dst(&src_ip, &dst_ip, &claims.tenant_id)
-            .await
-        {
+        let existing = match &group {
+            Some(g) => state.ch_storage.find_open_case_by_src_dst(&src_ip, &dst_ip, g, &claims.tenant_id).await,
+            None => None,
+        };
+        if let Some((existing_id, existing_number, _, _)) = existing {
             return Json(json!({
                 "status": "success",
                 "id": existing_id,
@@ -9706,6 +9716,117 @@ pub async fn aria_similar_incidents(
 /// Answers a question from this tenant's own past investigations and how they ended. The
 /// answer is checked against the records it was given (see ai::history); with no comparable
 /// records no AI call is made at all.
+/// The case (by number or session id) and, through it, its session's own analyses — sorted newest
+/// first, with a real port count attached where one is known. Shared by an explicit lookup ("tell me
+/// about INC-2026-0023") and by a vague follow-up resolved against the conversation's subject.
+async fn incident_sources(state: &AppState, tenant_id: &str, sensor_ids: &[String], id: &str) -> Vec<crate::ai::history::Source> {
+    use crate::ai::history;
+    let cases = state.ch_storage.get_soar_cases(tenant_id, sensor_ids).await.unwrap_or_default();
+    let found: Vec<serde_json::Value> = cases.into_iter()
+        .filter(|c| c["case_number"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(id))
+            || c["community_id"].as_str() == Some(id))
+        .collect();
+    // A session id names its own analyses. A case number names its case, and through the case, its session.
+    let cid = if id.starts_with("1:") {
+        id.to_string()
+    } else {
+        found.first().and_then(|c| c["community_id"].as_str()).unwrap_or("").to_string()
+    };
+    let mut all = history::sources_from_cases(&found);
+    if !cid.is_empty() {
+        let rows = state.ch_storage.get_ai_annotations_page(tenant_id, sensor_ids, "", &cid, 0, 5, 0)
+            .await.unwrap_or_default();
+        all.extend(history::sources_from_analyses(&rows).into_iter().filter(|s| s.community_id == cid));
+    }
+    history::sort_newest_first(&mut all);
+    attach_port_counts(state, tenant_id, sensor_ids, &mut all, true).await;
+    attach_outcomes(state, tenant_id, &mut all).await;
+    all
+}
+
+/// Attaches the recorded outcome (true/false positive, or closed with no verdict) to each source that
+/// has one, so "is this a real threat" can answer from what an analyst actually decided, not guess.
+async fn attach_outcomes(state: &AppState, tenant_id: &str, sources: &mut [crate::ai::history::Source]) {
+    let ids: Vec<String> = sources.iter().map(|s| s.community_id.clone()).filter(|c| !c.is_empty()).collect();
+    if ids.is_empty() {
+        return;
+    }
+    let outcomes = state.ch_storage.latest_outcomes(tenant_id, &ids).await;
+    for s in sources.iter_mut() {
+        if s.outcome.is_none() {
+            s.outcome = outcomes.get(&s.community_id).map(|o| o.0.clone());
+        }
+    }
+}
+
+/// Attaches what is actually known about each source: its distinct destination ports (from its last
+/// 50 events), and its real score, severity and the reasons the hit was scored that way — so a
+/// question like "what is its score" or "why is this HIGH" is answered from numbers that were
+/// actually computed and stored, not guessed from the case title.
+/// `deep`: also collect the session's event-type and protocol mix, and its evidence bundle and PCAP
+/// counts — the fuller pass for a question about one named incident ("collect the evidence…"). Kept
+/// off for a list of several records, so "the last 10 incidents" does not run it ten times over.
+async fn attach_port_counts(state: &AppState, tenant_id: &str, sensor_ids: &[String], sources: &mut [crate::ai::history::Source], deep: bool) {
+    use std::collections::HashMap;
+    let mut cids: Vec<String> = sources.iter().map(|s| s.community_id.clone()).filter(|c| !c.is_empty()).collect();
+    cids.sort();
+    cids.dedup();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut mix: HashMap<String, (Vec<(String, u64)>, Vec<(String, u64)>)> = HashMap::new();
+    let mut detail: HashMap<String, crate::ai::history::HitDetail> = HashMap::new();
+    let mut evidence: HashMap<String, (usize, usize)> = HashMap::new();
+    for cid in cids {
+        if let Ok(events) = state.ch_storage.get_events_by_community_id(&cid, tenant_id, sensor_ids).await {
+            let rows = events.as_array().cloned().unwrap_or_default();
+            let ports: std::collections::HashSet<u64> = rows.iter().filter_map(|e| e["dst_port"].as_u64()).collect();
+            if !ports.is_empty() {
+                counts.insert(cid.clone(), ports.len());
+            }
+            if deep && !rows.is_empty() {
+                let tally = |field: &str| -> Vec<(String, u64)> {
+                    let mut m: HashMap<String, u64> = HashMap::new();
+                    for e in &rows {
+                        if let Some(v) = e[field].as_str().filter(|v| !v.is_empty()) {
+                            *m.entry(v.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                    let mut v: Vec<(String, u64)> = m.into_iter().collect();
+                    v.sort_by(|a, b| b.1.cmp(&a.1));
+                    v
+                };
+                mix.insert(cid.clone(), (tally("event_type"), tally("proto")));
+            }
+        }
+        if let Some(d) = state.ch_storage.get_hit_explanation(tenant_id, &cid).await {
+            detail.insert(cid.clone(), d);
+        }
+        if deep {
+            let bundles = state.ch_storage.get_bundles_for_cid(tenant_id, &cid).await.unwrap_or_default().len();
+            let pcap = state.ch_storage.get_pcap_sessions(tenant_id, Some(&cid), None, 50, sensor_ids).await.unwrap_or_default().len();
+            evidence.insert(cid, (bundles, pcap));
+        }
+    }
+    for s in sources.iter_mut() {
+        if let Some(&n) = counts.get(&s.community_id) {
+            s.reasoning = crate::ai::history::with_port_note(&s.reasoning, n);
+        }
+        if let Some(d) = detail.get(&s.community_id) {
+            s.reasoning = crate::ai::history::with_hit_detail(&s.reasoning, d);
+        }
+        if let Some((types, protos)) = mix.get(&s.community_id) {
+            s.reasoning = crate::ai::history::with_event_mix(&s.reasoning, types, protos);
+        }
+        if let Some(&(bundles, pcap)) = evidence.get(&s.community_id) {
+            s.reasoning = crate::ai::history::with_evidence_counts(&s.reasoning, bundles, pcap);
+        }
+    }
+}
+
+/// POST /api/aria/ask-history — SOC GPT's backend: a question answered only from this tenant's own
+/// data. `subject` carries the session or case id the conversation is about, as returned by the
+/// previous answer; a vague question ("does it reach many ports?") is read against it. `history`
+/// carries the last few turns, so the AI reads the conversation the way a person would, rather than
+/// this code trying to match the wording of a follow-up.
 pub async fn aria_ask_history(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -9722,25 +9843,140 @@ pub async fn aria_ask_history(
     if question.is_empty() {
         return Json(json!({"error": "question required"}));
     }
-    let hits = crate::ai::rag::search_similar(
-        &state.ch_storage.client, &claims.tenant_id, &question, &claims.sensor_ids, "",
-        crate::ai::history::MAX_RECORDS as u32,
-    ).await;
-    let ids: Vec<String> = hits.iter().map(|h| h.investigation.community_id.clone()).collect();
-    let outcomes = state.ch_storage.latest_outcomes(&claims.tenant_id, &ids).await;
-    let sources = crate::ai::history::sources_from(&hits, &outcomes);
+    let subject = payload["subject"].as_str().unwrap_or("").trim().to_string();
+    let history_turns: Vec<(String, String)> = payload["history"].as_array().map(|arr| arr.iter()
+        .filter_map(|m| Some((m["role"].as_str()?.to_string(), m["text"].as_str()?.to_string())))
+        .collect()).unwrap_or_default();
+
+    use crate::ai::history::{self, Answer, Intent};
+    let intent = history::detect_intent(&question);
+
+    if let Intent::Summary { hours } = intent {
+        let facts = crate::ai::briefing::gather(&state.ch_storage, &claims.tenant_id, &claims.sensor_ids, hours).await;
+        let providers = history::providers(&state.ch_storage.client).await;
+        let (reply, ai_state) = if providers.is_empty() {
+            (String::new(), "not_configured")
+        } else {
+            (crate::ai::briefing::ask(&providers, &facts).await, "")
+        };
+        let b = crate::ai::briefing::compose(facts, &reply, ai_state);
+        return Json(json!({
+            "intent": "summary", "answer": b.text, "source": b.source, "reason": b.reason,
+            "sources": [], "facts": b.facts, "subject": subject,
+        }));
+    }
+
+    // A count of cases/alerts, answered straight from the records — no AI call, so nothing to get wrong.
+    if let Intent::Stats = intent {
+        let cases = state.ch_storage.get_soar_cases(&claims.tenant_id, &claims.sensor_ids).await.unwrap_or_default();
+        let mut by_status: std::collections::BTreeMap<String, usize> = Default::default();
+        for c in &cases {
+            *by_status.entry(c["status"].as_str().unwrap_or("Unknown").to_string()).or_insert(0) += 1;
+        }
+        let (critical, high) = tokio::join!(
+            state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "CRITICAL", &claims.sensor_ids),
+            state.ch_storage.count_hits_by_severity_aria(&claims.tenant_id, "HIGH", &claims.sensor_ids),
+        );
+        let status_line = if by_status.is_empty() {
+            "none".to_string()
+        } else {
+            by_status.iter().map(|(k, v)| format!("{v} {k}")).collect::<Vec<_>>().join(", ")
+        };
+        let answer = format!(
+            "{} case(s) in total — {}. {} critical and {} high-severity hit(s) stored for your sensors.",
+            cases.len(), status_line, critical.unwrap_or(0), high.unwrap_or(0)
+        );
+        return finish("stats", &subject, Answer { answer, source: "records", reason: "", sources: vec![] });
+    }
+
+    let (name, sources) = match &intent {
+        Intent::Latest { count, .. } => {
+            let analyses = state.ch_storage.get_all_ai_annotations(&claims.tenant_id, &claims.sensor_ids).await.unwrap_or_default();
+            let cases = state.ch_storage.get_soar_cases(&claims.tenant_id, &claims.sensor_ids).await.unwrap_or_default();
+            let mut all = history::sources_from_analyses(&analyses);
+            all.extend(history::sources_from_cases(&cases));
+            history::sort_newest_first(&mut all);
+            all.truncate(*count);
+            // The full evidence pass (event mix, bundle/PCAP counts) only for a short list — "the last
+            // 10 incidents" should not run it ten times over, but "the last incident" or "the last 3" can.
+            attach_port_counts(&state, &claims.tenant_id, &claims.sensor_ids, &mut all, *count <= 5).await;
+            attach_outcomes(&state, &claims.tenant_id, &mut all).await;
+            ("latest", all)
+        }
+        Intent::Incident(id) => {
+            let all = incident_sources(&state, &claims.tenant_id, &claims.sensor_ids, id).await;
+            if all.is_empty() {
+                let a = Answer {
+                    answer: format!("No case or analysis with id {id} is in your scope."),
+                    source: "records", reason: "not_found", sources: vec![],
+                };
+                return finish("incident", "", a);
+            }
+            ("incident", all)
+        }
+        // No case/session was named and no period either: a vague or open question. If the
+        // conversation already has a subject, its own record is fetched and handed over alongside
+        // whatever the search finds — the AI decides what is relevant, not this code.
+        _ => {
+            let mut all = if subject.is_empty() {
+                Vec::new()
+            } else {
+                incident_sources(&state, &claims.tenant_id, &claims.sensor_ids, &subject).await
+            };
+            let hits = crate::ai::rag::search_similar(
+                &state.ch_storage.client, &claims.tenant_id, &question, &claims.sensor_ids, "",
+                history::MAX_RECORDS as u32,
+            ).await;
+            let ids: Vec<String> = hits.iter().map(|h| h.investigation.community_id.clone()).collect();
+            let outcomes = state.ch_storage.latest_outcomes(&claims.tenant_id, &ids).await;
+            for s in history::sources_from(&hits, &outcomes) {
+                if !all.iter().any(|e| e.community_id == s.community_id) {
+                    all.push(s);
+                }
+            }
+            all.truncate(history::MAX_RECORDS + 1);
+            ("topic", all)
+        }
+    };
+
+    // The record the next vague question should be read against: whatever this answer was about.
+    let next_subject = sources.first().map(|s| s.community_id.clone()).filter(|c| !c.is_empty()).unwrap_or(subject);
+
+    // "What is the last incident": the newest records as they are, no AI needed.
+    if let Intent::Latest { summarize: false, .. } = intent {
+        let a = if sources.is_empty() {
+            Answer { answer: "There are no cases or analyses in your scope yet.".into(), source: "records", reason: "no_records", sources }
+        } else {
+            Answer { answer: format!("The {} newest record(s), most recent first.", sources.len()), source: "records", reason: "", sources }
+        };
+        return finish(name, &next_subject, a);
+    }
+    if sources.is_empty() && name == "latest" {
+        let a = Answer { answer: "There are no cases or analyses in your scope yet.".into(), source: "records", reason: "no_records", sources };
+        return finish(name, &next_subject, a);
+    }
 
     let (reply, ai_state) = if sources.is_empty() {
         (String::new(), "")
     } else {
-        let providers = crate::ai::history::providers(&state.ch_storage.client).await;
+        let providers = history::providers(&state.ch_storage.client).await;
         if providers.is_empty() {
             (String::new(), "not_configured")
         } else {
-            (crate::ai::history::ask(&providers, &question, &sources).await, "")
+            let asked = history::question_with_history(&question, &history_turns);
+            (history::ask(&providers, &asked, &sources).await, "")
         }
     };
-    Json(json!(crate::ai::history::compose(&question, sources, &reply, ai_state)))
+    finish(name, &next_subject, history::compose(&question, sources, &reply, ai_state))
+}
+
+/// The answer as JSON, with the kind of question it was read as ("topic", "latest", "incident",
+/// "summary") and the subject the next vague question should be read against.
+fn finish(intent: &str, subject: &str, a: crate::ai::history::Answer) -> Json<Value> {
+    let mut v = json!(a);
+    v["intent"] = json!(intent);
+    v["subject"] = json!(subject);
+    Json(v)
 }
 
 /// GET /api/ai-suppressions — list active suppressions (used by UI to filter WS hits)
@@ -9968,17 +10204,30 @@ pub async fn get_threat_predictions(
     }
 }
 
+/// GET /api/threat/predictions/history?indicator=<url or ip>
+/// Past predictions about one indicator (newest first, up to 100). Without `indicator` it is the
+/// newest 100 of all predictions, as before.
 pub async fn get_threat_predictions_history(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     let claims = match extract_claims(&headers) {
         Some(c) => c,
         None => return Json(json!({"error": "unauthorized"})),
     };
-    match crate::threat::get_predictions(&state.ch_storage, &claims.tenant_id, 100).await {
-        Ok(rows) => Json(json!({ "predictions": rows })),
-        Err(e)   => Json(json!({ "predictions": [], "error": e.to_string() })),
+    let indicator = params.get("indicator").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    // scan more rows when filtering, so one indicator's older predictions are still found
+    let scan = if indicator.is_some() { 2000 } else { 100 };
+    match crate::threat::get_predictions(&state.ch_storage, &claims.tenant_id, scan).await {
+        Ok(rows) => {
+            let rows: Vec<Value> = match &indicator {
+                Some(ind) => rows.into_iter().filter(|r| r["indicator"].as_str() == Some(ind.as_str())).take(100).collect(),
+                None => rows,
+            };
+            Json(json!({ "predictions": rows }))
+        }
+        Err(e) => Json(json!({ "predictions": [], "error": e.to_string() })),
     }
 }
 

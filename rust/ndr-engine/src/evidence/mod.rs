@@ -6,7 +6,7 @@ use std::io::Write;
 
 use crate::storage::clickhouse::tenant_db_pub as tenant_db;
 
-fn sha256_of(data: &[u8]) -> String {
+pub(crate) fn sha256_of(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);
     format!("{:x}", h.finalize())
@@ -886,6 +886,103 @@ pub async fn build_evidence_bundle_for_verify(
     ).await
 }
 
+/// The `tcpdump` filter for one flow, matching the traffic in either direction. A port that is
+/// missing or zero is left out — "port 0" matches nothing, so a half-known flow is filtered by
+/// host alone rather than excluded entirely. Same rule the remote-sensor uploader already uses
+/// (install-sensor.sh's `extract_with_tcpdump`), kept identical on purpose.
+fn flow_bpf_filter(src_ip: &str, dst_ip: &str, src_port: u64, dst_port: u64) -> String {
+    let mut clauses = vec![format!("host {src_ip}"), format!("host {dst_ip}")];
+    for p in [src_port, dst_port] {
+        if p != 0 {
+            clauses.push(format!("port {p}"));
+        }
+    }
+    format!("({})", clauses.join(" and "))
+}
+
+/// Whether a "filtered" capture actually isolated the flow, rather than passing the whole source
+/// file through unfiltered (a `tcpdump` filter that matched nothing, or matched everything, both
+/// look like "success" by exit code alone — the real signal is whether anything was removed).
+/// A pcap with no packets at all is exactly 24 bytes (just the file header) and is not useful either.
+fn pcap_filter_worked(filtered_size: u64, source_size: u64) -> bool {
+    filtered_size > 40 && (source_size == 0 || (filtered_size as f64) < (source_size as f64) * 0.9)
+}
+
+/// Falls back to Arkime's own raw capture files on disk when the live session lookup has
+/// nothing — most often because OpenSearch is unreachable or has not indexed the session yet,
+/// not because the packets were never captured. Scans the newest raw file that is not still
+/// being actively written, and filters it to this one flow with `tcpdump`. This mirrors the
+/// fallback the remote-sensor uploader already has (install-sensor.sh's
+/// `find_in_raw_pcap_direct` + `extract_with_tcpdump`) — applied here so the engine's own live
+/// evidence pipeline has the same resilience, not just sensors uploading over the network.
+async fn scan_raw_pcap_directly(src_ip: &str, dst_ip: &str, src_port: u64, dst_port: u64) -> Option<Vec<u8>> {
+    if src_ip.is_empty() || dst_ip.is_empty() {
+        return None;
+    }
+    let raw_dir = std::env::var("ARKIME_RAW_DIR").unwrap_or_else(|_| "/opt/arkime/raw".to_string());
+    let cutoff = std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600))?;
+
+    let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    let mut rd = tokio::fs::read_dir(&raw_dir).await.ok()?;
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !(name.ends_with(".pcap") || name.ends_with(".pcap.zst")) {
+            continue;
+        }
+        if let Ok(modified) = entry.metadata().await.and_then(|m| m.modified()) {
+            if modified >= cutoff {
+                candidates.push((modified, path));
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0)); // newest first, like the uploader
+
+    let now = std::time::SystemTime::now();
+    let (_, raw_path) = candidates.into_iter().find(|(modified, _)| {
+        // Skip a file Arkime may still be actively writing.
+        now.duration_since(*modified).map(|a| a >= std::time::Duration::from_secs(30)).unwrap_or(false)
+    })?;
+
+    let tmp_dir = std::env::temp_dir();
+    let is_zst = raw_path.extension().and_then(|e| e.to_str()) == Some("zst");
+    let plain_path = if is_zst {
+        let out = tmp_dir.join(format!("ndr-decomp-{}.pcap", uuid::Uuid::new_v4()));
+        let ok = tokio::process::Command::new("zstd")
+            .args(["-d", "-f", "-q"]).arg(&raw_path).arg("-o").arg(&out)
+            .status().await.map(|s| s.success()).unwrap_or(false);
+        if !ok || !out.exists() {
+            return None;
+        }
+        out
+    } else {
+        raw_path.clone()
+    };
+    let source_size = tokio::fs::metadata(&plain_path).await.map(|m| m.len()).unwrap_or(0);
+
+    let out_pcap = tmp_dir.join(format!("ndr-filtered-{}.pcap", uuid::Uuid::new_v4()));
+    let bpf = flow_bpf_filter(src_ip, dst_ip, src_port, dst_port);
+    let ran = tokio::process::Command::new("tcpdump")
+        .arg("-r").arg(&plain_path).arg("-w").arg(&out_pcap).arg(&bpf)
+        .output().await.is_ok();
+    if is_zst {
+        let _ = tokio::fs::remove_file(&plain_path).await;
+    }
+    if !ran {
+        let _ = tokio::fs::remove_file(&out_pcap).await;
+        return None;
+    }
+
+    let filtered_size = tokio::fs::metadata(&out_pcap).await.map(|m| m.len()).unwrap_or(0);
+    let result = if pcap_filter_worked(filtered_size, source_size) {
+        tokio::fs::read(&out_pcap).await.ok()
+    } else {
+        None
+    };
+    let _ = tokio::fs::remove_file(&out_pcap).await;
+    result
+}
+
 async fn build_evidence_bundle_inner(
     opensearch_url: &str,
     arkime_url: &str,
@@ -1039,7 +1136,10 @@ async fn build_evidence_bundle_inner(
             Some(bytes.to_vec())
         }.await.unwrap_or_default()
     } else {
-        vec![]
+        // No live Arkime session to fetch from (OpenSearch unreachable, or not indexed yet) —
+        // fall back to scanning Arkime's own raw capture on disk directly, so a temporary
+        // OpenSearch outage does not mean the evidence is gone, only slower to assemble.
+        scan_raw_pcap_directly(&src_ip, &dst_ip, src_port, dst_port).await.unwrap_or_default()
     };
 
     // ── 3. Zeek conn.log record ───────────────────────────────────────────────
@@ -1565,6 +1665,25 @@ pub async fn verify_bundle_integrity(
             (matches, computed)
         }
         Err(e) => (false, format!("file_read_error: {}", e))
+    }
+}
+
+#[cfg(test)]
+mod raw_pcap_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn the_filter_matches_the_flow_in_either_direction_and_skips_an_unknown_port() {
+        assert_eq!(flow_bpf_filter("10.0.0.5", "203.0.113.9", 51820, 443), "(host 10.0.0.5 and host 203.0.113.9 and port 51820 and port 443)");
+        assert_eq!(flow_bpf_filter("10.0.0.5", "203.0.113.9", 0, 0), "(host 10.0.0.5 and host 203.0.113.9)", "port 0 matches nothing, so it is left out rather than excluding everything");
+    }
+
+    #[test]
+    fn a_filter_that_removed_nothing_or_kept_an_empty_capture_did_not_work() {
+        assert!(!pcap_filter_worked(24, 1000), "24 bytes is just the file header: no packets");
+        assert!(!pcap_filter_worked(950, 1000), "95% of the source: the filter passed almost everything through");
+        assert!(pcap_filter_worked(100, 1000), "a real flow, clearly smaller than the whole capture");
+        assert!(pcap_filter_worked(100, 0), "an unknown source size should not block an otherwise real result");
     }
 }
 

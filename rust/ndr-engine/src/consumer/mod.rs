@@ -160,6 +160,107 @@ async fn batch_writer(
     }
 }
 
+/// Captures a real PCAP/evidence bundle for one hit and runs the AI's first analysis of it — for any
+/// HIGH/CRITICAL/MEDIUM hit with a normal flow community_id, whichever detector found it: Suricata
+/// alone, or Zeek plus a Sigma rule. `trigger_label` only changes the log line and the AI prompt's
+/// framing (e.g. "a Sigma rule matched on a Zeek network event" vs "a Suricata rule fired").
+async fn capture_evidence_and_analyze(
+    mut redis_mux: redis::aio::MultiplexedConnection,
+    ch: Arc<crate::storage::ClickhouseStorage>,
+    tenant_id: String,
+    cid: String,
+    src: String,
+    dst: String,
+    severity: String,
+    rule_names: String,
+    trigger_label: &'static str,
+    detector_sentence: &'static str,
+) {
+    // Evidence (PCAP) is only meaningful for a proper network flow with a standard community_id.
+    if !(matches!(severity.as_str(), "HIGH" | "CRITICAL" | "MEDIUM") && cid.starts_with("1:")) {
+        return;
+    }
+    // A scan or a burst can put dozens of distinct sessions on the same flow pair in seconds — each one
+    // a real community_id, so the hit-storage window does not catch it. Evidence capture is a disk write
+    // and an AI call, so it is claimed at most once per flow pair every five minutes, shared across
+    // engines. A second alert on the flow within that window still gets its hit stored and still reaches
+    // SOAR; it just does not get its own bundle and AI call.
+    let (a, b) = if src <= dst { (src.as_str(), dst.as_str()) } else { (dst.as_str(), src.as_str()) };
+    let claim_key = format!("evidence_fire:{tenant_id}:{a}:{b}");
+    let claimed: Result<Option<String>, _> = redis::cmd("SET").arg(&claim_key).arg(1).arg("NX").arg("EX").arg(300)
+        .query_async(&mut redis_mux).await;
+    if let Ok(None) = claimed {
+        return; // another hit on this pair already claimed evidence capture in the last 5 minutes
+    }
+    let opensearch_url = std::env::var("OPENSEARCH_URL").unwrap_or_else(|_| "http://localhost:9200".to_string());
+    let arkime_url  = std::env::var("ARKIME_URL").unwrap_or_default();
+    let arkime_pass = std::env::var("ARKIME_PASS").unwrap_or_else(|_| "admin".to_string());
+    let now_str = chrono::Utc::now().to_rfc3339();
+    let alert_json = serde_json::json!({
+        "community_id": cid, "tenant_id": tenant_id, "severity": severity,
+        "src_ip": src, "dst_ip": dst, "rule_name": rule_names,
+        "timestamp": now_str, "auto_captured_at": now_str,
+    });
+    let ev_sem = crate::api::evidence_semaphore();
+    let _permit = ev_sem.acquire_owned().await;
+    let (zip_bytes, sha256, _manifest) = match crate::evidence::build_evidence_bundle(
+        &opensearch_url, &arkime_url, &arkime_pass, &cid, alert_json, &tenant_id, None,
+    ).await {
+        Ok(v) => v,
+        Err(e) => { tracing::warn!("Evidence capture failed for {}: {}", cid, e); return; }
+    };
+    let date  = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let dir   = format!("/opt/ndr/evidence/{}/{}", tenant_id, date);
+    let _ = tokio::fs::create_dir_all(&dir).await;
+    let bundle_id = uuid::Uuid::new_v4().to_string();
+    let file_path = format!("{}/{}.zip", dir, bundle_id);
+    let size = zip_bytes.len() as u64;
+    if tokio::fs::write(&file_path, &zip_bytes).await.is_err() {
+        return;
+    }
+    let _ = ch.save_evidence_bundle(
+        &tenant_id, &bundle_id, &cid, &file_path, &sha256, size, 1, 90, &src, &dst, &severity, "",
+    ).await;
+    let _ = ch.log_evidence_action(
+        &tenant_id, &cid, &bundle_id, "auto_captured", "auto", &severity, "", "",
+        &format!("Automatically captured on {trigger_label}"), "",
+    ).await;
+    tracing::info!("Evidence bundle {} captured for {} cid {}", bundle_id, trigger_label, cid);
+
+    // The correlator path runs AI for corroborated hits, but a hit that only reaches this path
+    // (below the correlator's store threshold, or from only one detector) needs AI to fire here too.
+    if !ch.get_tenant_ai_enabled(&tenant_id).await {
+        return;
+    }
+    let bundles = ch.get_bundles_for_cid(&tenant_id, &cid).await.unwrap_or_default();
+    let sys = "You are a senior NDR (Network Detection & Response) security analyst. Analyse the alert \
+        and respond in plain text with three short sections:\n\
+        THREAT: what this detection indicates (2-3 sentences)\n\
+        RISK: potential impact (1-2 sentences)\n\
+        ACTION: recommended immediate response steps (2-3 bullet points)\n\
+        Be concise and actionable. No markdown headers.";
+    let q = format!(
+        "{detector_sentence}\n\
+         Rule(s) fired: {rule_names}\n\
+         Session community_id: {cid}\n\
+         Source: {src} → Destination: {dst}\n\
+         Severity: {severity}\n\
+         Evidence bundles: {}\n\
+         Tenant: {tenant_id}\n\
+         Provide your threat analysis.",
+        bundles.len()
+    );
+    match crate::ai::provider::generate_chat(&ch, sys, &[], &q).await {
+        Ok((analysis, _)) => {
+            let safe = analysis.replace('\'', "''");
+            let _ = ch.delete_ai_annotations_for_cid(&tenant_id, &cid).await;
+            let _ = ch.add_evidence_annotation(&tenant_id, &bundle_id, &cid, "ARIA-AI", &safe, "ai_analysis").await;
+            tracing::info!("AI analysis saved for {} cid {}", trigger_label, cid);
+        }
+        Err(e) => tracing::warn!("AI analysis failed for {} {}: {}", trigger_label, cid, e),
+    }
+}
+
 pub async fn start_consumer(state: Arc<AppState>) {
     let kafka_cfg = provigil_common::kafka::KafkaConfig::from_env();
     let instance_id = std::env::var("INSTANCE_ID")
@@ -356,6 +457,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 agent_s_details:    as_,
                                 corroborated_at:    0,
                                 agent_s_rule_id:    String::new(),
+                                reasons:            vec![format!("File hash {} matched the malware-hash feed", sha256)],
                                 agent_s_category:   "malware".to_string(),
                                 updated_at:         now_ts,
                                 sensor_id:          raw.get("sensor_host")
@@ -479,6 +581,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 agent_s_details:    "{}".to_string(),
                                 corroborated_at:    0,
                                 agent_s_rule_id:    String::new(),
+                                reasons:            vec![format!("TLS JA3 fingerprint {} matched the malicious-ja3 feed", ja3)],
                                 agent_s_category:   "malware".to_string(),
                                 updated_at:         now_ts,
                                 sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -573,6 +676,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     agent_s_details:    "{}".to_string(),
                                     corroborated_at:    0,
                                     agent_s_rule_id:    String::new(),
+                                    reasons:            vec![format!("HTTPS to {} on port 443 — a known DNS-over-HTTPS resolver, which evades DNS-based controls", dst_ip)],
                                     agent_s_category:   "policy-violation".to_string(),
                                     updated_at:         now_ts,
                                     sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -899,6 +1003,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     agent_s_details:    "{}".to_string(),
                                     corroborated_at:    0,
                                     agent_s_rule_id:    "".to_string(),
+                                    reasons:            vec![format!("IP {} was already claimed by MAC {}, and is now also claimed by {}", ip_s, existing_mac, mac_s)],
                                     agent_s_category:   "".to_string(),
                                     updated_at:         now,
                                     sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -1016,6 +1121,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 agent_s_details:    "{}".to_string(),
                                 corroborated_at:    0,
                                 agent_s_rule_id:    String::new(),
+                                reasons:            vec![format!("DNS query for {} matched the malicious-domain feed", domain)],
                                 agent_s_category:   "c2".to_string(),
                                 updated_at:         now_ts,
                                 sensor_id:          raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -1231,9 +1337,13 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             // Tenant's Sensitive Countries list, minus the countries its own sensors are in
                             crate::homecountry::apply(&state, &tenant_id, &mut enrich).await;
 
+                            // ET's own naming marks some rules informational (seen, not a threat), whatever
+                            // numeric severity Suricata assigned them — an "ET INFO" DNS lookup should not
+                            // outrank real detections, trigger evidence capture, or open a case.
                             let (score, severity) = match alert.severity {
                                 1 => (critical_score, "CRITICAL"),
-                                _ => (high_score,     "HIGH"),
+                                _ if crate::scoring::suricata_rule_is_informational(&alert.signature) => (25.0, "LOW"),
+                                _ => (high_score, "HIGH"),
                             };
 
                             let tags = {
@@ -1264,6 +1374,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 corroborated_at:    0,
                                 agent_s_rule_id:    alert.signature_id.to_string(),
                                 agent_s_category:   alert.category.clone(),
+                                reasons:            vec![format!("Suricata: {} ({})", alert.signature, alert.category)],
                                 updated_at:         now_ts,
                                 sensor_id:          event.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                             };
@@ -1282,6 +1393,8 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 score,
                                 severity: if alert.severity == 1 {
                                     crate::scoring::Severity::Critical
+                                } else if crate::scoring::suricata_rule_is_informational(&alert.signature) {
+                                    crate::scoring::Severity::Low
                                 } else {
                                     crate::scoring::Severity::High
                                 },
@@ -1292,6 +1405,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             let src_ws = src.clone();
                             let dst_ws = dst.clone();
                             let sev_ws = severity.to_string();
+                            let rule_names = format!("{} ({})", alert.signature, alert.category);
                             tokio::spawn(async move {
                                 if let Err(e) = ch_cl.insert_hit_for_tenant(ch_hit, &tid_cl).await {
                                     tracing::warn!("suricata-alert hit insert error: {}", e);
@@ -1318,6 +1432,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                     "tenant_id": tid_cl,
                                 });
                                 crate::api::publish_event_deduped(&state_soar, &tid_cl, &ws_msg.to_string(), &src_ws, &sev_ws);
+                                capture_evidence_and_analyze(
+                                    state_soar.redis_mux.clone(),
+                                    ch_cl, tid_cl.clone(), cid.clone(), src_ws.clone(), dst_ws.clone(), sev_ws.clone(),
+                                    rule_names, "agent_s_only Suricata alert",
+                                    "A Suricata rule fired on this flow (no Zeek/Sigma corroboration yet).",
+                                ).await;
                             });
                         }
                     }
@@ -1381,11 +1501,18 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             hit_time:     now_ts as u64,
                             source:       "sigma".to_string(),
                         };
-                        let is_trusted_cloud = {
+                        // A trusted provider on either end of the flow. A threat-feed match whose addresses are all
+                        // inside trusted provider ranges is weak evidence, not a confirmed threat.
+                        let (is_trusted_cloud, feed_only_trusted) = {
                             let tr = state.trusted.read().await;
-                            if tr.is_trusted_ip(&dst) { true }
-                            else { enrich.dst_asn.as_ref().map(|a| tr.is_trusted_asn(&a.org)).unwrap_or(false) }
+                            let ti = &state.enrichment.threat_intel;
+                            let feed: Vec<&str> = [src.as_str(), dst.as_str()].into_iter()
+                                .filter(|ip| ti.is_malicious_ip(ip)).collect();
+                            let trusted = tr.is_trusted_ip(&src) || tr.is_trusted_ip(&dst)
+                                || enrich.dst_asn.as_ref().map(|a| tr.is_trusted_asn(&a.org)).unwrap_or(false);
+                            (trusted, enrich.is_malicious && crate::scoring::feed_match_is_weak(&feed, |ip| tr.is_trusted_ip(ip)))
                         };
+                        enrich.is_malicious = enrich.is_malicious && !feed_only_trusted;
                         let entity_score = state.entity_cache
                             .get(&format!("{}:{}", tenant_id, src))
                             .map(|v| *v)
@@ -1393,6 +1520,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         let raw_risk = state.scorer.score(
                             &corr_hit,
                             enrich.is_malicious,
+                            feed_only_trusted,
                             enrich.sensitive_country,
                             is_trusted_cloud,
                             entity_score,
@@ -1428,6 +1556,7 @@ pub async fn start_consumer(state: Arc<AppState>) {
                             corroborated_at:    0,
                             agent_s_rule_id:    String::new(),
                             agent_s_category:   String::new(),
+                            reasons:            risk_soar.reasons.clone(),
                             updated_at:         now_ts,
                             sensor_id:          event.raw.get("sensor_host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                         };
@@ -1438,10 +1567,6 @@ pub async fn start_consumer(state: Arc<AppState>) {
                         let dst_clone       = ch_hit.dst_ip.clone();
                         let sev_clone       = ch_hit.severity.clone();
                         let sigma_log       = detections.iter().map(|d| d.title.as_str()).collect::<Vec<_>>().join(",");
-                        // Evidence (PCAP) only meaningful for proper network flows with a
-                        // standard community_id. WS broadcast has no such restriction (Bug 6 fix).
-                        let do_evidence     = matches!(severity, "HIGH" | "CRITICAL" | "MEDIUM")
-                                             && cid_clone.starts_with("1:");
                         // GAP 3: SOAR + WS broadcast for Sigma hits
                         let state_soar      = Arc::clone(&state);
                         let enrich_soar     = enrich.clone();
@@ -1473,107 +1598,12 @@ pub async fn start_consumer(state: Arc<AppState>) {
                                 "tenant_id": tid_clone,
                             });
                             crate::api::publish_event_deduped(&state_soar, &tid_clone, &ws_msg.to_string(), &src_clone, &sev_clone);
-                            if !do_evidence { return; }
-
-                            let opensearch_url = std::env::var("OPENSEARCH_URL")
-                                .unwrap_or_else(|_| "http://localhost:9200".to_string());
-                            let arkime_url  = std::env::var("ARKIME_URL").unwrap_or_default();
-                            let arkime_pass = std::env::var("ARKIME_PASS")
-                                .unwrap_or_else(|_| "admin".to_string());
-                            let now_str  = chrono::Utc::now().to_rfc3339();
-                            let alert_json = serde_json::json!({
-                                "community_id":    cid_clone,
-                                "tenant_id":       tid_clone,
-                                "severity":        sev_clone,
-                                "src_ip":          src_clone,
-                                "dst_ip":          dst_clone,
-                                "rule_name":       sigma_log,
-                                "timestamp":       now_str,
-                                "auto_captured_at": now_str,
-                            });
-                            let ev_sem = crate::api::evidence_semaphore();
-                            let _permit = ev_sem.acquire_owned().await;
-                            match crate::evidence::build_evidence_bundle(
-                                &opensearch_url, &arkime_url, &arkime_pass,
-                                &cid_clone, alert_json, &tid_clone, None,
-                            ).await {
-                                Ok((zip_bytes, sha256, _manifest)) => {
-                                    let date      = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                                    let dir       = format!("/opt/ndr/evidence/{}/{}", tid_clone, date);
-                                    let _         = tokio::fs::create_dir_all(&dir).await;
-                                    let bundle_id = uuid::Uuid::new_v4().to_string();
-                                    let file_path = format!("{}/{}.zip", dir, bundle_id);
-                                    let size      = zip_bytes.len() as u64;
-                                    if tokio::fs::write(&file_path, &zip_bytes).await.is_ok() {
-                                        let _ = ch_clone.save_evidence_bundle(
-                                            &tid_clone, &bundle_id, &cid_clone,
-                                            &file_path, &sha256, size,
-                                            1, 90,
-                                            &src_clone, &dst_clone, &sev_clone, "",
-                                        ).await;
-                                        let _ = ch_clone.log_evidence_action(
-                                            &tid_clone, &cid_clone, &bundle_id,
-                                            "auto_captured", "auto",
-                                            &sev_clone, "", "",
-                                            "Automatically captured on SIGMA zeek_only hit",
-                                            "",
-                                        ).await;
-                                        tracing::info!(
-                                            "Evidence bundle {} captured for zeek_only cid {}",
-                                            bundle_id, cid_clone
-                                        );
-                                        // GAP 4c: AI threat analysis for Sigma zeek_only hits.
-                                        // The correlator path runs AI for corroborated hits, but
-                                        // when the correlator score falls below store_threshold,
-                                        // only this path runs — so AI must fire here too.
-                                        if ch_clone.get_tenant_ai_enabled(&tid_clone).await {
-                                            let bundles = ch_clone
-                                                .get_bundles_for_cid(&tid_clone, &cid_clone)
-                                                .await.unwrap_or_default();
-                                            let sys = "You are a senior NDR (Network Detection & Response) \
-                                                security analyst. A Sigma detection rule matched on a Zeek \
-                                                network event. Analyse the alert and respond in plain text \
-                                                with three short sections:\n\
-                                                THREAT: what this detection indicates (2-3 sentences)\n\
-                                                RISK: potential impact (1-2 sentences)\n\
-                                                ACTION: recommended immediate response steps (2-3 bullet points)\n\
-                                                Be concise and actionable. No markdown headers.";
-                                            let q = format!(
-                                                "Sigma rule(s) fired: {sigma_log}\n\
-                                                 Session community_id: {cid_clone}\n\
-                                                 Source: {src_clone} → Destination: {dst_clone}\n\
-                                                 Severity: {sev_clone}\n\
-                                                 Evidence bundles: {}\n\
-                                                 Tenant: {tid_clone}\n\
-                                                 Provide your threat analysis.",
-                                                bundles.len()
-                                            );
-                                            match crate::ai::provider::generate_chat(
-                                                &ch_clone, sys, &[], &q
-                                            ).await {
-                                                Ok((analysis, _)) => {
-                                                    let safe = analysis.replace('\'', "''");
-                                                    let _ = ch_clone.delete_ai_annotations_for_cid(
-                                                        &tid_clone, &cid_clone,
-                                                    ).await;
-                                                    let _ = ch_clone.add_evidence_annotation(
-                                                        &tid_clone, &bundle_id, &cid_clone,
-                                                        "ARIA-AI", &safe, "ai_analysis",
-                                                    ).await;
-                                                    tracing::info!(
-                                                        "AI analysis saved for zeek_only cid {}",
-                                                        cid_clone
-                                                    );
-                                                }
-                                                Err(e) => tracing::warn!(
-                                                    "AI analysis failed for zeek_only {}: {}", cid_clone, e
-                                                ),
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => tracing::warn!("Evidence capture failed for {}: {}", cid_clone, e),
-                            }
+                            capture_evidence_and_analyze(
+                                state_soar.redis_mux.clone(),
+                                ch_clone, tid_clone, cid_clone, src_clone, dst_clone, sev_clone,
+                                sigma_log, "zeek_only SIGMA hit",
+                                "A Sigma detection rule matched on a Zeek network event.",
+                            ).await;
                         });
                     }
                 }

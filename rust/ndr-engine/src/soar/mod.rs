@@ -74,7 +74,26 @@ pub fn incident_key_for_hit(
     format!("soar:{}:{}:{}:{}", tenant_id, endpoint_a, endpoint_b, tag)
 }
 
-pub fn should_fire_soar_for_incident(state: &AppState, incident_key: &str) -> bool {
+/// Claims the right to act on an incident for the dedupe window. Shared by every engine through
+/// Valkey, so the same incident does not act once per engine. Falls back to this engine's memory
+/// only when Valkey cannot be reached.
+pub async fn should_fire_soar_for_incident(state: &AppState, incident_key: &str) -> bool {
+    let mut rc = state.redis_mux.clone();
+    let claimed: Result<Option<String>, _> = redis::cmd("SET")
+        .arg(format!("soar_fire:{incident_key}"))
+        .arg(1)
+        .arg("NX")
+        .arg("EX")
+        .arg(SOAR_DEDUPE_WINDOW_SECS)
+        .query_async(&mut rc)
+        .await;
+    match claimed {
+        Ok(got) => got.is_some(),
+        Err(_) => claim_in_this_engine(state, incident_key),
+    }
+}
+
+fn claim_in_this_engine(state: &AppState, incident_key: &str) -> bool {
     let now = Instant::now();
     let mut should_fire = true;
 
@@ -98,11 +117,6 @@ pub async fn execute_native_playbooks(
     enrichment: EnrichmentData,
     tenant_id: &str,
 ) {
-    let incident_key = incident_key_for_hit(tenant_id, &hit, &risk);
-    if !should_fire_soar_for_incident(state, &incident_key) {
-        return;
-    }
-
     let playbooks = match state.ch_storage.get_native_playbooks(tenant_id).await {
         Ok(p) => p,
         Err(_) => return,
@@ -111,17 +125,58 @@ pub async fn execute_native_playbooks(
     // Build context once — shared by both condition evaluation and action execution.
     let ctx = conditions::build_soar_context(&hit, &risk, &enrichment, tenant_id);
 
+    // Decide which playbooks this hit triggers first. The incident is claimed only if one does: an
+    // alert that matches no playbook must not block the next alert for the same incident.
+    let mut triggered = Vec::new();
     for pb in playbooks {
         if pb.enabled != 1 { continue; }
+        if provigil_common::soar::conditions::evaluate_condition(&pb, &ctx) {
+            triggered.push(pb);
+        }
+    }
+    if triggered.is_empty() {
+        return;
+    }
 
-        let triggered = provigil_common::soar::conditions::evaluate_condition(&pb, &ctx);
-        if triggered {
+    let incident_key = incident_key_for_hit(tenant_id, &hit, &risk);
+    if !should_fire_soar_for_incident(state, &incident_key).await {
+        return;
+    }
+
+    let action_types: Vec<&str> = triggered.iter().map(|pb| pb.action_type.as_str()).collect();
+    for (pb, run) in triggered.iter().zip(actions_to_run(&action_types)) {
+        if run {
             provigil_common::soar::actions::execute_action(
                 state.ch_storage.as_ref(),
-                &pb,
+                pb,
                 &ctx,
             ).await;
         }
+    }
+}
+
+/// Which of the playbooks that matched one alert run. One alert creates at most one case: the second
+/// `create_case` playbook used to create another. Other actions (evidence, notify) all still run.
+pub fn actions_to_run(action_types: &[&str]) -> Vec<bool> {
+    let mut case_created = false;
+    action_types.iter().map(|action| {
+        let creates_case = *action == "create_case";
+        let run = !(creates_case && case_created);
+        case_created |= creates_case && run;
+        run
+    }).collect()
+}
+
+#[cfg(test)]
+mod playbook_run_tests {
+    use super::actions_to_run;
+
+    #[test]
+    fn one_alert_creates_one_case_and_other_actions_still_run() {
+        assert_eq!(actions_to_run(&["create_case", "create_case"]), vec![true, false]);
+        assert_eq!(actions_to_run(&["create_case", "collect_evidence", "create_case"]), vec![true, true, false]);
+        assert_eq!(actions_to_run(&["block_ip", "create_case"]), vec![true, true]);
+        assert_eq!(actions_to_run(&[]), Vec::<bool>::new());
     }
 }
 

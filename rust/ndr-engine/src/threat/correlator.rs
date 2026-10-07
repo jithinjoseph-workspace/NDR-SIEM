@@ -233,9 +233,9 @@ async fn run_correlation(
             "INSERT INTO {db}.threat_predictions \
              (tenant_id, attack_type, probability, confidence, trend, trend_delta, \
               intel_signal_count, exposure_score, internal_hit_count, \
-              explanation, recommendations, aria_briefing, alert_level) \
+              explanation, indicator, recommendations, aria_briefing, alert_level) \
              VALUES ('{tid}','{at}',{prob:.4},{conf:.4},'stable',0.0,1,0.0,{hits},\
-                     '{exp}','{recs}','{briefing}','{al}')",
+                     '{exp}','{ind}','{recs}','{briefing}','{al}')",
             db       = db,
             tid      = esc(tenant_id),
             at       = esc(&m.attack_type),
@@ -243,6 +243,7 @@ async fn run_correlation(
             conf     = (m.probability * 0.85).min(0.95),
             hits     = m.hit_count,
             exp      = esc(&explanation),
+            ind      = esc(&m.ioc_value),
             recs     = esc(&recs_json),
             briefing = esc(&briefing),
             al       = alert_level,

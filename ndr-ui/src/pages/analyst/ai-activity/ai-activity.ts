@@ -163,9 +163,9 @@ export class AiActivity implements OnInit, OnDestroy {
   CalendarIcon      = Calendar;
 
   // View state: 'command-center' (Strategic Roadmap Control Tower) or deep inspection tabs
-  private _tab: 'command-center' | 'analyses' | 'suppressions' | 'predictions' = 'command-center';
+  private _tab: 'command-center' | 'analyses' | 'suppressions' | 'predictions' | 'soc-gpt' = 'command-center';
   get activeTab() { return this._tab; }
-  set activeTab(v: 'command-center' | 'analyses' | 'suppressions' | 'predictions') {
+  set activeTab(v: 'command-center' | 'analyses' | 'suppressions' | 'predictions' | 'soc-gpt') {
     if (v === this._tab) return;
     this._tab = v;
     this.reloadOpenTab();
@@ -325,6 +325,7 @@ export class AiActivity implements OnInit, OnDestroy {
   askLoading = signal<boolean>(false);
   askResult = signal<any | null>(null);
   askError = signal<string>('');
+  askedQuestion = '';
 
   askHistory() {
     const q = this.askText().trim();
@@ -332,6 +333,7 @@ export class AiActivity implements OnInit, OnDestroy {
     this.askLoading.set(true);
     this.askError.set('');
     this.askResult.set(null);
+    this.askedQuestion = q;
     this.evidence.askHistory(q).subscribe({
       next: (r: any) => {
         if (r?.error) this.askError.set(r.error); else this.askResult.set(r);
@@ -341,8 +343,93 @@ export class AiActivity implements OnInit, OnDestroy {
     });
   }
 
+  askIntentText(intent: string): string {
+    switch (intent) {
+      case 'summary': return 'Period summary';
+      case 'latest': return 'Newest records';
+      case 'incident': return 'Incident lookup';
+      case 'stats': return 'Platform counts';
+      default: return 'Similar past incidents';
+    }
+  }
+
+  /** Opens the answer as a plain page and prints it; "Save as PDF" in the print dialog makes the file. */
+  printAnswer() {
+    const r = this.askResult();
+    if (r) this.printReport(this.askedQuestion, r, (msg) => this.askError.set(msg));
+  }
+
+  /** Shared by "Ask your history" and SOC GPT: opens one answer as a printable page. */
+  private printReport(question: string, r: any, onBlocked: (msg: string) => void) {
+    const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]);
+    const rows = (r.sources || []).map((s: any) =>
+      `<tr><td>${esc(this.verdictLabel(s.verdict))}</td><td>${esc(s.src_ip)} → ${esc(s.dst_ip)}</td>` +
+      `<td>${esc(this.outcomeLabel(s.outcome).text)}</td><td>${esc(s.generated_at)}</td>` +
+      `<td>${esc(s.community_id)}</td><td>${esc(s.reasoning)}</td></tr>`).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>NDR answer</title><style>` +
+      `body{font-family:Arial,sans-serif;color:#111;margin:24px;font-size:12px}h1{font-size:16px}` +
+      `p{line-height:1.5;white-space:pre-line}.meta{color:#555}table{border-collapse:collapse;width:100%;margin-top:12px}` +
+      `td,th{border:1px solid #bbb;padding:4px;vertical-align:top;text-align:left}</style></head><body>` +
+      `<h1>NDR answer</h1>` +
+      `<p class="meta">Question: ${esc(question)} · ${esc(this.askIntentText(r.intent))} · ${esc(new Date().toLocaleString())}</p>` +
+      `<p>${esc(r.answer)}</p>` +
+      (r.reason ? `<p class="meta">${esc(this.askReasonText(r.reason))}</p>` : '') +
+      (rows ? `<table><tr><th>Verdict</th><th>Flow</th><th>Outcome</th><th>When</th><th>Session</th><th>Detail</th></tr>${rows}</table>` : '') +
+      `</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { onBlocked('Allow pop-ups for this site to save the answer as a PDF.'); return; }
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+
+  // ── SOC GPT: a running conversation over this tenant's own data, grounded the same way "Ask your
+  // history" is. `socSubject` is the session/case the conversation is currently about — the backend
+  // reads a vague follow-up against it and returns the next one, so this code never has to guess what
+  // "it" or "this session" means. ──
+  socMessages = signal<Array<{ role: 'user' | 'assistant'; text: string; result?: any }>>([]);
+  socInput = signal<string>('');
+  socLoading = signal<boolean>(false);
+  socError = signal<string>('');
+  private socSubject = '';
+
+  socSend() {
+    const q = this.socInput().trim();
+    if (!q || this.socLoading()) return;
+    this.socInput.set('');
+    this.socError.set('');
+    this.socMessages.update(m => [...m, { role: 'user', text: q }]);
+    this.socLoading.set(true);
+    const turns = this.socMessages().slice(-8).map(m => ({ role: m.role, text: m.text }));
+    this.evidence.askPlatform(q, this.socSubject, turns).subscribe({
+      next: (r: any) => {
+        this.socLoading.set(false);
+        if (r?.error) { this.socError.set(r.error); return; }
+        this.socSubject = r.subject || this.socSubject;
+        this.socMessages.update(m => [...m, { role: 'assistant', text: r.answer, result: { ...r, question: q } }]);
+      },
+      error: () => {
+        this.socLoading.set(false);
+        this.socError.set('SOC GPT could not answer right now.');
+      },
+    });
+  }
+
+  socPrint(msg: { result?: any }) {
+    if (msg.result) this.printReport(msg.result.question, msg.result, (m) => this.socError.set(m));
+  }
+
+  socClear() {
+    this.socMessages.set([]);
+    this.socSubject = '';
+    this.socError.set('');
+  }
+
   askReasonText(reason: string): string {
     switch (reason) {
+      case 'not_found': return 'Nothing with that case number or session id is in your scope.';
       case 'no_records': return 'Nothing comparable in your history yet.';
       case 'not_configured': return 'No AI provider is configured, so these are the records themselves.';
       case 'no_ai_answer': return 'The AI did not answer, so these are the records themselves.';
@@ -1258,17 +1345,27 @@ export class AiActivity implements OnInit, OnDestroy {
     return src.length > 70 ? src.slice(0, 67) + '...' : src;
   }
 
-  togglePrediction(type: string) {
-    if (this.expandedPrediction() === type) {
+  /** Each prediction is its own card, keyed by the indicator it is about (URL or IP). Two cards
+   *  of the same attack type must not open together or share a history. */
+  predKey(p: any): string {
+    if (p?.indicator) return p.indicator;
+    // Older predictions have no indicator. Several can share one timestamp, so the key also
+    // carries the explanation text, which is what makes each row its own card.
+    return `row:${p?.attack_type}|${p?.predicted_at}|${(p?.explanation || '').slice(0, 300)}`;
+  }
+
+  togglePrediction(key: string) {
+    if (this.expandedPrediction() === key) {
       this.expandedPrediction.set(null);
       this.historicalPredictions.set([]);
     } else {
-      this.expandedPrediction.set(type);
-      this.api.getThreatPredictionsHistory().subscribe({
-        next: (data) => {
+      this.expandedPrediction.set(key);
+      this.historicalPredictions.set([]);
+      // a card with no indicator has no history of its own; it only shows its own row
+      this.api.getThreatPredictionsHistory(key.startsWith('row:') ? undefined : key).subscribe({
+        next: (data: any) => {
           if (data && data.predictions) {
-            const history = data.predictions.filter((p: any) => p.attack_type === type);
-            this.historicalPredictions.set(history);
+            this.historicalPredictions.set(data.predictions.filter((p: any) => this.predKey(p) === key));
           }
         },
         error: reportRxjsError,
@@ -1276,8 +1373,8 @@ export class AiActivity implements OnInit, OnDestroy {
     }
   }
 
-  isPredExpanded(type: string) {
-    return this.expandedPrediction() === type;
+  isPredExpanded(key: string) {
+    return this.expandedPrediction() === key;
   }
 
   copyToClipboard(text: string, id: string) {

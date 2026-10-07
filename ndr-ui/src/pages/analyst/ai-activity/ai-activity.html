@@ -49,6 +49,15 @@
         <lucide-icon [name]="ShieldOffIcon" class="w-3.5 h-3.5"></lucide-icon>
         <span>AI SUPPRESSIONS ({{ suppCountLabel() }})</span>
       </button>
+
+      <button
+        class="tower-tab-btn"
+        [class.active]="activeTab === 'soc-gpt'"
+        (click)="activeTab = 'soc-gpt'"
+      >
+        <lucide-icon [name]="BotIcon" class="w-3.5 h-3.5"></lucide-icon>
+        <span>SOC GPT</span>
+      </button>
     </nav>
 
     <!-- Right Controls Bar -->
@@ -734,7 +743,7 @@
     <!-- Ask your history: answered only from this tenant's own past investigations -->
     <div class="ask-history">
       <div class="ask-row">
-        <input class="ask-input" type="text" placeholder="Ask your history, e.g. have we seen DNS tunneling from the finance VLAN before?"
+        <input class="ask-input" type="text" placeholder="Ask your history, e.g. the last incident, INC-2026-0005, summarize the last 7 days, have we seen DNS tunneling before?"
                [ngModel]="askText()" (ngModelChange)="askText.set($event)" (keydown.enter)="askHistory()" maxlength="300" />
         <button class="btn-dossier-secondary" (click)="askHistory()" [disabled]="askLoading() || !askText().trim()">
           <span>{{ askLoading() ? 'Searching…' : 'Ask' }}</span>
@@ -742,6 +751,10 @@
       </div>
       <p class="section-text verdict-error" *ngIf="askError()">{{ askError() }}</p>
       <div class="ask-result" *ngIf="askResult() as r">
+        <div class="ask-meta">
+          <span class="ask-intent">{{ askIntentText(r.intent) }}</span>
+          <button class="ask-pdf" (click)="printAnswer()">Save as PDF</button>
+        </div>
         <p class="ask-answer">{{ r.answer }}</p>
         <p class="ask-reason" *ngIf="r.reason">{{ askReasonText(r.reason) }}</p>
         <div class="similar-row" *ngFor="let s of r.sources" (click)="openSimilarIncident(s.community_id)">
@@ -811,9 +824,9 @@
       <div
         class="pred-card"
         *ngFor="let p of predictions()"
-        [class.expanded]="isPredExpanded(p.attack_type)"
+        [class.expanded]="isPredExpanded(predKey(p))"
       >
-        <div class="pred-card-header" (click)="togglePrediction(p.attack_type)">
+        <div class="pred-card-header" (click)="togglePrediction(predKey(p))">
           <div class="pred-title-col">
             <span class="pred-attack-type">{{ p.attack_type }}</span>
             <span class="pred-level-pill" [ngClass]="alertLevelClass(p.alert_level)">
@@ -831,7 +844,7 @@
               ></div>
             </div>
             <lucide-icon
-              [name]="isPredExpanded(p.attack_type) ? ChevronUpIcon : ChevronDownIcon"
+              [name]="isPredExpanded(predKey(p)) ? ChevronUpIcon : ChevronDownIcon"
               class="w-4 h-4 text-slate-400"
             ></lucide-icon>
           </div>
@@ -840,7 +853,7 @@
         <p class="pred-briefing" *ngIf="p.aria_briefing">{{ agent(p.aria_briefing) }}</p>
 
         <!-- Historical Trend Drawer -->
-        <div class="pred-history-drawer" *ngIf="isPredExpanded(p.attack_type)">
+        <div class="pred-history-drawer" *ngIf="isPredExpanded(predKey(p))">
           <span class="history-title">Historical Forecasts</span>
           <div class="history-list" *ngIf="historicalPredictions().length > 0">
             <div class="history-item" *ngFor="let h of historicalPredictions()">
@@ -926,6 +939,63 @@
       <button class="load-more-btn" *ngIf="suppPage().length < suppTotal()" [disabled]="suppLoading()" (click)="loadMoreSuppressions()">
         {{ suppLoading() ? 'Loading…' : 'Load more (' + (suppTotal() - suppPage().length) + ' left)' }}
       </button>
+    </div>
+  </main>
+
+  <!-- ── SOC GPT: a running conversation over this tenant's own data ────────────────── -->
+  <main *ngIf="activeTab === 'soc-gpt'" class="tower-tab-view soc-gpt-view">
+    <div class="tab-view-header">
+      <div class="tab-header-titles">
+        <h2 class="tab-h2">SOC GPT</h2>
+        <span class="tab-sub">Ask about an incident, a session, or your history. Answered only from this tenant's own data, grounded and cited.</span>
+      </div>
+      <button class="btn-dossier-secondary" (click)="socClear()" *ngIf="socMessages().length">
+        <span>Clear conversation</span>
+      </button>
+    </div>
+
+    <div class="soc-gpt-panel">
+      <div class="soc-gpt-thread">
+        <div class="soc-gpt-empty" *ngIf="!socMessages().length">
+          <lucide-icon [name]="BotIcon" [size]="28"></lucide-icon>
+          <p>Ask something like "what is the last incident", "tell me about INC-2026-0023", "summarize the last 7 days", or "have we seen DNS tunneling before".</p>
+        </div>
+
+        <div class="soc-msg" *ngFor="let m of socMessages()" [class.soc-msg-user]="m.role === 'user'">
+          <div class="soc-bubble">
+            <p class="soc-bubble-text">{{ m.text }}</p>
+            <ng-container *ngIf="m.result as r">
+              <div class="ask-meta">
+                <span class="ask-intent">{{ askIntentText(r.intent) }}</span>
+                <button class="ask-pdf" (click)="socPrint(m)">Save as PDF</button>
+              </div>
+              <p class="ask-reason" *ngIf="r.reason">{{ askReasonText(r.reason) }}</p>
+              <div class="similar-row" *ngFor="let s of r.sources" (click)="openSimilarIncident(s.community_id)">
+                <span class="verdict-badge sm" [ngClass]="verdictClass(s.verdict)">{{ verdictLabel(s.verdict) }}</span>
+                <div class="similar-main">
+                  <span class="similar-flow">{{ s.src_ip }} ➔ {{ s.dst_ip }} · {{ s.kind }}</span>
+                  <span class="similar-reason">{{ s.reasoning }}</span>
+                </div>
+                <span class="outcome-chip" [ngClass]="outcomeLabel(s.outcome).cls">{{ outcomeLabel(s.outcome).text }}</span>
+              </div>
+            </ng-container>
+          </div>
+        </div>
+
+        <div class="soc-msg" *ngIf="socLoading()">
+          <div class="soc-bubble soc-bubble-loading">Fetching and reading your data…</div>
+        </div>
+      </div>
+
+      <p class="section-text verdict-error" *ngIf="socError()">{{ socError() }}</p>
+
+      <div class="soc-gpt-row">
+        <input class="ask-input" type="text" placeholder="Ask SOC GPT about an incident, a session, or your history…"
+               [ngModel]="socInput()" (ngModelChange)="socInput.set($event)" (keydown.enter)="socSend()" maxlength="300" />
+        <button class="btn-dossier-secondary" (click)="socSend()" [disabled]="socLoading() || !socInput().trim()">
+          <span>{{ socLoading() ? 'Thinking…' : 'Send' }}</span>
+        </button>
+      </div>
     </div>
   </main>
 

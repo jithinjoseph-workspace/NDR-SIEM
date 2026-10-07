@@ -227,6 +227,7 @@ struct PredictionRow {
     exposure_score:     f32,
     internal_hit_count: u32,
     explanation:        String,
+    indicator:          String,
     recommendations:    String,
     aria_briefing:      String,
     alert_level:        String,
@@ -307,7 +308,7 @@ pub async fn get_predictions_page(
     let q = format!(
         "SELECT attack_type, probability, confidence, trend, trend_delta, \
                 intel_signal_count, exposure_score, internal_hit_count, \
-                explanation, recommendations, aria_briefing, alert_level, \
+                explanation, indicator, recommendations, aria_briefing, alert_level, \
                 toString(predicted_at) as predicted_at
          FROM {db}.threat_predictions
          ORDER BY predicted_at DESC, attack_type
@@ -329,6 +330,7 @@ pub async fn get_predictions_page(
         "exposure_score":     r.exposure_score,
         "internal_hit_count": r.internal_hit_count,
         "explanation":        r.explanation,
+        "indicator":          r.indicator,
         "recommendations":    serde_json::from_str::<serde_json::Value>(&r.recommendations)
                                   .unwrap_or(serde_json::json!([])),
         "aria_briefing":      r.aria_briefing,
