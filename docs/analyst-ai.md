@@ -4,6 +4,8 @@
 **Angular pages:** `pages/analyst/ai-activity/` and `pages/analyst/ai-report/`  
 **Shared service:** `services/aria/aria.service.ts` (`AriaService`)
 
+SOC GPT answers from tenant-scoped records. Questions asking for past/previous incidents or incident history read ClickHouse AI analyses and SOAR cases directly. Other natural-language questions search the tenant's Qdrant similarity index and supplement matches with recent analyses/cases, so a missing or empty embeddings index does not hide all history. Qdrant is populated when an AI investigation completes and an OpenAI-compatible embeddings provider succeeds; older AI analysis rows are not automatically backfilled into it. Answers stay bounded to the retrieved evidence.
+
 ---
 
 ## Page 3 — AI Activity

@@ -58,7 +58,7 @@ pub fn sources_from(hits: &[SimilarIncident], outcomes: &std::collections::HashM
 pub const SYSTEM_PROMPT: &str = "You answer a SOC analyst's question using ONLY the past investigation records given. \
 Never add facts, hosts, addresses or outcomes that are not in the records. Cite the community_id of each record \
 you rely on, exactly as written. If the records do not answer the question, say so in one sentence. \
-At most 90 words, plain text.";
+Use all relevant supplied records and give a concise, direct answer. At most 180 words, plain text.";
 
 pub fn user_prompt(question: &str, sources: &[Source]) -> String {
     let mut s = format!("QUESTION: {question}\n\nRECORDS:\n");
@@ -151,9 +151,12 @@ pub fn detect_intent(question: &str) -> Intent {
         return Intent::Stats;
     }
     const SUMMARY_WORDS: [&str; 5] = ["summar", "overview", "what happened", "digest", "recap"];
-    const LATEST_WORDS: [&str; 8] = [
+    const LATEST_WORDS: [&str; 17] = [
         "last ", "latest", "newest", "most recent", "recent",
         "new incident", "new case", "new alert",
+        "past incident", "previous incident", "incident history",
+        "past case", "previous case", "case history",
+        "past investigation", "previous investigation", "past alert",
     ];
     let summarize = SUMMARY_WORDS.iter().any(|w| lower.contains(w));
     let latest = LATEST_WORDS.iter().any(|w| lower.contains(w));
@@ -393,6 +396,10 @@ mod tests {
         assert_eq!(detect_intent("what is the last incident and summarize it"), Intent::Latest { summarize: true, count: 1 });
         assert_eq!(detect_intent("what is the last incident?"), Intent::Latest { summarize: false, count: 1 });
         assert_eq!(detect_intent("show me the newest alert"), Intent::Latest { summarize: false, count: 1 });
+        assert_eq!(detect_intent("past incidents"), Intent::Latest { summarize: false, count: MAX_RECORDS });
+        assert_eq!(detect_intent("is there any past incidents"), Intent::Latest { summarize: false, count: MAX_RECORDS });
+        assert_eq!(detect_intent("show incident history"), Intent::Latest { summarize: false, count: MAX_RECORDS });
+        assert_eq!(detect_intent("show previous cases"), Intent::Latest { summarize: false, count: MAX_RECORDS });
         assert_eq!(detect_intent("show me the latest alerts"), Intent::Latest { summarize: false, count: MAX_RECORDS }, "plural, no number: the usual few");
         assert_eq!(detect_intent("what were the last 4 incidents"), Intent::Latest { summarize: false, count: 4 });
         assert_eq!(detect_intent("show me the last 20 cases"), Intent::Latest { summarize: false, count: 10 }, "clamped to 10");

@@ -9,7 +9,7 @@ use super::DetectionEngine;
 pub use provigil_common::sigma_sync::GLOBAL_RULE_BLOCKLIST;
 
 /// Spawn the weekly Sigma sync using the shared provigil-common implementation.
-/// On new rules, reloads the in-memory DetectionEngine and signals other instances via Redis.
+/// On added/repaired rules, reloads the in-memory DetectionEngine and signals other instances via Redis.
 pub fn spawn_sigma_updater(
     rules_dir: String,
     redis_url: String,
@@ -74,4 +74,3 @@ async fn reload_engine(
         }
     }
 }
-

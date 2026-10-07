@@ -2591,6 +2591,8 @@ pub async fn get_rules(
     let search = params.get("q").map(|s| s.to_lowercase()).unwrap_or_default();
 
     let db_rules = state.ch_storage.get_all_sigma_rules(&tenant_id).await.unwrap_or_default();
+    let tenant_disabled: std::collections::HashSet<String> = state.ch_storage
+        .get_disabled_rules(&tenant_id).await.unwrap_or_default().into_iter().collect();
 
     let mut result: Vec<serde_json::Value> = db_rules.iter()
         .filter_map(|(id, name, content, _r_tenant_id, enabled, source)| {
@@ -2599,7 +2601,8 @@ pub async fn get_rules(
             let tags      = parsed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
             let severity  = parsed.as_ref().map(|p| p.severity.clone()).unwrap_or_default();
             let logsource = parsed.as_ref().map(|p| p.logsource.clone());
-            let is_enabled = *enabled == 1;
+            let is_enabled = *enabled == 1
+                && (source != "community" || !tenant_disabled.contains(id));
 
             // Filter by search query if provided
             if !search.is_empty() {
@@ -3180,7 +3183,7 @@ pub async fn sync_community_rules_api(
     let admin_sub  = claims.sub.clone();
     tokio::spawn(async move {
         match crate::detection::sync_now(&rules_dir, &redis_url, &detection, &ch_storage).await {
-            Ok(count) => tracing::info!("Admin {} SigmaHQ sync complete: {} new rules", admin_sub, count),
+            Ok(count) => tracing::info!("Admin {} SigmaHQ sync complete: {} rules added or repaired", admin_sub, count),
             Err(e)    => tracing::warn!("Admin {} SigmaHQ sync failed: {}", admin_sub, e),
         }
         // Release lock regardless of outcome
@@ -3617,7 +3620,8 @@ pub async fn toggle_rule(
 ) -> Json<Value> {
     let tenant_id = extract_claims(&headers).map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
 
-    // Bug 5 fix: toggle_sigma_rule now returns whether the rule is a community rule.
+    // Community rules are global; their enable/disable state is stored as a
+    // tenant-specific override rather than changing the shared rule row.
     // Community rules can't be modified in sigma_rules directly — they use rules_state overrides.
     // Custom rules use sigma_rules.enabled directly — rules_state is redundant and skipped.
     let is_community = match state.ch_storage
@@ -9934,7 +9938,38 @@ pub async fn aria_ask_history(
                     all.push(s);
                 }
             }
+
+            // Semantic matches are useful when the embeddings index is populated, but SOC GPT
+            // must still be able to answer from stored tenant history when it is empty or offline.
+            // Add recent analyses and cases as grounded candidates, without replacing better
+            // semantic matches already collected above.
+            if all.len() < history::MAX_RECORDS {
+                let analyses = state.ch_storage
+                    .get_all_ai_annotations(&claims.tenant_id, &claims.sensor_ids)
+                    .await
+                    .unwrap_or_default();
+                let cases = state.ch_storage
+                    .get_soar_cases(&claims.tenant_id, &claims.sensor_ids)
+                    .await
+                    .unwrap_or_default();
+                let mut recent = history::sources_from_analyses(&analyses);
+                recent.extend(history::sources_from_cases(&cases));
+                history::sort_newest_first(&mut recent);
+                for source in recent {
+                    if all.len() >= history::MAX_RECORDS {
+                        break;
+                    }
+                    if !all.iter().any(|existing| {
+                        !source.community_id.is_empty()
+                            && existing.community_id == source.community_id
+                    }) {
+                        all.push(source);
+                    }
+                }
+            }
             all.truncate(history::MAX_RECORDS + 1);
+            attach_port_counts(&state, &claims.tenant_id, &claims.sensor_ids, &mut all, true).await;
+            attach_outcomes(&state, &claims.tenant_id, &mut all).await;
             ("topic", all)
         }
     };

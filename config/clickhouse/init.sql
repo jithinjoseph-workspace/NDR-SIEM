@@ -87,9 +87,20 @@ TTL updated_at + INTERVAL 90 DAY;
 CREATE TABLE IF NOT EXISTS ndr.rules_state ON CLUSTER ndr_cluster (
     id      String,
     enabled UInt8    DEFAULT 1,
-    updated DateTime DEFAULT now()
+    updated DateTime DEFAULT now(),
+    tenant_id String DEFAULT 'default'
 ) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/rules_state', '{replica}', updated)
 ORDER BY id;
+
+-- Correctly tenant-scoped overrides. The legacy rules_state table is migrated
+-- at engine startup; its ORDER BY id cannot isolate overrides across tenants.
+CREATE TABLE IF NOT EXISTS ndr.rules_state_tenant ON CLUSTER ndr_cluster (
+    id        String,
+    enabled   UInt8    DEFAULT 1,
+    updated   DateTime DEFAULT now(),
+    tenant_id String   DEFAULT 'default'
+) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/rules_state_tenant', '{replica}', updated)
+ORDER BY (tenant_id, id);
 
 CREATE TABLE IF NOT EXISTS ndr.settings ON CLUSTER ndr_cluster
 (

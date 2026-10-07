@@ -1815,7 +1815,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     }
     
     pub async fn set_rule_enabled(&self, id: &str, enabled: bool, tenant_id: &str) -> anyhow::Result<()> {
-        self.client.query("INSERT INTO ndr.rules_state (id, enabled, tenant_id, updated) VALUES (?, ?, ?, now())")
+        self.client.query("INSERT INTO ndr.rules_state_tenant (id, enabled, tenant_id, updated) VALUES (?, ?, ?, now())")
             .bind(id)
             .bind(enabled as u8)
             .bind(tenant_id)
@@ -1826,7 +1826,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
     pub async fn get_disabled_rules(&self, tenant_id: &str) -> anyhow::Result<Vec<String>> {
         let ids = self.client
             .query(
-                "SELECT id FROM ndr.rules_state
+                "SELECT id FROM ndr.rules_state_tenant
                  FINAL
                  WHERE enabled = 0 AND tenant_id = ?"
             )
@@ -1974,7 +1974,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
         #[derive(clickhouse::Row, serde::Deserialize)]
         struct OverrideRow { id: String, tenant_id: String }
         let rows = self.client
-            .query("SELECT id, tenant_id FROM ndr.rules_state FINAL WHERE enabled = 0")
+            .query("SELECT id, tenant_id FROM ndr.rules_state_tenant FINAL WHERE enabled = 0")
             .fetch_all::<OverrideRow>()
             .await
             .unwrap_or_default();
@@ -1988,7 +1988,7 @@ pub async fn get_threat_intel_hits(&self) -> anyhow::Result<Vec<serde_json::Valu
 
     pub async fn delete_rule_state(&self, id: &str, tenant_id: &str) -> anyhow::Result<()> {
         self.client
-            .query("ALTER TABLE ndr.rules_state DELETE WHERE id = ? AND tenant_id = ? SETTINGS mutations_sync=1")
+            .query("ALTER TABLE ndr.rules_state_tenant DELETE WHERE id = ? AND tenant_id = ? SETTINGS mutations_sync=1")
             .bind(id)
             .bind(tenant_id)
             .execute()
