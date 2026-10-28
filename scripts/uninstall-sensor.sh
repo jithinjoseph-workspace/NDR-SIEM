@@ -66,7 +66,7 @@ else
     fi
     # Also check /etc/ndr/sensor.conf for the currently configured tenant
     if [ -f /etc/ndr/sensor.conf ]; then
-        CONF_TENANT=$(grep '^TENANT_ID=' /etc/ndr/sensor.conf | cut -d= -f2 | tr -d '[:space:]')
+        CONF_TENANT=$(grep '^TENANT_ID=' /etc/ndr/sensor.conf 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
         if [ -n "$CONF_TENANT" ]; then
             # Add if not already in list
             if [[ ! " ${TENANTS[*]:-} " =~ " ${CONF_TENANT} " ]]; then
@@ -92,8 +92,8 @@ log "Step 0: Reporting uninstall status to NDR cloud..."
 NDR_CLOUD_URL=""
 NDR_API_KEY=""
 if [ -f /etc/ndr/sensor.conf ]; then
-    NDR_CLOUD_URL=$(grep '^CLOUD_URL=' /etc/ndr/sensor.conf | cut -d= -f2 | tr -d '[:space:]')
-    NDR_API_KEY=$(grep '^API_KEY=' /etc/ndr/sensor.conf | cut -d= -f2 | tr -d '[:space:]')
+    NDR_CLOUD_URL=$(grep '^CLOUD_URL=' /etc/ndr/sensor.conf 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
+    NDR_API_KEY=$(grep '^API_KEY=' /etc/ndr/sensor.conf 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
 fi
 
 if [ -n "$NDR_CLOUD_URL" ] && [ -n "$NDR_API_KEY" ]; then
@@ -128,7 +128,9 @@ log "Step 1: Stopping all NDR sensor services..."
 # a running "not-found" service that nothing stopped.
 for SVC in ndr-agent ndr-vector ndr-sensor-agent ndr-sensor-vector arkime-capture arkime-viewer; do
     WAS_ACTIVE=false
-    systemctl is-active --quiet "$SVC" 2>/dev/null && WAS_ACTIVE=true
+    if systemctl is-active --quiet "$SVC" 2>/dev/null; then
+        WAS_ACTIVE=true
+    fi
     run "systemctl stop $SVC"
     run "systemctl disable $SVC"
     run "systemctl reset-failed $SVC"
@@ -233,7 +235,9 @@ done
 
 # leftover enable-links for removed units (a dangling link keeps the name around)
 for LINK in /etc/systemd/system/multi-user.target.wants/{ndr-agent,ndr-vector,ndr-sensor-agent,ndr-sensor-vector,arkime-capture,arkime-viewer}.service; do
-    [ -L "$LINK" ] && run "rm -f $LINK"
+    if [ -L "$LINK" ] || [ -e "$LINK" ]; then
+        run "rm -f $LINK"
+    fi
 done
 
 run "systemctl daemon-reload"
@@ -345,7 +349,9 @@ log "Step 9: Verifying nothing is left running..."
 if ! $DRY_RUN; then
     LEFT=""
     for PAT in 'agent\.py' 'pcap-uploader' 'zeek' 'suricata' 'arkime-capture' 'vector --config' '/usr/local/bin/vector'; do
-        pgrep -f "$PAT" > /dev/null 2>&1 && LEFT="$LEFT $PAT"
+        if pgrep -f "$PAT" > /dev/null 2>&1; then
+            LEFT="$LEFT $PAT"
+        fi
     done
     if [ -n "$LEFT" ]; then
         warn "  Still running:$LEFT - killing again..."
@@ -356,7 +362,9 @@ if ! $DRY_RUN; then
         sleep 2
         STILL=""
         for PAT in 'agent\.py' 'zeek' 'suricata' 'arkime-capture' 'vector --config'; do
-            pgrep -f "$PAT" > /dev/null 2>&1 && STILL="$STILL $PAT"
+            if pgrep -f "$PAT" > /dev/null 2>&1; then
+                STILL="$STILL $PAT"
+            fi
         done
         if [ -n "$STILL" ]; then
             warn "  ⚠️  Could not stop:$STILL - check with: pgrep -af 'agent.py|zeek|suricata|vector'"
