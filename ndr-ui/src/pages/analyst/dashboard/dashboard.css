@@ -92,7 +92,8 @@
 
 .dashboard-shell {
   min-height: 100%;
-  padding: 26px;
+  padding: var(--layout-page-padding, 24px);
+  box-sizing: border-box;
   background-color: #000000;
   background-image:
     radial-gradient(ellipse at 85% 5%, rgba(34, 197, 94, 0.22) 0%, rgba(34, 197, 94, 0.06) 35%, transparent 55%),
@@ -101,12 +102,6 @@
     linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 100% 100%, 36px 36px, 36px 36px;
-  animation: bg-pulse 10s ease-in-out infinite alternate;
-}
-
-@keyframes bg-pulse {
-  0% { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
-  100% { background-position: 0 0, 0 0, 0 0, 18px 18px, 18px 18px; }
 }
 
 .dashboard-header,
@@ -114,9 +109,11 @@
 .metrics-grid,
 .maps-grid,
 .secondary-charts-grid,
-.dashboard-grid {
-  max-width: 1480px;
-  margin-inline: auto;
+.dashboard-grid,
+.unified-kpi-strip {
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 .dashboard-header {
@@ -465,7 +462,7 @@
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--layout-grid-gap, 16px);
   margin-bottom: 16px;
 }
 
@@ -675,6 +672,7 @@
   width: 200%;
   height: 100%;
   animation: wave-slide 10s linear infinite;
+  will-change: transform;
 }
 
 .metric-wave svg:first-child {
@@ -709,7 +707,9 @@
   background: var(--accent);
   border-radius: 4px 4px 0 0;
   height: var(--h);
+  transform-origin: bottom;
   animation: bar-pulse 2s ease-in-out infinite alternate;
+  will-change: transform;
 }
 
 .metric-bars .bar:nth-child(odd) {
@@ -723,8 +723,8 @@
 }
 
 @keyframes bar-pulse {
-  0% { height: calc(var(--h) * 0.2); }
-  100% { height: var(--h); }
+  0% { transform: scaleY(0.2); }
+  100% { transform: scaleY(1); }
 }
 
 .metric-card > div:not(.metric-wave):not(.metric-bars) {
@@ -1211,6 +1211,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .maps-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-grid {
     grid-template-columns: 1fr;
   }
@@ -1304,10 +1308,11 @@
 .secondary-charts-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--layout-grid-gap, 16px);
   margin-top: 16px;
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 @media (max-width: 1280px) {
@@ -1855,8 +1860,9 @@
   box-shadow: 0 8px 32px rgba(248, 113, 113, 0.1);
   transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
   backdrop-filter: blur(12px);
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 .threat-prediction-banner:hover {
@@ -2311,7 +2317,7 @@
 .maps-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--layout-grid-gap, 16px);
   margin-bottom: 16px;
 }
 
@@ -2473,7 +2479,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  filter: drop-shadow(0 8px 12px rgba(0,0,0,0.6));
+  will-change: transform;
 }
 
 @keyframes moveCursor {

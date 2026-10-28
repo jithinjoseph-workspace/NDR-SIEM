@@ -1589,7 +1589,8 @@
 
 /* ── BASE SHELL & GLOBAL OVERRIDES ────────────────────────────────── */
 body:has(.sa-sidebar) .topbar {
-  padding-left: 220px !important;
+  padding-left: calc(236px + var(--layout-page-padding, 24px)) !important;
+  padding-right: var(--layout-page-padding, 24px) !important;
 }
 
 body:has(.sa-sidebar) .sa-sidebar {
@@ -1601,8 +1602,10 @@ body:has(.sa-sidebar) .sa-sidebar {
 }
 
 .sa-shell {
-  min-height: calc(100vh + 240px);
-  padding: 24px 32px 80px 252px;
+  min-height: 100%;
+  padding: var(--layout-page-padding, 24px);
+  padding-left: calc(236px + var(--layout-page-padding, 24px));
+  box-sizing: border-box;
   background-color: #020408;
   background-image:
     radial-gradient(circle at 10% 20%, rgba(59,130,246,0.10) 0%, transparent 45%),
@@ -1777,8 +1780,10 @@ body:has(.sa-sidebar) .search-wrap input:focus {
 .sa-shell {
   position: relative;
   isolation: isolate;
-  min-height: calc(100vh + 180px);
-  padding: 30px 36px 88px 272px;
+  min-height: 100%;
+  padding: var(--layout-page-padding, 24px);
+  padding-left: calc(236px + var(--layout-page-padding, 24px));
+  box-sizing: border-box;
   background-color: var(--sa-ink);
   background-image:
     radial-gradient(circle at 84% -8%, rgba(37, 99, 235, 0.15), transparent 38%),
@@ -1807,6 +1812,9 @@ body:has(.sa-sidebar) .search-wrap input:focus {
   border: 1px solid var(--sa-edge);
   border-radius: 20px;
   padding: 28px;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
   background: linear-gradient(145deg, rgba(15, 23, 42, 0.85), rgba(9, 14, 26, 0.90));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }

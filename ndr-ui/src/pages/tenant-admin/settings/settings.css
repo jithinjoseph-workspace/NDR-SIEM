@@ -12,8 +12,9 @@
 .threshold-strip,
 .settings-grid,
 .settings-loading {
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 .settings-header {
@@ -567,8 +568,9 @@ input[type="range"]::-moz-range-thumb {
 /* ── AI Configuration ──────────────────────────────────────────────────── */
 
 .ai-config-section {
-  max-width: 1480px;
-  margin: 20px auto 0;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin: 20px 0 0;
   border: 1px solid rgba(103, 168, 255, 0.18);
   border-radius: 8px;
   background: rgba(16, 25, 43, 0.92);
@@ -788,8 +790,9 @@ input[type="range"]::-moz-range-thumb {
 /* ── AI Providers ─────────────────────────────────────────────────────────── */
 
 .ai-providers-section {
-  max-width: 1480px;
-  margin: 20px auto 0;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin: 20px 0 0;
   border: 1px solid rgba(103, 168, 255, 0.18);
   border-radius: 8px;
   background: rgba(16, 25, 43, 0.92);

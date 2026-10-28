@@ -14,15 +14,18 @@
 }
 
 :host-context(body.has-analyst-sidebar) .topbar {
-  padding-left: 264px !important; /* 240px sidebar width + 24px default padding */
+  padding-left: calc(var(--sidebar-width, 240px) + var(--layout-page-padding, 24px)) !important;
+  padding-right: var(--layout-page-padding, 24px) !important;
 }
 
 :host-context(body:has(.sa-sidebar)) .topbar {
-  padding-left: 244px !important; /* 220px sidebar width + 24px default padding */
+  padding-left: calc(220px + var(--layout-page-padding, 24px)) !important;
+  padding-right: var(--layout-page-padding, 24px) !important;
 }
 
 :host-context(body:has(.crm-sidebar)) .topbar {
-  padding-left: 264px !important; /* 240px sidebar width + 24px default padding */
+  padding-left: calc(var(--sidebar-width, 240px) + var(--layout-page-padding, 24px)) !important;
+  padding-right: var(--layout-page-padding, 24px) !important;
 }
 
 .topbar-left {

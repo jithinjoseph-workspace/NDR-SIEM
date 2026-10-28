@@ -7,16 +7,168 @@
   --font-mono: "JetBrains Mono", monospace;
 }
 
-html, body {
+:root {
+  --sidebar-width: 240px;
+  --layout-page-padding: clamp(16px, 1.8vw, 32px);
+  --layout-grid-gap: clamp(12px, 1.2vw, 22px);
+  --layout-max-width: 2400px;
+  font-size: 16px;
+}
+
+html {
   height: 100%;
   margin: 0;
+  padding: 0;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
   background-color: var(--color-surface, #0d1117);
   color: var(--color-on-surface-variant, #dfe5fa);
   font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PERFORMANCE-GRADE RESOLUTION AUTO-SCALING ENGINE
+   Dynamically scales ALL pages, components, typography, and grids
+   smoothly across screen resolutions without browser zoom hysteresis.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* 4K & Ultra-wide monitors (>= 2560px width) */
+@media screen and (min-width: 2560px) {
+  :root {
+    --layout-page-padding: clamp(24px, 2vw, 44px);
+    --layout-grid-gap: clamp(16px, 1.4vw, 28px);
+    font-size: 17.5px;
+  }
+}
+
+/* 2K / 1440p displays (2000px - 2559px width) */
+@media screen and (min-width: 2000px) and (max-width: 2559px) {
+  :root {
+    font-size: 16.5px;
+  }
+}
+
+/* Full HD standard desktop (1600px - 1999px width) */
+@media screen and (min-width: 1600px) and (max-width: 1999px) {
+  :root {
+    font-size: 16px;
+  }
+}
+
+/* Large laptops / 1080p @ 125% OS scaling (1400px - 1599px width) */
+@media screen and (min-width: 1400px) and (max-width: 1599px) {
+  :root {
+    font-size: 15px;
+  }
+}
+
+/* Standard laptops (1366x768) / 1080p @ 150% scaling (1200px - 1399px width) */
+@media screen and (min-width: 1200px) and (max-width: 1399px) {
+  :root {
+    font-size: 14.5px;
+  }
+}
+
+/* Compact screens / 1280x720 / 1024x768 (992px - 1199px width) */
+@media screen and (min-width: 992px) and (max-width: 1199px) {
+  :root {
+    font-size: 13.5px;
+  }
+}
+
+/* Small displays / Tablets (< 992px width) */
+@media screen and (max-width: 991px) {
+  :root {
+    font-size: 13px;
+  }
+}
+
+/* ── Height-Constrained Displays (Laptops with 768px height or heavy browser toolbars) ── */
+@media screen and (max-height: 820px) {
+  :root {
+    --layout-page-padding: clamp(14px, 1.4vw, 22px);
+    --layout-grid-gap: clamp(10px, 1vw, 16px);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   UNIVERSAL RESPONSIVE GUARDS & OVERFLOW PREVENTION
+   Prevents layout clipping or overflow across tables, cards, & grids.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Angular Root container dimensions */
+app-root {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+/* Universal box-sizing guarantee */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* Safe image, canvas, and svg constraints */
+img, svg, canvas {
+  max-width: 100%;
+}
+
+/* Ensure data tables stay scrollable within their cards instead of breaking pages */
+.table-responsive,
+.overflow-x-auto,
+table {
+  max-width: 100%;
+}
+
+/* Firefox / Linux flexbox scroll bugfix: ensure flex children can shrink and trigger internal scroll */
+main,
+.flex-col > .flex-1,
+.overflow-auto,
+.overflow-y-auto,
+.overflow-x-auto {
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Prevent action bars, filter bars and page headers from bursting horizontally on smaller resolutions */
+.header-actions,
+.panel-actions,
+.filter-bar,
+.panel-head,
+.page-header {
+  flex-wrap: wrap;
 }
 
 /* Global fix for select dropdown options in dark theme */
 select option {
   background-color: #0f172a;
   color: #f7f9ff;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LEGACY BROWSER FALLBACK (Firefox ESR < 126 on older Linux distros)
+   ═══════════════════════════════════════════════════════════════════ */
+@supports not (zoom: 1) {
+  @media screen and (max-width: 1399px) {
+    :root {
+      font-size: 14.5px;
+    }
+  }
+  @media screen and (max-width: 1199px) {
+    :root {
+      font-size: 13.5px;
+    }
+  }
+  @media screen and (max-width: 991px) {
+    :root {
+      font-size: 12.5px;
+    }
+  }
 }

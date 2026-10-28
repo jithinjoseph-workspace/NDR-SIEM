@@ -1,12 +1,14 @@
 .siem-sources-shell {
   min-height: 100%;
-  padding: 26px;
+  padding: var(--layout-page-padding, 24px);
+  box-sizing: border-box;
   background: #0d1117;
 }
 
 .sources-header, .source-grid, .error-banner, .loading-row, .empty-state {
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 .sources-header {

@@ -6,7 +6,8 @@
 
 /* ── Topbar & Global Alignment ───────────────────────────────────── */
 body:has(.crm-sidebar) .topbar {
-  padding-left: 240px !important;
+  padding-left: calc(var(--sidebar-width, 240px) + var(--layout-page-padding, 24px)) !important;
+  padding-right: var(--layout-page-padding, 24px) !important;
 }
 
 body:has(.crm-sidebar) .crm-sidebar {
@@ -238,13 +239,15 @@ body:has(.crm-sidebar) .crm-sidebar {
 
 /* ── Main Shell ──────────────────────────────────────────────────── */
 .crm-main-shell {
-  min-height: calc(100vh + 240px);
-  padding: 24px 36px 80px 276px;
+  min-height: 100%;
+  padding: var(--layout-page-padding, 24px);
+  padding-left: calc(var(--sidebar-width, 240px) + var(--layout-page-padding, 24px));
   background-color: #0d1021; /* Sleek Dark Navy-Black from Reference Dashboard */
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   color: #ffffff;
   box-sizing: border-box;
   width: 100%;
+  max-width: var(--layout-max-width, 2400px);
 }
 
 /* ── Cockpit Hero Card ───────────────────────────────────────────── */

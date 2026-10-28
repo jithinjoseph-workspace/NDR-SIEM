@@ -9,8 +9,9 @@
 .sensor-strip,
 .setup-tabs,
 .setup-grid {
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 .sensor-strip {

@@ -370,7 +370,16 @@ export class ThreatMap implements OnInit, OnDestroy {
 
     svg.call(zoom as any);
 
-    const frame = () => {
+    let lastFlatTs = 0;
+    const minFlatInterval = this.previewMode ? 33 : 0;
+    const frame = (timestamp?: number) => {
+      if (timestamp && minFlatInterval > 0) {
+        if (timestamp - lastFlatTs < minFlatInterval) {
+          this.rafId = requestAnimationFrame(frame);
+          return;
+        }
+        lastFlatTs = timestamp;
+      }
       if (this.isAutoPan && this.targetTrans) {
         const tx = this.targetTrans[0] * W;
         const ty = this.targetTrans[1] * H;
@@ -556,7 +565,16 @@ export class ThreatMap implements OnInit, OnDestroy {
     );
 
     // ── Animation loop (auto-rotate + user drag) ───────────
-    const frame = () => {
+    let lastGlobeTs = 0;
+    const minGlobeInterval = this.previewMode ? 33 : 0;
+    const frame = (timestamp?: number) => {
+      if (timestamp && minGlobeInterval > 0) {
+        if (timestamp - lastGlobeTs < minGlobeInterval) {
+          this.rafId = requestAnimationFrame(frame);
+          return;
+        }
+        lastGlobeTs = timestamp;
+      }
       if (this.isAutoPan && this.targetRot) {
         let diff0 = this.targetRot[0] - rot[0];
         while (diff0 > 180) diff0 -= 360;

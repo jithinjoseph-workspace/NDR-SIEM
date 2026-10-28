@@ -1,6 +1,7 @@
 .tm-shell {
   min-height: 100%;
-  padding: 26px;
+  padding: var(--layout-page-padding, 24px);
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -16,8 +17,8 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  max-width: 1480px;
-  margin-inline: auto;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
   width: 100%;
   animation: fadeInDown 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -152,8 +153,8 @@
   grid-template-columns: 1fr 300px;
   gap: 16px;
   flex: 1;
-  max-width: 1480px;
-  margin-inline: auto;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
   width: 100%;
   min-height: 500px;
   animation: fadeIn 0.5s ease 0.2s both;

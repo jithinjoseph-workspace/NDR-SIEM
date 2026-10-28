@@ -1,6 +1,7 @@
 .siem-dash-shell {
   min-height: 100%;
-  padding: 26px;
+  padding: var(--layout-page-padding, 24px);
+  box-sizing: border-box;
   background:
     radial-gradient(ellipse at 85% 5%,  rgba(59,130,246,0.18) 0%, rgba(59,130,246,0.04) 35%, transparent 55%),
     radial-gradient(ellipse at 10% 95%, rgba(59,130,246,0.10) 0%, transparent 40%),
@@ -14,8 +15,9 @@
 }
 
 .siem-dash-header, .metrics-grid, .sources-table-wrap {
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 .siem-dash-header {
@@ -51,8 +53,9 @@ p { color: rgba(230,237,243,0.5); font-size: 13px; margin: 0; }
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 14px;
-  max-width: 1480px;
-  margin: 0 auto 24px;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin: 0 0 24px 0;
 }
 
 .skeleton-card {
@@ -131,14 +134,16 @@ p { color: rgba(230,237,243,0.5); font-size: 13px; margin: 0; }
   padding: 12px 16px;
   font-size: 13px;
   margin-bottom: 20px;
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 /* ── Alerts section ── */
 .alerts-section {
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
   margin-bottom: 24px;
 }
 

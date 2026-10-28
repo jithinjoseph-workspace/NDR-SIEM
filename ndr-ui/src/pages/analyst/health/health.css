@@ -1,6 +1,7 @@
 .health-shell {
   min-height: 100%;
-  padding: 28px;
+  padding: var(--layout-page-padding, 24px);
+  box-sizing: border-box;
   background:
     linear-gradient(180deg, rgba(11, 19, 35, 0.84), rgba(7, 14, 29, 0.98)),
     radial-gradient(circle at top right, rgba(103, 168, 255, 0.08), transparent 34%);
@@ -10,8 +11,9 @@
 .health-strip,
 .health-metrics,
 .services-panel {
-  max-width: 1480px;
-  margin-inline: auto;
+  width: 100%;
+  max-width: var(--layout-max-width, 2400px);
+  margin-inline: 0;
 }
 
 .health-header {
