@@ -1,7 +1,7 @@
 // SIEM Sigma Rule Evaluator — Option B: scheduled batch queries against siem_logs
 //
 // Every 5 minutes, for each tenant:
-//   1. Load enabled rules from ndr.sigma_rules (filtered by ndr.rules_state)
+//   1. Load enabled rules from ndr.sigma_rules (filtered by tenant overrides)
 //   2. Compile each rule's Sigma conditions → ClickHouse SQL WHERE clause
 //   3. Query ndr_{tenant}.siem_logs for matches in the last 5 min
 //   4. If hits → write alert to ndr_{tenant}.siem_alerts (deduped per rule/hour)
@@ -116,7 +116,7 @@ async fn load_disabled_overrides(
     struct Row { id: String, tenant_id: String }
 
     let rows: Vec<Row> = ch
-        .query("SELECT id, tenant_id FROM ndr.rules_state FINAL WHERE enabled = 0")
+        .query("SELECT id, tenant_id FROM ndr.rules_state_tenant FINAL WHERE enabled = 0")
         .fetch_all()
         .await
         .unwrap_or_default();

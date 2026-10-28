@@ -329,6 +329,8 @@ async fn emit(
     sensor_id: &str,
 ) {
     let now = now_ts();
+    // tags is moved into the struct below; its first tag names the pattern that matched.
+    let reason = tags.first().cloned().unwrap_or_else(|| "multi-flow pattern matched".to_string());
     let hit = NdrHit {
         timestamp:          now,
         community_id:       cid.to_string(),
@@ -350,6 +352,7 @@ async fn emit(
         agent_s_category:   String::new(),
         updated_at:         now,
         sensor_id:          sensor_id.to_string(),
+        reasons:            vec![format!("Multi-flow pattern matched across several flows: {reason}")],
     };
     if let Err(e) = ch.insert_hit_for_tenant(hit, tenant).await {
         tracing::warn!("multiflow emit failed [{}/{}]: {}", tenant, cid, e);

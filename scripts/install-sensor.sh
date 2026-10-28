@@ -683,6 +683,16 @@ log "Configuring Packet Recorder..."
 ARKIME_PASS=$(echo "$API_KEY" | \
   sha256sum | cut -c1-16)
 
+# Arkime only starts deleting its own oldest captures once free space drops below freeSpaceG.
+# A fixed 5GB is a dead zone on any disk bigger than ~100GB: OpenSearch's own flood-stage
+# watermark (95% used by default) blocks all writes well before a 5GB floor is ever reached,
+# so nothing self-heals and the disk keeps filling. Size it to the disk instead — 10% of total,
+# floor of 20GB — so Arkime prunes itself with real headroom before OpenSearch ever blocks.
+DISK_TOTAL_GB=$(df -BG --output=size / 2>/dev/null | tail -1 | tr -dc '0-9')
+DISK_TOTAL_GB=${DISK_TOTAL_GB:-100}
+ARKIME_FREE_SPACE_G=$(( DISK_TOTAL_GB / 10 ))
+if [ "$ARKIME_FREE_SPACE_G" -lt 20 ]; then ARKIME_FREE_SPACE_G=20; fi
+
 cat > /opt/arkime/etc/config.ini << EOF
 [default]
 elasticsearch=http://localhost:${OS_PORT}
@@ -698,7 +708,7 @@ simpleCompression=none
 pcapWriteSize=262143
 logLevel=warn
 maxDays=7
-freeSpaceG=5
+freeSpaceG=${ARKIME_FREE_SPACE_G}
 tcpTimeout=600
 udpTimeout=30
 maxStreams=500000

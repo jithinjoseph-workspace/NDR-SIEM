@@ -11,7 +11,11 @@
 
 ## Purpose
 
-The Rules page lets analysts and admins manage SIGMA-style detection rules that the NDR engine applies to all incoming Agent-Z and Agent-S events in real time. Rules define a single field/matcher/value condition and fire immediately after save — no engine restart required. Admins additionally see a "Sync Rules" button to pull the latest SigmaHQ community network detection rules from the upstream repository in the background.
+The Rules page lets analysts and admins manage SIGMA-style detection rules that the NDR engine applies to all incoming Agent-Z and Agent-S events in real time. Rules define a single field/matcher/value condition and fire immediately after save — no engine restart required. Admins additionally see a "Sync Rules" button to pull the latest SigmaHQ community network, Linux, and Windows rules from the upstream repository in the background.
+
+### Rule scope
+
+SigmaHQ community rules are shared globally in `ndr.sigma_rules` with `tenant_id='*'`, so every tenant can list and use them. Tenant-created rules remain in that tenant's own `sigma_rules` table. Disabling a shared community rule must not change the global row: the override is stored in `ndr.rules_state_tenant`, keyed by both `(tenant_id, id)`, and affects only that tenant. Startup migrations repair legacy community rows with an incorrect tenant scope and migrate old `ndr.rules_state` entries into the tenant-keyed table.
 
 ---
 
@@ -133,9 +137,7 @@ Shown inline in the form when `ruleForm.field === 'conn_state'` (toggled by "Sho
 
 **`ngOnInit()`** — calls `loadRules()`.
 
-**`loadRules()`** — two-step:
-1. `GET /api/rules` → normalises each rule into the local shape: `{ name: r.title, type: 'SIGMA', severity: uppercase, status: r.enabled ? 'ACTIVE' : 'INACTIVE', id, description, tags, conditions: r.conditions || 0, hits: 0 }`. Sets `loading = false` and triggers change detection.
-2. Sequentially (not in parallel) calls `GET /api/rules/hit-counts` → fills `r.hits` per rule by matching on `rule.name`; sums all values into `totalHits`. Errors are silently swallowed.
+**`loadRules()`** — loads the first server-paginated page with `GET /api/rules?limit=20&offset=0`. The API returns shared community rules plus rules custom to the authenticated tenant; `X-Total-Count` and `X-Active-Count` provide totals for the complete tenant-visible set. Further Agent-Z/SIGMA rows load on demand. It also loads hit counts and Agent-S fired rules separately; Agent-S fired rules are not the SigmaHQ community-rule catalogue.
 
 ### Form
 
@@ -159,7 +161,7 @@ Shown inline in the form when `ruleForm.field === 'conn_state'` (toggled by "Sho
 
 **`deleteRule(rule)`** — shows `window.confirm`. On confirm: `DELETE /api/rules/:id` — the backend handler deletes from ClickHouse, removes the `rules_state` record, attempts to delete the disk file at `{RULES_DIR}/{id}.yml`, then reloads rules and publishes `system:reload_rules` to Redis. The backend returns `{ status: 'deleted', active_rules: N }`. The component then calls `POST /api/rules/reload` explicitly before removing the rule from local `rules[]` in-place (no re-fetch). Like create, this triggers two reloads — one from the delete handler via Redis, one from the explicit reload call.
 
-**`toggleRule(rule)`** — `POST /api/rules/:id/toggle` with `{ enabled: !current }`. On success: flips `rule.status` in-place between `'ACTIVE'` and `'INACTIVE'`; shows message with new active rule count. The backend handler distinguishes community rules from custom rules: community rules use a `rules_state` override table (preserving the original YAML); custom rules update `sigma_rules.enabled` directly. Both paths hot-reload and publish to Redis.
+**`toggleRule(rule)`** — `POST /api/rules/:id/toggle` with `{ enabled: !current }`. On success: flips `rule.status` in-place between `'ACTIVE'` and `'INACTIVE'`; shows message with new active rule count. The backend distinguishes community rules from custom rules: community rules use a per-tenant `ndr.rules_state_tenant` override (preserving the global YAML); custom rules update that tenant's `sigma_rules.enabled` directly. Both paths hot-reload and publish to Redis.
 
 **`syncCommunityRules()`** — `POST /api/rules/sync-community`. Sets `syncing = true` while in flight.
 - If `res.status === 'already_running'`: shows the server's message (e.g. "Sync already in progress — check back in a minute").

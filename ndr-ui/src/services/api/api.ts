@@ -847,8 +847,10 @@ export class Api {
     return this.http.get(`${this.baseUrl}/threat/predictions`, { params: { limit: String(limit), offset: String(offset) } });
   }
 
-  getThreatPredictionsHistory(): Observable<any> {
-    return this.http.get(`${this.baseUrl}/threat/predictions/history`);
+  /** Past predictions about one indicator (URL or IP); without it, the newest of all. */
+  getThreatPredictionsHistory(indicator?: string): Observable<any> {
+    const params: Record<string, string> = indicator ? { indicator } : {};
+    return this.http.get(`${this.baseUrl}/threat/predictions/history`, { params });
   }
 
   getThreatPatterns(): Observable<any> {

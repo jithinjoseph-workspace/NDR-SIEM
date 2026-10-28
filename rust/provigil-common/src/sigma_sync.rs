@@ -26,7 +26,7 @@ pub const GLOBAL_RULE_BLOCKLIST: &[&str] = &[
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Spawn the weekly Sigma background sync.
-/// `on_saved` is called with the number of newly saved rules — use it to trigger
+/// `on_saved` is called with the number of added/repaired rules — use it to trigger
 /// an in-memory engine reload in whichever engine calls this.
 pub fn spawn_sigma_sync<F>(ch: Client, rules_dir: String, on_saved: F)
 where
@@ -38,9 +38,9 @@ where
         loop {
             info!("sigma_sync: checking SigmaHQ for new rules…");
             match fetch_and_save(&ch, &rules_dir).await {
-                Ok(0)     => info!("sigma_sync: no new rules fetched"),
+                Ok(0)     => info!("sigma_sync: no new or misplaced rules found"),
                 Ok(count) => {
-                    info!("sigma_sync: {} new rules saved", count);
+                    info!("sigma_sync: {} rules added or repaired", count);
                     on_saved(count);
                 }
                 Err(e) => warn!("sigma_sync: fetch failed — {e}"),
@@ -51,7 +51,7 @@ where
 }
 
 /// Immediate sync — used by admin "Sync Now" buttons in both engines.
-/// Returns the number of newly saved rules.
+/// Returns the number of newly saved or repaired global rules.
 pub async fn sync_now(ch: &Client, rules_dir: &str) -> anyhow::Result<usize> {
     fetch_and_save(ch, rules_dir).await
 }
@@ -70,6 +70,11 @@ pub async fn fetch_and_save(ch: &Client, rules_dir: &str) -> anyhow::Result<usiz
         .build()?;
 
     std::fs::create_dir_all(rules_dir)?;
+
+    let repaired = normalize_community_rule_scope(ch).await?;
+    if repaired > 0 {
+        info!("sigma_sync: repaired {} community rules to global scope", repaired);
+    }
 
     let mut all_urls: Vec<(String, String)> = Vec::new();
     for (category, api_url) in &[
@@ -94,7 +99,7 @@ pub async fn fetch_and_save(ch: &Client, rules_dir: &str) -> anyhow::Result<usiz
         ));
     }
 
-    let existing_ids = get_community_rule_ids(ch).await.unwrap_or_default();
+    let existing_ids = get_community_rule_ids(ch).await?;
     let mut saved = 0usize;
 
     for (filename, url) in &all_urls {
@@ -120,7 +125,7 @@ pub async fn fetch_and_save(ch: &Client, rules_dir: &str) -> anyhow::Result<usiz
         }
     }
 
-    Ok(saved)
+    Ok(saved + repaired)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,45 +142,68 @@ async fn get_community_rule_ids(ch: &Client) -> anyhow::Result<HashSet<String>> 
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
+pub(crate) async fn normalize_community_rule_scope(ch: &Client) -> anyhow::Result<usize> {
+    #[derive(serde::Deserialize, clickhouse::Row)]
+    struct Row {
+        id: String,
+        name: String,
+        content: String,
+        enabled: u8,
+    }
+
+    let misplaced = ch
+        .query(
+            "SELECT id, name, content, enabled FROM ndr.sigma_rules FINAL \
+             WHERE source = 'community' AND tenant_id != '*'",
+        )
+        .fetch_all::<Row>()
+        .await?;
+
+    let mut repaired = 0;
+    for row in misplaced {
+        ch.query(
+            "INSERT INTO ndr.sigma_rules \
+             (id, name, content, tenant_id, source, enabled, updated_at) \
+             VALUES (?, ?, ?, '*', 'community', ?, now())",
+        )
+        .bind(row.id)
+        .bind(row.name)
+        .bind(row.content)
+        .bind(row.enabled)
+        .execute()
+        .await?;
+        repaired += 1;
+    }
+
+    Ok(repaired)
+}
+
 async fn save_community_rule(
     ch:      &Client,
     id:      &str,
     title:   &str,
     content: &str,
 ) -> anyhow::Result<()> {
-    // Check if already exists; if so update, else insert
     #[derive(serde::Deserialize, clickhouse::Row)]
-    struct Exists { cnt: u64 }
-    let e: Exists = ch
-        .query("SELECT count() AS cnt FROM ndr.sigma_rules FINAL WHERE id = ?")
+    struct Existing { enabled: u8 }
+    let existing = ch
+        .query("SELECT enabled FROM ndr.sigma_rules FINAL WHERE id = ? LIMIT 1")
         .bind(id)
-        .fetch_one()
+        .fetch_optional::<Existing>()
         .await?;
 
-    if e.cnt > 0 {
-        // Update (ReplacingMergeTree — insert a new version)
-        ch.query(
-            "INSERT INTO ndr.sigma_rules (id, name, content, tenant_id, source, enabled, updated_at) \
-             SELECT id, ?, ?, tenant_id, source, enabled, now() \
-             FROM ndr.sigma_rules FINAL WHERE id = ?"
-        )
-        .bind(title)
-        .bind(content)
-        .bind(id)
-        .execute()
-        .await?;
-    } else {
-        ch.query(
-            "INSERT INTO ndr.sigma_rules \
-             (id, name, content, tenant_id, source, enabled, created_at, updated_at) \
-             VALUES (?, ?, ?, '*', 'community', 1, now(), now())"
-        )
-        .bind(id)
-        .bind(title)
-        .bind(content)
-        .execute()
-        .await?;
-    }
+    let enabled = existing.map(|row| row.enabled).unwrap_or(1);
+    ch.query(
+        "INSERT INTO ndr.sigma_rules \
+         (id, name, content, tenant_id, source, enabled, created_at, updated_at) \
+         VALUES (?, ?, ?, '*', 'community', ?, now(), now())",
+    )
+    .bind(id)
+    .bind(title)
+    .bind(content)
+    .bind(enabled)
+    .execute()
+    .await?;
     Ok(())
 }
 

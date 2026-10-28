@@ -96,13 +96,16 @@ impl RiskScorer {
 
     /// Score a correlated pair.
     ///
-    /// `is_malicious`      — src or dst IP matched threat intel feed
+    /// `is_malicious`      — strong threat evidence: an IP, domain or hash matched the feed
+    /// `weak_threat`       — the feed matched only addresses inside trusted provider ranges (see
+    ///                       `feed_match_is_weak`): kept visible, scored low, not tagged threat-intel
     /// `sensitive_country` — src or dst GeoIP country in the sensitive list
-    /// `is_trusted_cloud`  — dst ASN is a known cloud provider (from TrustedRanges, DB-driven)
+    /// `is_trusted_cloud`  — src or dst is a known cloud provider (from TrustedRanges, DB-driven)
     pub fn score(
         &self,
         hit: &CorrelationHit,
         is_malicious: bool,
+        weak_threat: bool,
         sensitive_country: bool,
         is_trusted_cloud: bool,
         entity_score: f32,
@@ -119,6 +122,9 @@ impl RiskScorer {
             score += 80.0;
             reasons.push("IP matches threat intel feed (abuse.ch)".into());
             tags.push("threat-intel".into());
+        } else if weak_threat {
+            score += 30.0;
+            reasons.push("Threat feed listed an address inside a trusted provider range: weak evidence, not tagged threat-intel".into());
         }
 
         // ── 2. Suricata alert ─────────────────────────────────────────
@@ -290,5 +296,46 @@ impl RiskScorer {
         let severity = Severity::from_score(score);
 
         RiskResult { score, severity, tags, reasons }
+    }
+}
+
+/// Whether a threat-feed match is weak evidence: every address the feed matched is inside a trusted
+/// provider range. Feeds list shared cloud addresses by mistake, so a match that rests only on such an
+/// address stays visible but is scored low, instead of as a confirmed threat.
+pub fn feed_match_is_weak(feed_matched: &[&str], is_trusted: impl Fn(&str) -> bool) -> bool {
+    !feed_matched.is_empty() && feed_matched.iter().all(|ip| is_trusted(ip))
+}
+
+#[cfg(test)]
+mod feed_weak_tests {
+    use super::feed_match_is_weak;
+
+    #[test]
+    fn a_match_is_weak_only_when_every_matched_address_is_trusted() {
+        let trusted = |ip: &str| ip.starts_with("142.250.");
+        assert!(feed_match_is_weak(&["142.250.205.99"], trusted));
+        assert!(!feed_match_is_weak(&["142.250.205.99", "162.243.103.246"], trusted), "one untrusted address keeps it strong");
+        assert!(!feed_match_is_weak(&[], trusted), "no feed match is not a weak match");
+    }
+}
+
+/// Whether a Suricata rule is informational by Emerging Threats' own naming convention — a rule
+/// logging something seen, not reporting a threat — whatever numeric severity Suricata assigned it.
+/// ET's classification.config does not always put "ET INFO"/"ET POLICY" rules at the lowest severity,
+/// so this is read from the rule's own name, not its severity field.
+pub fn suricata_rule_is_informational(signature: &str) -> bool {
+    signature.starts_with("ET INFO") || signature.starts_with("ET POLICY")
+}
+
+#[cfg(test)]
+mod suricata_informational_tests {
+    use super::suricata_rule_is_informational;
+
+    #[test]
+    fn et_info_and_et_policy_rules_are_informational_whatever_their_number() {
+        assert!(suricata_rule_is_informational("ET INFO OpenAI API Domain in DNS Lookup (api .openai .com)"));
+        assert!(suricata_rule_is_informational("ET POLICY Dropbox.com Offsite File Backup in Use"));
+        assert!(!suricata_rule_is_informational("ET SCAN Possible Nmap User-Agent Observed"));
+        assert!(!suricata_rule_is_informational("ET TROJAN Generic gate.php POST"));
     }
 }

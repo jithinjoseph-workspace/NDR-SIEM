@@ -83,4 +83,14 @@ export class EvidenceService {
   askHistory(question: string): Observable<any> {
     return this.http.post('/api/aria/ask-history', { question });
   }
+
+  /**
+   * SOC GPT: answers a question from this tenant's own data — cases, analyses, and past
+   * investigations. `subject` is the session/case the conversation is currently about (from the
+   * previous answer); `history` is the last few turns, so the backend can read a follow-up the way a
+   * person reading the chat would.
+   */
+  askPlatform(question: string, subject: string, history: Array<{ role: string; text: string }>): Observable<any> {
+    return this.http.post('/api/aria/ask-history', { question, subject, history });
+  }
 }

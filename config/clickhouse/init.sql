@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS ndr.ndr_hits ON CLUSTER ndr_cluster (
     agent_s_category    String DEFAULT '',
     updated_at          DateTime DEFAULT now(),
     sensor_id           String DEFAULT '',
+    reasons             Array(String) DEFAULT [],
     INDEX idx_sensor_id sensor_id TYPE bloom_filter GRANULARITY 1,
     PROJECTION proj_by_sensor (SELECT * ORDER BY (tenant_id, sensor_id, timestamp))
 ) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/ndr_hits', '{replica}', updated_at)
@@ -86,9 +87,20 @@ TTL updated_at + INTERVAL 90 DAY;
 CREATE TABLE IF NOT EXISTS ndr.rules_state ON CLUSTER ndr_cluster (
     id      String,
     enabled UInt8    DEFAULT 1,
-    updated DateTime DEFAULT now()
+    updated DateTime DEFAULT now(),
+    tenant_id String DEFAULT 'default'
 ) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/rules_state', '{replica}', updated)
 ORDER BY id;
+
+-- Correctly tenant-scoped overrides. The legacy rules_state table is migrated
+-- at engine startup; its ORDER BY id cannot isolate overrides across tenants.
+CREATE TABLE IF NOT EXISTS ndr.rules_state_tenant ON CLUSTER ndr_cluster (
+    id        String,
+    enabled   UInt8    DEFAULT 1,
+    updated   DateTime DEFAULT now(),
+    tenant_id String   DEFAULT 'default'
+) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/rules_state_tenant', '{replica}', updated)
+ORDER BY (tenant_id, id);
 
 CREATE TABLE IF NOT EXISTS ndr.settings ON CLUSTER ndr_cluster
 (
@@ -531,7 +543,9 @@ CREATE TABLE IF NOT EXISTS ndr.soar_cases ON CLUSTER ndr_cluster
     tenant_id    String DEFAULT 'default'
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/ndr/soar_cases', '{replica}', updated_at)
-ORDER BY (tenant_id, created_at);
+-- Keyed by case id: a row is replaced only by the same case. Keyed by created_at, two cases
+-- created in the same second replaced each other. Existing tables are rekeyed by the engine at startup.
+ORDER BY (tenant_id, id);
 
 CREATE TABLE IF NOT EXISTS ndr.soar_case_comments ON CLUSTER ndr_cluster
 (
@@ -787,6 +801,7 @@ CREATE TABLE IF NOT EXISTS ndr.threat_predictions ON CLUSTER ndr_cluster
     exposure_score      Float32  DEFAULT 0.0,
     internal_hit_count  UInt32   DEFAULT 0,
     explanation         String   DEFAULT '',
+    indicator           String   DEFAULT '',
     recommendations     String   DEFAULT '[]',
     aria_briefing       String   DEFAULT '',
     alert_level         String   DEFAULT 'info',
@@ -975,6 +990,7 @@ TTL created_at + INTERVAL 90 DAY;
 
 -- ── Retention TTL migrations (idempotent — safe to re-run on existing tables) ──
 -- Applied here so already-deployed clusters pick up TTLs without a manual ALTER.
+ALTER TABLE ndr.threat_predictions ON CLUSTER ndr_cluster ADD COLUMN IF NOT EXISTS indicator String DEFAULT '';
 ALTER TABLE ndr.ioc_hits ON CLUSTER ndr_cluster MODIFY TTL timestamp + INTERVAL 90 DAY;
 ALTER TABLE ndr.soar_playbook_runs ON CLUSTER ndr_cluster MODIFY TTL created_at + INTERVAL 90 DAY;
 ALTER TABLE ndr.evidence_log ON CLUSTER ndr_cluster MODIFY TTL performed_at + INTERVAL 90 DAY;

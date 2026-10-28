@@ -364,13 +364,18 @@ async fn run_prediction(
             .fetch_one::<u64>().await.unwrap_or(0);
         if already > 0 { continue; }
 
+        // The indicator this prediction is about: the first matched IOC (URL/IP), else the first
+        // source address of a matched pattern. Lets the page keep each prediction's history apart.
+        let indicator = matched_iocs.first().map(|m| m.ip.clone())
+            .or_else(|| matched_patterns.iter().map(|p| p.src_ip.clone()).find(|s| !s.is_empty()))
+            .unwrap_or_default();
         let q = format!(
             "INSERT INTO {db}.threat_predictions \
              (tenant_id, attack_type, probability, confidence, trend, trend_delta, \
               intel_signal_count, exposure_score, internal_hit_count, \
-              explanation, recommendations, aria_briefing, alert_level) \
+              explanation, indicator, recommendations, aria_briefing, alert_level) \
              VALUES ('{tid}','{at}',{prob:.4},{conf:.4},'{trend}',{td:.4},{sc},{es:.2},{ihc},\
-                     '{expl}','{recs}','{briefing}','{al}')",
+                     '{expl}','{ind}','{recs}','{briefing}','{al}')",
             db       = db,
             tid      = tenant_id,
             at       = esc(attack_type),
@@ -382,6 +387,7 @@ async fn run_prediction(
             es       = exposure_score,
             ihc      = matched_patterns.len() as u32,
             expl     = esc(&explanation),
+            ind      = esc(&indicator),
             recs     = esc(&recs_json),
             briefing = esc(&aria_briefing),
             al       = alert_level,
